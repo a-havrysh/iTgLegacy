@@ -168,7 +168,7 @@ int tg_channel_save(tg_t *tg, const tg_channel_t *m)
 	#define TG_CHANNEL_STR(t, n, type, name) \
 	if (m->n && m->n[0]){\
 		str_appendf(&s, "\'" name "\'" " = \'"); \
-		str_append(&s, (char*)m->n, strlen((char*)m->n)); \
+		str_append_sql(&s, (char*)m->n); \
 		str_appendf(&s, "\', "); \
 	}
 		
@@ -181,7 +181,7 @@ int tg_channel_save(tg_t *tg, const tg_channel_t *m)
 	#define TG_CHANNEL_SPS(t, n, type, name) \
 	if (m->n && m->n[0]){\
 		str_appendf(&s, "\'" name "\'" " = \'"); \
-		str_append(&s, (char*)m->n, strlen((char*)m->n)); \
+		str_append_sql(&s, (char*)m->n); \
 		str_appendf(&s, "\', "); \
 	}
 

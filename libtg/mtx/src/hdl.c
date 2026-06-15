@@ -134,8 +134,10 @@ buf_t_ hdl_deheader(buf_t_ b, msg_t t)
 #ifdef __MACH__
 #include <mach/clock.h>
 #include <mach/mach.h>
+#ifndef CLOCK_REALTIME
 #define CLOCK_REALTIME 0
 #define CLOCK_MONOTONIC 1
+#endif
 #endif
 
 void my_clock_gettime(int clock_id, struct timespec * T)

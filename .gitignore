@@ -1,5 +1,38 @@
+# Build directory and auxiliary build files
+build/
+build-aux/
+tdlib/build/
+tdlib/install/
+aclocal.m4
+configure
+COPYING
+INSTALL
+
+# Certificates and local configs
 certificates
 configure_ios.sh
+include/tg_config.h
 .vim*
 *~
+
+# Build artifacts
 *.o
+*.lo
+*.la
+*.a
+*.dylib
+*.Plo
+*.Tpo
+*.app
+*.ipa
+.deps/
+.libs/
+autom4te.cache/
+config.log
+config.status
+config.cache
+Makefile.in
+
+/tdlib/native-build
+.DS_Store
+/.zsign_cache

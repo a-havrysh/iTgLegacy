@@ -20,7 +20,9 @@
 	ContactsListViewController *cvc = 
 		[[ContactsListViewController alloc]init];
 	cvc.title = @"Contacts";
-	[cvc getContacts];
+	// ponytail: no eager [cvc getContacts] here - ABAddressBookCreateWithOptions
+	// reads the whole address book on the main thread and cvc's own viewDidLoad
+	// already does it, lazily, when the Contacts tab is first opened.
 	UINavigationController *cvnc =
 		[[UINavigationController alloc]initWithRootViewController:cvc];
 	UITabBarItem *cvtbi = [[UITabBarItem alloc]

@@ -170,7 +170,7 @@ int tg_user_save(tg_t *tg, const tg_user_t *m)
 	#define TG_USER_STR(t, n, type, name, ifmin) \
 	if (m->n && m->n[0]){\
 		str_appendf(&s, "\'" name "\'" " = \'"); \
-		str_append(&s, (char*)m->n, strlen((char*)m->n)); \
+		str_append_sql(&s, (char*)m->n); \
 		str_appendf(&s, "\', "); \
 	}
 		
@@ -184,7 +184,7 @@ int tg_user_save(tg_t *tg, const tg_user_t *m)
 	#define TG_USER_SPS(t, n, type, name, ifmin) \
 	if (m->n && m->n[0]){\
 		str_appendf(&s, "\'" name "\'" " = \'"); \
-		str_append(&s, (char*)m->n, strlen((char*)m->n)); \
+		str_append_sql(&s, (char*)m->n); \
 		str_appendf(&s, "\', "); \
 	}
 

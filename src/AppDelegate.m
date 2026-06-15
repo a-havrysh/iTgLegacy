@@ -9,6 +9,7 @@
 #import "AppDelegate.h"
 #include "AVFoundation/AVFoundation.h"
 #include <stdlib.h>
+#include <dlfcn.h>
 #include "TGDialog.h"
 #include "DialogsViewController.h"
 #include "ChatViewController.h"
@@ -30,9 +31,6 @@
 @implementation AppDelegate
 
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-
-	// libtd
-	void *td = td_json_client_create();
 
 	// lock crush
 	//UIApplication.sharedApplication.idleTimerDisabled = YES;
@@ -87,7 +85,10 @@
 	NSLog(@"start...");
 
 	self.syncData = [[NSOperationQueue alloc]init];
-	self.syncData.maxConcurrentOperationCount = 4;
+	// libtg drives a single socket and one answer queue - running 4 operations
+	// against it in parallel races the auth-key handshake against the queries
+	// that need it.
+	self.syncData.maxConcurrentOperationCount = 1;
 	
 	// set badge number
 	application.applicationIconBadgeNumber = 0;
@@ -129,7 +130,11 @@
 			boolForKey:@"showNotifications"];
 	
 	// start reachability
-	self.reach = [Reachability reachabilityWithHostname:@"www.google.ru"];
+	// Route-based check, not a name-based one. reachabilityWithHostname makes
+	// every "is there network?" test depend on resolving one specific foreign
+	// host - if that name does not resolve, the whole app reports "no network"
+	// while Telegram itself is perfectly reachable.
+	self.reach = [Reachability reachabilityForInternetConnection];
 	// Set the blocks
 	self.reach.reachableBlock = ^(Reachability*reach)
 	{
@@ -162,13 +167,19 @@
 		[[NSBundle mainBundle] bundlePath]];
 
 	// start window
-	self.window = [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];	
-	self.rootViewController = 
-			[[RootViewController alloc]init];
-	[self.window setRootViewController:self.rootViewController];
-	[self.window makeKeyAndVisible];	
+	self.window = [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
 
-	[self loadTgLib];
+	// With no stored session, the login screen IS the root: building the tab UI
+	// first only makes launch slower and flashes an interface the user cannot
+	// use yet. The tab UI is built in showMainUI once we are authorized.
+	if ([NSUserDefaults.standardUserDefaults objectForKey:@"userId"])
+		[self showMainUI];
+	else
+		[self showLoginUI];
+
+	[self.window makeKeyAndVisible];
+
+	[self probeTDLib];
 	[self authorize];
 	
 	return true;
@@ -430,6 +441,8 @@
 #pragma <LibTg FUNCTIONS>
 
 -(void)loadTgLib{
+	// ponytail: syncData runs 4 ops in parallel, so authorize/sendCode can race here
+	@synchronized(self){
 	if (self.tg)
 		return;
 
@@ -458,6 +471,7 @@
 	tg_set_on_error(self.tg, (__bridge void *)self, on_err);
 	if ([NSUserDefaults.standardUserDefaults  boolForKey:@"debug"])
 		tg_set_on_log(self.tg, (__bridge void *)self, on_log);
+	} // @synchronized
 }
 
 static void on_err(void *d, const char *err)
@@ -482,12 +496,18 @@ static void on_log(void *d, const char *msg)
 	NSNumber *userId = [NSNumber numberWithLongLong:user->id_];
 	[NSUserDefaults.standardUserDefaults 
 		setValue:userId forKey:@"userId"];
-	//[NSUserDefaults.standardUserDefaults 
-		//setValue:[NSString stringWithUTF8String:(char*)user->username_.data] 
-			//forKey:@"userName"];
-	if (self.authorizationDelegate)
-		[self.authorizationDelegate authorizedAs:user];
-	self.authorizationDelegate = nil;
+
+	dispatch_async(dispatch_get_main_queue(), ^{
+		self.loginVC = nil;
+		// Swap the login screen out for the tab UI. showMainUI builds it, which
+		// is what registers DialogsViewController as authorizationDelegate, so
+		// it has to run before we notify the delegate below.
+		[self showMainUI];
+
+		if (self.authorizationDelegate)
+			[self.authorizationDelegate authorizedAs:user];
+		self.authorizationDelegate = nil;
+	});
 	if (self.token){
 		[self.syncData addOperationWithBlock:^{
 			if (tg_account_register_ios(self.tg, self.token.UTF8String, true) == 0)	
@@ -498,21 +518,24 @@ static void on_log(void *d, const char *msg)
 	}
 	// get colors
 	[self getPeerColorset];
-	
-	/* TODO: updates.getState - to have unread messages count <15-01-25, yourname> */
 }
 
 -(void)chechPassword:(NSString *)password 
 {
-	tl_user_t *user = tg_auth_check_password(
-			self.tg, 
-			[password UTF8String]);
+	[self.syncData addOperationWithBlock:^{
+		tl_user_t *user = tg_auth_check_password(
+				self.tg, 
+				[password UTF8String]);
 
-	if (user){
-		[self afteLoginUser:user];
-	} else {
-		[self showMessage:@"Passoword is incorrect!"];
-	}
+		dispatch_async(dispatch_get_main_queue(), ^{
+			if (user){
+				[self afteLoginUser:user];
+			} else {
+				[self.loginVC setBusy:NO];
+				[self showMessage:@"Password is incorrect!"];
+			}
+		});
+	}];
 }
 
 -(void)signIn:(NSString *)phone_number 
@@ -523,74 +546,161 @@ static void on_log(void *d, const char *msg)
 	[[NSUserDefaults standardUserDefaults] setBool:NO 
 																					forKey:@"isNotFirstLaunch"];
 
-	tl_user_t *user = tg_auth_signIn(
-			self.tg, 
-			sentCode, 
-			[phone_number UTF8String], 
-			[code UTF8String]);
+	[self.syncData addOperationWithBlock:^{
+		tl_user_t *user = tg_auth_signIn(
+				self.tg, 
+				sentCode, 
+				[phone_number UTF8String], 
+				[code UTF8String]);
 
-	if (user){
-		[self afteLoginUser:user];
-	}
-	// check password
-	[self askInput:@"enter password" 
-						onDone:^(NSString *text){
-							[self chechPassword:text];
-						}];
+		dispatch_async(dispatch_get_main_queue(), ^{
+			if (user){
+				[self afteLoginUser:user];
+			} else {
+				if (self.loginVC) {
+					[self.loginVC showPasswordStep];
+				} else {
+					[self askInput:@"enter password" 
+										onDone:^(NSString *text){
+											[self chechPassword:text];
+										}];
+				}
+			}
+		});
+	}];
 }
 
 -(void)sendCode:(NSString *)phone_number
 {
-	tl_auth_sentCode_t *sentCode =
-		tg_auth_sendCode(
-				self.tg,
-			 	[phone_number UTF8String]);
-	if (sentCode){
-		[self askInput:@"enter phone_code" 
-						onDone:^(NSString *text){
-							[self signIn:phone_number 
-											code:text sentCode:sentCode];
-						}];
-	}
+	self.currentPhoneNumber = phone_number;
+	[self.syncData addOperationWithBlock:^{
+		[self loadTgLib];	// may still be initialising - the login form is shown early
+		tl_auth_sentCode_t *sentCode =
+			tg_auth_sendCode(
+					self.tg,
+					[phone_number UTF8String]);
+					
+		dispatch_async(dispatch_get_main_queue(), ^{
+			if (sentCode){
+				self.currentSentCode = sentCode;
+				if (self.loginVC) {
+					[self.loginVC showCodeStepWithPhoneNumber:phone_number];
+				} else {
+					[self askInput:@"enter phone_code" 
+									onDone:^(NSString *text){
+										[self signIn:phone_number 
+														code:text sentCode:sentCode];
+									}];
+				}
+			} else {
+				[self.loginVC setBusy:NO];
+				[self showMessage:@"Failed to send authorization code. Please check number."];
+			}
+		});
+	}];
+}
+
+// TDLIB PROBE - answers the one question the whole migration depends on:
+// does TDLib actually run on iOS 7.1.2 / armv7? Loaded with dlopen rather
+// than linked, so a failure here cannot take the app down with it - and so
+// the app's own __TEXT stays well under the 16MB armv7 branch limit.
+-(void)probeTDLib{
+	dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+		NSString *path = [[NSBundle mainBundle].bundlePath
+				stringByAppendingPathComponent:@"libtdjson.dylib"];
+		NSLog(@"TDLIB PROBE: dlopen %@", path);
+
+		void *h = dlopen(path.UTF8String, RTLD_NOW | RTLD_LOCAL);
+		if (!h){
+			NSLog(@"TDLIB PROBE: dlopen FAILED: %s", dlerror());
+			return;
+		}
+		NSLog(@"TDLIB PROBE: dlopen ok, handle %p", h);
+
+		void *(*jc_create)(void) = dlsym(h, "td_json_client_create");
+		void  (*jc_send)(void *, const char *) = dlsym(h, "td_json_client_send");
+		const char *(*jc_recv)(void *, double) = dlsym(h, "td_json_client_receive");
+		NSLog(@"TDLIB PROBE: create=%p send=%p recv=%p", jc_create, jc_send, jc_recv);
+		if (!jc_create || !jc_send || !jc_recv)
+			return;
+
+		void *client = jc_create();
+		NSLog(@"TDLIB PROBE: client = %p", client);
+		if (!client)
+			return;
+
+		jc_send(client, "{\"@type\":\"getAuthorizationState\"}");
+		NSLog(@"TDLIB PROBE: request sent");
+
+		int i;
+		for (i = 0; i < 10; i++){
+			const char *res = jc_recv(client, 1.0);
+			if (res){
+				NSLog(@"TDLIB PROBE: recv: %s", res);
+				break;
+			}
+		}
+		NSLog(@"TDLIB PROBE: done after %d polls", i);
+	});
+}
+
+-(void)showMainUI{
+	if (!self.rootViewController)
+		self.rootViewController = [[RootViewController alloc]init];
+	if (self.window.rootViewController != self.rootViewController)
+		[self.window setRootViewController:self.rootViewController];
+}
+
+-(void)showLoginUI{
+	if (self.loginVC)
+		return;
+
+	TGLoginViewController *loginVC = [[TGLoginViewController alloc] init];
+	self.loginVC = loginVC;
+
+	__weak typeof(self) weakSelf = self;
+	loginVC.onPhoneSubmitted = ^(NSString *phoneNumber) {
+		[weakSelf sendCode:phoneNumber];
+	};
+	loginVC.onCodeSubmitted = ^(NSString *code) {
+		[weakSelf signIn:weakSelf.currentPhoneNumber code:code sentCode:weakSelf.currentSentCode];
+	};
+	loginVC.onPasswordSubmitted = ^(NSString *password) {
+		[weakSelf chechPassword:password];
+	};
+
+	UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:loginVC];
+	[self.window setRootViewController:nav];
 }
 
 -(void)authorize{
-	if (!self.reach.isReachable){
-		// no network
-		[self showMessage:@"network is not reachable"];
-		return;
-	}
-
-	if (!self.tg)
-		[self loadTgLib];
-	
-	if (!self.tg)
-		return;
-
 	// do in background
 	[self.syncData addOperationWithBlock:^{
-		// check authorized 
+		[self loadTgLib];
+
+		if (!self.tg)
+			return;
+
+		// check authorized
 		tl_user_t *user = tg_is_authorized(self.tg);
-		
-		if (self.tg->key.size > 0){
-			while (!user){
-				NSLog(@"try to get user authorize");
-				sleep(1);	
-				user = tg_is_authorized(self.tg);
-			}
-		}
-		
+
 		// authorize if needed
 		dispatch_async(dispatch_get_main_queue(), ^{
-			if (user){
+			if (user)
 				[self afteLoginUser:user];
-			} else{
-				[self askInput:@"enter phone number (+7XXXXXXXXXX)" 
-								onDone:^(NSString *text){
-									[self sendCode:text];
-								}];
-			}
+			else
+				[self showLoginUI];
 		});
+
+		// No auth key yet? Build it now, while the user is still typing the
+		// phone number. It is a full RSA2048 + DH handshake - the bulk of the
+		// wait on an A5 - and tg_auth_sendCode would otherwise pay for it only
+		// after the Next tap.
+		if (!user && !tg_has_auth_key(self.tg)){
+			NSLog(@"prewarming auth key...");
+			tg_new_auth_key(self.tg);
+			NSLog(@"auth key ready");
+		}
 	}];
 }
 
@@ -644,10 +754,15 @@ static int getPeerColorsetCb(void *d, uint32_t color_id, tg_colors_t *colors, tg
 }
 
 -(Boolean)isOnLineAndAuthorized{
-	return
-		self.tg && 
-		self.authorizedUser != nil && 
-		self.reach.isReachable;
+	Boolean hasTg    = self.tg != NULL;
+	Boolean hasUser  = self.authorizedUser != nil;
+	Boolean isOnline = self.reach.isReachable;
+
+	if (!(hasTg && hasUser && isOnline))
+		NSLog(@"isOnLineAndAuthorized NO: tg=%d user=%d reachable=%d",
+				hasTg, hasUser, isOnline);
+
+	return hasTg && hasUser && isOnline;
 }
 
 -(void)setDebug:(Boolean)debug {
@@ -672,8 +787,9 @@ static int getPeerColorsetCb(void *d, uint32_t color_id, tg_colors_t *colors, tg
 - (BOOL)application:(UIApplication *)application 
 			handleOpenURL:(NSURL *)url 
 {
-	NSString *str = [NSString stringWithFormat:@"%@", url];
-	[self showMessage:str];
+	// Was an alert on every URL open, which blocks scripted launches
+	// (scripts/devrun.sh starts the app with `uiopen itglegacy://`).
+	NSLog(@"handleOpenURL: %@", url);
 	//if ([url.host isEqualToString:@"authorize"]){
 
 		//NSString *fragment = url.fragment;

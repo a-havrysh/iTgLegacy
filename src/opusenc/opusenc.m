@@ -525,3 +525,71 @@ static bool comment_pad(char **comments, int* length, int amount)
 
 #undef readint
 #undef writeint
+
+struct OggOpusComments {
+    char *artist;
+    char *title;
+};
+
+struct OggOpusEnc {
+    TGOggOpusWriter *writer;
+    NSFileHandle *fileHandle;
+};
+
+OggOpusComments *ope_comments_create(void) {
+    return calloc(1, sizeof(OggOpusComments));
+}
+
+int ope_comments_add(OggOpusComments *comments, const char *tag, const char *val) {
+    if (!comments || !tag || !val) return -1;
+    if (strcmp(tag, "ARTIST") == 0) comments->artist = strdup(val);
+    if (strcmp(tag, "TITLE") == 0) comments->title = strdup(val);
+    return 0;
+}
+
+void ope_comments_destroy(OggOpusComments *comments) {
+    if (!comments) return;
+    if (comments->artist) free(comments->artist);
+    if (comments->title) free(comments->title);
+    free(comments);
+}
+
+OggOpusEnc *ope_encoder_create_file(const char *path, OggOpusComments *comments, int rate, int channels, int family, int *error) {
+    NSString *nsPath = [NSString stringWithUTF8String:path];
+    [[NSFileManager defaultManager] createFileAtPath:nsPath contents:nil attributes:nil];
+    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:nsPath];
+    if (!handle) {
+        if (error) *error = -1;
+        return NULL;
+    }
+    TGOggOpusWriter *writer = [[TGOggOpusWriter alloc] init];
+    if (![writer begin:handle]) {
+        [handle closeFile];
+        if (error) *error = -1;
+        return NULL;
+    }
+    OggOpusEnc *enc = calloc(1, sizeof(OggOpusEnc));
+    enc->writer = writer;
+    enc->fileHandle = handle;
+    if (error) *error = 0;
+    return enc;
+}
+
+int ope_encoder_write(OggOpusEnc *enc, const short *pcm, int samples_per_channel) {
+    if (!enc || !enc->writer) return -1;
+    NSUInteger byteCount = samples_per_channel * 2;
+    [enc->writer writeFrame:(uint8_t *)pcm frameByteCount:byteCount];
+    return 0;
+}
+
+int ope_encoder_drain(OggOpusEnc *enc) {
+    return 0;
+}
+
+void ope_encoder_destroy(OggOpusEnc *enc) {
+    if (!enc) return;
+    if (enc->fileHandle) {
+        [enc->fileHandle closeFile];
+    }
+    free(enc);
+}

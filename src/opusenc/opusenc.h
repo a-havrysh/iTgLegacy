@@ -1,7 +1,9 @@
 #ifndef __OPUSENC_H
 #define __OPUSENC_H
 
+#ifdef __OBJC__
 #import <Foundation/Foundation.h>
+#endif
 #include "opus_types.h"
 #include <ogg/ogg.h>
 #include <stdio.h>
@@ -50,6 +52,19 @@ typedef struct
     char *description;
 } input_format;
 
+typedef struct OggOpusComments OggOpusComments;
+typedef struct OggOpusEnc OggOpusEnc;
+
+OggOpusComments *ope_comments_create(void);
+int ope_comments_add(OggOpusComments *comments, const char *tag, const char *val);
+void ope_comments_destroy(OggOpusComments *comments);
+
+OggOpusEnc *ope_encoder_create_file(const char *path, OggOpusComments *comments, int rate, int channels, int family, int *error);
+int ope_encoder_write(OggOpusEnc *enc, const short *pcm, int samples_per_channel);
+int ope_encoder_drain(OggOpusEnc *enc);
+void ope_encoder_destroy(OggOpusEnc *enc);
+
+#ifdef __OBJC__
 @interface TGOggOpusWriter : NSObject
 
 - (bool)begin:(NSFileHandle *)fileHandle;
@@ -58,6 +73,7 @@ typedef struct
 - (NSTimeInterval)encodedDuration;
 
 @end
+#endif
 
 #endif /* __OPUSENC_H */
 

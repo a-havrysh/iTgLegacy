@@ -122,4 +122,20 @@ void str_append(
 	 str_append(pStruct_str, __str, strlen(__str));\
 	 })
 
+/* Append a string that is going inside SQL single quotes.
+ * Names, titles and usernames come straight off the wire, so pasting them
+ * in raw breaks on any O'Brien and lets a peer inject SQL by choosing a
+ * name. SQLite escapes a quote by doubling it. */
+static void str_append_sql(struct str *s, const char *str)
+{
+	const char *p;
+	if (!str)
+		return;
+	for (p = str; *p; p++) {
+		str_append(s, p, 1);
+		if (*p == '\'')
+			str_append(s, "'", 1);
+	}
+}
+
 #endif /* ifndef STR_H_ */

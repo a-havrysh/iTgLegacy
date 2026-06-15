@@ -38,6 +38,7 @@
 
 #include <errno.h>
 
+#ifndef CLOCK_REALTIME
 int
 clock_gettime(int clock_id, struct timespec *ts)
 {
@@ -67,3 +68,4 @@ clock_gettime(int clock_id, struct timespec *ts)
     return -1;
   }
 }
+#endif

@@ -12,6 +12,8 @@
 #import "Reachability.h"
 #include "../libtg/libtg.h"
 
+#import "TGLoginViewController.h"
+
 @protocol AuthorizationDelegate <NSObject>
 -(void)tgLibLoaded;
 -(void)authorizedAs:(tl_user_t *)user;
@@ -57,6 +59,9 @@ enum {
 @property (strong) NSString *thumbDocCache;
 @property (strong) id rootViewController;
 @property (strong) id dialogsViewController;
+@property (strong) TGLoginViewController *loginVC;
+@property (nonatomic, assign) tl_auth_sentCode_t *currentSentCode;
+@property (nonatomic, copy) NSString *currentPhoneNumber;
 
 @property (strong) NSArray *colorset;
 @property (strong) NSMutableArray *unread;

@@ -118,8 +118,13 @@ tg_auth_sendCode(tg_t *tg, const char *phone_number)
 	char *auth_tokens = auth_tokens_from_database(tg);
 	if (auth_tokens){
 		strtok_foreach(auth_tokens, ";", token){
-			t[tn++] = 
-				buf_add((uint8_t*)token, strlen(token)); 
+			// t holds 20; the query above is the only thing keeping the row
+			// count down, and it does not have to. Stop at the array size
+			// instead of walking off the stack.
+			if (tn >= (int)(sizeof(t) / sizeof(t[0])))
+				break;
+			t[tn++] =
+				buf_add((uint8_t*)token, strlen(token));
 		}
 	}
 	
@@ -211,10 +216,15 @@ tg_auth_signIn(tg_t *tg, tl_auth_sentCode_t *sentCode,
 		if (auth->future_auth_token_.size > 0){
 		// save auth token
 			char auth_token[BUFSIZ];
-			strncpy(
-				auth_token,
-				((char *)auth->future_auth_token_.data),
-				auth->future_auth_token_.size);
+			// strncpy of exactly size bytes leaves no terminator, so the
+			// sprintf in auth_token_to_database used to read uninitialised
+			// stack past the token. Bound it and terminate it.
+			size_t n = auth->future_auth_token_.size;
+			if (n > sizeof(auth_token) - 1)
+				n = sizeof(auth_token) - 1;
+			memcpy(auth_token,
+				((char *)auth->future_auth_token_.data), n);
+			auth_token[n] = 0;
 			auth_token_to_database(tg, auth_token);
 		}
 		

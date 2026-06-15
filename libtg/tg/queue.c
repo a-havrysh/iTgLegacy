@@ -18,6 +18,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#include <sys/time.h>
+#include <errno.h>
 #include "stb_ds.h"
 #include "errors.h"
 #if INTPTR_MAX == INT32_MAX
@@ -427,11 +429,31 @@ static enum RTL _tg_receive(tg_queue_t *queue, int sockfd)
 {
 	ON_LOG(queue->tg, "%s", __func__);
 	buf_t r = buf_new();
+
+	// Bound the header read. This recv() used to block forever, so once
+	// another thread had caught this queue's answer and set queue->loop =
+	// false, nobody noticed: the thread sat here until tg_run_timer killed
+	// it after sleep(60). That is why every synchronous query cost a flat
+	// 60 seconds no matter how fast the server replied.
+	struct timeval tv = {1, 0};
+	setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
 	// get length of the package
 	uint32_t len;
 	int s = recv(sockfd, &len, 4, 0);
+	if (s < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)){
+		// nothing yet - hand control back so the loop re-checks queue->loop
+		buf_free(r);
+		return RTL_REREAD;
+	}
+	if (s == 0){
+		ON_ERR(queue->tg, "%s: %d: peer closed connection",
+				__func__, __LINE__);
+		buf_free(r);
+		return RTL_EXIT;
+	}
 	if (s<0){
-		ON_ERR(queue->tg, "%s: %d: socket error: %d", 
+		ON_ERR(queue->tg, "%s: %d: socket error: %d",
 				__func__, __LINE__, s);
 		buf_free(r);
 		return RTL_ERROR;
@@ -460,9 +482,11 @@ static enum RTL _tg_receive(tg_queue_t *queue, int sockfd)
 				sockfd, 
 				&r.data[received], 
 				len - received, 
-				0);	
+				0);
+		if (s < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+			continue; // mid-message, the timeout above is not an error here
 		if (s<0){
-			ON_ERR(queue->tg, "%s: %d: socket error: %d", 
+			ON_ERR(queue->tg, "%s: %d: socket error: %d",
 					__func__, __LINE__, s);
 			buf_free(r);
 			return RTL_ERROR;
@@ -691,11 +715,14 @@ static void * tg_run_queue(void * data)
 			continue;
 		}
 
+		// NOTE: this reads as inverted - pthread_mutex_trylock returns 0 on
+		// success, so the socket is read when the lock was NOT taken. Fixing
+		// it to == 0 stops users_getUsers from ever completing, so the rest of
+		// the queue design depends on this. Left alone deliberately; the real
+		// fix is replacing this transport, not flipping the condition.
 		if (pthread_mutex_trylock(&tg->socket_mutex))
 		{
 			// receive
-			//ON_LOG(queue->tg, "%s: receive...", __func__);
-			//usleep(1000); // in microseconds
 			res = _tg_receive(queue, queue->socket);
 			tg_mutex_unlock(&tg->socket_mutex);
 			if (res == RTL_RESEND)
@@ -709,8 +736,10 @@ static void * tg_run_queue(void * data)
 			if (res == RTL_EXIT || res == RTL_ERROR)
 				break;
 
-		} else // pthread_mutex_trylock
+		} else { // socket is busy in another queue thread
+			usleep(1000); // do not spin the CPU on an A5
 			continue;
+		}
 	}
 
 	// close socket

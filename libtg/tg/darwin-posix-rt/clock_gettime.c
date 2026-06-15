@@ -39,7 +39,7 @@
 #include <errno.h>
 
 int
-clock_gettime(int clock_id, struct timespec *ts)
+clock_gettime(clockid_t clock_id, struct timespec *ts)
 {
   mach_timespec_t mts;
   static clock_serv_t rt_clock_serv = 0;

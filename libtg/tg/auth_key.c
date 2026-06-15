@@ -18,7 +18,8 @@ bool tg_has_auth_key(tg_t *tg){
 
 int tg_new_auth_key(tg_t *tg)
 {
-	app_t app = api.app.open();
+	// app_open grew (ip, port) parameters; this file predates that.
+	app_t app = api.app.open(tg->ip, tg->port);
 	// check if has key
 	if (!shared_rc.key.size){
 		ON_ERR(tg, "%s: can't generate new auth key", __func__);

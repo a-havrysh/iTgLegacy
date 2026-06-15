@@ -26,16 +26,16 @@
 @interface  DialogsViewController()
 {
 }
-@property uint64_t hash;
+@property uint64_t tgHash;
 @end
 
 @implementation DialogsViewController
-@synthesize hash = _hash;
+@synthesize tgHash = _hash;
 
 - (void)viewDidLoad {
 	[super viewDidLoad];
 
-	self.hash = 0;
+	self.tgHash = 0;
 	
 	self.appDelegate = [[UIApplication sharedApplication]delegate];
 	self.appDelegate.authorizationDelegate = self;

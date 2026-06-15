@@ -7,7 +7,7 @@
 	<key>CFBundleDisplayName</key>
 	<string>Telegram</string>
 	<key>CFBundleExecutable</key>
-	<string>EXECUTABLE_NAME</string>
+	<string>iTgLegacy</string>
 	<key>CFBundleIconFiles</key>
 	<array>
 		<string>Icon-60@2x.png</string>
@@ -53,13 +53,17 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>PRODUCT_NAME</string>
+	<string>iTgLegacy</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>PACKAGE_VERSION</string>
+	<string>1.16.48</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
+	<key>CFBundleSupportedPlatforms</key>
+	<array>
+		<string>iPhoneOS</string>
+	</array>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -86,45 +90,53 @@
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>CFBundleURLName</key>
-			<string>org.telegram.TelegramHD.http</string>
+			<string>kuzm.ig.telegram.devrun</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>http://te.me</string>
-			</array>
-		</dict>
-		<dict>
-			<key>CFBundleTypeRole</key>
-			<string>Editor</string>
-			<key>CFBundleURLName</key>
-			<string>org.telegram.TelegramHD.https</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>https://te.me</string>
+				<string>itglegacy</string>
 			</array>
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>PACKAGE_VERSION</string>
+	<string>1.16.48</string>
+	<key>MinimumOSVersion</key>
+	<string>6.0</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSUserActivityTypes</key>
 	<array>
 		<string>org.telegram.conversation</string>
 	</array>
-	<key>UIAppFonts</key>
+	<key>UIDeviceFamily</key>
 	<array>
-		<string>MyriadPro-Regular.otf</string>
-		<string>MyriadPro-Bold.otf</string>
+		<integer>1</integer>
+		<integer>2</integer>
 	</array>
-	<!--<key>UIBackgroundModes</key>-->
-	<!--<array>-->
-		<!--<string>remote-notification</string>-->
-		<!--<string>audio</string>-->
-		<!--<string>location</string>-->
-		<!--<string>voip</string>-->
-	<!--</array>-->
 	<key>UIFileSharingEnabled</key>
 	<true/>
+	<key>UILaunchImages</key>
+	<array>
+		<dict>
+			<key>UILaunchImageMinimumOSVersion</key>
+			<string>6.0</string>
+			<key>UILaunchImageName</key>
+			<string>LaunchImage</string>
+			<key>UILaunchImageOrientation</key>
+			<string>Portrait</string>
+			<key>UILaunchImageSize</key>
+			<string>{320, 480}</string>
+		</dict>
+		<dict>
+			<key>UILaunchImageMinimumOSVersion</key>
+			<string>6.0</string>
+			<key>UILaunchImageName</key>
+			<string>LaunchImage-568h@2x</string>
+			<key>UILaunchImageOrientation</key>
+			<string>Portrait</string>
+			<key>UILaunchImageSize</key>
+			<string>{320, 568}</string>
+		</dict>
+	</array>
 	<key>UILaunchImages~ipad</key>
 	<array>
 		<dict>
@@ -148,14 +160,8 @@
 			<string>{768, 1024}</string>
 		</dict>
 	</array>
-	<key>UILaunchStoryboardName</key>
-	<string>LaunchScreen</string>
 	<key>UIPrerenderedIcon</key>
 	<true/>
-	<key>UIRequiredDeviceCapabilities</key>
-	<array>
-		<string>armv7</string>
-	</array>
 	<key>UIRequiresPersistentWiFi</key>
 	<true/>
 	<key>UIStatusBarStyle</key>
@@ -175,7 +181,5 @@
 	</array>
 	<key>UIViewGroupOpacity</key>
 	<false/>
-	<key>f</key>
-	<string></string>
 </dict>
 </plist>

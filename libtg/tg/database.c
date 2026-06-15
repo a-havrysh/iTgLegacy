@@ -197,10 +197,13 @@ char * auth_tokens_from_database(tg_t *tg)
 	ON_LOG(tg, "%s", __func__);
 	//pthread_mutex_lock(&tg->databasem); // lock
 	char sql[BUFSIZ];
-	sprintf(sql, 
-		"SELECT * FROM ((SELECT ROW_NUMBER() OVER (ORDER BY ID) "
-		"AS Number, auth_token FROM auth_tokens)) WHERE id = %d "
-		"ORDER BY Number DESC "	
+	// ROW_NUMBER() OVER (...) is a window function, SQLite >= 3.25 (2018).
+	// iOS 7.1.2 ships 3.7.13, which fails the whole statement with
+	// `near "(": syntax error`. rowid gives the same newest-first ordering.
+	sprintf(sql,
+		"SELECT rowid, auth_token FROM auth_tokens "
+		"WHERE id = %d "
+		"ORDER BY rowid DESC "
 		"LIMIT 20;", tg->id);
 	struct str s;
 	if (str_init(&s)){

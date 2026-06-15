@@ -4,8 +4,18 @@
 #include <openssl/rsa.h>
 #include <openssl/pem.h>
 #include <openssl/bn.h>
+#include <openssl/opensslv.h>
 #include <assert.h>
 #include "../tl/serialize.h"
+
+#if OPENSSL_VERSION_NUMBER < 0x10100000L || defined(LIBRESSL_VERSION_NUMBER)
+#ifndef RSA_get0_n
+#define RSA_get0_n(r) ((r)->n)
+#endif
+#ifndef RSA_get0_e
+#define RSA_get0_e(r) ((r)->e)
+#endif
+#endif
 
 #ifdef __GNUC__
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
@@ -49,13 +59,8 @@ uint64_t tg_cry_rsa_fpt(tg_t *tg){
 	if (!rsa)
 		return 1;
 
-#ifdef __APPLE__
-	const BIGNUM *n = rsa->n;
-	const BIGNUM *e = rsa->e;
-#else
 	const BIGNUM *n = RSA_get0_n(rsa);
 	const BIGNUM *e = RSA_get0_e(rsa);
-#endif
 
 	buf_t a;
 	buf_init(&a);
@@ -94,11 +99,7 @@ int tg_cry_rsa_cmp(tg_t *tg, buf_t buf)
 	BIGNUM *a = BN_new();
   BN_bin2bn(buf.data, buf.size, a);
 
-#ifdef __APPLE__
-	const BIGNUM *b = rsa->n;
-#else
 	const BIGNUM *b = RSA_get0_n(rsa);
-#endif
 	RSA_free(rsa);
 	
 	int cmp = BN_cmp(a, b);
@@ -121,13 +122,8 @@ buf_t tg_cry_rsa_enc(tg_t *tg, buf_t buf)
 	BIGNUM *a = BN_new();
   BN_bin2bn(buf.data, buf.size, a);
 	
-#ifdef __APPLE__
-	const BIGNUM *n = rsa->n;
-	const BIGNUM *e = rsa->e;
-#else
 	const BIGNUM *n = RSA_get0_n(rsa);
 	const BIGNUM *e = RSA_get0_e(rsa);
-#endif
   
 	BN_CTX * BN_ctx = BN_CTX_new();
 	BIGNUM *r = BN_new();
@@ -187,11 +183,7 @@ void tg_rsa(tg_t *tg, unsigned char * from, size_t from_size, unsigned char * to
     puts("Can not read public key from file\n");
   }
 
-#ifdef __APPLE__
-  tg_rsax(from, (int)from_size, to, (int)to_size, rsa->n, rsa->e);
-#else
   tg_rsax(from, (int)from_size, to, (int)to_size, RSA_get0_n(rsa), RSA_get0_e(rsa));
-#endif
   RSA_free(rsa);
   fclose(pub);
 }

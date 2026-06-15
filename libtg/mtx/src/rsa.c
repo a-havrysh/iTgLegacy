@@ -62,21 +62,32 @@ void rsa(unsigned char * from, size_t from_size, unsigned char * to, size_t to_s
   pub = fopen(public_key, "r");
 
   if (pub == NULL) {
-    puts("PEM_read_RSAPublicKey returns NULL\n");
+    /* Both of these used to fall through: fopen failure handed a NULL FILE*
+     * to OpenSSL, which dies in fgets() dereferencing NULL+0x38. */
+    fprintf(stderr, "rsa: can not open public key '%s'\n", public_key);
+    memset(to, 0, to_size);
+    return;
   }
 
   RSA * rsa = PEM_read_RSAPublicKey(pub, NULL, NULL, NULL);
 
   if (!rsa) {
-    RSA_free(rsa);
-    puts("Can not read public key from file\n");
+    fprintf(stderr, "rsa: PEM_read_RSAPublicKey('%s') returned NULL\n", public_key);
+    memset(to, 0, to_size);
+    fclose(pub);
+    return;
   }
 
-#ifdef __APPLE__
-  rsax(from, (int)from_size, to, (int)to_size, rsa->n, rsa->e);
-#else
-  rsax(from, (int)from_size, to, (int)to_size, RSA_get0_n(rsa), RSA_get0_e(rsa));
+#if OPENSSL_VERSION_NUMBER < 0x10100000L || defined(LIBRESSL_VERSION_NUMBER)
+#ifndef RSA_get0_n
+#define RSA_get0_n(r) ((r)->n)
 #endif
+#ifndef RSA_get0_e
+#define RSA_get0_e(r) ((r)->e)
+#endif
+#endif
+
+  rsax(from, (int)from_size, to, (int)to_size, (BIGNUM *)RSA_get0_n(rsa), (BIGNUM *)RSA_get0_e(rsa));
   RSA_free(rsa);
   fclose(pub);
 }

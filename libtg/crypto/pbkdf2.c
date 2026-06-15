@@ -15,8 +15,7 @@ buf_t tg_pbkdf2_sha512(
 	buf_t dest = buf_new();
 	dest.size = hash_size;
 	
-/*#if OPENSSL_VERSION_NUMBER < 0x10000000L*/
-#ifdef __APPLE__
+#if OPENSSL_VERSION_NUMBER < 0x10100000L && defined(__APPLE__)
 	HMAC_CTX ctx;
   HMAC_CTX_init(&ctx);
   unsigned char counter[4] = {0, 0, 0, 1};
