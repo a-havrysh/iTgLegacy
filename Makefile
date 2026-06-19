@@ -189,7 +189,8 @@ APP_SRC_M := \
 	src/Base64/Base64.m \
 	src/UIImage+Utils/UIImage+Utils.m \
 	src/opusenc/opusenc.m \
-	src/TGLoginViewController.m
+	src/TGLoginViewController.m \
+	src/TGClient.m
 
 APP_SRC_C := \
 	src/tlv_polyfill.c \

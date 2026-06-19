@@ -26,7 +26,8 @@
 #include "../libtg/tg/user.h"
 #include "../libtg/tg/peer.h"
 #include "AVFoundation/AVAudioSession.h"
-#include "../tdlib/include/td/telegram/td_json_client.h"
+#import "TGClient.h"
+#import <QuartzCore/QuartzCore.h>
 
 @implementation AppDelegate
 
@@ -179,7 +180,7 @@
 
 	[self.window makeKeyAndVisible];
 
-	[self probeTDLib];
+	[self startTDLibAuth];
 	[self authorize];
 	
 	return true;
@@ -600,47 +601,46 @@ static void on_log(void *d, const char *msg)
 	}];
 }
 
-// TDLIB PROBE - answers the one question the whole migration depends on:
-// does TDLib actually run on iOS 7.1.2 / armv7? Loaded with dlopen rather
-// than linked, so a failure here cannot take the app down with it - and so
-// the app's own __TEXT stays well under the 16MB armv7 branch limit.
--(void)probeTDLib{
-	dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-		NSString *path = [[NSBundle mainBundle].bundlePath
-				stringByAppendingPathComponent:@"libtdjson.dylib"];
-		NSLog(@"TDLIB PROBE: dlopen %@", path);
+// TDLib drives authorization now. libtg still owns the chat UI, so both run
+// until the rest of the migration lands.
+-(void)startTDLibAuth{
+	TGClient *tg = [TGClient shared];
 
-		void *h = dlopen(path.UTF8String, RTLD_NOW | RTLD_LOCAL);
-		if (!h){
-			NSLog(@"TDLIB PROBE: dlopen FAILED: %s", dlerror());
-			return;
-		}
-		NSLog(@"TDLIB PROBE: dlopen ok, handle %p", h);
+	__weak typeof(self) weakSelf = self;
+	tg.onAuthState = ^(TGAuthState state){
+		NSLog(@"TDLIB AUTH: state %d", (int)state);
+		AppDelegate *me = weakSelf;
+		if (!me) return;
 
-		void *(*jc_create)(void) = dlsym(h, "td_json_client_create");
-		void  (*jc_send)(void *, const char *) = dlsym(h, "td_json_client_send");
-		const char *(*jc_recv)(void *, double) = dlsym(h, "td_json_client_receive");
-		NSLog(@"TDLIB PROBE: create=%p send=%p recv=%p", jc_create, jc_send, jc_recv);
-		if (!jc_create || !jc_send || !jc_recv)
-			return;
-
-		void *client = jc_create();
-		NSLog(@"TDLIB PROBE: client = %p", client);
-		if (!client)
-			return;
-
-		jc_send(client, "{\"@type\":\"getAuthorizationState\"}");
-		NSLog(@"TDLIB PROBE: request sent");
-
-		int i;
-		for (i = 0; i < 10; i++){
-			const char *res = jc_recv(client, 1.0);
-			if (res){
-				NSLog(@"TDLIB PROBE: recv: %s", res);
+		switch (state){
+			case TGAuthStateWaitPhoneNumber:
+				[me showLoginUI];
+				[me.loginVC setBusy:NO];
 				break;
-			}
+			case TGAuthStateWaitCode:
+				[me.loginVC showCodeStepWithPhoneNumber:me.currentPhoneNumber];
+				break;
+			case TGAuthStateWaitPassword:
+				[me.loginVC showPasswordStep];
+				break;
+			case TGAuthStateReady:
+				NSLog(@"TDLIB AUTH: READY");
+				[me.loginVC setBusy:NO];
+				break;
+			default:
+				break;
 		}
-		NSLog(@"TDLIB PROBE: done after %d polls", i);
+	};
+
+	tg.onError = ^(NSString *msg){
+		AppDelegate *me = weakSelf;
+		[me.loginVC setBusy:NO];
+		[me showMessage:msg];
+	};
+
+	dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+		if (![tg start])
+			NSLog(@"TDLIB AUTH: unavailable, falling back to libtg");
 	});
 }
 
@@ -658,15 +658,26 @@ static void on_log(void *d, const char *msg)
 	TGLoginViewController *loginVC = [[TGLoginViewController alloc] init];
 	self.loginVC = loginVC;
 
+	// Route through TDLib when it loaded; libtg is the fallback.
 	__weak typeof(self) weakSelf = self;
 	loginVC.onPhoneSubmitted = ^(NSString *phoneNumber) {
-		[weakSelf sendCode:phoneNumber];
+		weakSelf.currentPhoneNumber = phoneNumber;
+		if ([TGClient shared].available)
+			[[TGClient shared] sendPhoneNumber:phoneNumber];
+		else
+			[weakSelf sendCode:phoneNumber];
 	};
 	loginVC.onCodeSubmitted = ^(NSString *code) {
-		[weakSelf signIn:weakSelf.currentPhoneNumber code:code sentCode:weakSelf.currentSentCode];
+		if ([TGClient shared].available)
+			[[TGClient shared] sendCode:code];
+		else
+			[weakSelf signIn:weakSelf.currentPhoneNumber code:code sentCode:weakSelf.currentSentCode];
 	};
 	loginVC.onPasswordSubmitted = ^(NSString *password) {
-		[weakSelf chechPassword:password];
+		if ([TGClient shared].available)
+			[[TGClient shared] sendPassword:password];
+		else
+			[weakSelf chechPassword:password];
 	};
 
 	UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:loginVC];
@@ -790,6 +801,54 @@ static int getPeerColorsetCb(void *d, uint32_t color_id, tg_colors_t *colors, tg
 	// Was an alert on every URL open, which blocks scripted launches
 	// (scripts/devrun.sh starts the app with `uiopen itglegacy://`).
 	NSLog(@"handleOpenURL: %@", url);
+
+	// itglegacy://screenshot - the app photographs itself into Caches, which
+	// devrun.sh then pulls over SSH. There is no screenshot binary on this
+	// device and iOS 7 + 30-pin cannot be mirrored to a Mac, so this is the
+	// only way to actually see the UI without someone holding the phone.
+	// itglegacy://phone/+380XXXXXXXXX - hand a phone number to TDLib without
+	// touching the screen and without the number ever entering the repository.
+	if ([url.host isEqualToString:@"phone"]){
+		NSString *number = [url.path stringByReplacingOccurrencesOfString:@"/" withString:@""];
+		if (number.length){
+			NSLog(@"phone from URL: %lu digits", (unsigned long)number.length);
+			self.currentPhoneNumber = number;
+			[[TGClient shared] sendPhoneNumber:number];
+		}
+		return true;
+	}
+
+	// itglegacy://code/12345 and itglegacy://password/... - the account owner
+	// runs these from their own terminal so the secret never passes through
+	// anyone else. Same mechanism as phone, different TDLib call.
+	if ([url.host isEqualToString:@"code"] || [url.host isEqualToString:@"password"]){
+		NSString *value = [url.path stringByReplacingOccurrencesOfString:@"/" withString:@""];
+		if (value.length){
+			// deliberately never logged
+			NSLog(@"%@ received from URL (%lu chars)", url.host, (unsigned long)value.length);
+			if ([url.host isEqualToString:@"code"])
+				[[TGClient shared] sendCode:value];
+			else
+				[[TGClient shared] sendPassword:value];
+		}
+		return true;
+	}
+
+	if ([url.host isEqualToString:@"screenshot"]){
+		dispatch_async(dispatch_get_main_queue(), ^{
+			UIWindow *w = self.window;
+			UIGraphicsBeginImageContextWithOptions(w.bounds.size, NO, 0.0f);
+			[w.layer renderInContext:UIGraphicsGetCurrentContext()];
+			UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+			UIGraphicsEndImageContext();
+
+			NSString *dir = [NSSearchPathForDirectoriesInDomains(
+					NSCachesDirectory, NSUserDomainMask, YES) objectAtIndex:0];
+			NSString *path = [dir stringByAppendingPathComponent:@"screen.png"];
+			BOOL ok = [UIImagePNGRepresentation(img) writeToFile:path atomically:YES];
+			NSLog(@"screenshot %@ -> %@", ok ? @"saved" : @"FAILED", path);
+		});
+	}
 	//if ([url.host isEqualToString:@"authorize"]){
 
 		//NSString *fragment = url.fragment;

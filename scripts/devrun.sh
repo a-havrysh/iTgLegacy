@@ -27,6 +27,7 @@ SECONDS_TO_LOG=60
 FILTER="iTgLegacy"
 DO_BUILD=1
 CHECK_ONLY=0
+SHOT_ONLY=0
 
 # SSH settings, used only for launch method B.
 # Everything (port, user, key, legacy ssh-rsa algorithms) lives in the
@@ -41,6 +42,7 @@ while [ $# -gt 0 ]; do
 		--seconds)  SECONDS_TO_LOG="$2"; shift 2 ;;
 		--filter)   FILTER="$2"; shift 2 ;;
 		--check)    CHECK_ONLY=1; shift ;;
+		--shot)     SHOT_ONLY=1; shift ;;
 		*) echo "unknown option: $1"; exit 2 ;;
 	esac
 done
@@ -187,6 +189,19 @@ collect() {
 	fi
 }
 
+# Ask the running app to photograph itself and pull the result.
+shot() {
+	ssh_ready || { echo "no ssh, cannot take a screenshot" >&2; return 1; }
+	ssh $SSH_OPTS "$SSH_HOST" "uiopen itglegacy://screenshot" || return 1
+	sleep 3
+	local remote
+	remote="$(ssh $SSH_OPTS "$SSH_HOST" \
+		'ls -t /var/mobile/Applications/*/Library/Caches/screen.png 2>/dev/null | head -1')"
+	[ -n "$remote" ] || { echo "app did not write a screenshot" >&2; return 1; }
+	scp $SSH_OPTS "$SSH_HOST:$remote" "$LOGDIR/screen-$STAMP.png" >/dev/null 2>&1 \
+		&& echo "$LOGDIR/screen-$STAMP.png"
+}
+
 summary() {
 	say "summary"
 	local f="$LOGDIR/syslog-$STAMP.log"
@@ -210,6 +225,11 @@ trap cleanup EXIT
 
 # ----------------------------------------------------------------- main -----
 wait_for_device || exit 1
+
+if [ "$SHOT_ONLY" = 1 ]; then
+	shot
+	exit $?
+fi
 
 if [ "$CHECK_ONLY" = 1 ]; then
 	say "checking launch methods, changing nothing"
