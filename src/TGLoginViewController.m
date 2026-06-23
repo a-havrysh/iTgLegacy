@@ -51,13 +51,18 @@ static CAGradientLayer *tgGloss(CGRect frame, UIColor *top, UIColor *bottom) {
                                                     action:@selector(actionButtonTapped)];
     self.navigationItem.rightBarButtonItem = self.nextItem;
 
-    /* Brushed-metal-ish bar rather than iOS 7 flat white. */
-    self.navigationController.navigationBar.tintColor = tgRGB(38, 92, 140);
-    if ([self.navigationController.navigationBar respondsToSelector:@selector(setBarTintColor:)])
-        self.navigationController.navigationBar.barTintColor = tgRGB(64, 122, 173);
-    self.navigationController.navigationBar.titleTextAttributes = @{
-        NSForegroundColorAttributeName : [UIColor whiteColor]
-    };
+    /* Brushed-metal-ish bar rather than iOS 7 flat white.
+     * barTintColor and NSForegroundColorAttributeName are iOS 7; on iOS 6 the
+     * bar colour IS tintColor and the title key is UITextAttributeTextColor. */
+    UINavigationBar *bar = self.navigationController.navigationBar;
+    if ([bar respondsToSelector:@selector(setBarTintColor:)]){
+        bar.tintColor = tgRGB(38, 92, 140);
+        bar.barTintColor = tgRGB(64, 122, 173);
+        bar.titleTextAttributes = @{ NSForegroundColorAttributeName : [UIColor whiteColor] };
+    } else {
+        bar.tintColor = tgRGB(64, 122, 173);
+        bar.titleTextAttributes = @{ UITextAttributeTextColor : [UIColor whiteColor] };
+    }
 
     [self setupUI];
 
@@ -81,7 +86,9 @@ static CAGradientLayer *tgGloss(CGRect frame, UIColor *top, UIColor *bottom) {
     self.scrollView = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 0, width, height)];
     self.scrollView.backgroundColor = [UIColor clearColor];
     self.scrollView.alwaysBounceVertical = YES;
-    self.scrollView.keyboardDismissMode = UIScrollViewKeyboardDismissModeInteractive;
+    // keyboardDismissMode is iOS 7; harmless to skip on iOS 6.
+    if ([self.scrollView respondsToSelector:@selector(setKeyboardDismissMode:)])
+        self.scrollView.keyboardDismissMode = UIScrollViewKeyboardDismissModeInteractive;
     [self.view addSubview:self.scrollView];
 
     /* Embossed title: dark text with a white highlight underneath. */

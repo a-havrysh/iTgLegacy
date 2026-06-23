@@ -1,86 +1,34 @@
 /**
- * File              : AppDelegate.h
- * Author            : Igor V. Sementsov <ig.kuzm@gmail.com>
- * Date              : 09.08.2023
- * Last Modified Date: 13.09.2023
- * Last Modified By  : Igor V. Sementsov <ig.kuzm@gmail.com>
+ * AppDelegate - TDLib only. libtg is gone, along with its C structs, its
+ * queue/socket transport and everything that depended on them.
  */
-
-#include "Foundation/Foundation.h"
 #import <UIKit/UIKit.h>
-#include <stdio.h>
-#import "Reachability.h"
-#include "../libtg/libtg.h"
-
 #import "TGLoginViewController.h"
 
-@protocol AuthorizationDelegate <NSObject>
--(void)tgLibLoaded;
--(void)authorizedAs:(tl_user_t *)user;
-@end
+@interface AppDelegate : UIResponder <UIApplicationDelegate, UIAlertViewDelegate>
 
-@protocol ReachabilityDelegate <NSObject>
--(void)isOnLine;
--(void)isOffLine;
-@end
-
-@protocol AppActivityDelegate <NSObject>
--(void)willResignActive;
-@end
-
-enum {
-	ALLERT_TYPE_ASK_INPUT,
-	ALLERT_TYPE_YES_NO,
-};
-
-@interface AppDelegate : UIResponder <UIApplicationDelegate>
-
-@property (strong, nonatomic) NSString *token;
-@property (strong, nonatomic) NSTimer *timer;
 @property (strong, nonatomic) UIWindow *window;
-@property (strong,nonatomic) NSURL *url;
-@property NSInteger allertType;
-@property Boolean tokenAlreadyRequested;
-@property (strong, nonatomic) void (^askInput_onDone)(NSString *text);
-@property (strong, nonatomic) void (^askYesNo_onYes)();
+@property (strong, nonatomic) UIViewController *rootViewController;
+@property (strong, nonatomic) TGLoginViewController *loginVC;
+
 @property (strong) NSOperationQueue *syncData;
-@property FILE *log;
-@property tg_t *tg;
-@property tl_user_t *authorizedUser;
-@property long *user_id;
-@property (strong) id<AuthorizationDelegate> authorizationDelegate;
-@property (strong) Reachability *reach;
-@property (strong) id<ReachabilityDelegate> reachabilityDelegate;
-@property (strong) id<AppActivityDelegate> appActivityDelegate;
+
+/// Caches used by the image loaders.
+@property (strong) NSString *smallPhotoCache;
+@property (strong) NSString *peerPhotoCache;
 @property (strong) NSString *imagesCache;
 @property (strong) NSString *filesCache;
-@property (strong) NSString *peerPhotoCache;
-@property (strong) NSString *smallPhotoCache;
 @property (strong) NSString *thumbDocCache;
-@property (strong) id rootViewController;
-@property (strong) id dialogsViewController;
-@property (strong) TGLoginViewController *loginVC;
-@property (nonatomic, assign) tl_auth_sentCode_t *currentSentCode;
-@property (nonatomic, copy) NSString *currentPhoneNumber;
 
-@property (strong) NSArray *colorset;
-@property (strong) NSMutableArray *unread;
--(void)removeUnredId:(uint64_t)fromId;
-
+@property (copy) NSString *currentPhoneNumber;
+@property (strong) NSString *token;
 @property Boolean showNotifications;
+@property FILE *log;
 
 -(void)showMessage:(NSString *)msg;
--(void)askYesNo:(NSString *)msg onYes:(void (^)())onYes;
--(void)askInput:(NSString *)msg onDone:(void (^)(NSString *text))onDone;
--(void)authorize;
--(void)showNotification:(NSString *)msg;
--(Boolean)isOnLineAndAuthorized;
+-(void)showMainUI;
+-(void)showLoginUI;
 
--(void)setDebug:(Boolean)debug;
--(void)toggleShowNotifications:(Boolean)showNotifications;
-
-- (void)setupPlayAndRecordAudioSession;
-- (void)setupSoloAmbientAudioSession;
 @end
 
 // vim:ft=objc

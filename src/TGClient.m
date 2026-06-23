@@ -1,7 +1,7 @@
 #import "TGClient.h"
 #import <UIKit/UIKit.h>
 #include <dlfcn.h>
-#include "../libtg/api_id.h"
+#include "api_id.h"
 
 typedef void *(*td_create_fn)(void);
 typedef void  (*td_send_fn)(void *client, const char *request);
@@ -17,6 +17,18 @@ typedef const char *(*td_exec_fn)(void *client, const char *request);
 @property (nonatomic, assign) BOOL available;
 @property (nonatomic, assign) BOOL running;
 @property (nonatomic, copy)   NSString *pendingPhoneNumber;
+@property (nonatomic, strong) NSMutableDictionary *chatsById;   // id -> mutable info
+@property (nonatomic, strong) NSArray *chats;
+@property (nonatomic, strong) NSMutableArray *outbox;   // JSON strings awaiting send
+@property (nonatomic, strong) NSLock *outboxLock;
+@property (nonatomic, assign) NSUInteger chatsAtLastLoad;
+@property (nonatomic, assign) BOOL chatListComplete;
+@property (nonatomic, assign) NSUInteger loadChatsAttempts;
+@property (nonatomic, strong) NSDictionary *me;
+@property (nonatomic, assign) TGConnectionState connectionState;
+@property (nonatomic, strong) NSMutableDictionary *pendingRequests;  // @extra -> completion
+@property (nonatomic, assign) NSUInteger requestSeq;
+@property (nonatomic, strong) NSMutableDictionary *fileWaiters;      // fileId -> completions
 @end
 
 @implementation TGClient
@@ -24,7 +36,15 @@ typedef const char *(*td_exec_fn)(void *client, const char *request);
 + (instancetype)shared {
 	static TGClient *s = nil;
 	static dispatch_once_t once;
-	dispatch_once(&once, ^{ s = [[TGClient alloc] init]; });
+	dispatch_once(&once, ^{
+		s = [[TGClient alloc] init];
+		s.chatsById = [NSMutableDictionary dictionary];
+		s.chats = @[];
+		s.outbox = [NSMutableArray array];
+		s.pendingRequests = [NSMutableDictionary dictionary];
+		s.fileWaiters = [NSMutableDictionary dictionary];
+		s.outboxLock = [[NSLock alloc] init];
+	});
 	return s;
 }
 
@@ -64,14 +84,15 @@ typedef const char *(*td_exec_fn)(void *client, const char *request);
 	self.available = YES;
 	self.running = YES;
 
+	// The single-threaded ClientManager creates its scheduler lazily, on the
+	// first request - without this nothing ever runs and no update arrives.
+	// Queued before the thread starts so it goes out on the receive thread.
+	[self send:@{@"@type" : @"getAuthorizationState"}];
+
 	// TDLib runs single-threaded on armv7 (no thread-local storage), so its
 	// scheduler only advances while we are inside td_json_client_receive.
 	// Keep one thread parked in it.
 	[NSThread detachNewThreadSelector:@selector(receiveLoop) toTarget:self withObject:nil];
-
-	// The single-threaded ClientManager creates its scheduler lazily, on the
-	// first request - without this nothing ever runs and no update arrives.
-	[self send:@{@"@type" : @"getAuthorizationState"}];
 
 	NSLog(@"TGClient: started");
 	return YES;
@@ -80,6 +101,8 @@ typedef const char *(*td_exec_fn)(void *client, const char *request);
 - (void)receiveLoop {
 	while (self.running){
 		@autoreleasepool {
+			[self drainOutbox];
+
 			const char *res = self.td_recv(self.client, 1.0);
 			if (!res)
 				continue;
@@ -103,10 +126,11 @@ typedef const char *(*td_exec_fn)(void *client, const char *request);
 
 #pragma mark - sending
 
+// The single-threaded ClientManager requires send and receive on the SAME
+// thread: sending from elsewhere while the receive loop holds the scheduler
+// guard aborts on `Scheduler.cpp:126 Check !scheduler_->has_guard_ failed`.
+// So callers only enqueue here, and the receive thread does the sending.
 - (void)send:(NSDictionary *)request {
-	if (!self.available)
-		return;
-
 	NSError *err = nil;
 	NSData *data = [NSJSONSerialization dataWithJSONObject:request options:0 error:&err];
 	if (!data){
@@ -116,20 +140,129 @@ typedef const char *(*td_exec_fn)(void *client, const char *request);
 
 	NSMutableData *z = [data mutableCopy];   // td_json_client_send wants a C string
 	[z appendBytes:"\0" length:1];
-	self.td_send(self.client, z.bytes);
+
+	[self.outboxLock lock];
+	[self.outbox addObject:z];
+	[self.outboxLock unlock];
+}
+
+/// Runs on the receive thread only.
+- (void)drainOutbox {
+	if (!self.available)
+		return;
+
+	NSArray *pending;
+	[self.outboxLock lock];
+	pending = [self.outbox copy];
+	[self.outbox removeAllObjects];
+	[self.outboxLock unlock];
+
+	for (NSData *d in pending)
+		self.td_send(self.client, d.bytes);
+}
+
+- (void)request:(NSDictionary *)request completion:(void (^)(NSDictionary *))completion {
+	if (!completion){
+		[self send:request];
+		return;
+	}
+	NSString *extra = [NSString stringWithFormat:@"r%lu", (unsigned long)(++self.requestSeq)];
+	self.pendingRequests[extra] = [completion copy];
+
+	NSMutableDictionary *withExtra = [request mutableCopy];
+	withExtra[@"@extra"] = extra;
+	[self send:withExtra];
 }
 
 #pragma mark - updates
 
 - (void)handleUpdate:(NSDictionary *)obj {
+	// A reply to one of our requests: route it and stop.
+	NSString *extra = obj[@"@extra"];
+	if ([extra isKindOfClass:NSString.class]){
+		void (^completion)(NSDictionary *) = self.pendingRequests[extra];
+		if (completion){
+			[self.pendingRequests removeObjectForKey:extra];
+			completion(obj);
+			return;
+		}
+	}
 	NSString *type = obj[@"@type"];
+
+	// Log each response kind once - enough to see what TDLib actually sends
+	// without dumping the user's messages into the log.
+	static NSMutableSet *seen = nil;
+	if (!seen) seen = [NSMutableSet set];
+	if (type && ![seen containsObject:type]){
+		[seen addObject:type];
+		NSLog(@"TGClient: first %@", type);
+	}
 
 	if ([type isEqualToString:@"updateAuthorizationState"]){
 		[self handleAuthState:obj[@"authorization_state"]];
 		return;
 	}
+	// Answer to getMe. updateUser also carries our own record, but the direct
+	// reply is the one that always has the phone number.
+	if ([type isEqualToString:@"user"] && obj[@"phone_number"]){
+		self.me = @{
+			@"id"         : obj[@"id"] ?: @(0),
+			@"first_name" : obj[@"first_name"] ?: @"",
+			@"username"   : obj[@"usernames"][@"active_usernames"][0] ?: (obj[@"username"] ?: @""),
+			@"phone"      : obj[@"phone_number"] ?: @"",
+		};
+		NSLog(@"TGClient: signed in as +%@", self.me[@"phone"]);
+		return;
+	}
+	if ([type isEqualToString:@"updateNewChat"]){
+		[self mergeChat:obj[@"chat"]];
+		return;
+	}
+	if ([type isEqualToString:@"updateChatLastMessage"] ||
+		[type isEqualToString:@"updateChatPosition"] ||
+		[type isEqualToString:@"updateChatTitle"] ||
+		[type isEqualToString:@"updateChatReadInbox"]){
+		[self applyChatUpdate:obj];
+		return;
+	}
+	if ([type isEqualToString:@"updateConnectionState"]){
+		NSString *st = obj[@"state"][@"@type"];
+		NSLog(@"TGClient: connection %@", st);
+
+		TGConnectionState state = TGConnectionStateUnknown;
+		NSString *text = nil;
+		if ([st isEqualToString:@"connectionStateWaitingForNetwork"]){
+			state = TGConnectionStateWaitingForNetwork; text = @"Waiting for network";
+		} else if ([st isEqualToString:@"connectionStateConnecting"] ||
+				   [st isEqualToString:@"connectionStateConnectingToProxy"]){
+			state = TGConnectionStateConnecting; text = @"Connecting";
+		} else if ([st isEqualToString:@"connectionStateUpdating"]){
+			state = TGConnectionStateUpdating; text = @"Updating";
+		} else if ([st isEqualToString:@"connectionStateReady"]){
+			state = TGConnectionStateReady; text = nil;
+		}
+
+		self.connectionState = state;
+		if (self.onConnectionState)
+			self.onConnectionState(state, text);
+		return;
+	}
+	if ([type isEqualToString:@"updateUnreadChatCount"] ||
+		[type isEqualToString:@"updateChatFolders"]){
+		NSLog(@"TGClient: %@ total=%@ list=%@", type, obj[@"total_count"],
+				obj[@"chat_list"][@"@type"]);
+		return;
+	}
 	if ([type isEqualToString:@"error"]){
 		NSString *msg = obj[@"message"] ?: @"unknown error";
+		NSLog(@"TGClient: ERROR code=%@ msg=%@", obj[@"code"], msg);
+		if ([obj[@"code"] intValue] == 404){
+			// loadChats answers 404 when the whole list is loaded
+			self.chatListComplete = YES;
+			NSLog(@"TGClient: chat list complete (%lu)",
+					(unsigned long)self.chatsById.count);
+			return;
+		}
 		NSLog(@"TGClient: error: %@", obj);
 		if (self.onError)
 			self.onError(msg);
@@ -166,6 +299,10 @@ typedef const char *(*td_exec_fn)(void *client, const char *request);
 	}
 
 	self.authState = s;
+	if (s == TGAuthStateReady){
+		[self loadChats];
+		[self send:@{@"@type" : @"getMe"}];
+	}
 	if (s == TGAuthStateWaitPhoneNumber)
 		[self flushPendingPhoneNumber];
 	if (self.onAuthState)
@@ -232,6 +369,411 @@ typedef const char *(*td_exec_fn)(void *client, const char *request);
 		@"@type"    : @"checkAuthenticationPassword",
 		@"password" : password ?: @"",
 	}];
+}
+
+#pragma mark - files
+
+- (void)downloadFile:(NSInteger)fileId completion:(void (^)(NSString *))completion {
+	if (fileId <= 0){
+		if (completion) completion(nil);
+		return;
+	}
+
+	__weak typeof(self) weakSelf = self;
+	[self request:@{
+		@"@type"       : @"downloadFile",
+		@"file_id"     : @(fileId),
+		@"priority"    : @(1),
+		@"offset"      : @(0),
+		@"limit"       : @(0),
+		@"synchronous" : @YES,     // reply only once the file is on disk
+	} completion:^(NSDictionary *result){
+		TGClient *me = weakSelf;
+		(void)me;
+		NSString *path = result[@"local"][@"path"];
+		BOOL done = [result[@"local"][@"is_downloading_completed"] boolValue];
+		if (completion)
+			completion((done && path.length) ? path : nil);
+	}];
+}
+
+#pragma mark - messages
+
+/// Flatten a TDLib message into what the UI needs.
+static NSDictionary *TGFlattenMessage(NSDictionary *m) {
+	NSDictionary *content = m[@"content"];
+	NSString *ctype = content[@"@type"];
+	NSNumber *photoFileId = nil;   // an image to show in the bubble
+	NSNumber *docFileId   = nil;   // a file to offer for download
+	NSString *docName     = nil;
+
+	if ([ctype isEqualToString:@"messagePhoto"]){
+		// sizes are ordered small to large; take the largest that exists
+		NSArray *sizes = content[@"photo"][@"sizes"];
+		if (sizes.count)
+			photoFileId = [sizes lastObject][@"photo"][@"id"];
+	} else if ([ctype isEqualToString:@"messageVideo"]){
+		photoFileId = content[@"video"][@"thumbnail"][@"file"][@"id"];
+		docFileId   = content[@"video"][@"video"][@"id"];
+		docName     = content[@"video"][@"file_name"];
+	} else if ([ctype isEqualToString:@"messageVideoNote"]){
+		photoFileId = content[@"video_note"][@"thumbnail"][@"file"][@"id"];
+		docFileId   = content[@"video_note"][@"video"][@"id"];
+	} else if ([ctype isEqualToString:@"messageDocument"]){
+		photoFileId = content[@"document"][@"thumbnail"][@"file"][@"id"];
+		docFileId   = content[@"document"][@"document"][@"id"];
+		docName     = content[@"document"][@"file_name"];
+	} else if ([ctype isEqualToString:@"messageVoiceNote"]){
+		docFileId   = content[@"voice_note"][@"voice"][@"id"];
+	} else if ([ctype isEqualToString:@"messageAudio"]){
+		docFileId   = content[@"audio"][@"audio"][@"id"];
+		docName     = content[@"audio"][@"file_name"];
+	} else if ([ctype isEqualToString:@"messageSticker"]){
+		photoFileId = content[@"sticker"][@"sticker"][@"id"];
+	}
+
+	// In a bubble the picture speaks for itself: show the caption if there is
+	// one, otherwise nothing. The generic "Photo"/"Video" wording belongs in
+	// the chat list, which calls TGMessagePreview directly.
+	NSString *caption = content[@"caption"][@"text"];
+	NSString *text = caption.length ? caption
+			: (photoFileId ? @"" : TGMessagePreview(m));
+
+	return @{
+		@"id"        : m[@"id"] ?: @(0),
+		@"text"      : text,
+		@"kind"      : ctype ?: @"",
+		@"date"      : m[@"date"] ?: @(0),
+		@"outgoing"  : m[@"is_outgoing"] ?: @NO,
+		@"senderId"  : m[@"sender_id"][@"user_id"] ?: @(0),
+		@"photoId"   : photoFileId ?: [NSNull null],
+		@"docId"     : docFileId   ?: [NSNull null],
+		@"docName"   : docName     ?: @"",
+	};
+}
+
+- (void)historyForChat:(int64_t)chatId
+                 limit:(NSInteger)limit
+            completion:(void (^)(NSArray *))completion {
+	// getChatHistory returns only what TDLib already holds, and picks the
+	// batch size itself - a first call on a cold chat often answers with one
+	// message. Walk backwards from the newest until we have enough or the
+	// chat runs out.
+	NSMutableArray *collected = [NSMutableArray array];
+	[self fetchHistoryChunkForChat:chatId
+					 fromMessageId:0
+							 limit:limit
+						 collected:collected
+						completion:completion];
+}
+
+- (void)fetchHistoryChunkForChat:(int64_t)chatId
+                   fromMessageId:(int64_t)fromMessageId
+                           limit:(NSInteger)limit
+                       collected:(NSMutableArray *)collected
+                      completion:(void (^)(NSArray *))completion {
+	__weak typeof(self) weakSelf = self;
+	[self request:@{
+		@"@type"           : @"getChatHistory",
+		@"chat_id"         : @(chatId),
+		@"from_message_id" : @(fromMessageId),
+		@"offset"          : @(0),
+		@"limit"           : @(limit),
+		@"only_local"      : @NO,
+	} completion:^(NSDictionary *result){
+		TGClient *me = weakSelf;
+		NSArray *msgs = result[@"messages"];
+
+		if (!me || ![msgs isKindOfClass:NSArray.class] || msgs.count == 0){
+			// End of the chat, or an error - hand back what we have, oldest
+			// first, which is the order a chat view wants.
+			if (completion)
+				completion([[collected reverseObjectEnumerator] allObjects]);
+			return;
+		}
+
+		for (NSDictionary *m in msgs)
+			[collected addObject:TGFlattenMessage(m)];
+
+		int64_t oldest = [[msgs lastObject][@"id"] longLongValue];
+		if ((NSInteger)collected.count >= limit || oldest == 0){
+			if (completion)
+				completion([[collected reverseObjectEnumerator] allObjects]);
+			return;
+		}
+
+		[me fetchHistoryChunkForChat:chatId
+					   fromMessageId:oldest
+							   limit:limit - collected.count
+						   collected:collected
+						  completion:completion];
+	}];
+}
+
+- (void)sendText:(NSString *)text toChat:(int64_t)chatId {
+	[self send:@{
+		@"@type"                : @"sendMessage",
+		@"chat_id"              : @(chatId),
+		@"input_message_content": @{
+			@"@type" : @"inputMessageText",
+			@"text"  : @{@"@type" : @"formattedText", @"text" : text ?: @""},
+		},
+	}];
+}
+
+- (void)deleteMessage:(int64_t)messageId inChat:(int64_t)chatId {
+	[self send:@{
+		@"@type"        : @"deleteMessages",
+		@"chat_id"      : @(chatId),
+		@"message_ids"  : @[@(messageId)],
+		@"revoke"       : @YES,
+	}];
+}
+
+- (void)markRead:(NSArray *)messageIds inChat:(int64_t)chatId {
+	if (!messageIds.count)
+		return;
+	[self send:@{
+		@"@type"       : @"viewMessages",
+		@"chat_id"     : @(chatId),
+		@"message_ids" : messageIds,
+		@"force_read"  : @YES,
+	}];
+}
+
+#pragma mark - contacts
+
+- (void)contactsWithCompletion:(void (^)(NSArray *))completion {
+	__weak typeof(self) weakSelf = self;
+	[self request:@{@"@type" : @"getContacts"} completion:^(NSDictionary *result){
+		NSArray *ids = result[@"user_ids"];
+		if (![ids isKindOfClass:NSArray.class]){
+			if (completion) completion(@[]);
+			return;
+		}
+
+		// Fetch each user; finish when the last one answers.
+		NSMutableArray *users = [NSMutableArray array];
+		__block NSUInteger left = ids.count;
+		if (!left){
+			if (completion) completion(@[]);
+			return;
+		}
+		for (NSNumber *uid in ids){
+			[weakSelf request:@{@"@type" : @"getUser", @"user_id" : uid}
+				   completion:^(NSDictionary *u){
+				if ([u[@"@type"] isEqualToString:@"user"]){
+					[users addObject:@{
+						@"id"         : u[@"id"] ?: @(0),
+						@"first_name" : u[@"first_name"] ?: @"",
+						@"last_name"  : u[@"last_name"] ?: @"",
+						@"phone"      : u[@"phone_number"] ?: @"",
+						@"username"   : u[@"usernames"][@"active_usernames"][0] ?: @"",
+					}];
+				}
+				if (--left == 0 && completion)
+					completion(users);
+			}];
+		}
+	}];
+}
+
+- (void)privateChatWithUser:(int64_t)userId completion:(void (^)(int64_t))completion {
+	[self request:@{
+		@"@type"   : @"createPrivateChat",
+		@"user_id" : @(userId),
+		@"force"   : @NO,
+	} completion:^(NSDictionary *chat){
+		if (completion)
+			completion([chat[@"id"] longLongValue]);
+	}];
+}
+
+- (void)userForPhone:(NSString *)phone completion:(void (^)(NSDictionary *))completion {
+	if (!phone.length){
+		if (completion) completion(nil);
+		return;
+	}
+	[self request:@{
+		@"@type"        : @"searchUserByPhoneNumber",
+		@"phone_number" : phone,
+	} completion:^(NSDictionary *u){
+		if (![u[@"@type"] isEqualToString:@"user"]){
+			if (completion) completion(nil);
+			return;
+		}
+		if (completion) completion(@{
+			@"id"         : u[@"id"] ?: @(0),
+			@"first_name" : u[@"first_name"] ?: @"",
+			@"last_name"  : u[@"last_name"] ?: @"",
+			@"phone"      : u[@"phone_number"] ?: @"",
+			@"username"   : u[@"usernames"][@"active_usernames"][0] ?: @"",
+		});
+	}];
+}
+
+#pragma mark - maintenance
+
+- (void)clearLocalDatabase {
+	// Wipes cached chats/messages but keeps the session.
+	[self send:@{@"@type" : @"optimizeStorage", @"chat_limit" : @(0)}];
+	[self.chatsById removeAllObjects];
+	[self rebuildChats];
+}
+
+#pragma mark - chats
+
+- (void)loadChats {
+	// TDLib only emits updateNewChat/updateChatPosition after the list is
+	// asked for; without loadChats nothing about chats ever arrives. It also
+	// loads in batches - one call is one batch, and it answers with error 404
+	// once everything is loaded - so this has to be repeated until the list
+	// stops growing.
+	if (self.chatListComplete)
+		return;
+	self.chatsAtLastLoad = self.chatsById.count;
+	NSLog(@"TGClient: loadChats attempt %lu (have %lu)",
+			(unsigned long)self.loadChatsAttempts + 1,
+			(unsigned long)self.chatsById.count);
+	[self send:@{
+		@"@type"     : @"loadChats",
+		@"chat_list" : @{@"@type" : @"chatListMain"},
+		@"limit"     : @(50),
+	}];
+
+	// A batch beyond the first needs a server round trip, so silence for a
+	// second or two means nothing. Keep asking on a timer and stop only when
+	// TDLib says 404 (everything loaded) or after a sane number of tries.
+	self.loadChatsAttempts++;
+	if (self.loadChatsAttempts > 12)
+		return;
+
+	__weak typeof(self) weakSelf = self;
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)),
+			dispatch_get_main_queue(), ^{
+		TGClient *me = weakSelf;
+		if (me && !me.chatListComplete)
+			[me loadChats];
+	});
+}
+
+/// Preview text for a chat's last message. TDLib nests the content by type.
+static NSString *TGMessagePreview(NSDictionary *message) {
+	NSDictionary *content = message[@"content"];
+	NSString *ctype = content[@"@type"];
+
+	if ([ctype isEqualToString:@"messageText"])
+		return content[@"text"][@"text"] ?: @"";
+	if ([ctype isEqualToString:@"messagePhoto"])
+		return @"Photo";
+	if ([ctype isEqualToString:@"messageVideo"])
+		return @"Video";
+	if ([ctype isEqualToString:@"messageVoiceNote"])
+		return @"Voice message";
+	if ([ctype isEqualToString:@"messageVideoNote"])
+		return @"Video message";
+	if ([ctype isEqualToString:@"messageSticker"])
+		return @"Sticker";
+	if ([ctype isEqualToString:@"messageDocument"])
+		return @"Document";
+	if ([ctype isEqualToString:@"messageAudio"])
+		return @"Audio";
+	if ([ctype isEqualToString:@"messageAnimation"])
+		return @"GIF";
+	return ctype ?: @"";
+}
+
+/// Chats are ordered by the "order" of their position in the main list. It is
+/// an int64 sent as a string, so it must not be compared as a string.
+static int64_t TGMainListOrder(NSArray *positions) {
+	for (NSDictionary *p in positions){
+		NSDictionary *list = p[@"list"];
+		if ([list[@"@type"] isEqualToString:@"chatListMain"])
+			return (int64_t)[p[@"order"] longLongValue];
+	}
+	return 0;
+}
+
+- (void)mergeChat:(NSDictionary *)chat {
+	if (![chat isKindOfClass:NSDictionary.class])
+		return;
+
+	NSNumber *chatId = chat[@"id"];
+	if (!chatId)
+		return;
+
+	NSMutableDictionary *info = self.chatsById[chatId];
+	if (!info){
+		info = [NSMutableDictionary dictionary];
+		self.chatsById[chatId] = info;
+	}
+
+	info[@"id"] = chatId;
+	if (chat[@"title"])
+		info[@"title"] = chat[@"title"];
+	if (chat[@"unread_count"])
+		info[@"unread"] = chat[@"unread_count"];
+	if (chat[@"positions"])
+		info[@"order"] = @(TGMainListOrder(chat[@"positions"]));
+
+	// Small avatar, if the chat has one. Downloaded lazily; the id is enough
+	// for the UI to ask for it later.
+	NSNumber *photoFile = chat[@"photo"][@"small"][@"id"];
+	if (photoFile)
+		info[@"photoFileId"] = photoFile;
+
+	NSDictionary *last = chat[@"last_message"];
+	if ([last isKindOfClass:NSDictionary.class]){
+		info[@"text"] = TGMessagePreview(last);
+		info[@"date"] = last[@"date"] ?: @(0);
+	}
+
+	[self rebuildChats];
+}
+
+- (void)applyChatUpdate:(NSDictionary *)update {
+	NSNumber *chatId = update[@"chat_id"];
+	if (!chatId)
+		return;
+
+	NSMutableDictionary *info = self.chatsById[chatId];
+	if (!info){
+		info = [NSMutableDictionary dictionary];
+		info[@"id"] = chatId;
+		self.chatsById[chatId] = info;
+	}
+
+	if (update[@"title"])
+		info[@"title"] = update[@"title"];
+	if (update[@"unread_count"])
+		info[@"unread"] = update[@"unread_count"];
+
+	NSDictionary *last = update[@"last_message"];
+	if ([last isKindOfClass:NSDictionary.class]){
+		info[@"text"] = TGMessagePreview(last);
+		info[@"date"] = last[@"date"] ?: @(0);
+	}
+
+	if (update[@"positions"])
+		info[@"order"] = @(TGMainListOrder(update[@"positions"]));
+	NSDictionary *position = update[@"position"];
+	if ([position isKindOfClass:NSDictionary.class])
+		info[@"order"] = @(TGMainListOrder(@[position]));
+
+	[self rebuildChats];
+}
+
+- (void)rebuildChats {
+	NSArray *all = self.chatsById.allValues;
+	self.chats = [all sortedArrayUsingComparator:^NSComparisonResult(id a, id b){
+		int64_t oa = [a[@"order"] longLongValue];
+		int64_t ob = [b[@"order"] longLongValue];
+		if (oa == ob) return NSOrderedSame;
+		return oa > ob ? NSOrderedAscending : NSOrderedDescending;   // newest first
+	}];
+
+	if (self.onChatsChanged)
+		self.onChatsChanged();
 }
 
 - (void)logOut {

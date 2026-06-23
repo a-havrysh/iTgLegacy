@@ -1,61 +1,39 @@
 /**
- * File              : RootViewController.m
- * Author            : Igor V. Sementsov <ig.kuzm@gmail.com>
- * Date              : 22.08.2023
- * Last Modified Date: 13.09.2023
- * Last Modified By  : Igor V. Sementsov <ig.kuzm@gmail.com>
+ * RootViewController - the tab bar. Three screens, all on TDLib.
  */
 #import "RootViewController.h"
-#include "AppDelegate.h"
-#include "Foundation/Foundation.h"
-#include "UIKit/UIKit.h"
-#import "DialogsViewController.h"
-#import "ConfigViewController.h"
-#import "ContactsListViewController.h"
+#import "TGChatListViewController.h"
+#import "TGContactsViewController.h"
+#import "TGSettingsViewController.h"
 
 @implementation RootViewController
+
 - (void)viewDidLoad {
-	
-	// contacts view
-	ContactsListViewController *cvc = 
-		[[ContactsListViewController alloc]init];
-	cvc.title = @"Contacts";
-	// ponytail: no eager [cvc getContacts] here - ABAddressBookCreateWithOptions
-	// reads the whole address book on the main thread and cvc's own viewDidLoad
-	// already does it, lazily, when the Contacts tab is first opened.
-	UINavigationController *cvnc =
-		[[UINavigationController alloc]initWithRootViewController:cvc];
-	UITabBarItem *cvtbi = [[UITabBarItem alloc]
-			initWithTabBarSystemItem:UITabBarSystemItemContacts tag:0];
-	[cvnc setTabBarItem:cvtbi];
+	[super viewDidLoad];
 
-	// chats view
-	DialogsViewController *dvc = 
-		[[DialogsViewController alloc]init];
-	dvc.title = @"Dialogs";
-	UINavigationController *dvcnc =
-		[[UINavigationController alloc]initWithRootViewController:dvc];
-	UITabBarItem *dvctbi = [[UITabBarItem alloc]
-		initWithTabBarSystemItem:UITabBarSystemItemRecents tag:1];
-	dvctbi.title = @"Dialogs";
-	[dvcnc setTabBarItem:dvctbi];
+	TGChatListViewController *chats = [[TGChatListViewController alloc] init];
+	UINavigationController *chatsNC =
+		[[UINavigationController alloc] initWithRootViewController:chats];
+	chatsNC.tabBarItem = [[UITabBarItem alloc]
+		initWithTabBarSystemItem:UITabBarSystemItemRecents tag:0];
+	chatsNC.tabBarItem.title = @"Chats";
 
-	// config view
-	ConfigViewController *configvc = 
-		[[ConfigViewController alloc]initWithStyle:UITableViewStyleGrouped];
-	configvc.title = @"Config";
-	UINavigationController *confignc =
-		[[UINavigationController alloc]initWithRootViewController:configvc];
-	UITabBarItem *configtbi = [[UITabBarItem alloc]
+	TGContactsViewController *contacts = [[TGContactsViewController alloc] init];
+	UINavigationController *contactsNC =
+		[[UINavigationController alloc] initWithRootViewController:contacts];
+	contactsNC.tabBarItem = [[UITabBarItem alloc]
+		initWithTabBarSystemItem:UITabBarSystemItemContacts tag:1];
+
+	TGSettingsViewController *settings = [[TGSettingsViewController alloc] init];
+	UINavigationController *settingsNC =
+		[[UINavigationController alloc] initWithRootViewController:settings];
+	settingsNC.tabBarItem = [[UITabBarItem alloc]
 		initWithTabBarSystemItem:UITabBarSystemItemMore tag:2];
 
-	[confignc setTabBarItem:configtbi];
-
-	[self setViewControllers:@[cvnc, dvcnc, confignc] animated:TRUE];
-	[self setSelectedViewController:dvcnc];
+	[self setViewControllers:@[chatsNC, contactsNC, settingsNC] animated:NO];
+	[self setSelectedIndex:0];
 }
 
 @end
-
 
 // vim:ft=objc

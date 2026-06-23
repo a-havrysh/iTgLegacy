@@ -61,8 +61,6 @@ INCLUDES  := -I$(ROOT_DIR)/include \
              -I$(ROOT_DIR)/src/opus/include/opus \
              -I$(ROOT_DIR)/src/opusenc \
              -I$(ROOT_DIR)/src/opusfile \
-             -I$(ROOT_DIR)/libtg \
-             -I$(ROOT_DIR)/libtg/mtx \
              -I$(ROOT_DIR)/tdlib/td \
              -I$(ROOT_DIR)/tdlib/include \
              -I$(BUILD_DIR)/armv7/tdlib/include \
@@ -78,131 +76,30 @@ FRAMEWORKS := -framework UIKit -framework Foundation -framework QuickLook \
               -framework AddressBookUI -framework MobileCoreServices \
               -framework CoreLocation -framework MapKit
 
-TDLIB_LIBS := -ltdjson_static -ltdjson_private -ltdclient -ltdcore -ltdapi -ltddb -ltdmtproto -ltdactor -ltdnet -ltdsqlite -ltde2e -ltdtl -ltdutils
-DEPS_LIBS  := -lopus -lcrypto -lssl -lcurl -lnghttp2 -lstdc++ -lsqlite3 -lz
+# TDLib is loaded at runtime from libtdjson.dylib, never linked.
+TDLIB_LIBS :=
+DEPS_LIBS  := -lstdc++ -lz
 
 # ------------------------------------------------------------------------------
 # Source Files
 # ------------------------------------------------------------------------------
-LIBTG_SRC_C := \
-	libtg/crypto/pbkdf2.c \
-	libtg/crypto/hsh.c \
-	libtg/crypto/aes.c \
-	libtg/crypto/cmn.c \
-	libtg/crypto/rsa.c \
-	libtg/tg/darwin-posix-rt/clock_gettime.c \
-	libtg/tg/2fa.c \
-	libtg/tg/ack.c \
-	libtg/tg/answer.c \
-	libtg/tg/auth.c \
-	libtg/tg/auth_key.c \
-	libtg/tg/channel.c \
-	libtg/tg/chat.c \
-	libtg/tg/connect.c \
-	libtg/tg/database.c \
-	libtg/tg/dialogs.c \
-	libtg/tg/ds.c \
-	libtg/tg/encrypt.c \
-	libtg/tg/errors.c \
-	libtg/tg/files.c \
-	libtg/tg/header.c \
-	libtg/tg/images.c \
-	libtg/tg/messages.c \
-	libtg/tg/net.c \
-	libtg/tg/ntp.c \
-	libtg/tg/peer.c \
-	libtg/tg/prepare_query.c \
-	libtg/tg/queue.c \
-	libtg/tg/send_query.c \
-	libtg/tg/strerr.c \
-	libtg/tg/tg.c \
-	libtg/tg/transport.c \
-	libtg/tg/updates.c \
-	libtg/tg/user.c \
-	libtg/tl/buf.c \
-	libtg/tl/deserialize.c \
-	libtg/tl/deserialize_table.c \
-	libtg/tl/free.c \
-	libtg/tl/gunzip.c \
-	libtg/tl/methods.c \
-	libtg/tl/serialize.c \
-	libtg/mtx/src/aes.c \
-	libtg/mtx/src/api.c \
-	libtg/mtx/src/app.c \
-	libtg/mtx/src/buf.c \
-	libtg/mtx/src/cmn.c \
-	libtg/mtx/src/crc.c \
-	libtg/mtx/src/cry.c \
-	libtg/mtx/src/enl.c \
-	libtg/mtx/src/hdl.c \
-	libtg/mtx/src/hsh.c \
-	libtg/mtx/src/log.c \
-	libtg/mtx/src/net.c \
-	libtg/mtx/src/rfc.c \
-	libtg/mtx/src/rsa.c \
-	libtg/mtx/src/scl.c \
-	libtg/mtx/src/sel.c \
-	libtg/mtx/src/sha1.c \
-	libtg/mtx/src/sha256.c \
-	libtg/mtx/src/sil.c \
-	libtg/mtx/src/srl.c \
-	libtg/mtx/src/std.c \
-	libtg/mtx/src/stk.c \
-	libtg/mtx/src/tgt.c \
-	libtg/mtx/src/tml.c \
-	libtg/mtx/src/trl.c \
-	libtg/mtx/src/types.c \
-	libtg/tools/cafextract.c \
-	libtg/tools/pcm_to_opusogg.c \
-	libtg/tools/opus_to_wav.c
+LIBTG_SRC_C :=
 
-LIBTG_SRC_CXX := \
-	libtg/mtx/src/fact.cpp
+LIBTG_SRC_CXX :=
 
 APP_SRC_M := \
 	src/AppDelegate.m \
 	src/RootViewController.m \
-	src/DialogViewCell.m \
-	src/DialogsViewController.m \
-	src/ChatViewController.m \
-	src/ContactsListViewController.m \
-	src/ConfigViewController.m \
-	src/TextEditViewController.m \
-	src/QuickLookController.m \
-	src/FilePickerController.m \
-	src/Reachability.m \
-	src/TGDialog.m \
-	src/TGMessage.m \
-	src/TGVideoPlayer.m \
-	src/DownloadManager.m \
-	src/ChatBox.m \
-	src/InputToolBar.m \
 	src/main.m \
-	src/UIInputToolbar/BHExpandingTextView.m \
-	src/UIInputToolbar/BHExpandingTextViewInternal.m \
-	src/UIInputToolbar/BHInputToolbar.m \
-	src/BubbleView/NSBubbleData.m \
-	src/BubbleView/UIBubbleHeaderTableViewCell.m \
-	src/BubbleView/UIBubbleTableView.m \
-	src/BubbleView/UIBubbleTableViewCell.m \
-	src/BubbleView/UIBubbleTypingTableViewCell.m \
-	src/Base64/Base64.m \
-	src/UIImage+Utils/UIImage+Utils.m \
-	src/opusenc/opusenc.m \
+	src/TGClient.m \
 	src/TGLoginViewController.m \
-	src/TGClient.m
+	src/TGChatListViewController.m \
+	src/TGChatViewController.m \
+	src/TGContactsViewController.m \
+	src/TGSettingsViewController.m
 
 APP_SRC_C := \
-	src/tlv_polyfill.c \
-	src/opusfile/internal.c \
-	src/opusfile/opusfile.c \
-	src/opusfile/info.c \
-	src/opusfile/stream.c \
-	src/ogg/ogg/framing.c \
-	src/opusenc/opus_header.c \
-	src/opusenc/picture.c \
-	src/opusenc/diag_range.c \
-	src/opusenc/wav_io.c
+	src/tlv_polyfill.c
 
 # Object mapping for armv7
 ARMV7_OBJ_DIR := $(BUILD_DIR)/armv7/obj
@@ -269,7 +166,6 @@ ipa-armv7: $(MACHOFIX) $(ARMV7_ALL_OBJS)
 		$(ARMV7_ALL_OBJS) $(FRAMEWORKS) $(TDLIB_LIBS) $(DEPS_LIBS) -o "$(BUILD_DIR)/armv7/app/iTgLegacy.app/iTgLegacy"
 	@cp -f "$(ROOT_DIR)/src/Info.plist" "$(BUILD_DIR)/armv7/app/iTgLegacy.app/Info.plist" 2>/dev/null || true
 	@cp -rf "$(ROOT_DIR)/images/"* "$(BUILD_DIR)/armv7/app/iTgLegacy.app/" 2>/dev/null || true
-	cp -f "$(ROOT_DIR)/libtg/pub.pkcs" "$(BUILD_DIR)/armv7/app/iTgLegacy.app/pub.pkcs"
 	@# TDLib rides along as its own image: statically linked it pushes __TEXT
 	@# past the 16MB armv7 thumb branch limit. Built by scripts/build_tdlib_dylib.sh.
 	@cp -f "$(BUILD_DIR)/armv7/tdlib/lib/libtdjson.dylib" "$(BUILD_DIR)/armv7/app/iTgLegacy.app/" 2>/dev/null || echo "[!] no libtdjson.dylib - run scripts/build_tdlib_dylib.sh"
@@ -290,7 +186,6 @@ ipa-arm64: $(ARM64_ALL_OBJS)
 		$(ARM64_ALL_OBJS) $(FRAMEWORKS) $(TDLIB_LIBS) $(DEPS_LIBS) -o "$(BUILD_DIR)/arm64/app/iTgLegacy.app/iTgLegacy"
 	@cp -f "$(ROOT_DIR)/src/Info.plist" "$(BUILD_DIR)/arm64/app/iTgLegacy.app/Info.plist" 2>/dev/null || true
 	@cp -rf "$(ROOT_DIR)/images/"* "$(BUILD_DIR)/arm64/app/iTgLegacy.app/" 2>/dev/null || true
-	cp -f "$(ROOT_DIR)/libtg/pub.pkcs" "$(BUILD_DIR)/arm64/app/iTgLegacy.app/pub.pkcs"
 	@codesign -s - --force "$(BUILD_DIR)/arm64/app/iTgLegacy.app" 2>/dev/null || true
 	@rm -rf "$(BUILD_DIR)/Payload" "$(IPA_ARM64)"
 	@mkdir -p "$(BUILD_DIR)/Payload"
