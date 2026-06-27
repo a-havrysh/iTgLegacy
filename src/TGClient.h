@@ -86,7 +86,13 @@ typedef NS_ENUM(NSInteger, TGConnectionState) {
                  limit:(NSInteger)limit
             completion:(void (^)(NSArray *messages))completion;
 
+/// Fired on the main queue when a message arrives, is edited or deleted in
+/// any chat. `message` is the flattened form; nil means it was deleted.
+@property (nonatomic, copy) void (^onMessage)(int64_t chatId, NSDictionary *message, int64_t deletedId);
+
 - (void)sendText:(NSString *)text toChat:(int64_t)chatId;
+/// Send a local image file. TDLib uploads it and echoes the message back.
+- (void)sendPhotoAtPath:(NSString *)path toChat:(int64_t)chatId;
 - (void)deleteMessage:(int64_t)messageId inChat:(int64_t)chatId;
 - (void)markRead:(NSArray *)messageIds inChat:(int64_t)chatId;
 

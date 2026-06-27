@@ -8,9 +8,14 @@
 #import <UIKit/UIKit.h>
 
 @interface TGChatViewController : UIViewController
-    <UITableViewDataSource, UITableViewDelegate, UITextFieldDelegate>
+    <UITableViewDataSource, UITableViewDelegate, UITextFieldDelegate,
+     UIImagePickerControllerDelegate, UINavigationControllerDelegate>
 
 @property (nonatomic, assign) int64_t chatId;
 @property (nonatomic, copy)   NSString *chatTitle;
+
+/// Run the tap handler for a row, without a touch. Used by
+/// itglegacy://tap/N so playback and viewers can be exercised remotely.
+- (void)simulateTapOnRow:(NSInteger)row;
 
 @end

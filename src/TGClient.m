@@ -31,6 +31,8 @@ typedef const char *(*td_exec_fn)(void *client, const char *request);
 @property (nonatomic, strong) NSMutableDictionary *fileWaiters;      // fileId -> completions
 @end
 
+static NSDictionary *TGFlattenMessage(NSDictionary *m);
+
 @implementation TGClient
 
 + (instancetype)shared {
@@ -212,6 +214,27 @@ typedef const char *(*td_exec_fn)(void *client, const char *request);
 			@"phone"      : obj[@"phone_number"] ?: @"",
 		};
 		NSLog(@"TGClient: signed in as +%@", self.me[@"phone"]);
+		return;
+	}
+	// Live message updates - without these a chat only refreshes when reopened.
+	if ([type isEqualToString:@"updateNewMessage"]){
+		NSDictionary *m = obj[@"message"];
+		if (self.onMessage && m)
+			self.onMessage([m[@"chat_id"] longLongValue], TGFlattenMessage(m), 0);
+		return;
+	}
+	if ([type isEqualToString:@"updateMessageContent"]){
+		// Content changed in place (a photo finished uploading, a text edited).
+		if (self.onMessage)
+			self.onMessage([obj[@"chat_id"] longLongValue], nil, 0);
+		return;
+	}
+	if ([type isEqualToString:@"updateDeleteMessages"]){
+		if ([obj[@"is_permanent"] boolValue] && self.onMessage){
+			int64_t chatId = [obj[@"chat_id"] longLongValue];
+			for (NSNumber *mid in obj[@"message_ids"])
+				self.onMessage(chatId, nil, [mid longLongValue]);
+		}
 		return;
 	}
 	if ([type isEqualToString:@"updateNewChat"]){
@@ -404,40 +427,105 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 	NSDictionary *content = m[@"content"];
 	NSString *ctype = content[@"@type"];
 	NSNumber *photoFileId = nil;   // an image to show in the bubble
-	NSNumber *docFileId   = nil;   // a file to offer for download
+	NSNumber *docFileId   = nil;   // a file to play or offer for download
 	NSString *docName     = nil;
+	NSString *extra       = nil;   // text the content itself carries
+	NSNumber *latitude = nil, *longitude = nil;
 
 	if ([ctype isEqualToString:@"messagePhoto"]){
-		// sizes are ordered small to large; take the largest that exists
+		// sizes run small to large; take the largest present
 		NSArray *sizes = content[@"photo"][@"sizes"];
 		if (sizes.count)
 			photoFileId = [sizes lastObject][@"photo"][@"id"];
+
 	} else if ([ctype isEqualToString:@"messageVideo"]){
 		photoFileId = content[@"video"][@"thumbnail"][@"file"][@"id"];
 		docFileId   = content[@"video"][@"video"][@"id"];
 		docName     = content[@"video"][@"file_name"];
+
 	} else if ([ctype isEqualToString:@"messageVideoNote"]){
 		photoFileId = content[@"video_note"][@"thumbnail"][@"file"][@"id"];
 		docFileId   = content[@"video_note"][@"video"][@"id"];
+
+	} else if ([ctype isEqualToString:@"messageAnimation"]){
+		// Telegram GIFs are MP4, so they play like any video.
+		photoFileId = content[@"animation"][@"thumbnail"][@"file"][@"id"];
+		docFileId   = content[@"animation"][@"animation"][@"id"];
+		docName     = content[@"animation"][@"file_name"];
+
+	} else if ([ctype isEqualToString:@"messageSticker"] ||
+			   [ctype isEqualToString:@"messageAnimatedEmoji"]){
+		NSDictionary *sticker = [ctype isEqualToString:@"messageSticker"]
+			? content[@"sticker"]
+			: content[@"animated_emoji"][@"sticker"];
+		NSString *format = sticker[@"format"][@"@type"];
+
+		if ([format isEqualToString:@"stickerFormatTgs"]){
+			// Lottie vector animation - TGLottieView plays it. The thumbnail
+			// is kept as what to show until the file arrives.
+			docFileId   = sticker[@"sticker"][@"id"];
+			photoFileId = sticker[@"thumbnail"][@"file"][@"id"];
+			docName     = @"tgs";
+		} else if ([format isEqualToString:@"stickerFormatWebp"]){
+			photoFileId = sticker[@"sticker"][@"id"];
+		} else {
+			// .webm is VP9, which this device cannot decode - thumbnail only.
+			photoFileId = sticker[@"thumbnail"][@"file"][@"id"];
+		}
+
+		extra = content[@"emoji"] ?: sticker[@"emoji"];
+
 	} else if ([ctype isEqualToString:@"messageDocument"]){
 		photoFileId = content[@"document"][@"thumbnail"][@"file"][@"id"];
 		docFileId   = content[@"document"][@"document"][@"id"];
 		docName     = content[@"document"][@"file_name"];
+		NSNumber *size = content[@"document"][@"document"][@"size"];
+		extra = size.longLongValue > 0
+			? [NSString stringWithFormat:@"%@\n%.1f KB", docName ?: @"Document",
+					size.doubleValue / 1024.0]
+			: (docName ?: @"Document");
+
 	} else if ([ctype isEqualToString:@"messageVoiceNote"]){
-		docFileId   = content[@"voice_note"][@"voice"][@"id"];
+		docFileId = content[@"voice_note"][@"voice"][@"id"];
+		NSNumber *dur = content[@"voice_note"][@"duration"];
+		extra = [NSString stringWithFormat:@"Voice message  %ld:%02ld",
+				(long)(dur.integerValue / 60), (long)(dur.integerValue % 60)];
+
 	} else if ([ctype isEqualToString:@"messageAudio"]){
-		docFileId   = content[@"audio"][@"audio"][@"id"];
-		docName     = content[@"audio"][@"file_name"];
-	} else if ([ctype isEqualToString:@"messageSticker"]){
-		photoFileId = content[@"sticker"][@"sticker"][@"id"];
+		docFileId = content[@"audio"][@"audio"][@"id"];
+		docName   = content[@"audio"][@"file_name"];
+		NSString *title = content[@"audio"][@"title"];
+		extra = title.length ? title : (docName ?: @"Audio");
+
+	} else if ([ctype isEqualToString:@"messageContact"]){
+		NSDictionary *c = content[@"contact"];
+		NSString *name = [[NSString stringWithFormat:@"%@ %@",
+				c[@"first_name"] ?: @"", c[@"last_name"] ?: @""]
+				stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+		extra = [NSString stringWithFormat:@"%@\n%@", name, c[@"phone_number"] ?: @""];
+
+	} else if ([ctype isEqualToString:@"messageVenue"]){
+		NSDictionary *v = content[@"venue"];
+		extra = [NSString stringWithFormat:@"%@\n%@",
+				v[@"title"] ?: @"", v[@"address"] ?: @""];
+		latitude  = v[@"location"][@"latitude"];
+		longitude = v[@"location"][@"longitude"];
+
+	} else if ([ctype isEqualToString:@"messageLocation"]){
+		NSDictionary *loc = content[@"location"];
+		extra = @"Location";
+		latitude  = loc[@"latitude"];
+		longitude = loc[@"longitude"];
 	}
 
-	// In a bubble the picture speaks for itself: show the caption if there is
-	// one, otherwise nothing. The generic "Photo"/"Video" wording belongs in
-	// the chat list, which calls TGMessagePreview directly.
+	// A caption wins; then whatever the content itself says; and for a plain
+	// picture, nothing at all - the image speaks for itself.
 	NSString *caption = content[@"caption"][@"text"];
-	NSString *text = caption.length ? caption
-			: (photoFileId ? @"" : TGMessagePreview(m));
+	NSString *text;
+	if (caption.length)      text = caption;
+	else if (extra.length)   text = extra;
+	else if (photoFileId)    text = @"";
+	else                     text = TGMessagePreview(m);
 
 	return @{
 		@"id"        : m[@"id"] ?: @(0),
@@ -449,6 +537,8 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		@"photoId"   : photoFileId ?: [NSNull null],
 		@"docId"     : docFileId   ?: [NSNull null],
 		@"docName"   : docName     ?: @"",
+		@"lat"       : latitude    ?: [NSNull null],
+		@"lon"       : longitude   ?: [NSNull null],
 	};
 }
 
@@ -517,6 +607,19 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		@"input_message_content": @{
 			@"@type" : @"inputMessageText",
 			@"text"  : @{@"@type" : @"formattedText", @"text" : text ?: @""},
+		},
+	}];
+}
+
+- (void)sendPhotoAtPath:(NSString *)path toChat:(int64_t)chatId {
+	if (!path.length)
+		return;
+	[self send:@{
+		@"@type"                : @"sendMessage",
+		@"chat_id"              : @(chatId),
+		@"input_message_content": @{
+			@"@type" : @"inputMessagePhoto",
+			@"photo" : @{@"@type" : @"inputFileLocal", @"path" : path},
 		},
 	}];
 }
@@ -680,6 +783,23 @@ static NSString *TGMessagePreview(NSDictionary *message) {
 		return @"Audio";
 	if ([ctype isEqualToString:@"messageAnimation"])
 		return @"GIF";
+	if ([ctype isEqualToString:@"messageVideoNote"])
+		return @"Video message";
+	if ([ctype isEqualToString:@"messageAnimatedEmoji"])
+		return content[@"emoji"] ?: @"Emoji";
+	if ([ctype isEqualToString:@"messageContact"])
+		return @"Contact";
+	if ([ctype isEqualToString:@"messageVenue"])
+		return @"Venue";
+	if ([ctype isEqualToString:@"messageLocation"])
+		return @"Location";
+	if ([ctype isEqualToString:@"messageCall"])
+		return @"Call";
+	if ([ctype isEqualToString:@"messagePoll"])
+		return @"Poll";
+	// Unknown kinds read better without the "message" prefix than raw.
+	if ([ctype hasPrefix:@"message"])
+		return [ctype substringFromIndex:7];
 	return ctype ?: @"";
 }
 

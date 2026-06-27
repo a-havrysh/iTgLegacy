@@ -23,6 +23,12 @@
 	// stderr into a file so TDLib's own diagnostics survive a crash and can be
 	// read off the device; scripts/devrun.sh pulls it.
 	NSString *log = [cache stringByAppendingPathComponent:@"log.txt"];
+	// Keep the previous run: an uncaught exception prints its reason to stderr
+	// and the process dies, so without this copy the one message that explains
+	// a crash is deleted by the next launch.
+	NSString *lastlog = [cache stringByAppendingPathComponent:@"lastlog.txt"];
+	[[NSFileManager defaultManager] removeItemAtPath:lastlog error:nil];
+	[[NSFileManager defaultManager] copyItemAtPath:log toPath:lastlog error:nil];
 	[[NSFileManager defaultManager] removeItemAtPath:log error:nil];
 	self.log = freopen(log.UTF8String, "a+", stderr);
 
@@ -49,9 +55,11 @@
 			[[NSBundle mainBundle] bundlePath]];
 
 	self.window = [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
-	// Which screen to show is TDLib's authorization state to decide, so start
-	// on the login form and swap to the tabs when the session turns out ready.
-	[self showLoginUI];
+	// Only TDLib knows whether this session is signed in, and it takes a second
+	// to say so. Showing the login form meanwhile means an already-signed-in
+	// user is asked for their phone number on every launch, so show a neutral
+	// screen until the state actually arrives.
+	[self showLoadingUI];
 	[self.window makeKeyAndVisible];
 
 	[self startTDLib];
@@ -110,6 +118,24 @@
 
 #pragma mark - screens
 
+- (void)showLoadingUI {
+	UIViewController *vc = [[UIViewController alloc] init];
+	vc.view.backgroundColor = [UIColor colorWithRed:0.87f green:0.89f blue:0.92f alpha:1.0f];
+
+	UIActivityIndicatorView *spinner = [[UIActivityIndicatorView alloc]
+			initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleGray];
+	spinner.center = CGPointMake(vc.view.bounds.size.width / 2,
+								 vc.view.bounds.size.height / 2);
+	spinner.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin |
+			UIViewAutoresizingFlexibleRightMargin |
+			UIViewAutoresizingFlexibleTopMargin |
+			UIViewAutoresizingFlexibleBottomMargin;
+	[spinner startAnimating];
+	[vc.view addSubview:spinner];
+
+	[self.window setRootViewController:vc];
+}
+
 - (void)showMainUI {
 	if (!self.rootViewController)
 		self.rootViewController = [[RootViewController alloc] init];
@@ -120,7 +146,7 @@
 }
 
 - (void)showLoginUI {
-	if (self.loginVC && self.window.rootViewController)
+	if (self.loginVC)
 		return;
 
 	TGLoginViewController *loginVC = [[TGLoginViewController alloc] init];
@@ -229,6 +255,44 @@
 			vc.hidesBottomBarWhenPushed = YES;
 			[nc pushViewController:vc animated:NO];
 			NSLog(@"open chat index %ld", (long)idx);
+		});
+		return YES;
+	}
+
+	// itglegacy://tap/N - run the tap handler for a row of the open chat.
+	// itglegacy://send/<text> - send into the open chat, for testing the path
+	// end to end without a keyboard.
+	if ([host isEqualToString:@"send"] && arg.length){
+		dispatch_async(dispatch_get_main_queue(), ^{
+			UITabBarController *tabs = (UITabBarController *)self.rootViewController;
+			if (![tabs isKindOfClass:UITabBarController.class])
+				return;
+			UINavigationController *nc = tabs.viewControllers[tabs.selectedIndex];
+			UIViewController *top = nc.topViewController;
+			if (![top isKindOfClass:[TGChatViewController class]]){
+				NSLog(@"send: no chat open");
+				return;
+			}
+			int64_t chatId = [(TGChatViewController *)top chatId];
+			NSString *text = [arg stringByReplacingPercentEscapesUsingEncoding:
+					NSUTF8StringEncoding] ?: arg;
+			NSLog(@"send: %lu chars to chat %lld", (unsigned long)text.length, chatId);
+			[[TGClient shared] sendText:text toChat:chatId];
+		});
+		return YES;
+	}
+
+	if ([host isEqualToString:@"tap"]){
+		dispatch_async(dispatch_get_main_queue(), ^{
+			UITabBarController *tabs = (UITabBarController *)self.rootViewController;
+			if (![tabs isKindOfClass:UITabBarController.class])
+				return;
+			UINavigationController *nc = tabs.viewControllers[tabs.selectedIndex];
+			UIViewController *top = nc.topViewController;
+			if ([top isKindOfClass:[TGChatViewController class]])
+				[(TGChatViewController *)top simulateTapOnRow:[arg integerValue]];
+			else
+				NSLog(@"tap: no chat open");
 		});
 		return YES;
 	}

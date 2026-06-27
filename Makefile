@@ -59,6 +59,11 @@ INCLUDES  := -I$(ROOT_DIR)/include \
              -I$(ROOT_DIR)/src/ogg/ogg \
              -I$(ROOT_DIR)/src/opus/include \
              -I$(ROOT_DIR)/src/opus/include/opus \
+             -I$(ROOT_DIR)/src/opusfile \
+             -I$(ROOT_DIR)/src/ogg \
+             -I$(ROOT_DIR)/src/ogg/ogg \
+             -I$(ROOT_DIR)/src/opus/include \
+             -I$(ROOT_DIR)/src/opus/include/opus \
              -I$(ROOT_DIR)/src/opusenc \
              -I$(ROOT_DIR)/src/opusfile \
              -I$(ROOT_DIR)/tdlib/td \
@@ -66,7 +71,7 @@ INCLUDES  := -I$(ROOT_DIR)/include \
              -I$(BUILD_DIR)/armv7/tdlib/include \
              -I$(BUILD_DIR)/arm64/tdlib/include
 
-DEFINES   := -DOPENSSL_API_COMPAT=0x00908000L -DHAVE_CONFIG_H
+DEFINES   :=
 
 FRAMEWORKS := -framework UIKit -framework Foundation -framework QuickLook \
               -framework SystemConfiguration -framework CoreGraphics \
@@ -74,11 +79,12 @@ FRAMEWORKS := -framework UIKit -framework Foundation -framework QuickLook \
               -framework AVFoundation -framework AudioToolbox \
               -framework CoreMedia -framework AddressBook \
               -framework AddressBookUI -framework MobileCoreServices \
-              -framework CoreLocation -framework MapKit
+              -framework CoreLocation -framework MapKit \
+              -F$(ROOT_DIR)/src -framework WebP
 
 # TDLib is loaded at runtime from libtdjson.dylib, never linked.
 TDLIB_LIBS :=
-DEPS_LIBS  := -lstdc++ -lz
+DEPS_LIBS  := -lopus -lstdc++ -lz
 
 # ------------------------------------------------------------------------------
 # Source Files
@@ -96,10 +102,19 @@ APP_SRC_M := \
 	src/TGChatListViewController.m \
 	src/TGChatViewController.m \
 	src/TGContactsViewController.m \
-	src/TGSettingsViewController.m
+	src/TGSettingsViewController.m \
+	src/TGVoiceDecoder.m \
+	src/UIImage+WebP.m \
+	src/TGLottieView.m
 
 APP_SRC_C := \
-	src/tlv_polyfill.c
+	src/tlv_polyfill.c \
+	src/opusfile/internal.c \
+	src/opusfile/opusfile.c \
+	src/opusfile/info.c \
+	src/opusfile/stream.c \
+	src/ogg/ogg/framing.c \
+	src/ogg/ogg/bitwise.c
 
 # Object mapping for armv7
 ARMV7_OBJ_DIR := $(BUILD_DIR)/armv7/obj
@@ -161,7 +176,7 @@ $(MACHOFIX): tools/machofix.c
 ipa-armv7: $(MACHOFIX) $(ARMV7_ALL_OBJS)
 	@echo "[+] Building 32-bit armv7 app bundle..."
 	@mkdir -p "$(IPA_DIR)" "$(BUILD_DIR)/armv7/app/iTgLegacy.app"
-	$(CC) -arch armv7 -isysroot $(SDK_PATH) $(MIN_IOS) -Wl,-dead_strip -Wl,-pagezero_size,0x1000 \
+	$(CC) -arch armv7 -isysroot $(SDK_PATH) $(MIN_IOS) -Wl,-dead_strip -ObjC -Wl,-pagezero_size,0x1000 \
 		-L$(BUILD_DIR)/armv7/libs -L$(BUILD_DIR)/armv7/tdlib/lib -L$(ROOT_DIR)/src/opus/lib \
 		$(ARMV7_ALL_OBJS) $(FRAMEWORKS) $(TDLIB_LIBS) $(DEPS_LIBS) -o "$(BUILD_DIR)/armv7/app/iTgLegacy.app/iTgLegacy"
 	@cp -f "$(ROOT_DIR)/src/Info.plist" "$(BUILD_DIR)/armv7/app/iTgLegacy.app/Info.plist" 2>/dev/null || true
