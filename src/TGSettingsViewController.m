@@ -1,5 +1,6 @@
 #import "TGSettingsViewController.h"
 #import "TGClient.h"
+#import "TGTheme.h"
 
 @implementation TGSettingsViewController
 
@@ -9,6 +10,11 @@
 
 - (void)viewDidLoad {
 	[super viewDidLoad];
+	// iOS 7 lays content out under the bars; these screens position their own
+	// frames and expect the old behaviour.
+	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
+		self.edgesForExtendedLayout = UIRectEdgeNone;
+
 	self.title = @"Settings";
 }
 
@@ -18,15 +24,27 @@
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-	return 2;
+	return 3;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
-	return section == 0 ? @"Account" : @"Storage";
+	if (section == 0) return @"Account";
+	if (section == 1) return @"Appearance";
+	return @"Storage";
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+	if (section != 1)
+		return nil;
+	return (NSFoundationVersionNumber > 993.00)
+		? @"This system shipped flat, so that is the default here."
+		: @"This system shipped skeuomorphic, so that is the default here.";
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-	return section == 0 ? 1 : 2;
+	if (section == 0) return 1;
+	if (section == 1) return 2;   // skeuomorphic / flat
+	return 2;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -53,6 +71,15 @@
 		return cell;
 	}
 
+	if (indexPath.section == 1){
+		BOOL flat = [TGTheme shared].isFlat;
+		cell.textLabel.text = (indexPath.row == 0) ? @"Skeuomorphic" : @"Flat";
+		cell.detailTextLabel.text = @"";
+		cell.accessoryType = ((indexPath.row == 1) == flat)
+			? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+		return cell;
+	}
+
 	cell.detailTextLabel.text = @"";
 	if (indexPath.row == 0){
 		cell.textLabel.text = @"Clear local cache";
@@ -65,7 +92,16 @@
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
-	if (indexPath.section != 1)
+
+	if (indexPath.section == 1){
+		[TGTheme shared].style = (indexPath.row == 0)
+			? TGThemeStyleSkeuomorphic : TGThemeStyleFlat;
+		[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+		[tableView reloadData];
+		return;
+	}
+
+	if (indexPath.section != 2)
 		return;
 
 	if (indexPath.row == 0){

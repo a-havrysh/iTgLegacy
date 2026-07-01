@@ -1,5 +1,8 @@
 #import "TGChatViewController.h"
 #import "TGClient.h"
+#import "TGTheme.h"
+#import "TGIcons.h"
+#import "TGForwardPicker.h"
 #import <QuartzCore/QuartzCore.h>
 #import <MediaPlayer/MediaPlayer.h>
 #import <MapKit/MapKit.h>
@@ -24,6 +27,10 @@ static const CGFloat kImageMax    = 200.0f;
 @property (nonatomic, strong) TGLottieView *lottie;
 @property (nonatomic, strong) UILabel *icon;        // file glyph / contact initials
 @property (nonatomic, strong) UILabel *subtitle;    // size / phone number
+@property (nonatomic, strong) UILabel *sender;     // who wrote it, groups only
+@property (nonatomic, strong) UIView  *quoteBar;   // the stripe beside a quote
+@property (nonatomic, strong) UILabel *quote;      // what is being replied to
+@property (nonatomic, strong) UIImageView *ticks;  // delivery marks
 @end
 
 @implementation TGBubbleCell
@@ -53,6 +60,27 @@ static const CGFloat kImageMax    = 200.0f;
 	self.body.font = [UIFont systemFontOfSize:15];
 	self.body.backgroundColor = [UIColor clearColor];
 	[self.bubble addSubview:self.body];
+
+	self.sender = [[UILabel alloc] init];
+	self.sender.font = [UIFont boldSystemFontOfSize:12];
+	self.sender.backgroundColor = [UIColor clearColor];
+	self.sender.hidden = YES;
+	[self.contentView addSubview:self.sender];
+
+	self.ticks = [[UIImageView alloc] init];
+	self.ticks.hidden = YES;
+	[self.bubble addSubview:self.ticks];
+
+	self.quoteBar = [[UIView alloc] init];
+	self.quoteBar.hidden = YES;
+	[self.bubble addSubview:self.quoteBar];
+
+	self.quote = [[UILabel alloc] init];
+	self.quote.font = [UIFont systemFontOfSize:13];
+	self.quote.numberOfLines = 2;
+	self.quote.backgroundColor = [UIColor clearColor];
+	self.quote.hidden = YES;
+	[self.bubble addSubview:self.quote];
 
 	self.icon = [[UILabel alloc] init];
 	self.icon.textAlignment = NSTextAlignmentCenter;
@@ -99,6 +127,15 @@ static const CGFloat kImageMax    = 200.0f;
 @property (nonatomic, strong) NSMutableDictionary *lottiePaths;   // fileId -> path
 @property (nonatomic, strong) NSMutableDictionary *maps;          // messageId -> UIImage
 @property (nonatomic, strong) NSMutableSet *mapsRequested;
+@property (nonatomic, strong) NSMutableDictionary *quotes;       // messageId -> flattened
+@property (nonatomic, strong) NSMutableSet *quotesRequested;
+@property (nonatomic, strong) NSDictionary *actionMessage;   // long-pressed
+@property (nonatomic, assign) int64_t replyToId;             // composing a reply
+@property (nonatomic, assign) int64_t editingId;             // editing instead
+@property (nonatomic, strong) UIView *composeBanner;         // "Reply to ..."
+
+- (void)clearComposeState;
+- (void)showComposeBanner:(NSString *)text;
 @end
 
 @implementation TGChatViewController
@@ -108,14 +145,22 @@ static const CGFloat kImageMax    = 200.0f;
 - (void)viewDidLoad {
 	[super viewDidLoad];
 
-	self.title = self.chatTitle ?: @"Chat";
+	// iOS 7 lays content out under the bars; these screens position their own
+	// frames and expect the old behaviour.
+	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
+		self.edgesForExtendedLayout = UIRectEdgeNone;
+
+	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+	[self buildTitleView];
 	self.messages = @[];
 	self.images = [NSMutableDictionary dictionary];
 	self.imagesRequested = [NSMutableSet set];
 	self.lottiePaths = [NSMutableDictionary dictionary];
 	self.maps = [NSMutableDictionary dictionary];
 	self.mapsRequested = [NSMutableSet set];
-	self.view.backgroundColor = [UIColor colorWithRed:0.85f green:0.87f blue:0.83f alpha:1.0f];
+	self.quotes = [NSMutableDictionary dictionary];
+	self.quotesRequested = [NSMutableSet set];
+	self.view.backgroundColor = [[TGTheme shared] chatBackgroundColour];
 
 	CGRect b = self.view.bounds;
 
@@ -159,6 +204,43 @@ static const CGFloat kImageMax    = 200.0f;
 	[self reload];
 }
 
+/// A two-line header: the chat name with member count or status beneath it,
+/// which is what tells you where you are in a group.
+- (void)buildTitleView {
+	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 200, 40)];
+
+	UILabel *name = [[UILabel alloc] initWithFrame:CGRectMake(0, 1, 200, 20)];
+	name.text = self.chatTitle ?: @"Chat";
+	name.font = [UIFont boldSystemFontOfSize:17];
+	name.textColor = [[TGTheme shared] barTitleColour];
+	name.backgroundColor = [UIColor clearColor];
+	name.textAlignment = NSTextAlignmentCenter;
+	if (![TGTheme shared].isFlat){
+		name.shadowColor = [UIColor colorWithWhite:0.0f alpha:0.4f];
+		name.shadowOffset = CGSizeMake(0, -1);
+	}
+	[header addSubview:name];
+
+	UILabel *subtitle = [[UILabel alloc] initWithFrame:CGRectMake(0, 21, 200, 14)];
+	subtitle.font = [UIFont systemFontOfSize:12];
+	subtitle.textColor = [TGTheme shared].isFlat
+			? [[TGTheme shared] secondaryTextColour]
+			: [UIColor colorWithWhite:1.0f alpha:0.75f];
+	subtitle.backgroundColor = [UIColor clearColor];
+	subtitle.textAlignment = NSTextAlignmentCenter;
+	[header addSubview:subtitle];
+
+	self.navigationItem.titleView = header;
+
+	if (!self.isGroup)
+		return;
+
+	[[TGClient shared] memberCountForChat:self.chatId completion:^(NSInteger count){
+		if (count > 0)
+			subtitle.text = [NSString stringWithFormat:@"%ld members", (long)count];
+	}];
+}
+
 - (void)buildInputBar:(CGRect)b {
 	self.inputBar = [[UIView alloc] initWithFrame:
 			CGRectMake(0, b.size.height - kInputHeight, b.size.width, kInputHeight)];
@@ -172,10 +254,8 @@ static const CGFloat kImageMax    = 200.0f;
 
 	UIButton *attach = [UIButton buttonWithType:UIButtonTypeCustom];
 	attach.frame = CGRectMake(4, 6, 34, kInputHeight - 12);
-	[attach setTitle:@"+" forState:UIControlStateNormal];
-	[attach setTitleColor:[UIColor colorWithRed:0.24f green:0.50f blue:0.85f alpha:1.0f]
-				 forState:UIControlStateNormal];
-	attach.titleLabel.font = [UIFont boldSystemFontOfSize:26];
+	[attach setImage:[TGIcons attach] forState:UIControlStateNormal];
+	attach.tintColor = [[TGTheme shared] accentColour];
 	[attach addTarget:self action:@selector(attachTapped)
 			forControlEvents:UIControlEventTouchUpInside];
 	[self.inputBar addSubview:attach];
@@ -215,7 +295,7 @@ static const CGFloat kImageMax    = 200.0f;
 
 - (void)reload {
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] historyForChat:self.chatId limit:60 completion:^(NSArray *messages){
+	[[TGClient shared] historyForChat:self.chatId thread:self.threadId limit:60 completion:^(NSArray *messages){
 		TGChatViewController *me = weakSelf;
 		if (!me)
 			return;
@@ -233,6 +313,8 @@ static const CGFloat kImageMax    = 200.0f;
 		[me.table reloadData];
 		[me scrollToBottomAnimated:NO];
 		[me fetchMissingImages];
+		[me resolveUnknownSenders];
+		[me fetchMissingQuotes];
 
 		NSMutableArray *ids = [NSMutableArray array];
 		for (NSDictionary *m in messages)
@@ -312,6 +394,49 @@ static const CGFloat kImageMax    = 200.0f;
 	}
 }
 
+/// Group messages need a name over the bubble, and TDLib only volunteers
+/// users it happens to have sent already - the rest have to be asked for.
+- (void)resolveUnknownSenders {
+	__weak typeof(self) weakSelf = self;
+	NSMutableSet *wanted = [NSMutableSet set];
+	for (NSDictionary *m in self.messages){
+		int64_t sender = [m[@"senderId"] longLongValue];
+		if (sender != 0 && ![[TGClient shared] nameForUserId:sender])
+			[wanted addObject:@(sender)];
+	}
+
+	for (NSNumber *uid in wanted){
+		[[TGClient shared] ensureUserName:uid.longLongValue completion:^{
+			[weakSelf.table reloadData];
+		}];
+	}
+}
+
+/// A reply shows what it answers. TDLib only inlines the quote sometimes, so
+/// the original is fetched when it does not.
+- (void)fetchMissingQuotes {
+	__weak typeof(self) weakSelf = self;
+	for (NSDictionary *m in self.messages){
+		NSNumber *replyId = m[@"replyId"];
+		if (![replyId isKindOfClass:NSNumber.class])
+			continue;
+		if ([m[@"replyText"] length] || self.quotes[replyId] ||
+			[self.quotesRequested containsObject:replyId])
+			continue;
+		[self.quotesRequested addObject:replyId];
+
+		[[TGClient shared] messageWithId:replyId.longLongValue
+								  inChat:self.chatId
+							  completion:^(NSDictionary *original){
+			TGChatViewController *me = weakSelf;
+			if (!me || !original)
+				return;
+			me.quotes[replyId] = original;
+			[me.table reloadData];
+		}];
+	}
+}
+
 - (void)fetchMissingImages {
 	__weak typeof(self) weakSelf = self;
 	[self fetchMissingMaps];
@@ -386,8 +511,13 @@ static const CGFloat kImageMax    = 200.0f;
 	if (!text.length)
 		return;
 
-	[[TGClient shared] sendText:text toChat:self.chatId];
-	self.input.text = @"";
+	if (self.editingId != 0)
+		[[TGClient shared] editMessage:self.editingId inChat:self.chatId text:text];
+	else
+		[[TGClient shared] sendText:text toChat:self.chatId
+							 thread:self.threadId replyTo:self.replyToId];
+
+	[self clearComposeState];
 
 	// TDLib echoes the message back as an update; refresh shortly after.
 	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
@@ -553,6 +683,62 @@ static const CGFloat kImageMax    = 200.0f;
 #pragma mark - geometry
 
 /// Size of the text inside a bubble, and of the bubble itself.
+/// The quote block a reply carries, and the "forwarded from" line above it.
+- (NSString *)quoteTextFor:(NSDictionary *)m {
+	NSNumber *replyId = m[@"replyId"];
+	if (![replyId isKindOfClass:NSNumber.class])
+		return nil;
+	NSString *inline_ = m[@"replyText"];
+	if (inline_.length)
+		return inline_;
+	NSDictionary *fetched = self.quotes[replyId];
+	return fetched[@"text"] ?: @"...";
+}
+
+- (CGFloat)decorationHeightFor:(NSDictionary *)m {
+	CGFloat h = 0;
+	if ([m[@"forward"] length])
+		h += 16;
+	if ([self quoteTextFor:m])
+		h += 32;
+	return h;
+}
+
+/// "12:29" for incoming, "12:29 ✓✓" for outgoing, "edited" in front when it
+/// applies - the same line Telegram tucks into the corner of the bubble.
+- (NSString *)stampFor:(NSDictionary *)m {
+	static NSDateFormatter *hm = nil;
+	if (!hm){ hm = [[NSDateFormatter alloc] init]; [hm setDateFormat:@"HH:mm"]; }
+
+	NSString *stamp = [hm stringFromDate:
+			[NSDate dateWithTimeIntervalSince1970:[m[@"date"] doubleValue]]];
+	if ([m[@"edited"] boolValue])
+		stamp = [NSString stringWithFormat:@"edited %@", stamp];
+	return stamp;   // the ticks are drawn beside it, not spelled out
+}
+
+- (CGFloat)timeWidthFor:(NSDictionary *)m {
+	CGFloat w = [[self stampFor:m] sizeWithFont:[UIFont systemFontOfSize:11]].width + 2;
+	if ([m[@"outgoing"] boolValue])
+		w += 18;   // room for the ticks
+	return w;
+}
+
+/// Telegram puts the stamp at the end of the last line when it fits there,
+/// and only drops it to its own line when it does not. Anything else leaves a
+/// gap under short messages, which is what looked wrong.
+- (BOOL)stampFitsInlineFor:(NSDictionary *)m {
+	NSString *text = m[@"text"] ?: @"";
+	if (!text.length || [text rangeOfString:@"\n"].location != NSNotFound)
+		return NO;
+
+	CGFloat oneLine = [text sizeWithFont:[UIFont systemFontOfSize:15]].width;
+	if (oneLine > kBubbleMaxW - 2 * kPadH)
+		return NO;   // it wraps, so there is no short last line to share
+
+	return (oneLine + 6 + [self timeWidthFor:m]) <= (kBubbleMaxW - 2 * kPadH);
+}
+
 - (CGSize)bodySizeFor:(NSDictionary *)m {
 	NSString *text = m[@"text"] ?: @"";
 	if (!text.length)
@@ -591,14 +777,35 @@ static const CGFloat kImageMax    = 200.0f;
 	if ([m[@"docName"] isEqualToString:@"tgs"] && self.lottiePaths[m[@"docId"]])
 		return 148;
 
+	if ([m[@"service"] boolValue])
+		return 30;
+
 	if ([m[@"kind"] isEqualToString:@"messageDocument"] ||
 		[m[@"kind"] isEqualToString:@"messageContact"])
 		return 64;
 
-	CGFloat h = kPadV * 2 + 14;                 // padding + time line
+	CGFloat h = kPadV * 2 + [self decorationHeightFor:m] +
+			([self stampFitsInlineFor:m] ? 0 : 14);
+	if (self.isGroup && ![m[@"outgoing"] boolValue] &&
+		[[TGClient shared] nameForUserId:[m[@"senderId"] longLongValue]])
+		h += 15;                                // room for the sender line
 	if (pic.height > 0) h += pic.height + 4;
 	if (body.height > 0) h += body.height;
 	return MAX(h + 6, 40);
+}
+
+/// Clients colour each participant's name; the same person keeps the same
+/// colour because it is derived from their id.
+static UIColor *TGSenderColour(int64_t userId) {
+	static NSArray *palette = nil;
+	if (!palette)
+		palette = @[[UIColor colorWithRed:0.85f green:0.27f blue:0.27f alpha:1],
+					[UIColor colorWithRed:0.20f green:0.55f blue:0.85f alpha:1],
+					[UIColor colorWithRed:0.25f green:0.62f blue:0.35f alpha:1],
+					[UIColor colorWithRed:0.75f green:0.45f blue:0.15f alpha:1],
+					[UIColor colorWithRed:0.55f green:0.35f blue:0.75f alpha:1],
+					[UIColor colorWithRed:0.20f green:0.60f blue:0.62f alpha:1]];
+	return palette[(NSUInteger)llabs(userId) % palette.count];
 }
 
 #pragma mark - table
@@ -623,6 +830,33 @@ static const CGFloat kImageMax    = 200.0f;
 
 	cell.icon.hidden = YES;
 	cell.subtitle.hidden = YES;
+	cell.sender.hidden = YES;
+
+	// Service messages sit centred on the wallpaper, not in a bubble - joins,
+	// renames, pins. Groups are full of them.
+	if ([m[@"service"] boolValue]){
+		CGFloat width = tableView.bounds.size.width - 40;
+		cell.bubble.frame = CGRectMake(20, 4, width, 22);
+		cell.bubble.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.10f];
+		cell.bubble.layer.borderWidth = 0;
+		cell.bubble.layer.cornerRadius = 11;
+		cell.picture.hidden = YES;
+		cell.time.text = @"";
+		cell.body.hidden = NO;
+		cell.body.numberOfLines = 1;
+		cell.body.font = [UIFont systemFontOfSize:12];
+		cell.body.textAlignment = NSTextAlignmentCenter;
+		cell.body.textColor = [UIColor colorWithWhite:0.30f alpha:1.0f];
+		// "joined the group" reads oddly with nobody attached to it.
+		NSString *who = [[TGClient shared] nameForUserId:[m[@"senderId"] longLongValue]];
+		cell.body.text = who.length
+				? [NSString stringWithFormat:@"%@ %@", who, m[@"text"]]
+				: m[@"text"];
+		cell.body.frame = CGRectMake(0, 3, width, 16);
+		return cell;
+	}
+	cell.body.textAlignment = NSTextAlignmentLeft;
+	cell.bubble.layer.cornerRadius = 14;
 	cell.lottie.hidden = YES;
 	[cell.lottie stop];
 
@@ -686,20 +920,49 @@ static const CGFloat kImageMax    = 200.0f;
 	CGSize body = [self bodySizeFor:m];
 	CGSize pic  = [self imageSizeFor:m];
 
+	// The bubble has to fit whichever is widest: the text, a picture, the
+	// quoted message, or the timestamp. Sizing it on the text alone squeezed
+	// quotes down to an ellipsis.
+	BOOL inlineStamp = [self stampFitsInlineFor:m];
+	CGFloat timeW = [self timeWidthFor:m];
 	CGFloat contentW = MAX(body.width, pic.width);
-	CGFloat bubbleW  = MAX(contentW + 2 * kPadH, 56);
-	CGFloat bubbleH  = kPadV * 2 + 14 + (pic.height ? pic.height + 4 : 0) + body.height;
+	if ([self quoteTextFor:m] || [m[@"forward"] length])
+		contentW = MAX(contentW, 170);
+	if (inlineStamp)
+		contentW = MAX(contentW, body.width + 6 + timeW);   // they share the last line
+
+	CGFloat bubbleW = MAX(contentW + 2 * kPadH, timeW + 2 * kPadH + 8);
+	bubbleW = MIN(bubbleW, kBubbleMaxW + 2 * kPadH);
+	CGFloat bubbleH  = kPadV * 2 + (inlineStamp ? 0 : 14) + [self decorationHeightFor:m] +
+			(pic.height ? pic.height + 4 : 0) + body.height;
 
 	CGFloat x = mine ? (tableView.bounds.size.width - bubbleW - 8) : 8;
-	cell.bubble.frame = CGRectMake(x, 3, bubbleW, bubbleH);
+	CGFloat top = 3;
+
+	// In a group you need to know who is speaking.
+	NSString *senderName = (self.isGroup && !mine)
+			? [[TGClient shared] nameForUserId:[m[@"senderId"] longLongValue]] : nil;
+	if (senderName.length){
+		cell.sender.hidden = NO;
+		cell.sender.text = senderName;
+		cell.sender.textColor = TGSenderColour([m[@"senderId"] longLongValue]);
+		cell.sender.frame = CGRectMake(x + kPadH, 2, tableView.bounds.size.width - x - 20, 14);
+		top = 18;
+	}
+
+	cell.bubble.frame = CGRectMake(x, top, bubbleW, bubbleH);
 
 	// Outgoing green, incoming white - the convention every client uses.
 	// A sticker gets neither: no fill, no border.
+	TGTheme *theme = [TGTheme shared];
 	cell.bubble.backgroundColor = isSticker ? [UIColor clearColor] : (mine
-		? [UIColor colorWithRed:0.85f green:0.96f blue:0.76f alpha:1.0f]
-		: [UIColor whiteColor]);
-	cell.bubble.layer.borderWidth = isSticker ? 0.0f : 1.0f;
-	cell.bubble.layer.borderColor = [UIColor colorWithWhite:0.0f alpha:0.12f].CGColor;
+		? [theme bubbleMineColour] : [theme bubbleTheirsColour]);
+	cell.bubble.layer.borderWidth = isSticker ? 0.0f : [theme bubbleBorderWidth];
+	cell.bubble.layer.borderColor = [theme bubbleBorderColour].CGColor;
+	cell.bubble.layer.cornerRadius = [theme bubbleCornerRadius];
+	// A flat outgoing bubble is a solid accent colour, so its text inverts.
+	cell.body.textColor = (mine && theme.isFlat)
+		? [UIColor whiteColor] : [theme primaryTextColour];
 
 	// A video note is a circle, with no bubble around it - that is how every
 	// client draws them.
@@ -750,6 +1013,51 @@ static const CGFloat kImageMax    = 200.0f;
 		return cell;
 	}
 	CGFloat y = kPadV;
+
+	// "Forwarded from X", then the quote block, then the message itself.
+	cell.quoteBar.hidden = YES;
+	cell.quote.hidden = YES;
+
+	NSString *forwarded = m[@"forward"];
+	if ([forwarded length]){
+		cell.quote.hidden = NO;
+		cell.quote.numberOfLines = 1;
+		cell.quote.font = [UIFont italicSystemFontOfSize:12];
+		cell.quote.textColor = [theme accentColour];
+		cell.quote.text = [NSString stringWithFormat:@"Forwarded from %@", forwarded];
+		cell.quote.frame = CGRectMake(kPadH, y, bubbleW - 2 * kPadH, 14);
+		y += 16;
+	}
+
+	NSString *quoted = [self quoteTextFor:m];
+	if (quoted){
+		cell.quoteBar.hidden = NO;
+		cell.quoteBar.backgroundColor = [theme accentColour];
+		cell.quoteBar.frame = CGRectMake(kPadH, y, 2, 28);
+
+		// the forward line above reuses the same label, so build a second one
+		UILabel *q = cell.quote.hidden ? cell.quote : nil;
+		if (!q){
+			q = [[UILabel alloc] init];
+			q.tag = 0x9001;
+			q.font = [UIFont systemFontOfSize:13];
+			q.numberOfLines = 2;
+			q.backgroundColor = [UIColor clearColor];
+			UILabel *existing = (UILabel *)[cell.bubble viewWithTag:0x9001];
+			if (existing) q = existing; else [cell.bubble addSubview:q];
+		}
+		q.hidden = NO;
+		q.numberOfLines = 2;
+		q.font = [UIFont systemFontOfSize:13];
+		q.textColor = [theme secondaryTextColour];
+		q.text = quoted;
+		q.frame = CGRectMake(kPadH + 8, y, bubbleW - 2 * kPadH - 10, 28);
+		y += 32;
+	} else {
+		UILabel *existing = (UILabel *)[cell.bubble viewWithTag:0x9001];
+		existing.hidden = YES;
+	}
+
 	if (pic.height > 0){
 		cell.picture.hidden = NO;
 		cell.picture.image = [self imageFor:m];
@@ -765,15 +1073,19 @@ static const CGFloat kImageMax    = 200.0f;
 	cell.body.numberOfLines = 0;
 	cell.body.font = [UIFont systemFontOfSize:15];
 	cell.body.text = m[@"text"];
-	cell.body.textColor = [UIColor colorWithWhite:0.08f alpha:1.0f];
 	cell.body.frame = CGRectMake(kPadH, y, body.width, body.height);
 
-	static NSDateFormatter *hm = nil;
-	if (!hm){ hm = [[NSDateFormatter alloc] init]; [hm setDateFormat:@"HH:mm"]; }
-	cell.time.text = [hm stringFromDate:
-			[NSDate dateWithTimeIntervalSince1970:[m[@"date"] doubleValue]]];
+	cell.time.text = [self stampFor:m];
 	cell.time.textColor = [UIColor colorWithWhite:0.45f alpha:1.0f];
-	cell.time.frame = CGRectMake(bubbleW - 44 - kPadH + 6, bubbleH - kPadV - 12, 44, 12);
+	CGFloat tickW = mine ? 18 : 0;
+	CGFloat stampY = inlineStamp ? (y + body.height - 14) : (bubbleH - kPadV - 13);
+	cell.time.frame = CGRectMake(bubbleW - timeW - kPadH, stampY, timeW - tickW, 12);
+
+	cell.ticks.hidden = !mine;
+	if (mine){
+		cell.ticks.image = [TGIcons ticksWhite:theme.isFlat];
+		cell.ticks.frame = CGRectMake(bubbleW - kPadH - 15, stampY + 2, 15, 9);
+	}
 
 	return cell;
 }

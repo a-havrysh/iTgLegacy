@@ -51,9 +51,26 @@ typedef NS_ENUM(NSInteger, TGConnectionState) {
 /// Called on the main queue whenever the chat list changed. Read `chats`.
 @property (nonatomic, copy) void (^onChatsChanged)(void);
 
+/// Display name for a user TDLib has told us about, or nil.
+- (NSString *)nameForUserId:(int64_t)userId;
+
+/// Fetch a user TDLib has not volunteered yet, so a group message can be
+/// attributed. `completion` runs once the name is cached.
+- (void)ensureUserName:(int64_t)userId completion:(void (^)(void))completion;
+
+/// Topics of a forum supergroup - a forum holds several independent threads
+/// in one chat. Each entry: "threadId", "name", "text", "unread", "date".
+/// Empty for a chat that is not a forum.
+- (void)forumTopicsForChat:(int64_t)chatId completion:(void (^)(NSArray *topics))completion;
+
+/// Members in a group or supergroup; 0 for anything else.
+- (void)memberCountForChat:(int64_t)chatId completion:(void (^)(NSInteger count))completion;
+
 /// Chat list, most recent first. Each entry is a dictionary with keys
 /// "id" (NSNumber), "title", "text" (last message preview), "unread"
-/// (NSNumber), "date" (NSNumber, unix time). Main queue only.
+/// (NSNumber), "date" (NSNumber, unix time), "isGroup" (NSNumber BOOL - a
+/// basic group, supergroup or channel, where messages need a sender name).
+/// Main queue only.
 @property (nonatomic, readonly) NSArray *chats;
 
 /// Ask TDLib to populate the main chat list. Only meaningful once authorized.
@@ -86,11 +103,35 @@ typedef NS_ENUM(NSInteger, TGConnectionState) {
                  limit:(NSInteger)limit
             completion:(void (^)(NSArray *messages))completion;
 
+/// History of one forum topic. `threadId` is the topic's message_thread_id.
+- (void)historyForChat:(int64_t)chatId
+                thread:(int64_t)threadId
+                 limit:(NSInteger)limit
+            completion:(void (^)(NSArray *messages))completion;
+
 /// Fired on the main queue when a message arrives, is edited or deleted in
 /// any chat. `message` is the flattened form; nil means it was deleted.
 @property (nonatomic, copy) void (^onMessage)(int64_t chatId, NSDictionary *message, int64_t deletedId);
 
 - (void)sendText:(NSString *)text toChat:(int64_t)chatId;
+/// Send into a forum topic.
+- (void)sendText:(NSString *)text toChat:(int64_t)chatId thread:(int64_t)threadId;
+/// Send as a reply to a message.
+- (void)sendText:(NSString *)text toChat:(int64_t)chatId
+          thread:(int64_t)threadId replyTo:(int64_t)replyToId;
+
+/// Forward messages into another chat.
+- (void)forwardMessages:(NSArray *)messageIds
+               fromChat:(int64_t)fromChatId
+                 toChat:(int64_t)toChatId;
+
+/// Replace the text of a message already sent.
+- (void)editMessage:(int64_t)messageId inChat:(int64_t)chatId text:(NSString *)text;
+
+/// One message by id, flattened. Used to show what a reply is answering.
+- (void)messageWithId:(int64_t)messageId
+               inChat:(int64_t)chatId
+           completion:(void (^)(NSDictionary *message))completion;
 /// Send a local image file. TDLib uploads it and echoes the message back.
 - (void)sendPhotoAtPath:(NSString *)path toChat:(int64_t)chatId;
 - (void)deleteMessage:(int64_t)messageId inChat:(int64_t)chatId;

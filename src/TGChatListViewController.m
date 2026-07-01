@@ -1,6 +1,10 @@
 #import "TGChatListViewController.h"
 #import "TGChatViewController.h"
 #import "TGClient.h"
+#import "TGTheme.h"
+#import "TGIcons.h"
+#import "TGContactsViewController.h"
+#import "TGTopicsViewController.h"
 #import <QuartzCore/QuartzCore.h>
 
 static const CGFloat kRowHeight = 68.0f;
@@ -50,7 +54,7 @@ static const CGFloat kAvatar    = 52.0f;
 	self.badge = [[UILabel alloc] init];
 	self.badge.font = [UIFont boldSystemFontOfSize:13];
 	self.badge.textColor = [UIColor whiteColor];
-	self.badge.backgroundColor = [UIColor colorWithRed:0.24f green:0.60f blue:0.92f alpha:1.0f];
+	self.badge.backgroundColor = [[TGTheme shared] accentColour];
 	self.badge.textAlignment = NSTextAlignmentCenter;
 	self.badge.layer.cornerRadius = 10;
 	self.badge.clipsToBounds = YES;
@@ -98,11 +102,34 @@ static const CGFloat kAvatar    = 52.0f;
 	self.avatars = [NSMutableDictionary dictionary];
 	self.avatarsRequested = [NSMutableSet set];
 
+	// Without this there is no way to start a conversation at all - you can
+	// only reply to chats that already exist.
+	self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
+			initWithImage:[TGIcons compose]
+					style:UIBarButtonItemStylePlain
+				   target:self
+				   action:@selector(composeTapped)];
+
 	self.tableView.rowHeight = kRowHeight;
 	self.tableView.separatorStyle = UITableViewCellSeparatorStyleSingleLine;
-	self.tableView.backgroundColor = [UIColor whiteColor];
+	// iOS 7 lays content out under the bars; these screens position their own
+	// frames and expect the old behaviour.
+	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
+		self.edgesForExtendedLayout = UIRectEdgeNone;
 
 	__weak typeof(self) weakSelf = self;
+	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+
+	// Restyle in place when the setting changes, rather than needing a restart.
+	[[NSNotificationCenter defaultCenter] addObserverForName:TGThemeChangedNotification
+			object:nil queue:[NSOperationQueue mainQueue]
+		usingBlock:^(NSNotification *note){
+		[TGIcons flush];
+		[[TGTheme shared] styleNavigationBar:weakSelf.navigationController.navigationBar];
+		[weakSelf.tableView reloadData];
+	}];
+
 	[TGClient shared].onChatsChanged = ^{
 		[weakSelf reload];
 	};
@@ -111,6 +138,12 @@ static const CGFloat kAvatar    = 52.0f;
 		weakSelf.title = text ?: @"Chats";
 	};
 	[self reload];
+}
+
+- (void)composeTapped {
+	TGContactsViewController *contacts = [[TGContactsViewController alloc] init];
+	contacts.title = @"New Message";
+	[self.navigationController pushViewController:contacts animated:YES];
 }
 
 - (void)reload {
@@ -183,10 +216,16 @@ static NSString *TGChatDate(NSTimeInterval unix) {
 	cell.badge.text = unread > 0 ? [NSString stringWithFormat:@"%ld", (long)unread] : @"";
 
 	NSNumber *fileId = c[@"photoFileId"];
-	cell.avatar.image = fileId ? self.avatars[fileId] : nil;
-	cell.avatar.backgroundColor = cell.avatar.image
-		? [UIColor clearColor]
-		: [UIColor colorWithWhite:0.85f alpha:1.0f];
+	UIImage *photo = fileId ? self.avatars[fileId] : nil;
+	if (!photo){
+		NSString *title = c[@"title"] ?: @"";
+		NSString *initials = title.length ? [title substringToIndex:1] : @"?";
+		photo = [TGIcons avatarWithInitials:initials.uppercaseString
+									   size:kAvatar
+								   colourId:[c[@"id"] longLongValue]];
+	}
+	cell.avatar.image = photo;
+	cell.avatar.backgroundColor = [UIColor clearColor];
 
 	[cell setNeedsLayout];
 	return cell;
@@ -196,9 +235,21 @@ static NSString *TGChatDate(NSTimeInterval unix) {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
 
 	NSDictionary *c = self.chats[indexPath.row];
+	NSLog(@"open chat: group=%@ forum=%@", c[@"isGroup"], c[@"isForum"] ?: @"(absent)");
+
+	if ([c[@"isForum"] boolValue]){
+		TGTopicsViewController *topics = [[TGTopicsViewController alloc] init];
+		topics.chatId = [c[@"id"] longLongValue];
+		topics.chatTitle = c[@"title"];
+		topics.hidesBottomBarWhenPushed = YES;
+		[self.navigationController pushViewController:topics animated:YES];
+		return;
+	}
+
 	TGChatViewController *vc = [[TGChatViewController alloc] init];
 	vc.chatId = [c[@"id"] longLongValue];
 	vc.chatTitle = c[@"title"];
+	vc.isGroup = [c[@"isGroup"] boolValue];
 	vc.hidesBottomBarWhenPushed = YES;
 	[self.navigationController pushViewController:vc animated:YES];
 }

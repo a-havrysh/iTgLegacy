@@ -9,10 +9,14 @@
 
 @interface TGChatViewController : UIViewController
     <UITableViewDataSource, UITableViewDelegate, UITextFieldDelegate,
-     UIImagePickerControllerDelegate, UINavigationControllerDelegate>
+     UIImagePickerControllerDelegate, UINavigationControllerDelegate,
+     UIActionSheetDelegate>
 
 @property (nonatomic, assign) int64_t chatId;
 @property (nonatomic, copy)   NSString *chatTitle;
+@property (nonatomic, assign) BOOL isGroup;
+/// Non-zero when this is one topic of a forum supergroup.
+@property (nonatomic, assign) int64_t threadId;
 
 /// Run the tap handler for a row, without a touch. Used by
 /// itglegacy://tap/N so playback and viewers can be exercised remotely.

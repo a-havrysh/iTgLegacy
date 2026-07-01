@@ -18,6 +18,7 @@ typedef const char *(*td_exec_fn)(void *client, const char *request);
 @property (nonatomic, assign) BOOL running;
 @property (nonatomic, copy)   NSString *pendingPhoneNumber;
 @property (nonatomic, strong) NSMutableDictionary *chatsById;   // id -> mutable info
+@property (nonatomic, strong) NSMutableDictionary *usersById;   // id -> display name
 @property (nonatomic, strong) NSArray *chats;
 @property (nonatomic, strong) NSMutableArray *outbox;   // JSON strings awaiting send
 @property (nonatomic, strong) NSLock *outboxLock;
@@ -41,6 +42,7 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m);
 	dispatch_once(&once, ^{
 		s = [[TGClient alloc] init];
 		s.chatsById = [NSMutableDictionary dictionary];
+		s.usersById = [NSMutableDictionary dictionary];
 		s.chats = @[];
 		s.outbox = [NSMutableArray array];
 		s.pendingRequests = [NSMutableDictionary dictionary];
@@ -216,6 +218,18 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m);
 		NSLog(@"TGClient: signed in as +%@", self.me[@"phone"]);
 		return;
 	}
+	if ([type isEqualToString:@"updateUser"]){
+		NSDictionary *u = obj[@"user"];
+		NSString *name = [[NSString stringWithFormat:@"%@ %@",
+				u[@"first_name"] ?: @"", u[@"last_name"] ?: @""]
+				stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+		if (!name.length)
+			name = u[@"usernames"][@"active_usernames"][0] ?: @"";
+		if (u[@"id"] && name.length)
+			self.usersById[u[@"id"]] = name;
+		return;
+	}
+
 	// Live message updates - without these a chat only refreshes when reopened.
 	if ([type isEqualToString:@"updateNewMessage"]){
 		NSDictionary *m = obj[@"message"];
@@ -431,6 +445,7 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 	NSString *docName     = nil;
 	NSString *extra       = nil;   // text the content itself carries
 	NSNumber *latitude = nil, *longitude = nil;
+	BOOL isService = NO;
 
 	if ([ctype isEqualToString:@"messagePhoto"]){
 		// sizes run small to large; take the largest present
@@ -511,6 +526,91 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		latitude  = v[@"location"][@"latitude"];
 		longitude = v[@"location"][@"longitude"];
 
+	} else if ([ctype isEqualToString:@"messageChatAddMembers"]){
+		NSMutableArray *names = [NSMutableArray array];
+		for (NSNumber *uid in content[@"member_user_ids"])
+			[names addObject:[[TGClient shared] nameForUserId:uid.longLongValue] ?: @"someone"];
+		extra = [NSString stringWithFormat:@"%@ joined the group",
+				[names componentsJoinedByString:@", "]];
+		isService = YES;
+
+	} else if ([ctype isEqualToString:@"messageChatDeleteMember"]){
+		NSString *who = [[TGClient shared] nameForUserId:
+				[content[@"user_id"] longLongValue]] ?: @"someone";
+		extra = [NSString stringWithFormat:@"%@ left the group", who];
+		isService = YES;
+
+	} else if ([ctype isEqualToString:@"messageChatJoinByLink"] ||
+			   [ctype isEqualToString:@"messageChatJoinByRequest"]){
+		extra = @"joined the group via invite link";
+		isService = YES;
+
+	} else if ([ctype isEqualToString:@"messageChatChangeTitle"]){
+		extra = [NSString stringWithFormat:@"Group renamed to \"%@\"",
+				content[@"title"] ?: @""];
+		isService = YES;
+
+	} else if ([ctype isEqualToString:@"messageChatChangePhoto"]){
+		extra = @"Group photo changed";
+		isService = YES;
+
+	} else if ([ctype isEqualToString:@"messageChatDeletePhoto"]){
+		extra = @"Group photo removed";
+		isService = YES;
+
+	} else if ([ctype isEqualToString:@"messagePinMessage"]){
+		extra = @"pinned a message";
+		isService = YES;
+
+	} else if ([ctype isEqualToString:@"messageBasicGroupChatCreate"] ||
+			   [ctype isEqualToString:@"messageSupergroupChatCreate"]){
+		extra = [NSString stringWithFormat:@"Group \"%@\" created",
+				content[@"title"] ?: @""];
+		isService = YES;
+
+	} else if ([ctype isEqualToString:@"messageChatUpgradeTo"] ||
+			   [ctype isEqualToString:@"messageChatUpgradeFrom"]){
+		extra = @"Group upgraded to a supergroup";
+		isService = YES;
+
+	} else if ([ctype isEqualToString:@"messageChatSetTheme"]){
+		extra = @"Chat theme changed";
+		isService = YES;
+
+	} else if ([ctype isEqualToString:@"messageScreenshotTaken"]){
+		extra = @"Screenshot taken";
+		isService = YES;
+
+	} else if ([ctype isEqualToString:@"messageCall"]){
+		NSNumber *dur = content[@"duration"];
+		extra = dur.integerValue > 0
+			? [NSString stringWithFormat:@"Call, %ld:%02ld",
+					(long)(dur.integerValue / 60), (long)(dur.integerValue % 60)]
+			: @"Call";
+		isService = YES;
+
+	} else if ([ctype isEqualToString:@"messagePoll"]){
+		NSDictionary *poll = content[@"poll"];
+		NSMutableString *lines = [NSMutableString stringWithFormat:@"%@",
+				poll[@"question"][@"text"] ?: poll[@"question"] ?: @"Poll"];
+		for (NSDictionary *opt in poll[@"options"])
+			[lines appendFormat:@"\n  %@  %@%%",
+					opt[@"text"][@"text"] ?: opt[@"text"] ?: @"",
+					opt[@"vote_percentage"] ?: @0];
+		extra = lines;
+
+	} else if ([ctype isEqualToString:@"messageDice"]){
+		extra = [NSString stringWithFormat:@"%@  %@",
+				content[@"emoji"] ?: @"Dice", content[@"value"] ?: @""];
+
+	} else if ([ctype isEqualToString:@"messageGame"]){
+		extra = [NSString stringWithFormat:@"Game: %@",
+				content[@"game"][@"title"] ?: @""];
+
+	} else if ([ctype isEqualToString:@"messageUnsupported"]){
+		extra = @"Message not supported on this client";
+		isService = YES;
+
 	} else if ([ctype isEqualToString:@"messageLocation"]){
 		NSDictionary *loc = content[@"location"];
 		extra = @"Location";
@@ -527,19 +627,82 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 	else if (photoFileId)    text = @"";
 	else                     text = TGMessagePreview(m);
 
+	// Reply, forward and edit state - three things a chat is unreadable
+	// without, because a bare answer loses what it answers.
+	NSDictionary *replyTo = m[@"reply_to"];
+	NSNumber *replyId = nil;
+	NSString *replyText = nil;
+	if ([replyTo[@"@type"] isEqualToString:@"messageReplyToMessage"]){
+		replyId = replyTo[@"message_id"];
+		// Newer TDLib carries the quoted text inline; otherwise the chat view
+		// fetches the original by id.
+		replyText = replyTo[@"quote"][@"text"][@"text"] ?: replyTo[@"quote"][@"text"];
+	}
+
+	NSString *forwardFrom = nil;
+	NSDictionary *origin = m[@"forward_info"][@"origin"];
+	NSString *originType = origin[@"@type"];
+	if ([originType isEqualToString:@"messageOriginUser"])
+		forwardFrom = [[TGClient shared] nameForUserId:
+				[origin[@"sender_user_id"] longLongValue]] ?: @"a user";
+	else if ([originType isEqualToString:@"messageOriginHiddenUser"])
+		forwardFrom = origin[@"sender_name"];
+	else if ([originType isEqualToString:@"messageOriginChannel"]){
+		NSString *signature = origin[@"author_signature"];
+		forwardFrom = signature.length ? signature : @"a channel";
+	}
+	else if ([originType isEqualToString:@"messageOriginChat"])
+		forwardFrom = origin[@"author_signature"] ?: @"a chat";
+
 	return @{
 		@"id"        : m[@"id"] ?: @(0),
 		@"text"      : text,
+		@"replyId"   : replyId    ?: [NSNull null],
+		@"replyText" : replyText  ?: @"",
+		@"forward"   : forwardFrom ?: @"",
+		@"edited"    : @([m[@"edit_date"] doubleValue] > 0),
 		@"kind"      : ctype ?: @"",
 		@"date"      : m[@"date"] ?: @(0),
 		@"outgoing"  : m[@"is_outgoing"] ?: @NO,
-		@"senderId"  : m[@"sender_id"][@"user_id"] ?: @(0),
 		@"photoId"   : photoFileId ?: [NSNull null],
 		@"docId"     : docFileId   ?: [NSNull null],
 		@"docName"   : docName     ?: @"",
+		@"service"   : @(isService),
+		@"senderId"  : m[@"sender_id"][@"user_id"] ?: @(0),
 		@"lat"       : latitude    ?: [NSNull null],
 		@"lon"       : longitude   ?: [NSNull null],
 	};
+}
+
+- (void)historyForChat:(int64_t)chatId
+                thread:(int64_t)threadId
+                 limit:(NSInteger)limit
+            completion:(void (^)(NSArray *))completion {
+	if (threadId == 0){
+		[self historyForChat:chatId limit:limit completion:completion];
+		return;
+	}
+
+	// A topic is a message thread, and threads have their own history call.
+	[self request:@{
+		@"@type"           : @"getMessageThreadHistory",
+		@"chat_id"         : @(chatId),
+		@"message_id"      : @(threadId),
+		@"from_message_id" : @(0),
+		@"offset"          : @(0),
+		@"limit"           : @(limit),
+	} completion:^(NSDictionary *result){
+		NSArray *msgs = result[@"messages"];
+		if (![msgs isKindOfClass:NSArray.class]){
+			NSLog(@"TGClient: thread history -> %@", result[@"@type"]);
+			if (completion) completion(@[]);
+			return;
+		}
+		NSMutableArray *out = [NSMutableArray arrayWithCapacity:msgs.count];
+		for (NSDictionary *m in [[msgs reverseObjectEnumerator] allObjects])
+			[out addObject:TGFlattenMessage(m)];
+		if (completion) completion(out);
+	}];
 }
 
 - (void)historyForChat:(int64_t)chatId
@@ -601,15 +764,68 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 }
 
 - (void)sendText:(NSString *)text toChat:(int64_t)chatId {
-	[self send:@{
+	[self sendText:text toChat:chatId thread:0];
+}
+
+- (void)sendText:(NSString *)text toChat:(int64_t)chatId thread:(int64_t)threadId {
+	[self sendText:text toChat:chatId thread:threadId replyTo:0];
+}
+
+- (void)sendText:(NSString *)text toChat:(int64_t)chatId
+          thread:(int64_t)threadId replyTo:(int64_t)replyToId {
+	NSMutableDictionary *request = [@{
 		@"@type"                : @"sendMessage",
 		@"chat_id"              : @(chatId),
+		@"message_thread_id"    : @(threadId),
+		@"input_message_content": @{
+			@"@type" : @"inputMessageText",
+			@"text"  : @{@"@type" : @"formattedText", @"text" : text ?: @""},
+		},
+	} mutableCopy];
+
+	if (replyToId != 0)
+		request[@"reply_to"] = @{@"@type" : @"inputMessageReplyToMessage",
+								 @"message_id" : @(replyToId)};
+
+	[self send:request];
+}
+
+- (void)forwardMessages:(NSArray *)messageIds
+               fromChat:(int64_t)fromChatId
+                 toChat:(int64_t)toChatId {
+	[self send:@{
+		@"@type"        : @"forwardMessages",
+		@"chat_id"      : @(toChatId),
+		@"from_chat_id" : @(fromChatId),
+		@"message_ids"  : messageIds ?: @[],
+	}];
+}
+
+- (void)editMessage:(int64_t)messageId inChat:(int64_t)chatId text:(NSString *)text {
+	[self send:@{
+		@"@type"                : @"editMessageText",
+		@"chat_id"              : @(chatId),
+		@"message_id"           : @(messageId),
 		@"input_message_content": @{
 			@"@type" : @"inputMessageText",
 			@"text"  : @{@"@type" : @"formattedText", @"text" : text ?: @""},
 		},
 	}];
 }
+
+- (void)messageWithId:(int64_t)messageId
+               inChat:(int64_t)chatId
+           completion:(void (^)(NSDictionary *))completion {
+	[self request:@{@"@type" : @"getMessage",
+					@"chat_id" : @(chatId),
+					@"message_id" : @(messageId)}
+	   completion:^(NSDictionary *m){
+		if (completion)
+			completion([m[@"@type"] isEqualToString:@"message"]
+					? TGFlattenMessage(m) : nil);
+	}];
+}
+
 
 - (void)sendPhotoAtPath:(NSString *)path toChat:(int64_t)chatId {
 	if (!path.length)
@@ -795,6 +1011,19 @@ static NSString *TGMessagePreview(NSDictionary *message) {
 		return @"Location";
 	if ([ctype isEqualToString:@"messageCall"])
 		return @"Call";
+	if ([ctype isEqualToString:@"messageChatJoinByLink"] ||
+		[ctype isEqualToString:@"messageChatJoinByRequest"])
+		return @"joined the group";
+	if ([ctype isEqualToString:@"messageChatAddMembers"])
+		return @"added a member";
+	if ([ctype isEqualToString:@"messageChatDeleteMember"])
+		return @"left the group";
+	if ([ctype isEqualToString:@"messageChatChangeTitle"])
+		return @"renamed the group";
+	if ([ctype isEqualToString:@"messageChatChangePhoto"])
+		return @"changed the group photo";
+	if ([ctype isEqualToString:@"messagePinMessage"])
+		return @"pinned a message";
 	if ([ctype isEqualToString:@"messagePoll"])
 		return @"Poll";
 	// Unknown kinds read better without the "message" prefix than raw.
@@ -812,6 +1041,56 @@ static int64_t TGMainListOrder(NSArray *positions) {
 			return (int64_t)[p[@"order"] longLongValue];
 	}
 	return 0;
+}
+
+- (NSString *)nameForUserId:(int64_t)userId {
+	return self.usersById[@(userId)];
+}
+
+/// Member count for a group, so the chat header can carry a subtitle.
+- (void)memberCountForChat:(int64_t)chatId completion:(void (^)(NSInteger count))completion {
+	[self request:@{@"@type" : @"getChat", @"chat_id" : @(chatId)}
+	   completion:^(NSDictionary *chat){
+		NSDictionary *type = chat[@"type"];
+		NSString *t = type[@"@type"];
+		if ([t isEqualToString:@"chatTypeBasicGroup"]){
+			[self request:@{@"@type" : @"getBasicGroupFullInfo",
+							@"basic_group_id" : type[@"basic_group_id"]}
+			   completion:^(NSDictionary *full){
+				if (completion) completion([full[@"members"] count]);
+			}];
+		} else if ([t isEqualToString:@"chatTypeSupergroup"]){
+			[self request:@{@"@type" : @"getSupergroupFullInfo",
+							@"supergroup_id" : type[@"supergroup_id"]}
+			   completion:^(NSDictionary *full){
+				if (completion) completion([full[@"member_count"] integerValue]);
+			}];
+		} else if (completion){
+			completion(0);
+		}
+	}];
+}
+
+- (void)ensureUserName:(int64_t)userId completion:(void (^)(void))completion {
+	if (userId == 0 || self.usersById[@(userId)]){
+		if (completion) completion();
+		return;
+	}
+	__weak typeof(self) weakSelf = self;
+	[self request:@{@"@type" : @"getUser", @"user_id" : @(userId)}
+	   completion:^(NSDictionary *u){
+		TGClient *me = weakSelf;
+		if (me && [u[@"@type"] isEqualToString:@"user"]){
+			NSString *name = [[NSString stringWithFormat:@"%@ %@",
+					u[@"first_name"] ?: @"", u[@"last_name"] ?: @""]
+					stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+			if (!name.length)
+				name = u[@"usernames"][@"active_usernames"][0] ?: @"";
+			if (name.length)
+				me.usersById[@(userId)] = name;
+		}
+		if (completion) completion();
+	}];
 }
 
 - (void)mergeChat:(NSDictionary *)chat {
@@ -833,6 +1112,16 @@ static int64_t TGMainListOrder(NSArray *positions) {
 		info[@"title"] = chat[@"title"];
 	if (chat[@"unread_count"])
 		info[@"unread"] = chat[@"unread_count"];
+
+	NSString *chatType = chat[@"type"][@"@type"];
+	if (chatType)
+		info[@"isGroup"] = @(![chatType isEqualToString:@"chatTypePrivate"] &&
+							 ![chatType isEqualToString:@"chatTypeSecret"]);
+
+	// A forum keeps several threads in one chat, so it opens on a topic list
+	// rather than a merged stream.
+	if (chat[@"is_forum"])
+		info[@"isForum"] = chat[@"is_forum"];
 	if (chat[@"positions"])
 		info[@"order"] = @(TGMainListOrder(chat[@"positions"]));
 
@@ -844,11 +1133,29 @@ static int64_t TGMainListOrder(NSArray *positions) {
 
 	NSDictionary *last = chat[@"last_message"];
 	if ([last isKindOfClass:NSDictionary.class]){
-		info[@"text"] = TGMessagePreview(last);
+		info[@"text"] = [self previewForLastMessage:last inChat:info];
 		info[@"date"] = last[@"date"] ?: @(0);
 	}
 
 	[self rebuildChats];
+}
+
+/// In a group the list shows who spoke last - "Назар: text" - which is the
+/// only way to tell a busy group apart at a glance.
+- (NSString *)previewForLastMessage:(NSDictionary *)last inChat:(NSDictionary *)info {
+	NSString *text = TGMessagePreview(last);
+	if (![info[@"isGroup"] boolValue] || [last[@"is_outgoing"] boolValue])
+		return text;
+
+	int64_t sender = [last[@"sender_id"][@"user_id"] longLongValue];
+	NSString *who = [self nameForUserId:sender];
+	if (!who.length){
+		// not known yet - fetch, then rebuild so the row fills in
+		__weak typeof(self) weakSelf = self;
+		[self ensureUserName:sender completion:^{ [weakSelf rebuildChats]; }];
+		return text;
+	}
+	return [NSString stringWithFormat:@"%@: %@", who, text];
 }
 
 - (void)applyChatUpdate:(NSDictionary *)update {
@@ -870,7 +1177,7 @@ static int64_t TGMainListOrder(NSArray *positions) {
 
 	NSDictionary *last = update[@"last_message"];
 	if ([last isKindOfClass:NSDictionary.class]){
-		info[@"text"] = TGMessagePreview(last);
+		info[@"text"] = [self previewForLastMessage:last inChat:info];
 		info[@"date"] = last[@"date"] ?: @(0);
 	}
 

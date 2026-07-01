@@ -9,6 +9,7 @@
 #import "RootViewController.h"
 #import "TGClient.h"
 #import "TGChatViewController.h"
+#import "TGTopicsViewController.h"
 #import <QuartzCore/QuartzCore.h>
 #include <stdio.h>
 
@@ -249,9 +250,20 @@
 			UINavigationController *nc = tabs.viewControllers[0];
 			[nc popToRootViewControllerAnimated:NO];
 
+			if ([c[@"isForum"] boolValue]){
+				TGTopicsViewController *topics = [[TGTopicsViewController alloc] init];
+				topics.chatId = [c[@"id"] longLongValue];
+				topics.chatTitle = c[@"title"];
+				topics.hidesBottomBarWhenPushed = YES;
+				[nc pushViewController:topics animated:NO];
+				NSLog(@"open forum index %ld", (long)idx);
+				return;
+			}
+
 			TGChatViewController *vc = [[TGChatViewController alloc] init];
 			vc.chatId = [c[@"id"] longLongValue];
 			vc.chatTitle = c[@"title"];
+			vc.isGroup = [c[@"isGroup"] boolValue];   // same as the list does
 			vc.hidesBottomBarWhenPushed = YES;
 			[nc pushViewController:vc animated:NO];
 			NSLog(@"open chat index %ld", (long)idx);
@@ -300,7 +312,10 @@
 	if ([host isEqualToString:@"screenshot"]){
 		dispatch_async(dispatch_get_main_queue(), ^{
 			UIWindow *w = self.window;
-			UIGraphicsBeginImageContextWithOptions(w.bounds.size, NO, 0.0f);
+			// Opaque: with an alpha channel, white text over a solid bubble
+			// composited wrongly and came out orange in the capture - a
+			// screenshot artifact that looked exactly like a colour bug.
+			UIGraphicsBeginImageContextWithOptions(w.bounds.size, YES, 0.0f);
 			[w.layer renderInContext:UIGraphicsGetCurrentContext()];
 			UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
 			UIGraphicsEndImageContext();

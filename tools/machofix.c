@@ -35,6 +35,7 @@
 #define LC_SEGMENT      0x1
 #define LC_DYLD_INFO_ONLY 0x80000022u
 #define LC_MAIN         0x80000028u
+#define LC_VERSION_MIN_IPHONEOS 0x25
 
 #define REBASE_OPCODE_MASK 0xF0
 #define REBASE_IMM_MASK    0x0F
@@ -198,6 +199,19 @@ int main(int argc, char **argv)
 			}
 		} else if (cmd == LC_MAIN) {
 			entryoff_off = off + 8;          /* uint64 */
+		} else if (cmd == LC_VERSION_MIN_IPHONEOS) {
+			/* UIKit decides between iOS 6 and iOS 7 chrome from the SDK this
+			 * records, not from the deployment target. Built with
+			 * -miphoneos-version-min=6.0 the linker writes sdk 6.0, and iOS 7
+			 * then draws the whole app with legacy blue bars - no theming can
+			 * override that. Claim 7.0 while leaving the minimum at 6.0, so
+			 * the app still launches on iOS 6 but gets modern chrome on 7. */
+			uint32_t sdk = rd32(off + 12);
+			if (sdk < 0x00070000) {
+				wr32(off + 12, 0x00070000);
+				printf("machofix: LC_VERSION_MIN sdk %u.%u -> 7.0\n",
+						sdk >> 16, (sdk >> 8) & 0xff);
+			}
 		} else if (cmd == LC_DYLD_INFO_ONLY) {
 			rebase_off  = rd32(off + 8);
 			rebase_size = rd32(off + 12);

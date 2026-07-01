@@ -11,6 +11,11 @@
 - (void)viewDidLoad {
 	[super viewDidLoad];
 
+	// iOS 7 lays content out under the bars; these screens position their own
+	// frames and expect the old behaviour.
+	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
+		self.edgesForExtendedLayout = UIRectEdgeNone;
+
 	self.title = @"Contacts";
 	self.users = @[];
 	self.tableView.rowHeight = 52;

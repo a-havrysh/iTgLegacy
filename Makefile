@@ -98,10 +98,14 @@ APP_SRC_M := \
 	src/RootViewController.m \
 	src/main.m \
 	src/TGClient.m \
+	src/TGTheme.m \
+	src/TGIcons.m \
 	src/TGLoginViewController.m \
 	src/TGChatListViewController.m \
 	src/TGChatViewController.m \
 	src/TGContactsViewController.m \
+	src/TGTopicsViewController.m \
+	src/TGForwardPicker.m \
 	src/TGSettingsViewController.m \
 	src/TGVoiceDecoder.m \
 	src/UIImage+WebP.m \
