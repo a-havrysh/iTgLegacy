@@ -169,6 +169,24 @@ static NSMutableDictionary *sCache = nil;
 	}];
 }
 
++ (UIImage *)microphone {
+	return [self iconNamed:@"microphone" draw:^(CGContextRef ctx, CGFloat s){
+		// capsule head, stand, base
+		UIBezierPath *head = [UIBezierPath bezierPathWithRoundedRect:
+				CGRectMake(s/2 - 4, 3, 8, 13) cornerRadius:4];
+		CGContextAddPath(ctx, head.CGPath);
+		CGContextFillPath(ctx);
+
+		CGContextSetLineWidth(ctx, 2);
+		CGContextAddArc(ctx, s/2, 14, 7, 0, M_PI, 0);
+		CGContextStrokePath(ctx);
+
+		CGContextMoveToPoint(ctx, s/2, 21);
+		CGContextAddLineToPoint(ctx, s/2, s - 4);
+		CGContextStrokePath(ctx);
+	}];
+}
+
 + (UIImage *)ticksWhite:(BOOL)white {
 	CGSize size = CGSizeMake(15, 9);
 	UIGraphicsBeginImageContextWithOptions(size, NO, 0);
@@ -206,14 +224,21 @@ static NSMutableDictionary *sCache = nil;
                            size:(CGFloat)size
                        colourId:(int64_t)colourId
 {
-	// A blank grey circle tells you nothing; initials on a stable colour let
-	// you recognise a row before reading it.
+	// Telegram's own placeholder colours, and its own mapping: the palette is
+	// indexed through [0,7,4,1,6,3,5] so that the same person gets the same
+	// colour here as in every other client.
 	static NSArray *palette = nil;
 	if (!palette)
-		palette = @[@[@0.85f, @0.35f, @0.35f], @[@0.30f, @0.60f, @0.85f],
-					@[@0.35f, @0.68f, @0.45f], @[@0.85f, @0.60f, @0.25f],
-					@[@0.60f, @0.45f, @0.80f], @[@0.30f, @0.65f, @0.68f]];
-	NSArray *c = palette[(NSUInteger)llabs(colourId) % palette.count];
+		palette = @[@[@0.882f, @0.443f, @0.463f],   // red
+					@[@0.929f, @0.659f, @0.424f],   // orange
+					@[@0.651f, @0.584f, @0.906f],   // violet
+					@[@0.482f, @0.784f, @0.384f],   // green
+					@[@0.431f, @0.788f, @0.796f],   // cyan
+					@[@0.396f, @0.667f, @0.867f],   // blue
+					@[@0.933f, @0.478f, @0.682f],   // pink
+					@[@0.882f, @0.443f, @0.463f]];  // the 8th slot repeats red
+	static const NSUInteger order[7] = {0, 7, 4, 1, 6, 3, 5};
+	NSArray *c = palette[order[(NSUInteger)llabs(colourId) % 7]];
 
 	UIGraphicsBeginImageContextWithOptions(CGSizeMake(size, size), NO, 0);
 	CGContextRef ctx = UIGraphicsGetCurrentContext();

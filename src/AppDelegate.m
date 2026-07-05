@@ -190,6 +190,7 @@
  *   itglegacy://screenshot       write Caches/screen.png
  *   itglegacy://tab/N            select a tab
  *   itglegacy://chatindex/N      open the Nth chat in the list
+ *   itglegacy://profile          open the profile of the chat on screen
  *   itglegacy://phone/+NNN       hand a phone number to TDLib
  *   itglegacy://code/NNNNN       hand the login code to TDLib
  *   itglegacy://password/...     hand the 2FA password to TDLib
@@ -267,6 +268,22 @@
 			vc.hidesBottomBarWhenPushed = YES;
 			[nc pushViewController:vc animated:NO];
 			NSLog(@"open chat index %ld", (long)idx);
+		});
+		return YES;
+	}
+
+	// itglegacy://profile - open the profile of the chat already on screen.
+	if ([host isEqualToString:@"profile"]){
+		dispatch_async(dispatch_get_main_queue(), ^{
+			UITabBarController *tabs = (UITabBarController *)self.rootViewController;
+			if (![tabs isKindOfClass:UITabBarController.class])
+				return;
+			UINavigationController *nc = tabs.viewControllers[tabs.selectedIndex];
+			UIViewController *top = nc.topViewController;
+			if ([top respondsToSelector:@selector(openProfile)])
+				[top performSelector:@selector(openProfile)];
+			else
+				NSLog(@"profile: no chat on screen");
 		});
 		return YES;
 	}

@@ -59,11 +59,6 @@ INCLUDES  := -I$(ROOT_DIR)/include \
              -I$(ROOT_DIR)/src/ogg/ogg \
              -I$(ROOT_DIR)/src/opus/include \
              -I$(ROOT_DIR)/src/opus/include/opus \
-             -I$(ROOT_DIR)/src/opusfile \
-             -I$(ROOT_DIR)/src/ogg \
-             -I$(ROOT_DIR)/src/ogg/ogg \
-             -I$(ROOT_DIR)/src/opus/include \
-             -I$(ROOT_DIR)/src/opus/include/opus \
              -I$(ROOT_DIR)/src/opusenc \
              -I$(ROOT_DIR)/src/opusfile \
              -I$(ROOT_DIR)/tdlib/td \
@@ -106,8 +101,11 @@ APP_SRC_M := \
 	src/TGContactsViewController.m \
 	src/TGTopicsViewController.m \
 	src/TGForwardPicker.m \
+	src/TGProfileViewController.m \
 	src/TGSettingsViewController.m \
 	src/TGVoiceDecoder.m \
+	src/TGVoiceRecorder.m \
+	src/opusenc/opusenc.m \
 	src/UIImage+WebP.m \
 	src/TGLottieView.m
 
@@ -118,7 +116,10 @@ APP_SRC_C := \
 	src/opusfile/info.c \
 	src/opusfile/stream.c \
 	src/ogg/ogg/framing.c \
-	src/ogg/ogg/bitwise.c
+	src/ogg/ogg/bitwise.c \
+	src/opusenc/opus_header.c \
+	src/opusenc/picture.c \
+	src/opusenc/diag_range.c
 
 # Object mapping for armv7
 ARMV7_OBJ_DIR := $(BUILD_DIR)/armv7/obj

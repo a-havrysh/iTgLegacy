@@ -3,6 +3,8 @@
 #import "TGTheme.h"
 #import "TGIcons.h"
 #import "TGForwardPicker.h"
+#import "TGVoiceRecorder.h"
+#import "TGProfileViewController.h"
 #import <QuartzCore/QuartzCore.h>
 #import <MediaPlayer/MediaPlayer.h>
 #import <MapKit/MapKit.h>
@@ -14,6 +16,7 @@
 static const CGFloat kInputHeight = 44.0f;
 static const CGFloat kBubbleMaxW  = 240.0f;
 static const CGFloat kPadH        = 10.0f;
+static const CGFloat kAvatarSide  = 28.0f;   // sender avatar in groups
 static const CGFloat kPadV        = 7.0f;
 static const CGFloat kImageMax    = 200.0f;
 
@@ -31,6 +34,7 @@ static const CGFloat kImageMax    = 200.0f;
 @property (nonatomic, strong) UIView  *quoteBar;   // the stripe beside a quote
 @property (nonatomic, strong) UILabel *quote;      // what is being replied to
 @property (nonatomic, strong) UIImageView *ticks;  // delivery marks
+@property (nonatomic, strong) UIImageView *senderAvatar;  // groups only
 @end
 
 @implementation TGBubbleCell
@@ -66,6 +70,12 @@ static const CGFloat kImageMax    = 200.0f;
 	self.sender.backgroundColor = [UIColor clearColor];
 	self.sender.hidden = YES;
 	[self.contentView addSubview:self.sender];
+
+	self.senderAvatar = [[UIImageView alloc] init];
+	self.senderAvatar.layer.cornerRadius = kAvatarSide / 2;
+	self.senderAvatar.clipsToBounds = YES;
+	self.senderAvatar.hidden = YES;
+	[self.contentView addSubview:self.senderAvatar];
 
 	self.ticks = [[UIImageView alloc] init];
 	self.ticks.hidden = YES;
@@ -114,7 +124,7 @@ static const CGFloat kImageMax    = 200.0f;
 
 #pragma mark - controller
 
-@interface TGChatViewController ()
+@interface TGChatViewController () <UISearchBarDelegate>
 @property (nonatomic, strong) UITableView *table;
 @property (nonatomic, strong) UIView *inputBar;
 @property (nonatomic, strong) UITextField *input;
@@ -133,6 +143,12 @@ static const CGFloat kImageMax    = 200.0f;
 @property (nonatomic, assign) int64_t replyToId;             // composing a reply
 @property (nonatomic, assign) int64_t editingId;             // editing instead
 @property (nonatomic, strong) UIView *composeBanner;         // "Reply to ..."
+@property (nonatomic, strong) UIButton *micButton;
+@property (nonatomic, strong) UISearchBar *chatSearchBar;
+@property (nonatomic, strong) NSArray *messagesBeforeSearch;
+@property (nonatomic, strong) NSTimer *recordTimer;
+@property (nonatomic, strong) NSMutableDictionary *senderAvatars;   // userId -> UIImage
+@property (nonatomic, strong) NSMutableSet *senderAvatarsRequested;
 
 - (void)clearComposeState;
 - (void)showComposeBanner:(NSString *)text;
@@ -153,6 +169,8 @@ static const CGFloat kImageMax    = 200.0f;
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
 	[self buildTitleView];
 	self.messages = @[];
+	self.senderAvatars = [NSMutableDictionary dictionary];
+	self.senderAvatarsRequested = [NSMutableSet set];
 	self.images = [NSMutableDictionary dictionary];
 	self.imagesRequested = [NSMutableSet set];
 	self.lottiePaths = [NSMutableDictionary dictionary];
@@ -230,14 +248,31 @@ static const CGFloat kImageMax    = 200.0f;
 	subtitle.textAlignment = NSTextAlignmentCenter;
 	[header addSubview:subtitle];
 
+	header.userInteractionEnabled = YES;
+	[header addGestureRecognizer:[[UITapGestureRecognizer alloc]
+			initWithTarget:self action:@selector(openProfile)]];
 	self.navigationItem.titleView = header;
+	[self buildAvatarButton];
+
+	// "typing..." takes the subtitle over while it lasts, then hands it back.
+	__weak typeof(self) weakSelf = self;
+	__block NSString *restingSubtitle = @"";
+	[TGClient shared].onChatAction = ^(int64_t chatId, NSString *action){
+		if (chatId != weakSelf.chatId)
+			return;
+		subtitle.text = action ?: restingSubtitle;
+	};
+
+	[self loadPinnedMessage];
 
 	if (!self.isGroup)
 		return;
 
 	[[TGClient shared] memberCountForChat:self.chatId completion:^(NSInteger count){
-		if (count > 0)
-			subtitle.text = [NSString stringWithFormat:@"%ld members", (long)count];
+		if (count > 0){
+			restingSubtitle = [NSString stringWithFormat:@"%ld members", (long)count];
+			subtitle.text = restingSubtitle;
+		}
 	}];
 }
 
@@ -283,6 +318,25 @@ static const CGFloat kImageMax    = 200.0f;
 	[self.sendButton addTarget:self action:@selector(sendTapped)
 			forControlEvents:UIControlEventTouchUpInside];
 	[self.inputBar addSubview:self.sendButton];
+
+	// Hold to record, release to send - the gesture every client uses. It sits
+	// where Send is and swaps with it depending on whether anything is typed.
+	self.micButton = [UIButton buttonWithType:UIButtonTypeCustom];
+	self.micButton.frame = self.sendButton.frame;
+	[self.micButton setImage:[TGIcons microphone] forState:UIControlStateNormal];
+	self.micButton.tintColor = [[TGTheme shared] accentColour];
+	self.micButton.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+	[self.micButton addTarget:self action:@selector(recordStart)
+			 forControlEvents:UIControlEventTouchDown];
+	[self.micButton addTarget:self action:@selector(recordFinish)
+			 forControlEvents:UIControlEventTouchUpInside];
+	[self.micButton addTarget:self action:@selector(recordCancel)
+			 forControlEvents:UIControlEventTouchUpOutside | UIControlEventTouchCancel];
+	[self.inputBar addSubview:self.micButton];
+
+	[self.input addTarget:self action:@selector(inputChanged)
+		 forControlEvents:UIControlEventEditingChanged];
+	[self inputChanged];
 
 	[self.view addSubview:self.inputBar];
 }
@@ -524,6 +578,256 @@ static const CGFloat kImageMax    = 200.0f;
 			dispatch_get_main_queue(), ^{
 		[self reload];
 	});
+}
+
+/// Telegram puts the chat's picture top right, and it opens the profile.
+- (void)buildAvatarButton {
+	CGFloat side = 30;
+	UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+	button.frame = CGRectMake(0, 0, side, side);
+	button.layer.cornerRadius = side / 2;
+	button.clipsToBounds = YES;
+	[button addTarget:self action:@selector(openProfile)
+	 forControlEvents:UIControlEventTouchUpInside];
+
+	NSString *title = self.chatTitle ?: @"";
+	[button setImage:[TGIcons avatarWithInitials:
+			(title.length ? [title substringToIndex:1].uppercaseString : @"?")
+											size:side colourId:self.chatId]
+			forState:UIControlStateNormal];
+
+	self.navigationItem.rightBarButtonItem =
+			[[UIBarButtonItem alloc] initWithCustomView:button];
+
+	NSNumber *fileId = [[TGClient shared] photoFileIdForChat:self.chatId];
+	if (!fileId)
+		return;
+	[[TGClient shared] downloadFile:fileId.integerValue completion:^(NSString *path){
+		UIImage *photo = path ? [UIImage imageWithContentsOfFile:path] : nil;
+		if (photo) [button setImage:photo forState:UIControlStateNormal];
+	}];
+}
+
+- (void)openProfile {
+	// A private chat id is the user id, which is what the profile needs to
+	// look up a photo and a phone number; a group has no single user.
+	int64_t userId = self.isGroup ? 0 : self.chatId;
+	TGProfileViewController *profile = [[TGProfileViewController alloc]
+			initWithChatId:self.chatId userId:userId title:self.chatTitle];
+	__weak typeof(self) weakSelf = self;
+	profile.onSearchTapped = ^{
+		[weakSelf.navigationController popViewControllerAnimated:YES];
+		[weakSelf toggleChatSearch];
+	};
+	[self.navigationController pushViewController:profile animated:YES];
+}
+
+#pragma mark - pinned message
+
+/// A strip under the navigation bar, the way clients surface what is pinned.
+- (void)loadPinnedMessage {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] pinnedMessageForChat:self.chatId completion:^(NSDictionary *m){
+		NSString *text = m[@"text"];
+		if (!text.length)
+			return;
+		[weakSelf showPinnedBanner:text];
+	}];
+}
+
+- (void)showPinnedBanner:(NSString *)text {
+	CGRect b = self.view.bounds;
+	UIView *banner = [[UIView alloc] initWithFrame:CGRectMake(0, 0, b.size.width, 34)];
+	banner.backgroundColor = [UIColor colorWithWhite:0.97f alpha:0.97f];
+	banner.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+
+	UIView *stripe = [[UIView alloc] initWithFrame:CGRectMake(8, 5, 2, 24)];
+	stripe.backgroundColor = [[TGTheme shared] accentColour];
+	[banner addSubview:stripe];
+
+	UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(16, 2, b.size.width - 24, 14)];
+	label.text = @"Pinned message";
+	label.font = [UIFont boldSystemFontOfSize:11];
+	label.textColor = [[TGTheme shared] accentColour];
+	label.backgroundColor = [UIColor clearColor];
+	[banner addSubview:label];
+
+	UILabel *body = [[UILabel alloc] initWithFrame:CGRectMake(16, 16, b.size.width - 24, 16)];
+	body.text = text;
+	body.font = [UIFont systemFontOfSize:13];
+	body.textColor = [[TGTheme shared] primaryTextColour];
+	body.backgroundColor = [UIColor clearColor];
+	body.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	[banner addSubview:body];
+
+	UIView *hair = [[UIView alloc] initWithFrame:CGRectMake(0, 33, b.size.width, 1)];
+	hair.backgroundColor = [UIColor colorWithWhite:0.8f alpha:1];
+	hair.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	[banner addSubview:hair];
+
+	[self.view addSubview:banner];
+
+	// Push the message list down so the banner does not cover the first row.
+	UIEdgeInsets insets = self.table.contentInset;
+	insets.top += 34;
+	self.table.contentInset = insets;
+	self.table.scrollIndicatorInsets = insets;
+}
+
+#pragma mark - search
+
+/// The table already knows how to draw a list of flattened messages, so search
+/// just swaps the list underneath it rather than building a second screen.
+- (void)toggleChatSearch {
+	if (self.chatSearchBar){
+		[self endChatSearch];
+		return;
+	}
+
+	CGRect b = self.view.bounds;
+	self.chatSearchBar = [[UISearchBar alloc] initWithFrame:CGRectMake(0, 0, b.size.width, 44)];
+	self.chatSearchBar.delegate = self;
+	self.chatSearchBar.placeholder = @"Search in chat";
+	self.chatSearchBar.showsCancelButton = YES;
+	self.chatSearchBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	[self.view addSubview:self.chatSearchBar];
+	[self.chatSearchBar becomeFirstResponder];
+
+	self.messagesBeforeSearch = self.messages;
+}
+
+- (void)endChatSearch {
+	[self.chatSearchBar resignFirstResponder];
+	[self.chatSearchBar removeFromSuperview];
+	self.chatSearchBar = nil;
+
+	if (self.messagesBeforeSearch){
+		self.messages = self.messagesBeforeSearch;
+		self.messagesBeforeSearch = nil;
+		[self.table reloadData];
+		[self scrollToBottomAnimated:NO];
+	}
+}
+
+- (void)searchBarCancelButtonClicked:(UISearchBar *)searchBar {
+	[self endChatSearch];
+}
+
+- (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)query {
+	if (!query.length){
+		self.messages = self.messagesBeforeSearch ?: @[];
+		[self.table reloadData];
+		return;
+	}
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] searchInChat:self.chatId query:query completion:^(NSArray *found){
+		TGChatViewController *me = weakSelf;
+		if (!me || ![me.chatSearchBar.text isEqualToString:query])
+			return;   // a stale answer must not replace a newer query
+		// searchChatMessages answers newest first; the table reads oldest first.
+		me.messages = [[found reverseObjectEnumerator] allObjects];
+		[me.table reloadData];
+	}];
+}
+
+/// Cached initials until the real photo arrives; drawing it every row would
+/// re-download and re-decode on every scroll.
+- (UIImage *)avatarForUser:(int64_t)userId name:(NSString *)name {
+	NSNumber *key = @(userId);
+	UIImage *cached = self.senderAvatars[key];
+	if (cached)
+		return cached;
+
+	NSString *initials = name.length ? [name substringToIndex:1] : @"?";
+	UIImage *placeholder = [TGIcons avatarWithInitials:initials.uppercaseString
+												  size:kAvatarSide
+											  colourId:userId];
+	self.senderAvatars[key] = placeholder;
+
+	if ([self.senderAvatarsRequested containsObject:key])
+		return placeholder;
+	[self.senderAvatarsRequested addObject:key];
+
+	__weak typeof(self) weakSelf = self;
+	void (^fetch)(NSNumber *) = ^(NSNumber *fileId){
+		if (!fileId)
+			return;
+		[[TGClient shared] downloadFile:fileId.integerValue completion:^(NSString *path){
+			UIImage *photo = path ? [UIImage imageWithContentsOfFile:path] : nil;
+			if (!photo) return;
+			weakSelf.senderAvatars[key] = photo;
+			[weakSelf.table reloadData];
+		}];
+	};
+
+	NSNumber *cachedFile = [[TGClient shared] photoFileIdForUserId:userId];
+	if (cachedFile){
+		fetch(cachedFile);
+		return placeholder;
+	}
+
+	// TDLib only volunteers updateUser for people it has reason to send; the
+	// rest of a group's members have to be asked for.
+	[[TGClient shared] userInfo:userId completion:^(NSDictionary *user){
+		fetch(user[@"profile_photo"][@"small"][@"id"]);
+	}];
+	return placeholder;
+}
+
+#pragma mark - voice
+
+/// Send is for typed text, the microphone for everything else - showing both
+/// at once would leave one of them dead.
+- (void)inputChanged {
+	BOOL hasText = self.input.text.length > 0;
+	self.sendButton.hidden = !hasText;
+	self.micButton.hidden = hasText;
+}
+
+- (void)recordStart {
+	if (![[TGVoiceRecorder shared] start]){
+		[self showPlaybackFailure];
+		return;
+	}
+	[self showComposeBanner:@"Recording... 0:00"];
+	self.recordTimer = [NSTimer scheduledTimerWithTimeInterval:0.5
+													   target:self
+													 selector:@selector(recordTick)
+													 userInfo:nil
+													  repeats:YES];
+}
+
+- (void)recordTick {
+	NSTimeInterval d = [TGVoiceRecorder shared].duration;
+	UILabel *label = (UILabel *)[self.composeBanner.subviews firstObject];
+	if ([label isKindOfClass:UILabel.class])
+		label.text = [NSString stringWithFormat:@"Recording... %ld:%02ld",
+				(long)(d / 60), (long)((NSInteger)d % 60)];
+}
+
+- (void)recordFinish {
+	[self.recordTimer invalidate];
+	self.recordTimer = nil;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGVoiceRecorder shared] stopWithCompletion:^(NSString *path, NSTimeInterval seconds){
+		TGChatViewController *me = weakSelf;
+		[me clearComposeState];
+		if (!me || !path || seconds < 0.5)
+			return;   // a stray tap is not a voice message
+		[[TGClient shared] sendVoiceAtPath:path
+								  duration:(NSInteger)seconds
+									toChat:me.chatId
+									thread:me.threadId];
+	}];
+}
+
+- (void)recordCancel {
+	[self.recordTimer invalidate];
+	self.recordTimer = nil;
+	[[TGVoiceRecorder shared] cancel];
+	[self clearComposeState];
 }
 
 #pragma mark - attachments
@@ -831,6 +1135,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 	cell.icon.hidden = YES;
 	cell.subtitle.hidden = YES;
 	cell.sender.hidden = YES;
+	cell.senderAvatar.hidden = YES;
 
 	// Service messages sit centred on the wallpaper, not in a bubble - joins,
 	// renames, pins. Groups are full of them.
@@ -940,17 +1245,26 @@ static UIColor *TGSenderColour(int64_t userId) {
 	CGFloat top = 3;
 
 	// In a group you need to know who is speaking.
+	int64_t senderId = [m[@"senderId"] longLongValue];
 	NSString *senderName = (self.isGroup && !mine)
-			? [[TGClient shared] nameForUserId:[m[@"senderId"] longLongValue]] : nil;
+			? [[TGClient shared] nameForUserId:senderId] : nil;
 	if (senderName.length){
+		// The bubble shifts right to make room for the avatar beside it.
+		x += kAvatarSide + 4;
+		cell.senderAvatar.hidden = NO;
+		cell.senderAvatar.image = [self avatarForUser:senderId name:senderName];
+
 		cell.sender.hidden = NO;
 		cell.sender.text = senderName;
-		cell.sender.textColor = TGSenderColour([m[@"senderId"] longLongValue]);
+		cell.sender.textColor = TGSenderColour(senderId);
 		cell.sender.frame = CGRectMake(x + kPadH, 2, tableView.bounds.size.width - x - 20, 14);
 		top = 18;
 	}
 
 	cell.bubble.frame = CGRectMake(x, top, bubbleW, bubbleH);
+	if (!cell.senderAvatar.hidden)
+		cell.senderAvatar.frame = CGRectMake(8, top + bubbleH - kAvatarSide,
+											 kAvatarSide, kAvatarSide);
 
 	// Outgoing green, incoming white - the convention every client uses.
 	// A sticker gets neither: no fill, no border.

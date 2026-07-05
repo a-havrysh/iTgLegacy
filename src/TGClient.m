@@ -19,6 +19,9 @@ typedef const char *(*td_exec_fn)(void *client, const char *request);
 @property (nonatomic, copy)   NSString *pendingPhoneNumber;
 @property (nonatomic, strong) NSMutableDictionary *chatsById;   // id -> mutable info
 @property (nonatomic, strong) NSMutableDictionary *usersById;   // id -> display name
+@property (nonatomic, strong) NSMutableDictionary *userPhotosById; // id -> photo file id
+@property (nonatomic, strong) NSArray *archivedChats;
+@property (nonatomic, strong) NSArray *folders;
 @property (nonatomic, strong) NSArray *chats;
 @property (nonatomic, strong) NSMutableArray *outbox;   // JSON strings awaiting send
 @property (nonatomic, strong) NSLock *outboxLock;
@@ -43,6 +46,9 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m);
 		s = [[TGClient alloc] init];
 		s.chatsById = [NSMutableDictionary dictionary];
 		s.usersById = [NSMutableDictionary dictionary];
+		s.userPhotosById = [NSMutableDictionary dictionary];
+		s.archivedChats = @[];
+		s.folders = @[];
 		s.chats = @[];
 		s.outbox = [NSMutableArray array];
 		s.pendingRequests = [NSMutableDictionary dictionary];
@@ -227,6 +233,7 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m);
 			name = u[@"usernames"][@"active_usernames"][0] ?: @"";
 		if (u[@"id"] && name.length)
 			self.usersById[u[@"id"]] = name;
+		[self cacheProfilePhoto:u];
 		return;
 	}
 
@@ -258,7 +265,8 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m);
 	if ([type isEqualToString:@"updateChatLastMessage"] ||
 		[type isEqualToString:@"updateChatPosition"] ||
 		[type isEqualToString:@"updateChatTitle"] ||
-		[type isEqualToString:@"updateChatReadInbox"]){
+		[type isEqualToString:@"updateChatReadInbox"] ||
+		[type isEqualToString:@"updateChatNotificationSettings"]){
 		[self applyChatUpdate:obj];
 		return;
 	}
@@ -284,8 +292,38 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m);
 			self.onConnectionState(state, text);
 		return;
 	}
-	if ([type isEqualToString:@"updateUnreadChatCount"] ||
-		[type isEqualToString:@"updateChatFolders"]){
+	if ([type isEqualToString:@"updateChatAction"]){
+		// TDLib names the action; the client turns it into the phrase every
+		// other client shows.
+		NSString *kind = obj[@"action"][@"@type"];
+		NSString *phrase = nil;
+		if ([kind isEqualToString:@"chatActionTyping"])
+			phrase = @"typing...";
+		else if ([kind isEqualToString:@"chatActionRecordingVoiceNote"])
+			phrase = @"recording audio...";
+		else if ([kind isEqualToString:@"chatActionRecordingVideoNote"] ||
+				 [kind isEqualToString:@"chatActionRecordingVideo"])
+			phrase = @"recording video...";
+		else if ([kind isEqualToString:@"chatActionUploadingPhoto"])
+			phrase = @"sending a photo...";
+		else if ([kind hasPrefix:@"chatActionUploading"])
+			phrase = @"sending a file...";
+		// chatActionCancel and anything unknown clear it.
+		if (self.onChatAction)
+			self.onChatAction([obj[@"chat_id"] longLongValue], phrase);
+		return;
+	}
+
+	if ([type isEqualToString:@"updateChatFolders"]){
+		NSMutableArray *out = [NSMutableArray array];
+		for (NSDictionary *f in obj[@"chat_folders"])
+			[out addObject:@{@"id"    : f[@"id"] ?: @(0),
+							 @"title" : f[@"title"][@"text"] ?: f[@"name"][@"text"] ?: f[@"title"] ?: @""}];
+		self.folders = out;
+		NSLog(@"TGClient: %lu folders", (unsigned long)out.count);
+		return;
+	}
+	if ([type isEqualToString:@"updateUnreadChatCount"]){
 		NSLog(@"TGClient: %@ total=%@ list=%@", type, obj[@"total_count"],
 				obj[@"chat_list"][@"@type"]);
 		return;
@@ -705,6 +743,60 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 	}];
 }
 
+- (void)searchMessages:(NSString *)query completion:(void (^)(NSArray *))completion {
+	__weak typeof(self) weakSelf = self;
+	[self request:@{
+		@"@type"  : @"searchMessages",
+		@"query"  : query ?: @"",
+		@"limit"  : @(50),
+		@"offset" : @"",
+	} completion:^(NSDictionary *result){
+		TGClient *me = weakSelf;
+		NSMutableArray *out = [NSMutableArray array];
+		for (NSDictionary *m in result[@"messages"]){
+			NSMutableDictionary *flat = [TGFlattenMessage(m) mutableCopy];
+			if (!flat) continue;
+			int64_t chatId = [m[@"chat_id"] longLongValue];
+			flat[@"chatId"] = @(chatId);
+			flat[@"chatTitle"] = [me titleForChat:chatId] ?: @"";
+			[out addObject:flat];
+		}
+		if (completion) completion(out);
+	}];
+}
+
+- (void)searchInChat:(int64_t)chatId query:(NSString *)query
+          completion:(void (^)(NSArray *))completion {
+	__weak typeof(self) weakSelf = self;
+	[self request:@{
+		@"@type"           : @"searchChatMessages",
+		@"chat_id"         : @(chatId),
+		@"query"           : query ?: @"",
+		@"from_message_id" : @(0),
+		@"offset"          : @(0),
+		@"limit"           : @(50),
+	} completion:^(NSDictionary *result){
+		TGClient *me = weakSelf;
+		NSMutableArray *out = [NSMutableArray array];
+		for (NSDictionary *m in result[@"messages"]){
+			NSDictionary *flat = TGFlattenMessage(m);
+			if (flat) [out addObject:flat];
+		}
+		if (completion) completion(out);
+	}];
+}
+
+/// Title of a chat we already know about, for search results that name it.
+- (NSString *)titleForChat:(int64_t)chatId {
+	for (NSDictionary *c in self.chats)
+		if ([c[@"id"] longLongValue] == chatId)
+			return c[@"title"];
+	for (NSDictionary *c in self.archivedChats)
+		if ([c[@"id"] longLongValue] == chatId)
+			return c[@"title"];
+	return nil;
+}
+
 - (void)historyForChat:(int64_t)chatId
                  limit:(NSInteger)limit
             completion:(void (^)(NSArray *))completion {
@@ -826,6 +918,22 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 	}];
 }
 
+
+- (void)sendVoiceAtPath:(NSString *)path duration:(NSInteger)seconds
+                 toChat:(int64_t)chatId thread:(int64_t)threadId {
+	if (!path.length)
+		return;
+	[self send:@{
+		@"@type"                : @"sendMessage",
+		@"chat_id"              : @(chatId),
+		@"message_thread_id"    : @(threadId),
+		@"input_message_content": @{
+			@"@type"      : @"inputMessageVoiceNote",
+			@"voice_note" : @{@"@type" : @"inputFileLocal", @"path" : path},
+			@"duration"   : @(seconds),
+		},
+	}];
+}
 
 - (void)sendPhotoAtPath:(NSString *)path toChat:(int64_t)chatId {
 	if (!path.length)
@@ -959,6 +1067,11 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		@"chat_list" : @{@"@type" : @"chatListMain"},
 		@"limit"     : @(50),
 	}];
+	[self send:@{
+		@"@type"     : @"loadChats",
+		@"chat_list" : @{@"@type" : @"chatListArchive"},
+		@"limit"     : @(50),
+	}];
 
 	// A batch beyond the first needs a server round trip, so silence for a
 	// second or two means nothing. Keep asking on a timer and stop only when
@@ -1032,15 +1145,107 @@ static NSString *TGMessagePreview(NSDictionary *message) {
 	return ctype ?: @"";
 }
 
-/// Chats are ordered by the "order" of their position in the main list. It is
-/// an int64 sent as a string, so it must not be compared as a string.
-static int64_t TGMainListOrder(NSArray *positions) {
+/// Chats are ordered by the "order" of their position in a list. It is an
+/// int64 sent as a string, so it must not be compared as a string.
+static int64_t TGOrderInList(NSArray *positions, NSString *listType) {
 	for (NSDictionary *p in positions){
 		NSDictionary *list = p[@"list"];
-		if ([list[@"@type"] isEqualToString:@"chatListMain"])
+		if ([list[@"@type"] isEqualToString:listType])
 			return (int64_t)[p[@"order"] longLongValue];
 	}
 	return 0;
+}
+
+static BOOL TGPinnedInMain(NSArray *positions) {
+	for (NSDictionary *p in positions)
+		if ([p[@"list"][@"@type"] isEqualToString:@"chatListMain"])
+			return [p[@"is_pinned"] boolValue];
+	return NO;
+}
+
+static int64_t TGMainListOrder(NSArray *positions) {
+	return TGOrderInList(positions, @"chatListMain");
+}
+
+static int64_t TGArchiveOrder(NSArray *positions) {
+	return TGOrderInList(positions, @"chatListArchive");
+}
+
+/// Small profile photo of a user, so a group message can show who wrote it.
+- (void)cacheProfilePhoto:(NSDictionary *)user {
+	NSNumber *fileId = user[@"profile_photo"][@"small"][@"id"];
+	if (user[@"id"] && fileId)
+		self.userPhotosById[user[@"id"]] = fileId;
+}
+
+- (NSNumber *)photoFileIdForUserId:(int64_t)userId {
+	return self.userPhotosById[@(userId)];
+}
+
+- (void)pinnedMessageForChat:(int64_t)chatId
+                  completion:(void (^)(NSDictionary *))completion {
+	[self request:@{@"@type" : @"getChatPinnedMessage", @"chat_id" : @(chatId)}
+	   completion:^(NSDictionary *m){
+		if (completion)
+			completion([m[@"@type"] isEqualToString:@"message"] ? TGFlattenMessage(m) : nil);
+	}];
+}
+
+- (void)setChat:(int64_t)chatId pinned:(BOOL)pinned {
+	[self send:@{
+		@"@type"     : @"toggleChatIsPinned",
+		@"chat_list" : @{@"@type" : @"chatListMain"},
+		@"chat_id"   : @(chatId),
+		@"is_pinned" : @(pinned),
+	}];
+}
+
+- (void)setChat:(int64_t)chatId muted:(BOOL)muted {
+	// A very large mute_for is how TDLib expresses "muted", there is no flag.
+	[self send:@{
+		@"@type" : @"setChatNotificationSettings",
+		@"chat_id" : @(chatId),
+		@"notification_settings" : @{
+			@"@type"                : @"chatNotificationSettings",
+			@"use_default_mute_for" : @NO,
+			@"mute_for"             : @(muted ? 365 * 24 * 3600 : 0),
+		},
+	}];
+}
+
+- (NSNumber *)photoFileIdForChat:(int64_t)chatId {
+	for (NSArray *list in @[self.chats, self.archivedChats])
+		for (NSDictionary *c in list)
+			if ([c[@"id"] longLongValue] == chatId)
+				return c[@"photoFileId"];
+	return nil;
+}
+
+- (void)userInfo:(int64_t)userId completion:(void (^)(NSDictionary *))completion {
+	[self request:@{@"@type" : @"getUser", @"user_id" : @(userId)}
+	   completion:^(NSDictionary *u){
+		if (completion) completion([u[@"@type"] isEqualToString:@"user"] ? u : nil);
+	}];
+}
+
+- (void)mediaInChat:(int64_t)chatId filter:(NSString *)filter
+         completion:(void (^)(NSArray *))completion {
+	[self request:@{
+		@"@type"           : @"searchChatMessages",
+		@"chat_id"         : @(chatId),
+		@"query"           : @"",
+		@"from_message_id" : @(0),
+		@"offset"          : @(0),
+		@"limit"           : @(60),
+		@"filter"          : @{@"@type" : filter},
+	} completion:^(NSDictionary *result){
+		NSMutableArray *out = [NSMutableArray array];
+		for (NSDictionary *m in result[@"messages"]){
+			NSDictionary *flat = TGFlattenMessage(m);
+			if (flat) [out addObject:flat];
+		}
+		if (completion) completion(out);
+	}];
 }
 
 - (NSString *)nameForUserId:(int64_t)userId {
@@ -1088,6 +1293,7 @@ static int64_t TGMainListOrder(NSArray *positions) {
 				name = u[@"usernames"][@"active_usernames"][0] ?: @"";
 			if (name.length)
 				me.usersById[@(userId)] = name;
+			[me cacheProfilePhoto:u];
 		}
 		if (completion) completion();
 	}];
@@ -1122,14 +1328,22 @@ static int64_t TGMainListOrder(NSArray *positions) {
 	// rather than a merged stream.
 	if (chat[@"is_forum"])
 		info[@"isForum"] = chat[@"is_forum"];
-	if (chat[@"positions"])
+	if (chat[@"positions"]){
 		info[@"order"] = @(TGMainListOrder(chat[@"positions"]));
+		info[@"archiveOrder"] = @(TGArchiveOrder(chat[@"positions"]));
+		info[@"isPinned"] = @(TGPinnedInMain(chat[@"positions"]));
+	}
+	if (chat[@"notification_settings"])
+		info[@"isMuted"] = @([chat[@"notification_settings"][@"mute_for"] integerValue] > 0);
 
 	// Small avatar, if the chat has one. Downloaded lazily; the id is enough
 	// for the UI to ask for it later.
 	NSNumber *photoFile = chat[@"photo"][@"small"][@"id"];
 	if (photoFile)
 		info[@"photoFileId"] = photoFile;
+
+	NSString *draft = chat[@"draft_message"][@"input_message_text"][@"text"][@"text"];
+	info[@"draft"] = draft ?: @"";
 
 	NSDictionary *last = chat[@"last_message"];
 	if ([last isKindOfClass:NSDictionary.class]){
@@ -1181,26 +1395,59 @@ static int64_t TGMainListOrder(NSArray *positions) {
 		info[@"date"] = last[@"date"] ?: @(0);
 	}
 
-	if (update[@"positions"])
+	if (update[@"notification_settings"])
+		info[@"isMuted"] = @([update[@"notification_settings"][@"mute_for"] integerValue] > 0);
+	if (update[@"positions"]){
 		info[@"order"] = @(TGMainListOrder(update[@"positions"]));
+		info[@"archiveOrder"] = @(TGArchiveOrder(update[@"positions"]));
+		info[@"isPinned"] = @(TGPinnedInMain(update[@"positions"]));
+	}
 	NSDictionary *position = update[@"position"];
-	if ([position isKindOfClass:NSDictionary.class])
-		info[@"order"] = @(TGMainListOrder(@[position]));
+	if ([position isKindOfClass:NSDictionary.class]){
+		NSString *listType = position[@"list"][@"@type"];
+		if ([listType isEqualToString:@"chatListArchive"])
+			info[@"archiveOrder"] = @(TGArchiveOrder(@[position]));
+		else
+			info[@"order"] = @(TGMainListOrder(@[position]));
+			info[@"isPinned"] = @(TGPinnedInMain(@[position]));
+	}
 
 	[self rebuildChats];
 }
 
 - (void)rebuildChats {
 	NSArray *all = self.chatsById.allValues;
-	self.chats = [all sortedArrayUsingComparator:^NSComparisonResult(id a, id b){
+
+	NSComparator byOrder = ^NSComparisonResult(id a, id b){
 		int64_t oa = [a[@"order"] longLongValue];
 		int64_t ob = [b[@"order"] longLongValue];
 		if (oa == ob) return NSOrderedSame;
 		return oa > ob ? NSOrderedAscending : NSOrderedDescending;   // newest first
+	};
+
+	// A chat sits in exactly one of the two lists, told apart by which
+	// position carries a non-zero order.
+	NSMutableArray *main = [NSMutableArray array], *archived = [NSMutableArray array];
+	for (NSDictionary *c in all){
+		if ([c[@"archiveOrder"] longLongValue] > 0)
+			[archived addObject:c];
+		else if ([c[@"order"] longLongValue] > 0)
+			[main addObject:c];
+	}
+
+	self.chats = [main sortedArrayUsingComparator:byOrder];
+	self.archivedChats = [archived sortedArrayUsingComparator:
+			^NSComparisonResult(id a, id b){
+		int64_t oa = [a[@"archiveOrder"] longLongValue];
+		int64_t ob = [b[@"archiveOrder"] longLongValue];
+		if (oa == ob) return NSOrderedSame;
+		return oa > ob ? NSOrderedAscending : NSOrderedDescending;
 	}];
 
 	if (self.onChatsChanged)
 		self.onChatsChanged();
+	if (self.onArchiveChanged)
+		self.onArchiveChanged();
 }
 
 - (void)logOut {

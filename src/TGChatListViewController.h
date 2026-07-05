@@ -7,5 +7,5 @@
 //
 #import <UIKit/UIKit.h>
 
-@interface TGChatListViewController : UITableViewController
+@interface TGChatListViewController : UITableViewController <UIActionSheetDelegate>
 @end

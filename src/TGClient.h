@@ -54,9 +54,39 @@ typedef NS_ENUM(NSInteger, TGConnectionState) {
 /// Display name for a user TDLib has told us about, or nil.
 - (NSString *)nameForUserId:(int64_t)userId;
 
+/// Profile photo file id for a user, or nil if TDLib has not sent one.
+- (NSNumber *)photoFileIdForUserId:(int64_t)userId;
+
+/// Profile photo file id of a chat we already know about, or nil. Groups and
+/// channels have no user record, so this is where their picture comes from.
+- (NSNumber *)photoFileIdForChat:(int64_t)chatId;
+
+/// Full user record: "first_name", "last_name", "usernames", "phone_number".
+- (void)userInfo:(int64_t)userId completion:(void (^)(NSDictionary *user))completion;
+
+/// Shared media of a chat. `filter` is a TDLib SearchMessagesFilter type name,
+/// e.g. "searchMessagesFilterPhotoAndVideo" or "searchMessagesFilterDocument".
+- (void)mediaInChat:(int64_t)chatId filter:(NSString *)filter
+         completion:(void (^)(NSArray *messages))completion;
+
 /// Fetch a user TDLib has not volunteered yet, so a group message can be
 /// attributed. `completion` runs once the name is cached.
 - (void)ensureUserName:(int64_t)userId completion:(void (^)(void))completion;
+
+/// Remember unsent text for a chat, so leaving a conversation does not throw
+/// it away. Pass nil to clear.
+- (void)setDraft:(NSString *)text forChat:(int64_t)chatId thread:(int64_t)threadId;
+
+/// Chats in the archive, same shape as `chats`.
+@property (nonatomic, readonly) NSArray *archivedChats;
+/// Called on the main queue when the archive changes.
+@property (nonatomic, copy) void (^onArchiveChanged)(void);
+
+/// Chat folders the user has configured: "id" and "title".
+@property (nonatomic, readonly) NSArray *folders;
+
+/// Chats of one folder.
+- (void)chatsInFolder:(NSInteger)folderId completion:(void (^)(NSArray *chats))completion;
 
 /// Topics of a forum supergroup - a forum holds several independent threads
 /// in one chat. Each entry: "threadId", "name", "text", "unread", "date".
@@ -109,6 +139,19 @@ typedef NS_ENUM(NSInteger, TGConnectionState) {
                  limit:(NSInteger)limit
             completion:(void (^)(NSArray *messages))completion;
 
+/// Someone is typing (or recording, or uploading) in a chat. `action` is a
+/// short phrase to show, or nil when they stopped.
+@property (nonatomic, copy) void (^onChatAction)(int64_t chatId, NSString *action);
+
+/// The pinned message of a chat, flattened, or nil if there is none.
+- (void)pinnedMessageForChat:(int64_t)chatId
+                  completion:(void (^)(NSDictionary *message))completion;
+
+/// Pin or unpin a chat in the main list.
+- (void)setChat:(int64_t)chatId pinned:(BOOL)pinned;
+/// Mute forever, or unmute.
+- (void)setChat:(int64_t)chatId muted:(BOOL)muted;
+
 /// Fired on the main queue when a message arrives, is edited or deleted in
 /// any chat. `message` is the flattened form; nil means it was deleted.
 @property (nonatomic, copy) void (^onMessage)(int64_t chatId, NSDictionary *message, int64_t deletedId);
@@ -132,10 +175,22 @@ typedef NS_ENUM(NSInteger, TGConnectionState) {
 - (void)messageWithId:(int64_t)messageId
                inChat:(int64_t)chatId
            completion:(void (^)(NSDictionary *message))completion;
+/// Send a recorded voice note (.oga), with its duration in seconds.
+- (void)sendVoiceAtPath:(NSString *)path duration:(NSInteger)seconds
+                 toChat:(int64_t)chatId thread:(int64_t)threadId;
+
 /// Send a local image file. TDLib uploads it and echoes the message back.
 - (void)sendPhotoAtPath:(NSString *)path toChat:(int64_t)chatId;
 - (void)deleteMessage:(int64_t)messageId inChat:(int64_t)chatId;
 - (void)markRead:(NSArray *)messageIds inChat:(int64_t)chatId;
+
+/// Search messages across every chat. Each result is a flattened message with
+/// an extra "chatId" and "chatTitle" so it can be shown out of context.
+- (void)searchMessages:(NSString *)query completion:(void (^)(NSArray *messages))completion;
+
+/// Search inside one chat, newest first. Flattened messages.
+- (void)searchInChat:(int64_t)chatId query:(NSString *)query
+          completion:(void (^)(NSArray *messages))completion;
 
 #pragma mark - contacts
 

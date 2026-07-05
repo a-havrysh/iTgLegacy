@@ -86,10 +86,15 @@ static const CGFloat kAvatar    = 52.0f;
 
 #pragma mark - controller
 
-@interface TGChatListViewController ()
+@interface TGChatListViewController () <UISearchBarDelegate>
 @property (nonatomic, strong) NSArray *chats;
+@property (nonatomic, assign) BOOL showsArchive;      // this IS the archive screen
+@property (nonatomic, assign) NSInteger folderId;     // 0 = no folder
 @property (nonatomic, strong) NSMutableDictionary *avatars;   // fileId -> UIImage
 @property (nonatomic, strong) NSMutableSet *avatarsRequested;
+@property (nonatomic, strong) UISearchBar *searchBar;
+@property (nonatomic, strong) NSArray *searchResults;   // nil = not searching
+@property (nonatomic, strong) NSDictionary *actionChat; // long-pressed row
 @end
 
 @implementation TGChatListViewController
@@ -97,7 +102,11 @@ static const CGFloat kAvatar    = 52.0f;
 - (void)viewDidLoad {
 	[super viewDidLoad];
 
-	self.title = @"Chats";
+	self.title = self.showsArchive ? @"Archived" : @"Chats";
+	if (!self.showsArchive)
+		self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc]
+				initWithTitle:@"Folders" style:UIBarButtonItemStylePlain
+					   target:self action:@selector(foldersTapped)];
 	self.chats = @[];
 	self.avatars = [NSMutableDictionary dictionary];
 	self.avatarsRequested = [NSMutableSet set];
@@ -109,6 +118,18 @@ static const CGFloat kAvatar    = 52.0f;
 					style:UIBarButtonItemStylePlain
 				   target:self
 				   action:@selector(composeTapped)];
+
+	// Search sits above the list, the way every client puts it - pull down or
+	// just start typing.
+	self.searchBar = [[UISearchBar alloc] initWithFrame:CGRectMake(0, 0, 320, 44)];
+	self.searchBar.delegate = self;
+	self.searchBar.placeholder = @"Search";
+	self.tableView.tableHeaderView = self.searchBar;
+
+	// Hold a row for the two things clients put there: pin and mute.
+	UILongPressGestureRecognizer *hold = [[UILongPressGestureRecognizer alloc]
+			initWithTarget:self action:@selector(rowHeld:)];
+	[self.tableView addGestureRecognizer:hold];
 
 	self.tableView.rowHeight = kRowHeight;
 	self.tableView.separatorStyle = UITableViewCellSeparatorStyleSingleLine;
@@ -133,6 +154,9 @@ static const CGFloat kAvatar    = 52.0f;
 	[TGClient shared].onChatsChanged = ^{
 		[weakSelf reload];
 	};
+	[TGClient shared].onArchiveChanged = ^{
+		[weakSelf.tableView reloadData];
+	};
 	[TGClient shared].onConnectionState = ^(TGConnectionState state, NSString *text){
 		// Clients put this in the title bar rather than hiding it in a flag.
 		weakSelf.title = text ?: @"Chats";
@@ -147,9 +171,86 @@ static const CGFloat kAvatar    = 52.0f;
 }
 
 - (void)reload {
+	if (self.showsArchive){
+		self.chats = [TGClient shared].archivedChats;
+		[self.tableView reloadData];
+		[self fetchMissingAvatars];
+		return;
+	}
+
+	if (self.folderId != 0){
+		__weak typeof(self) weakSelf = self;
+		[[TGClient shared] chatsInFolder:self.folderId completion:^(NSArray *chats){
+			weakSelf.chats = chats;
+			[weakSelf.tableView reloadData];
+			[weakSelf fetchMissingAvatars];
+		}];
+		return;
+	}
+
 	self.chats = [TGClient shared].chats;
 	[self.tableView reloadData];
 	[self fetchMissingAvatars];
+}
+
+/// The archive is one row above the list, as clients place it.
+- (BOOL)hasArchiveRow {
+	return !self.searchResults && !self.showsArchive && self.folderId == 0 &&
+			[TGClient shared].archivedChats.count > 0;
+}
+
+- (void)openArchive {
+	TGChatListViewController *archive = [[TGChatListViewController alloc] init];
+	archive.showsArchive = YES;
+	archive.hidesBottomBarWhenPushed = YES;
+	[self.navigationController pushViewController:archive animated:YES];
+}
+
+/// Folders are a filter over the same chats, offered as a choice.
+- (void)foldersTapped {
+	NSArray *folders = [TGClient shared].folders;
+	if (!folders.count)
+		return;
+
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Show"
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:@"All chats", nil];
+	for (NSDictionary *f in folders)
+		[sheet addButtonWithTitle:f[@"title"]];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	[sheet showInView:self.view];
+}
+
+- (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
+	if (index == sheet.cancelButtonIndex)
+		return;
+
+	if (sheet.tag == kChatActionsTag){
+		int64_t chatId = [self.actionChat[@"id"] longLongValue];
+		if (index == 0)
+			[[TGClient shared] setChat:chatId pinned:![self.actionChat[@"isPinned"] boolValue]];
+		else
+			[[TGClient shared] setChat:chatId muted:![self.actionChat[@"isMuted"] boolValue]];
+		self.actionChat = nil;
+		return;
+	}
+
+	NSArray *folders = [TGClient shared].folders;
+	if (index == 0){
+		self.folderId = 0;
+		self.title = self.showsArchive ? @"Archived" : @"Chats";
+	if (!self.showsArchive)
+		self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc]
+				initWithTitle:@"Folders" style:UIBarButtonItemStylePlain
+					   target:self action:@selector(foldersTapped)];
+	} else if (index - 1 < (NSInteger)folders.count){
+		NSDictionary *f = folders[index - 1];
+		self.folderId = [f[@"id"] integerValue];
+		self.title = f[@"title"];
+	}
+	[self reload];
 }
 
 /// Avatars are fetched once each and cached by file id.
@@ -196,8 +297,90 @@ static NSString *TGChatDate(NSTimeInterval unix) {
 
 #pragma mark - table
 
+static const NSInteger kChatActionsTag = 77;
+
+- (void)rowHeld:(UILongPressGestureRecognizer *)hold {
+	if (hold.state != UIGestureRecognizerStateBegan)
+		return;
+
+	NSIndexPath *path = [self.tableView indexPathForRowAtPoint:[hold locationInView:self.tableView]];
+	if (!path || ([self hasArchiveRow] && path.row == 0))
+		return;
+
+	NSArray *rows = self.searchResults ?: self.chats;
+	NSInteger index = path.row - ([self hasArchiveRow] ? 1 : 0);
+	if (index < 0 || index >= (NSInteger)rows.count)
+		return;
+	self.actionChat = rows[index];
+
+	UIActionSheet *sheet = [[UIActionSheet alloc]
+			initWithTitle:self.actionChat[@"title"]
+				 delegate:self
+		cancelButtonTitle:nil
+   destructiveButtonTitle:nil
+		otherButtonTitles:([self.actionChat[@"isPinned"] boolValue] ? @"Unpin" : @"Pin"),
+						  ([self.actionChat[@"isMuted"] boolValue] ? @"Unmute" : @"Mute"), nil];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = kChatActionsTag;
+	[sheet showInView:self.view];
+}
+
+#pragma mark - search
+
+- (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)query {
+	if (!query.length){
+		self.searchResults = nil;
+		[self.tableView reloadData];
+		return;
+	}
+
+	// Chat titles match locally and instantly; messages need the server. Both
+	// land in one list, chats first, which is what the query usually means.
+	NSMutableArray *results = [NSMutableArray array];
+	for (NSDictionary *c in [TGClient shared].chats)
+		if ([c[@"title"] rangeOfString:query options:NSCaseInsensitiveSearch].location != NSNotFound)
+			[results addObject:c];
+	self.searchResults = results;
+	[self.tableView reloadData];
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] searchMessages:query completion:^(NSArray *messages){
+		TGChatListViewController *me = weakSelf;
+		// A slower answer to an older query must not replace a newer one.
+		if (!me || ![me.searchBar.text isEqualToString:query])
+			return;
+		NSMutableArray *combined = [results mutableCopy];
+		for (NSDictionary *m in messages)
+			[combined addObject:@{
+				@"id"    : m[@"chatId"] ?: @0,
+				@"title" : m[@"chatTitle"] ?: @"",
+				@"text"  : m[@"text"] ?: @"",
+				@"date"  : m[@"date"] ?: @0,
+			}];
+		me.searchResults = combined;
+		[me.tableView reloadData];
+	}];
+}
+
+- (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {
+	[searchBar resignFirstResponder];
+}
+
+- (void)searchBarCancelButtonClicked:(UISearchBar *)searchBar {
+	searchBar.text = @"";
+	self.searchResults = nil;
+	[searchBar resignFirstResponder];
+	[self.tableView reloadData];
+}
+
+- (NSArray *)visibleChats {
+	return self.searchResults ?: self.chats;
+}
+
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-	return self.chats.count;
+	if (self.searchResults)
+		return self.searchResults.count;
+	return self.chats.count + ([self hasArchiveRow] ? 1 : 0);
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -206,10 +389,32 @@ static NSString *TGChatDate(NSTimeInterval unix) {
 	if (!cell)
 		cell = [[TGChatCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:reuse];
 
-	NSDictionary *c = self.chats[indexPath.row];
+	if ([self hasArchiveRow] && indexPath.row == 0){
+		cell.titleLabel.text = @"Archived Chats";
+		cell.previewLabel.text = [NSString stringWithFormat:@"%lu chats",
+				(unsigned long)[TGClient shared].archivedChats.count];
+		cell.dateLabel.text = @"";
+		cell.badge.hidden = YES;
+		cell.avatar.image = [TGIcons avatarWithInitials:@"\u25bc" size:kAvatar colourId:7];
+		cell.avatar.backgroundColor = [UIColor clearColor];
+		[cell setNeedsLayout];
+		return cell;
+	}
+
+	NSDictionary *c = self.searchResults
+			? self.searchResults[indexPath.row]
+			: self.chats[indexPath.row - ([self hasArchiveRow] ? 1 : 0)];
 	cell.titleLabel.text = c[@"title"];
 	cell.previewLabel.text = c[@"text"];
 	cell.dateLabel.text = TGChatDate([c[@"date"] doubleValue]);
+
+	// A muted chat says so in its title; a pinned one keeps a marker where the
+	// date sits when it has none.
+	cell.titleLabel.text = [c[@"isMuted"] boolValue]
+			? [NSString stringWithFormat:@"%@ \U0001F507", c[@"title"] ?: @""]
+			: c[@"title"];
+	if ([c[@"isPinned"] boolValue] && !cell.dateLabel.text.length)
+		cell.dateLabel.text = @"\U0001F4CC";
 
 	NSInteger unread = [c[@"unread"] integerValue];
 	cell.badge.hidden = (unread <= 0);
@@ -234,7 +439,14 @@ static NSString *TGChatDate(NSTimeInterval unix) {
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
 
-	NSDictionary *c = self.chats[indexPath.row];
+	if ([self hasArchiveRow] && indexPath.row == 0){
+		[self openArchive];
+		return;
+	}
+
+	NSDictionary *c = self.searchResults
+			? self.searchResults[indexPath.row]
+			: self.chats[indexPath.row - ([self hasArchiveRow] ? 1 : 0)];
 	NSLog(@"open chat: group=%@ forum=%@", c[@"isGroup"], c[@"isForum"] ?: @"(absent)");
 
 	if ([c[@"isForum"] boolValue]){

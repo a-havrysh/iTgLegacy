@@ -18,7 +18,8 @@
 + (UIImage *)attach;
 + (UIImage *)play;         ///< over video thumbnails
 + (UIImage *)document;
-+ (UIImage *)pin;          ///< map marker
++ (UIImage *)pin;
++ (UIImage *)microphone;          ///< map marker
 
 /// Delivery ticks, drawn the way Telegram draws them: two checks overlapping
 /// into one mark, not two separate glyphs side by side.
