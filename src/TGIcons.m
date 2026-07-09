@@ -187,6 +187,19 @@ static NSMutableDictionary *sCache = nil;
 	}];
 }
 
+/// A smiling face. U+1F642 would be the obvious glyph, but it arrived in
+/// Unicode 7.0 and iOS 7 draws it as an empty box.
++ (UIImage *)sticker {
+	return [self iconNamed:@"sticker" draw:^(CGContextRef ctx, CGFloat s){
+		CGContextSetLineWidth(ctx, 2);
+		CGContextStrokeEllipseInRect(ctx, CGRectMake(3, 3, s - 6, s - 6));
+		CGContextFillEllipseInRect(ctx, CGRectMake(s * 0.33f, s * 0.34f, 2.5f, 3.5f));
+		CGContextFillEllipseInRect(ctx, CGRectMake(s * 0.60f, s * 0.34f, 2.5f, 3.5f));
+		CGContextAddArc(ctx, s / 2, s * 0.52f, s * 0.22f, 0.5f, M_PI - 0.5f, 0);
+		CGContextStrokePath(ctx);
+	}];
+}
+
 + (UIImage *)ticksWhite:(BOOL)white {
 	CGSize size = CGSizeMake(15, 9);
 	UIGraphicsBeginImageContextWithOptions(size, NO, 0);

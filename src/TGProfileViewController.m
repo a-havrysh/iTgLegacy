@@ -10,6 +10,7 @@
 @property (nonatomic, strong) NSArray *details;   // label/value pairs
 @property (nonatomic, strong) NSArray *photos;    // flattened messages
 @property (nonatomic, strong) NSArray *files;
+@property (nonatomic, strong) NSArray *members;
 @property (nonatomic, strong) UIImageView *avatarView;
 @end
 
@@ -85,9 +86,8 @@
 	if (!self.userId){
 		// A group has no user record; what it does have is a size.
 		__weak typeof(self) weakSelf = self;
-		[[TGClient shared] memberCountForChat:self.chatId completion:^(NSInteger count){
-			if (count <= 0) return;
-			weakSelf.details = @[@[@"members", [NSString stringWithFormat:@"%ld", (long)count]]];
+		[[TGClient shared] membersOfChat:self.chatId completion:^(NSArray *members){
+			weakSelf.members = members;
 			[weakSelf.tableView reloadData];
 		}];
 		return;
@@ -134,30 +134,33 @@
 #pragma mark - table
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-	return 4;   // actions, details, photos, files
+	return 5;   // actions, details, members, photos, files
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
 	if (section == 0) return self.onSearchTapped ? 1 : 0;
 	if (section == 1) return self.details.count;
-	if (section == 2) return self.photos.count ? 1 : 0;   // a strip of thumbnails
+	if (section == 2) return self.members.count;
+	if (section == 3) return self.photos.count ? 1 : 0;   // a strip of thumbnails
 	return self.files.count;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
-	if (section == 2 && self.photos.count)
+	if (section == 2 && self.members.count)
+		return [NSString stringWithFormat:@"%lu members", (unsigned long)self.members.count];
+	if (section == 3 && self.photos.count)
 		return [NSString stringWithFormat:@"%lu photos and videos", (unsigned long)self.photos.count];
-	if (section == 3 && self.files.count)
+	if (section == 4 && self.files.count)
 		return [NSString stringWithFormat:@"%lu files", (unsigned long)self.files.count];
 	return nil;
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
-	return indexPath.section == 2 ? 84 : 44;
+	return indexPath.section == 3 ? 84 : 44;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-	if (indexPath.section == 2)
+	if (indexPath.section == 3)
 		return [self photoStripCell:tableView];
 
 	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"row"];
@@ -179,6 +182,16 @@
 		NSArray *pair = self.details[indexPath.row];
 		cell.textLabel.text = pair[0];
 		cell.detailTextLabel.text = pair[1];
+	} else if (indexPath.section == 2){
+		NSDictionary *member = self.members[indexPath.row];
+		int64_t userId = [member[@"id"] longLongValue];
+		NSString *name = [member[@"name"] length]
+				? member[@"name"] : [[TGClient shared] nameForUserId:userId];
+		cell.textLabel.text = name ?: @"";
+		cell.detailTextLabel.text = nil;
+		cell.imageView.image = [TGIcons avatarWithInitials:
+				(name.length ? [name substringToIndex:1].uppercaseString : @"?")
+													  size:32 colourId:userId];
 	} else {
 		NSDictionary *m = self.files[indexPath.row];
 		cell.textLabel.text = m[@"docName"] ?: @"File";

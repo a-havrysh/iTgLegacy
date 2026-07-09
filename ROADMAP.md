@@ -29,21 +29,26 @@ this does not.
 | **done** | Send text | |
 | **done** | Live updates while a chat is open | `updateNewMessage` |
 | **done** | Read receipts sent | `viewMessages` |
-| | Reply to a message | quote is currently dropped |
-| | Forward a message | source is not shown |
-| | Edit a message | no "edited" marker either |
-| | Delete a message from the UI | API is wired, no gesture |
-| | Draft persistence | typed text is lost on leaving a chat |
-| | Typing indicators | |
-| | Search in chat and globally | |
-| | Pinned message banner | |
-| | Message selection and multi-actions | |
+| **done** | Reply to a message | quoted message shown above the reply |
+| **done** | Forward a message | source is named on the message |
+| **done** | Edit a message | marked as edited |
+| **done** | Delete a message from the UI | long press |
+| **done** | Draft persistence | |
+| **done** | Typing indicators | takes over the header subtitle |
+| **done** | Search in chat and globally | in-chat search lives in the profile |
+| **done** | Pinned message banner | |
+| **done** | Reactions | shown on messages; can add a thumbs up |
+| | Message selection and multi-actions | one message at a time |
+| **done** | Jump to the quoted message | scrolls and flashes it |
+| | Unread separator and jump-to-unread | history opens at the bottom |
+| | Scheduled and silent sending | |
+| **done** | Saved Messages | from the Folders menu |
 
 ## 2 · Media
 
 | | Feature | Notes |
 |---|---|---|
-| **done** | Photos inline, full-screen viewer | |
+| **done** | Photos inline, full-screen viewer | hold to save |
 | **done** | Video and video notes, played | `MPMoviePlayerViewController` |
 | **done** | Voice notes, played | Opus decoded to PCM via libopusfile — iOS 7 cannot decode Opus |
 | **done** | WebP stickers | libwebp; the category had to be written, the file in the repo held only a header |
@@ -52,12 +57,16 @@ this does not.
 | **done** | Send a photo from the library | untested — needs a real tap |
 | | `.webm` stickers | VP9; no decoder exists on this hardware |
 | | Lottie: masks, mattes, trim paths, gradients, repeaters | stickers using them draw approximately |
-| | Record and send a voice note | encoder side of Opus |
-| | Send video, documents, location, contacts | |
-| | Albums (grouped media) | shown as separate messages |
-| | Download progress and cancel | |
-| | Save to camera roll | |
+| **done** | Record and send a voice note | libopusenc; hold the microphone |
+| **done** | Send video, location, contacts | documents still missing - no file browser on iOS 7 |
+| **done** | Albums (grouped media) | one block, one timestamp |
+| *in progress* | Download progress and cancel | progress shown; no cancel |
+| **done** | Save to camera roll | hold the full-screen picture |
 | | GIF autoplay | plays on tap only |
+| *in progress* | Send stickers | a strip of recent stickers; animated ones stand in as their emoji |
+| | Sticker sets: install, browse, favourites | |
+| *in progress* | Photo viewer | zooms; no swipe between photos |
+| | Polls and quizzes | not rendered |
 
 ## 3 · Chats and groups
 
@@ -67,14 +76,20 @@ this does not.
 | **done** | Service messages | joins, leaves, renames, pins, creation |
 | **done** | Forum topics | opens on a topic list |
 | **done** | Member count in the header | |
+| **done** | Profile screen | avatar, username, phone, members, shared media |
+| **done** | Sender avatars in groups | Telegram's own placeholder palette and mapping |
 | **done** | Start a new chat from contacts | |
-| | Channels | list and read work; posting, comments and reactions do not |
+| *in progress* | Channels | read, join, mute; comments and reactions do not |
 | | Secret chats | disabled at TDLib init |
-| | Archive | TDLib reports it; no UI |
-| | Chat folders | `updateChatFolders` arrives and is ignored |
-| | Mute, pin, leave, delete a chat | |
-| | Group member list, admin actions | |
+| **done** | Archive | a row above the list |
+| **done** | Chat folders | offered from the Folders button |
+| **done** | Mute, pin, leave, delete a chat | hold a row in the list |
+| *in progress* | Group member list, admin actions | list is in the profile; no admin actions |
 | | Invite links | |
+| | Create a group or channel | join only |
+| | Create and manage forum topics | read only |
+| | Block a user, report | |
+| **done** | Online status and last seen | in the header of a private chat |
 
 ## 4 · Presentation
 
@@ -82,12 +97,14 @@ this does not.
 |---|---|---|
 | **done** | Skeuomorphic and flat themes, switchable | defaults to what the OS shipped with: skeuomorphic below iOS 7, flat from 7 |
 | *in progress* | Skeuomorphic icon set and chrome | app icon, tab bar and buttons still the inherited artwork |
-| | Wallpapers | flat colour today |
-| | Dark theme | |
+| | Dark theme as a built-in | available today only by importing one |
+| | Wallpapers from Telegram's own collection | `getBackgrounds` is not called |
 | | Font size setting | |
 | | Landscape and iPad layouts | portrait iPhone only |
 | | 4-inch screen layout check | built for 3.5-inch, never verified on a 5/5c |
 | | Localisation | English strings, hardcoded |
+| **done** | Themes from the official clients | `.tgios-theme` JSON and `.attheme`; zipped exports rejected |
+| **done** | Chat wallpaper | a picture from the library |
 
 ## 5 · Platform and delivery
 
@@ -101,6 +118,30 @@ this does not.
 | | Background fetch | |
 | | arm64 build | Makefile target exists, unexercised since the rewrite |
 | | Crash reporting | crash logs are pulled by hand today |
+
+---
+
+## 6 · Not attempted, and why
+
+These are the rest of the difference against Telegram for iOS. They are listed
+so the gap is honest, not because each is scheduled.
+
+| Feature | Why it is not here |
+|---|---|
+| Voice and video calls | needs WebRTC; no build of it exists for armv7 iOS 7, and the A5 could not run video anyway |
+| Stories | a large surface built on features above (viewer, reactions, privacy) |
+| Premium: emoji status, custom emoji, boosts | custom emoji alone needs an animated-emoji renderer per message |
+| Secret chats | disabled at TDLib init; end-to-end key handling on top of everything else |
+| Bots: inline mode, keyboards, web apps | inline results and web apps need a browser surface |
+| Live locations | a background location task the OS will kill |
+| Payments, gifts, Stars | payment sheets and a web view |
+| Translation and transcription | server features gated behind Premium |
+| Multiple accounts | one TDLib client instance today |
+| Chat archive settings, auto-delete timers | small, just not written |
+| Privacy and security settings, sessions, blocked users | a settings tree of its own |
+| Auto-download and storage settings | TDLib exposes them; no UI |
+| Notification settings per chat | mute is all there is |
+| Username, bio and profile photo editing | the profile screen is read-only |
 
 ---
 

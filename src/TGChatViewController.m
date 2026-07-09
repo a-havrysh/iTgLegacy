@@ -5,6 +5,11 @@
 #import "TGForwardPicker.h"
 #import "TGVoiceRecorder.h"
 #import "TGProfileViewController.h"
+#import "TGThemeFile.h"
+#import <AddressBookUI/AddressBookUI.h>
+#import <CoreLocation/CoreLocation.h>
+#import <AssetsLibrary/AssetsLibrary.h>
+#import <MobileCoreServices/MobileCoreServices.h>
 #import <QuartzCore/QuartzCore.h>
 #import <MediaPlayer/MediaPlayer.h>
 #import <MapKit/MapKit.h>
@@ -124,7 +129,9 @@ static const CGFloat kImageMax    = 200.0f;
 
 #pragma mark - controller
 
-@interface TGChatViewController () <UISearchBarDelegate>
+@interface TGChatViewController () <UISearchBarDelegate, CLLocationManagerDelegate,
+		UIScrollViewDelegate,
+		ABPeoplePickerNavigationControllerDelegate>
 @property (nonatomic, strong) UITableView *table;
 @property (nonatomic, strong) UIView *inputBar;
 @property (nonatomic, strong) UITextField *input;
@@ -149,6 +156,13 @@ static const CGFloat kImageMax    = 200.0f;
 @property (nonatomic, strong) NSTimer *recordTimer;
 @property (nonatomic, strong) NSMutableDictionary *senderAvatars;   // userId -> UIImage
 @property (nonatomic, strong) NSMutableSet *senderAvatarsRequested;
+@property (nonatomic, strong) UILabel *downloadHUD;
+@property (nonatomic, assign) NSInteger downloadingFileId;
+@property (nonatomic, strong) CLLocationManager *locationManager;
+@property (nonatomic, strong) UIImage *fullScreenImage;
+@property (nonatomic, strong) UIImageView *wallpaperView;
+@property (nonatomic, strong) UIButton *stickerButton;
+@property (nonatomic, strong) UIScrollView *stickerPanel;
 
 - (void)clearComposeState;
 - (void)showComposeBanner:(NSString *)text;
@@ -189,6 +203,19 @@ static const CGFloat kImageMax    = 200.0f;
 	self.table.separatorStyle = UITableViewCellSeparatorStyleNone;
 	self.table.backgroundColor = [UIColor clearColor];
 	self.table.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+	// The wallpaper goes behind the table, which is transparent over it.
+	self.wallpaperView = [[UIImageView alloc] initWithFrame:self.view.bounds];
+	self.wallpaperView.contentMode = UIViewContentModeScaleAspectFill;
+	self.wallpaperView.clipsToBounds = YES;
+	self.wallpaperView.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+										  UIViewAutoresizingFlexibleHeight;
+	self.wallpaperView.image = [[TGTheme shared] wallpaper];
+	[self.view addSubview:self.wallpaperView];
+
+	// Hold a message for the things a chat needs and a tap cannot carry.
+	[self.table addGestureRecognizer:[[UILongPressGestureRecognizer alloc]
+			initWithTarget:self action:@selector(messageHeld:)]];
+
 	[self.view addSubview:self.table];
 
 	[self buildInputBar:b];
@@ -263,10 +290,36 @@ static const CGFloat kImageMax    = 200.0f;
 		subtitle.text = action ?: restingSubtitle;
 	};
 
-	[self loadPinnedMessage];
+	// An imported theme can arrive while a chat is open - repaint rather than
+	// wait for the screen to be pushed again.
+	__weak typeof(self) weakChat = self;
+	[[NSNotificationCenter defaultCenter] addObserverForName:TGThemeChangedNotification
+			object:nil queue:[NSOperationQueue mainQueue]
+		 usingBlock:^(NSNotification *note){
+		[TGIcons flush];
+		TGChatViewController *me = weakChat;
+		me.view.backgroundColor = [[TGTheme shared] chatBackgroundColour];
+		me.table.backgroundColor = [UIColor clearColor];
+		me.inputBar.backgroundColor = [[TGTheme shared] inputBarColour];
+		me.wallpaperView.image = [[TGTheme shared] wallpaper];
+		[[TGTheme shared] styleNavigationBar:me.navigationController.navigationBar];
+		[me.table reloadData];
+	}];
 
-	if (!self.isGroup)
+	[self loadPinnedMessage];
+	[self applyPostingRights];
+
+	if (!self.isGroup){
+		// A private chat shows presence where a group shows its size.
+		[[TGClient shared] statusForUser:self.chatId completion:^(NSString *status){
+			if (!status.length)
+				return;
+			restingSubtitle = status;
+			if (!subtitle.text.length)
+				subtitle.text = status;
+		}];
 		return;
+	}
 
 	[[TGClient shared] memberCountForChat:self.chatId completion:^(NSInteger count){
 		if (count > 0){
@@ -279,7 +332,7 @@ static const CGFloat kImageMax    = 200.0f;
 - (void)buildInputBar:(CGRect)b {
 	self.inputBar = [[UIView alloc] initWithFrame:
 			CGRectMake(0, b.size.height - kInputHeight, b.size.width, kInputHeight)];
-	self.inputBar.backgroundColor = [UIColor colorWithWhite:0.93f alpha:1.0f];
+	self.inputBar.backgroundColor = [[TGTheme shared] inputBarColour];
 	self.inputBar.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin;
 
 	UIView *hair = [[UIView alloc] initWithFrame:CGRectMake(0, 0, b.size.width, 1)];
@@ -296,7 +349,7 @@ static const CGFloat kImageMax    = 200.0f;
 	[self.inputBar addSubview:attach];
 
 	self.input = [[UITextField alloc] initWithFrame:
-			CGRectMake(38, 7, b.size.width - 106, kInputHeight - 14)];
+			CGRectMake(38, 7, b.size.width - 142, kInputHeight - 14)];
 	self.input.borderStyle = UITextBorderStyleRoundedRect;
 	self.input.placeholder = @"Message";
 	self.input.font = [UIFont systemFontOfSize:15];
@@ -318,6 +371,16 @@ static const CGFloat kImageMax    = 200.0f;
 	[self.sendButton addTarget:self action:@selector(sendTapped)
 			forControlEvents:UIControlEventTouchUpInside];
 	[self.inputBar addSubview:self.sendButton];
+
+	// A sticker button beside the composer, as clients place it.
+	self.stickerButton = [UIButton buttonWithType:UIButtonTypeCustom];
+	self.stickerButton.frame = CGRectMake(b.size.width - 100, 6, 30, kInputHeight - 12);
+	[self.stickerButton setImage:[TGIcons sticker] forState:UIControlStateNormal];
+	self.stickerButton.tintColor = [[TGTheme shared] accentColour];
+	self.stickerButton.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+	[self.stickerButton addTarget:self action:@selector(toggleStickerPanel)
+				 forControlEvents:UIControlEventTouchUpInside];
+	[self.inputBar addSubview:self.stickerButton];
 
 	// Hold to record, release to send - the gesture every client uses. It sits
 	// where Send is and swaps with it depending on whether anything is typed.
@@ -622,6 +685,144 @@ static const CGFloat kImageMax    = 200.0f;
 	[self.navigationController pushViewController:profile animated:YES];
 }
 
+/// A channel you only follow has no composer; it gets a mute switch instead,
+/// which is what the bottom of a channel offers in every client.
+- (void)applyPostingRights {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] canSendInChat:self.chatId completion:^(BOOL canSend, BOOL isChannel){
+		TGChatViewController *me = weakSelf;
+		if (!me || canSend)
+			return;
+
+		me.inputBar.hidden = YES;
+
+		CGRect b = me.view.bounds;
+		UIButton *mute = [UIButton buttonWithType:UIButtonTypeCustom];
+		mute.frame = me.inputBar.frame;
+		mute.backgroundColor = [[TGTheme shared] inputBarColour];
+		mute.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+								UIViewAutoresizingFlexibleTopMargin;
+		[mute setTitleColor:[[TGTheme shared] accentColour] forState:UIControlStateNormal];
+		mute.titleLabel.font = [UIFont systemFontOfSize:15];
+		[mute setTitle:(isChannel ? @"Mute channel" : @"Mute chat")
+			  forState:UIControlStateNormal];
+		[mute addTarget:me action:@selector(muteFromChat:)
+	   forControlEvents:UIControlEventTouchUpInside];
+		[me.view addSubview:mute];
+		(void)b;
+	}];
+}
+
+- (void)muteFromChat:(UIButton *)button {
+	BOOL muting = [button.currentTitle hasPrefix:@"Mute"];
+	[[TGClient shared] setChat:self.chatId muted:muting];
+	[button setTitle:(muting ? @"Unmute" : @"Mute channel") forState:UIControlStateNormal];
+}
+
+/// YES when this message continues the album the one before it started.
+- (BOOL)continuesAlbumAtRow:(NSInteger)row {
+	NSString *album = self.messages[row][@"albumId"];
+	if (!album.length || [album isEqualToString:@"0"] || row == 0)
+		return NO;
+	return [self.messages[row - 1][@"albumId"] isEqualToString:album];
+}
+
+/// YES when the next message belongs to the same album, so this one should not
+/// carry the timestamp - only the last of a block does.
+- (BOOL)albumContinuesAfterRow:(NSInteger)row {
+	NSString *album = self.messages[row][@"albumId"];
+	if (!album.length || [album isEqualToString:@"0"] ||
+		row + 1 >= (NSInteger)self.messages.count)
+		return NO;
+	return [self.messages[row + 1][@"albumId"] isEqualToString:album];
+}
+
+/// Copy the received file into Documents first: TDLib owns its cache and can
+/// delete it, and a theme has to survive the next launch.
+- (void)applyThemeFromMessage:(NSDictionary *)m {
+	NSNumber *docId = m[@"docId"];
+	if (![docId isKindOfClass:NSNumber.class])
+		return;
+
+	NSString *name = m[@"docName"] ?: @"theme.tgios-theme";
+	[self beginDownloadHUDForFile:[docId integerValue]];
+	[[TGClient shared] downloadFile:[docId integerValue] completion:^(NSString *path){
+		[self endDownloadHUD];
+		if (!path)
+			return;
+
+		NSString *documents = [NSSearchPathForDirectoriesInDomains(
+				NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+		NSString *saved = [documents stringByAppendingPathComponent:name];
+		[[NSFileManager defaultManager] removeItemAtPath:saved error:nil];
+		[[NSFileManager defaultManager] copyItemAtPath:path toPath:saved error:nil];
+
+		BOOL applied = [[TGTheme shared] importThemeAtPath:saved];
+		UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Theme"
+				message:(applied ? [NSString stringWithFormat:@"%@ applied.",
+						[TGTheme shared].importedName ?: name]
+								 : @"This file could not be read as a Telegram theme.")
+			   delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+		[alert show];
+	}];
+}
+
+/// Scroll to a message already loaded, and flash it so the eye finds it.
+/// NO when the message is not in the loaded window.
+- (BOOL)scrollToMessageId:(int64_t)messageId {
+	for (NSInteger row = 0; row < (NSInteger)self.messages.count; row++){
+		if ([self.messages[row][@"id"] longLongValue] != messageId)
+			continue;
+
+		NSIndexPath *path = [NSIndexPath indexPathForRow:row inSection:0];
+		[self.table scrollToRowAtIndexPath:path
+						  atScrollPosition:UITableViewScrollPositionMiddle
+								  animated:YES];
+		UITableViewCell *cell = [self.table cellForRowAtIndexPath:path];
+		cell.contentView.alpha = 0.3f;
+		[UIView animateWithDuration:0.6 animations:^{ cell.contentView.alpha = 1.0f; }];
+		return YES;
+	}
+	return NO;
+}
+
+#pragma mark - download progress
+
+/// A video or a document is megabytes over a 4S connection; without this the
+/// tap looks like it did nothing.
+- (void)beginDownloadHUDForFile:(NSInteger)fileId {
+	self.downloadingFileId = fileId;
+
+	if (!self.downloadHUD){
+		self.downloadHUD = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 110, 40)];
+		self.downloadHUD.center = CGPointMake(self.view.bounds.size.width / 2,
+											  self.view.bounds.size.height / 2);
+		self.downloadHUD.textAlignment = NSTextAlignmentCenter;
+		self.downloadHUD.font = [UIFont boldSystemFontOfSize:15];
+		self.downloadHUD.textColor = [UIColor whiteColor];
+		self.downloadHUD.backgroundColor = [UIColor colorWithWhite:0 alpha:0.7f];
+		self.downloadHUD.layer.cornerRadius = 8;
+		self.downloadHUD.clipsToBounds = YES;
+	}
+	self.downloadHUD.text = @"0%";
+	self.downloadHUD.hidden = NO;
+	[self.view addSubview:self.downloadHUD];
+
+	__weak typeof(self) weakSelf = self;
+	[TGClient shared].onFileProgress = ^(NSInteger updatedId, float progress){
+		TGChatViewController *me = weakSelf;
+		if (!me || updatedId != me.downloadingFileId)
+			return;
+		me.downloadHUD.text = [NSString stringWithFormat:@"%d%%", (int)(progress * 100)];
+	};
+}
+
+- (void)endDownloadHUD {
+	self.downloadingFileId = 0;
+	self.downloadHUD.hidden = YES;
+	[self.downloadHUD removeFromSuperview];
+}
+
 #pragma mark - pinned message
 
 /// A strip under the navigation bar, the way clients surface what is pinned.
@@ -775,6 +976,74 @@ static const CGFloat kImageMax    = 200.0f;
 	return placeholder;
 }
 
+#pragma mark - stickers
+
+/// A strip of the stickers used lately. A full sticker-set browser is a screen
+/// of its own; the recents are what a chat reaches for.
+- (void)toggleStickerPanel {
+	if (self.stickerPanel){
+		[self.stickerPanel removeFromSuperview];
+		self.stickerPanel = nil;
+		return;
+	}
+
+	CGRect b = self.view.bounds;
+	CGFloat height = 96;
+	UIScrollView *panel = [[UIScrollView alloc] initWithFrame:
+			CGRectMake(0, CGRectGetMinY(self.inputBar.frame) - height, b.size.width, height)];
+	panel.backgroundColor = [[TGTheme shared] inputBarColour];
+	panel.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+							 UIViewAutoresizingFlexibleTopMargin;
+	[self.view addSubview:panel];
+	self.stickerPanel = panel;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] recentStickersWithCompletion:^(NSArray *stickers){
+		TGChatViewController *me = weakSelf;
+		if (!me || me.stickerPanel != panel)
+			return;
+		[me fillStickerPanel:panel with:stickers];
+	}];
+}
+
+- (void)fillStickerPanel:(UIScrollView *)panel with:(NSArray *)stickers {
+	CGFloat side = 72, gap = 6, x = gap;
+	for (NSDictionary *sticker in stickers){
+		UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+		button.frame = CGRectMake(x, 12, side, side);
+		button.tag = [sticker[@"fileId"] integerValue];
+		[button addTarget:self action:@selector(stickerTapped:)
+		 forControlEvents:UIControlEventTouchUpInside];
+		// Until the picture is decoded the emoji stands in, so the strip is
+		// usable immediately rather than a row of blanks.
+		[button setTitle:sticker[@"emoji"] forState:UIControlStateNormal];
+		button.titleLabel.font = [UIFont systemFontOfSize:34];
+		[panel addSubview:button];
+		x += side + gap;
+
+		if ([sticker[@"isAnimated"] boolValue])
+			continue;
+		[[TGClient shared] downloadFile:[sticker[@"fileId"] integerValue]
+							 completion:^(NSString *path){
+			UIImage *image = path ? [UIImage convertFromWebP:path
+											  compressedData:nil error:nil] : nil;
+			if (!image)
+				return;
+			[button setTitle:@"" forState:UIControlStateNormal];
+			[button setImage:image forState:UIControlStateNormal];
+			button.imageView.contentMode = UIViewContentModeScaleAspectFit;
+		}];
+	}
+	panel.contentSize = CGSizeMake(x, panel.bounds.size.height);
+}
+
+- (void)stickerTapped:(UIButton *)button {
+	[[TGClient shared] sendStickerWithFileId:button.tag
+									  toChat:self.chatId
+									  thread:self.threadId];
+	[self toggleStickerPanel];
+}
+
 #pragma mark - voice
 
 /// Send is for typed text, the microphone for everything else - showing both
@@ -832,22 +1101,190 @@ static const CGFloat kImageMax    = 200.0f;
 
 #pragma mark - attachments
 
+static const NSInteger kAttachSheetTag  = 41;
+static const NSInteger kMessageSheetTag = 42;
+
 - (void)attachTapped {
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
+													  delegate:self
+											 cancelButtonTitle:nil
+										destructiveButtonTitle:nil
+											 otherButtonTitles:@"Photo or Video",
+														   @"Location",
+														   @"Contact", nil];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = kAttachSheetTag;
+	[sheet showInView:self.view];
+}
+
+- (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
+	if (index == sheet.cancelButtonIndex)
+		return;
+
+	if (sheet.tag == kMessageSheetTag){
+		[self runMessageAction:[sheet buttonTitleAtIndex:index]];
+		return;
+	}
+	if (sheet.tag != kAttachSheetTag)
+		return;
+	if (index == 0)      [self pickMedia];
+	else if (index == 1) [self sendCurrentLocation];
+	else                 [self pickContact];
+}
+
+#pragma mark - message actions
+
+- (void)messageHeld:(UILongPressGestureRecognizer *)hold {
+	if (hold.state != UIGestureRecognizerStateBegan)
+		return;
+
+	NSIndexPath *path = [self.table indexPathForRowAtPoint:[hold locationInView:self.table]];
+	if (!path || path.row >= (NSInteger)self.messages.count)
+		return;
+
+	NSDictionary *m = self.messages[path.row];
+	if ([m[@"service"] boolValue])
+		return;
+	self.actionMessage = m;
+
+	BOOL mine = [m[@"outgoing"] boolValue];
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:@"Reply", @"Forward",
+															@"React \U0001F44D", nil];
+	if ([m[@"text"] length])
+		[sheet addButtonWithTitle:@"Copy"];
+	if (mine && [m[@"text"] length])
+		[sheet addButtonWithTitle:@"Edit"];
+	if (mine)
+		sheet.destructiveButtonIndex = [sheet addButtonWithTitle:@"Delete"];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = kMessageSheetTag;
+	[sheet showInView:self.view];
+}
+
+- (void)runMessageAction:(NSString *)action {
+	NSDictionary *m = self.actionMessage;
+	int64_t messageId = [m[@"id"] longLongValue];
+	if (!messageId)
+		return;
+
+	if ([action isEqualToString:@"Reply"]){
+		self.replyToId = messageId;
+		self.editingId = 0;
+		[self showComposeBanner:[NSString stringWithFormat:@"Reply to: %@",
+				[m[@"text"] length] ? m[@"text"] : m[@"kind"]]];
+		[self.input becomeFirstResponder];
+
+	} else if ([action isEqualToString:@"Forward"]){
+		TGForwardPicker *picker = [[TGForwardPicker alloc] init];
+		__weak typeof(self) weakSelf = self;
+		picker.onPicked = ^(int64_t targetChatId){
+			[[TGClient shared] forwardMessages:@[@(messageId)]
+									  fromChat:weakSelf.chatId
+										toChat:targetChatId];
+		};
+		[self.navigationController pushViewController:picker animated:YES];
+
+	} else if ([action hasPrefix:@"React"]){
+		[[TGClient shared] reactTo:messageId inChat:self.chatId emoji:@"\U0001F44D"];
+
+	} else if ([action isEqualToString:@"Copy"]){
+		[UIPasteboard generalPasteboard].string = m[@"text"];
+
+	} else if ([action isEqualToString:@"Edit"]){
+		self.editingId = messageId;
+		self.replyToId = 0;
+		self.input.text = m[@"text"];
+		[self showComposeBanner:@"Editing"];
+		[self.input becomeFirstResponder];
+
+	} else if ([action isEqualToString:@"Delete"]){
+		[[TGClient shared] deleteMessage:messageId inChat:self.chatId];
+	}
+	self.actionMessage = nil;
+}
+
+- (void)pickMedia {
 	if (![UIImagePickerController isSourceTypeAvailable:
 			UIImagePickerControllerSourceTypePhotoLibrary])
 		return;
 
 	UIImagePickerController *picker = [[UIImagePickerController alloc] init];
 	picker.sourceType = UIImagePickerControllerSourceTypePhotoLibrary;
+	// Without this the library shows photos only, and video cannot be sent.
+	picker.mediaTypes = @[(NSString *)kUTTypeImage, (NSString *)kUTTypeMovie];
 	picker.delegate = self;
 	[self presentViewController:picker animated:YES completion:nil];
+}
+
+/// One fix, then stop - a chat wants a pin, not a running trace.
+- (void)sendCurrentLocation {
+	if (!self.locationManager){
+		self.locationManager = [[CLLocationManager alloc] init];
+		self.locationManager.delegate = self;
+		self.locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters;
+	}
+	[self.locationManager startUpdatingLocation];
+}
+
+- (void)locationManager:(CLLocationManager *)manager
+	 didUpdateLocations:(NSArray *)locations {
+	CLLocation *fix = [locations lastObject];
+	[manager stopUpdatingLocation];
+	if (!fix)
+		return;
+	[[TGClient shared] sendLocation:fix.coordinate.latitude
+						  longitude:fix.coordinate.longitude
+							 toChat:self.chatId];
+}
+
+- (void)locationManager:(CLLocationManager *)manager didFailWithError:(NSError *)error {
+	[manager stopUpdatingLocation];
+	NSLog(@"location: %@", error);
+}
+
+- (void)pickContact {
+	ABPeoplePickerNavigationController *picker =
+			[[ABPeoplePickerNavigationController alloc] init];
+	picker.peoplePickerDelegate = self;
+	[self presentViewController:picker animated:YES completion:nil];
+}
+
+- (BOOL)peoplePickerNavigationController:(ABPeoplePickerNavigationController *)picker
+      shouldContinueAfterSelectingPerson:(ABRecordRef)person {
+	NSString *name = (__bridge_transfer NSString *)
+			ABRecordCopyCompositeName(person);
+	ABMultiValueRef phones = ABRecordCopyValue(person, kABPersonPhoneProperty);
+	NSString *phone = ABMultiValueGetCount(phones) > 0
+			? (__bridge_transfer NSString *)ABMultiValueCopyValueAtIndex(phones, 0)
+			: nil;
+	if (phones) CFRelease(phones);
+
+	[picker dismissViewControllerAnimated:YES completion:nil];
+	if (phone.length)
+		[[TGClient shared] sendContactNamed:name phone:phone toChat:self.chatId];
+	return NO;
+}
+
+- (void)peoplePickerNavigationControllerDidCancel:(ABPeoplePickerNavigationController *)picker {
+	[picker dismissViewControllerAnimated:YES completion:nil];
 }
 
 - (void)imagePickerController:(UIImagePickerController *)picker
 		didFinishPickingMediaWithInfo:(NSDictionary *)info
 {
-	UIImage *image = info[UIImagePickerControllerOriginalImage];
 	[picker dismissViewControllerAnimated:YES completion:nil];
+
+	NSURL *movie = info[UIImagePickerControllerMediaURL];
+	if (movie){
+		[[TGClient shared] sendVideoAtPath:movie.path toChat:self.chatId];
+		return;
+	}
+
+	UIImage *image = info[UIImagePickerControllerOriginalImage];
 	if (!image)
 		return;
 
@@ -884,13 +1321,28 @@ static const CGFloat kImageMax    = 200.0f;
 	NSDictionary *m = self.messages[indexPath.row];
 	NSString *kind = m[@"kind"];
 
+	// A reply is unreadable if you cannot get to what it answers.
+	int64_t replyId = [m[@"replyId"] longLongValue];
+	if (replyId && [self scrollToMessageId:replyId])
+		return;
+
+	// A theme file is the one document worth opening in place: tapping it
+	// applies the theme, the way the official clients do.
+	if ([kind isEqualToString:@"messageDocument"] &&
+		[TGThemeFile handlesFile:(m[@"docName"] ?: @"")]){
+		[self applyThemeFromMessage:m];
+		return;
+	}
+
 	// Video and video notes play; a photo opens full screen.
 	if ([kind isEqualToString:@"messageVideo"] ||
 		[kind isEqualToString:@"messageVideoNote"]){
 		NSNumber *docId = m[@"docId"];
 		if (![docId isKindOfClass:NSNumber.class])
 			return;
+		[self beginDownloadHUDForFile:[docId integerValue]];
 		[[TGClient shared] downloadFile:[docId integerValue] completion:^(NSString *path){
+			[self endDownloadHUD];
 			if (!path)
 				return;
 			MPMoviePlayerViewController *player = [[MPMoviePlayerViewController alloc]
@@ -906,7 +1358,9 @@ static const CGFloat kImageMax    = 200.0f;
 		NSNumber *docId = m[@"docId"];
 		if (![docId isKindOfClass:NSNumber.class])
 			return;
+		[self beginDownloadHUDForFile:[docId integerValue]];
 		[[TGClient shared] downloadFile:[docId integerValue] completion:^(NSString *path){
+			[self endDownloadHUD];
 			if (!path)
 				return;
 			dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
@@ -942,6 +1396,25 @@ static const CGFloat kImageMax    = 200.0f;
 	}
 }
 
+- (UIView *)viewForZoomingInScrollView:(UIScrollView *)scrollView {
+	return [scrollView viewWithTag:0xF118];
+}
+
+- (void)saveFullScreenImage:(UILongPressGestureRecognizer *)hold {
+	if (hold.state != UIGestureRecognizerStateBegan || !self.fullScreenImage)
+		return;
+	UIImageWriteToSavedPhotosAlbum(self.fullScreenImage, self,
+			@selector(image:didFinishSavingWithError:contextInfo:), NULL);
+}
+
+- (void)image:(UIImage *)image didFinishSavingWithError:(NSError *)error
+  contextInfo:(void *)contextInfo {
+	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@""
+			message:(error ? @"Could not save" : @"Saved to Camera Roll")
+		   delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+	[alert show];
+}
+
 - (void)showPlaybackFailure {
 	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@""
 													message:@"Cannot play this audio"
@@ -959,14 +1432,39 @@ static const CGFloat kImageMax    = 200.0f;
 	backdrop.backgroundColor = [UIColor blackColor];
 	backdrop.tag = 0xF117;
 
+	// A scroll view is all zooming needs; a 4S has no room for a custom one.
+	UIScrollView *zoom = [[UIScrollView alloc] initWithFrame:backdrop.bounds];
+	zoom.minimumZoomScale = 1.0f;
+	zoom.maximumZoomScale = 4.0f;
+	zoom.delegate = self;
+	zoom.showsHorizontalScrollIndicator = NO;
+	zoom.showsVerticalScrollIndicator = NO;
+	[backdrop addSubview:zoom];
+
 	UIImageView *view = [[UIImageView alloc] initWithFrame:backdrop.bounds];
 	view.contentMode = UIViewContentModeScaleAspectFit;
 	view.image = image;
-	[backdrop addSubview:view];
+	view.tag = 0xF118;
+	[zoom addSubview:view];
 
 	UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc]
 			initWithTarget:self action:@selector(dismissFullScreen:)];
 	[backdrop addGestureRecognizer:tap];
+
+	// Hold the picture to keep it - the only way out of the app for an image.
+	self.fullScreenImage = image;
+	UILongPressGestureRecognizer *hold = [[UILongPressGestureRecognizer alloc]
+			initWithTarget:self action:@selector(saveFullScreenImage:)];
+	[backdrop addGestureRecognizer:hold];
+
+	UILabel *hint = [[UILabel alloc] initWithFrame:
+			CGRectMake(0, backdrop.bounds.size.height - 34, backdrop.bounds.size.width, 20)];
+	hint.text = @"Hold to save";
+	hint.font = [UIFont systemFontOfSize:12];
+	hint.textAlignment = NSTextAlignmentCenter;
+	hint.textColor = [UIColor colorWithWhite:1 alpha:0.6f];
+	hint.backgroundColor = [UIColor clearColor];
+	[backdrop addSubview:hint];
 
 	backdrop.alpha = 0;
 	[window addSubview:backdrop];
@@ -1005,6 +1503,8 @@ static const CGFloat kImageMax    = 200.0f;
 		h += 16;
 	if ([self quoteTextFor:m])
 		h += 32;
+	if ([m[@"reactions"] length])
+		h += 18;
 	return h;
 }
 
@@ -1151,7 +1651,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 		cell.body.numberOfLines = 1;
 		cell.body.font = [UIFont systemFontOfSize:12];
 		cell.body.textAlignment = NSTextAlignmentCenter;
-		cell.body.textColor = [UIColor colorWithWhite:0.30f alpha:1.0f];
+		cell.body.textColor = [[TGTheme shared] secondaryTextColour];
 		// "joined the group" reads oddly with nobody attached to it.
 		NSString *who = [[TGClient shared] nameForUserId:[m[@"senderId"] longLongValue]];
 		cell.body.text = who.length
@@ -1179,18 +1679,18 @@ static UIColor *TGSenderColour(int64_t userId) {
 		CGFloat height = 58;
 		CGFloat x = mine ? (tableView.bounds.size.width - width - 8) : 8;
 		cell.bubble.frame = CGRectMake(x, 3, width, height);
-		cell.bubble.backgroundColor = mine
-			? [UIColor colorWithRed:0.85f green:0.96f blue:0.76f alpha:1.0f]
-			: [UIColor whiteColor];
-		cell.bubble.layer.borderWidth = 1.0f;
-		cell.bubble.layer.borderColor = [UIColor colorWithWhite:0.0f alpha:0.12f].CGColor;
+		TGTheme *cardTheme = [TGTheme shared];
+		cell.bubble.backgroundColor = mine ? [cardTheme bubbleMineColour]
+										   : [cardTheme bubbleTheirsColour];
+		cell.bubble.layer.borderWidth = [cardTheme bubbleBorderWidth];
+		cell.bubble.layer.borderColor = [cardTheme bubbleBorderColour].CGColor;
 
 		cell.icon.hidden = NO;
 		cell.icon.frame = CGRectMake(kPadH, 11, 36, 36);
 		cell.icon.layer.cornerRadius = 18;
 		if (isDoc){
 			cell.icon.text = @"\u25a4";              // a sheet of paper
-			cell.icon.backgroundColor = [UIColor colorWithRed:0.24f green:0.60f blue:0.92f alpha:1.0f];
+			cell.icon.backgroundColor = [[TGTheme shared] accentColour];
 		} else {
 			// initials read better than a generic person glyph
 			NSString *initials = first.length ? [first substringToIndex:1] : @"?";
@@ -1204,7 +1704,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 		cell.body.hidden = NO;
 		cell.body.numberOfLines = 1;
 		cell.body.font = [UIFont boldSystemFontOfSize:15];
-		cell.body.textColor = [UIColor colorWithWhite:0.08f alpha:1.0f];
+		cell.body.textColor = [cardTheme primaryTextColour];
 		cell.body.text = first;
 		cell.body.frame = CGRectMake(56, 10, width - 66, 20);
 
@@ -1242,7 +1742,9 @@ static UIColor *TGSenderColour(int64_t userId) {
 			(pic.height ? pic.height + 4 : 0) + body.height;
 
 	CGFloat x = mine ? (tableView.bounds.size.width - bubbleW - 8) : 8;
-	CGFloat top = 3;
+	// Photos of one album sit flush against each other, so the block reads as
+	// a single post rather than a run of separate messages.
+	CGFloat top = [self continuesAlbumAtRow:indexPath.row] ? 0 : 3;
 
 	// In a group you need to know who is speaking.
 	int64_t senderId = [m[@"senderId"] longLongValue];
@@ -1389,7 +1891,27 @@ static UIColor *TGSenderColour(int64_t userId) {
 	cell.body.text = m[@"text"];
 	cell.body.frame = CGRectMake(kPadH, y, body.width, body.height);
 
-	cell.time.text = [self stampFor:m];
+	// Reactions sit under the message, as they do everywhere else.
+	UILabel *reactions = (UILabel *)[cell.bubble viewWithTag:0x9002];
+	NSString *reactionText = m[@"reactions"];
+	if ([reactionText length]){
+		if (!reactions){
+			reactions = [[UILabel alloc] init];
+			reactions.tag = 0x9002;
+			reactions.backgroundColor = [UIColor clearColor];
+			reactions.font = [UIFont systemFontOfSize:13];
+			[cell.bubble addSubview:reactions];
+		}
+		reactions.hidden = NO;
+		reactions.text = reactionText;
+		reactions.textColor = (mine && theme.isFlat)
+				? [UIColor whiteColor] : [theme secondaryTextColour];
+		reactions.frame = CGRectMake(kPadH, y + body.height + 2, bubbleW - 2 * kPadH, 16);
+	} else {
+		reactions.hidden = YES;
+	}
+
+	cell.time.text = [self albumContinuesAfterRow:indexPath.row] ? @"" : [self stampFor:m];
 	cell.time.textColor = [UIColor colorWithWhite:0.45f alpha:1.0f];
 	CGFloat tickW = mine ? 18 : 0;
 	CGFloat stampY = inlineStamp ? (y + body.height - 14) : (bubbleH - kPadV - 13);

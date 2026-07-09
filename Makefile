@@ -94,6 +94,7 @@ APP_SRC_M := \
 	src/main.m \
 	src/TGClient.m \
 	src/TGTheme.m \
+	src/TGThemeFile.m \
 	src/TGIcons.m \
 	src/TGLoginViewController.m \
 	src/TGChatListViewController.m \

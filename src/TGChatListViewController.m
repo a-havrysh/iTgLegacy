@@ -86,7 +86,7 @@ static const CGFloat kAvatar    = 52.0f;
 
 #pragma mark - controller
 
-@interface TGChatListViewController () <UISearchBarDelegate>
+@interface TGChatListViewController () <UISearchBarDelegate, UIAlertViewDelegate>
 @property (nonatomic, strong) NSArray *chats;
 @property (nonatomic, assign) BOOL showsArchive;      // this IS the archive screen
 @property (nonatomic, assign) NSInteger folderId;     // 0 = no folder
@@ -95,6 +95,7 @@ static const CGFloat kAvatar    = 52.0f;
 @property (nonatomic, strong) UISearchBar *searchBar;
 @property (nonatomic, strong) NSArray *searchResults;   // nil = not searching
 @property (nonatomic, strong) NSDictionary *actionChat; // long-pressed row
+@property (nonatomic, assign) int64_t chatPendingDeletion;
 @end
 
 @implementation TGChatListViewController
@@ -124,6 +125,9 @@ static const CGFloat kAvatar    = 52.0f;
 	self.searchBar = [[UISearchBar alloc] initWithFrame:CGRectMake(0, 0, 320, 44)];
 	self.searchBar.delegate = self;
 	self.searchBar.placeholder = @"Search";
+	if ([self.searchBar respondsToSelector:@selector(setBarTintColor:)])
+		self.searchBar.barTintColor = [[TGTheme shared] listBackgroundColour];
+	self.searchBar.tintColor = [[TGTheme shared] accentColour];
 	self.tableView.tableHeaderView = self.searchBar;
 
 	// Hold a row for the two things clients put there: pin and mute.
@@ -141,6 +145,7 @@ static const CGFloat kAvatar    = 52.0f;
 	__weak typeof(self) weakSelf = self;
 	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+	[[TGTheme shared] styleTabBar:self.tabBarController.tabBar];
 
 	// Restyle in place when the setting changes, rather than needing a restart.
 	[[NSNotificationCenter defaultCenter] addObserverForName:TGThemeChangedNotification
@@ -148,6 +153,11 @@ static const CGFloat kAvatar    = 52.0f;
 		usingBlock:^(NSNotification *note){
 		[TGIcons flush];
 		[[TGTheme shared] styleNavigationBar:weakSelf.navigationController.navigationBar];
+		weakSelf.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+		weakSelf.tableView.separatorColor = [[TGTheme shared] bubbleBorderColour];
+		[[TGTheme shared] styleTabBar:weakSelf.tabBarController.tabBar];
+		if ([weakSelf.searchBar respondsToSelector:@selector(setBarTintColor:)])
+			weakSelf.searchBar.barTintColor = [[TGTheme shared] listBackgroundColour];
 		[weakSelf.tableView reloadData];
 	}];
 
@@ -162,6 +172,19 @@ static const CGFloat kAvatar    = 52.0f;
 		weakSelf.title = text ?: @"Chats";
 	};
 	[self reload];
+}
+
+/// Saved Messages is your own chat; it is not always in the list, and every
+/// client keeps a way in regardless.
+- (void)openSavedMessages {
+	int64_t chatId = [[TGClient shared] savedMessagesChatId];
+	if (!chatId)
+		return;
+	TGChatViewController *vc = [[TGChatViewController alloc] init];
+	vc.chatId = chatId;
+	vc.chatTitle = @"Saved Messages";
+	vc.hidesBottomBarWhenPushed = YES;
+	[self.navigationController pushViewController:vc animated:YES];
 }
 
 - (void)composeTapped {
@@ -231,13 +254,19 @@ static const CGFloat kAvatar    = 52.0f;
 		int64_t chatId = [self.actionChat[@"id"] longLongValue];
 		if (index == 0)
 			[[TGClient shared] setChat:chatId pinned:![self.actionChat[@"isPinned"] boolValue]];
-		else
+		else if (index == 1)
 			[[TGClient shared] setChat:chatId muted:![self.actionChat[@"isMuted"] boolValue]];
+		else if (index == sheet.destructiveButtonIndex)
+			[self confirmDeleteChat:chatId];
 		self.actionChat = nil;
 		return;
 	}
 
 	NSArray *folders = [TGClient shared].folders;
+	if (index == 1){
+		[self openSavedMessages];
+		return;
+	}
 	if (index == 0){
 		self.folderId = 0;
 		self.title = self.showsArchive ? @"Archived" : @"Chats";
@@ -245,8 +274,8 @@ static const CGFloat kAvatar    = 52.0f;
 		self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc]
 				initWithTitle:@"Folders" style:UIBarButtonItemStylePlain
 					   target:self action:@selector(foldersTapped)];
-	} else if (index - 1 < (NSInteger)folders.count){
-		NSDictionary *f = folders[index - 1];
+	} else if (index - 2 < (NSInteger)folders.count){
+		NSDictionary *f = folders[index - 2];
 		self.folderId = [f[@"id"] integerValue];
 		self.title = f[@"title"];
 	}
@@ -320,9 +349,27 @@ static const NSInteger kChatActionsTag = 77;
    destructiveButtonTitle:nil
 		otherButtonTitles:([self.actionChat[@"isPinned"] boolValue] ? @"Unpin" : @"Pin"),
 						  ([self.actionChat[@"isMuted"] boolValue] ? @"Unmute" : @"Mute"), nil];
+	sheet.destructiveButtonIndex = [sheet addButtonWithTitle:@"Delete and Leave"];
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 	sheet.tag = kChatActionsTag;
 	[sheet showInView:self.view];
+}
+
+/// Leaving is not undoable, so it asks first.
+- (void)confirmDeleteChat:(int64_t)chatId {
+	self.chatPendingDeletion = chatId;
+	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Delete and Leave"
+			message:@"This chat will be removed from the list."
+		   delegate:self
+  cancelButtonTitle:@"Cancel"
+  otherButtonTitles:@"Delete", nil];
+	[alert show];
+}
+
+- (void)alertView:(UIAlertView *)alert clickedButtonAtIndex:(NSInteger)index {
+	if (index != alert.cancelButtonIndex && self.chatPendingDeletion)
+		[[TGClient shared] deleteChat:self.chatPendingDeletion];
+	self.chatPendingDeletion = 0;
 }
 
 #pragma mark - search
@@ -388,6 +435,13 @@ static const NSInteger kChatActionsTag = 77;
 	TGChatCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
 	if (!cell)
 		cell = [[TGChatCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:reuse];
+
+	TGTheme *theme = [TGTheme shared];
+	cell.backgroundColor = [theme listBackgroundColour];
+	cell.titleLabel.textColor = [theme primaryTextColour];
+	cell.previewLabel.textColor = [theme secondaryTextColour];
+	cell.dateLabel.textColor = [theme secondaryTextColour];
+	cell.badge.backgroundColor = [theme accentColour];
 
 	if ([self hasArchiveRow] && indexPath.row == 0){
 		cell.titleLabel.text = @"Archived Chats";

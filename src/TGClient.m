@@ -292,6 +292,19 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m);
 			self.onConnectionState(state, text);
 		return;
 	}
+	if ([type isEqualToString:@"updateFile"]){
+		// Big files take long enough on a 4S that silence looks like a hang.
+		NSDictionary *file = obj[@"file"];
+		NSDictionary *local = file[@"local"];
+		if (self.onFileProgress && [local[@"is_downloading_active"] boolValue]){
+			double expected = [file[@"expected_size"] doubleValue];
+			double got = [local[@"downloaded_size"] doubleValue];
+			if (expected > 0)
+				self.onFileProgress([file[@"id"] integerValue], (float)(got / expected));
+		}
+		return;
+	}
+
 	if ([type isEqualToString:@"updateChatAction"]){
 		// TDLib names the action; the client turns it into the phrase every
 		// other client shows.
@@ -473,6 +486,23 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m);
 }
 
 #pragma mark - messages
+
+/// Reactions as one short line: emoji and count, most used first. Custom
+/// emoji have no character to draw, so they are counted but not named.
+static NSString *TGReactionSummary(NSDictionary *m) {
+	NSArray *reactions = m[@"interaction_info"][@"reactions"][@"reactions"];
+	if (![reactions isKindOfClass:NSArray.class] || !reactions.count)
+		return nil;
+
+	NSMutableArray *parts = [NSMutableArray array];
+	for (NSDictionary *r in reactions){
+		NSString *emoji = r[@"type"][@"emoji"];
+		NSInteger count = [r[@"total_count"] integerValue];
+		[parts addObject:[NSString stringWithFormat:@"%@ %ld",
+				emoji.length ? emoji : @"\U00002B50", (long)count]];
+	}
+	return [parts componentsJoinedByString:@"  "];
+}
 
 /// Flatten a TDLib message into what the UI needs.
 static NSDictionary *TGFlattenMessage(NSDictionary *m) {
@@ -706,6 +736,11 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		@"docId"     : docFileId   ?: [NSNull null],
 		@"docName"   : docName     ?: @"",
 		@"service"   : @(isService),
+		// Several photos sent together share an album id; the chat draws them
+		// as one block rather than as unrelated messages.
+		@"albumId"   : m[@"media_album_id"] ?: @"",
+		// "\U0001F44D 3" per reaction, joined - enough to show under a bubble.
+		@"reactions" : TGReactionSummary(m) ?: @"",
 		@"senderId"  : m[@"sender_id"][@"user_id"] ?: @(0),
 		@"lat"       : latitude    ?: [NSNull null],
 		@"lon"       : longitude   ?: [NSNull null],
@@ -919,6 +954,40 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 }
 
 
+- (void)recentStickersWithCompletion:(void (^)(NSArray *))completion {
+	[self request:@{@"@type" : @"getRecentStickers", @"is_attached" : @NO}
+	   completion:^(NSDictionary *result){
+		NSMutableArray *out = [NSMutableArray array];
+		for (NSDictionary *sticker in result[@"stickers"]){
+			NSNumber *fileId = sticker[@"sticker"][@"id"];
+			if (!fileId)
+				continue;
+			NSString *format = sticker[@"format"][@"@type"] ?: @"";
+			[out addObject:@{
+				@"fileId"     : fileId,
+				@"emoji"      : sticker[@"emoji"] ?: @"",
+				// .tgs and .webm cannot be drawn as a thumbnail cheaply, so the
+				// panel falls back to the emoji for those.
+				@"isAnimated" : @(![format isEqualToString:@"stickerFormatWebp"]),
+				@"thumbId"    : sticker[@"thumbnail"][@"file"][@"id"] ?: @0,
+			}];
+		}
+		if (completion) completion(out);
+	}];
+}
+
+- (void)sendStickerWithFileId:(NSInteger)fileId toChat:(int64_t)chatId thread:(int64_t)threadId {
+	[self send:@{
+		@"@type"                : @"sendMessage",
+		@"chat_id"              : @(chatId),
+		@"message_thread_id"    : @(threadId),
+		@"input_message_content": @{
+			@"@type"   : @"inputMessageSticker",
+			@"sticker" : @{@"@type" : @"inputFileId", @"id" : @(fileId)},
+		},
+	}];
+}
+
 - (void)sendVoiceAtPath:(NSString *)path duration:(NSInteger)seconds
                  toChat:(int64_t)chatId thread:(int64_t)threadId {
 	if (!path.length)
@@ -935,6 +1004,52 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 	}];
 }
 
+- (void)sendVideoAtPath:(NSString *)path toChat:(int64_t)chatId {
+	if (!path.length)
+		return;
+	[self send:@{
+		@"@type"                : @"sendMessage",
+		@"chat_id"              : @(chatId),
+		@"input_message_content": @{
+			@"@type" : @"inputMessageVideo",
+			@"video" : @{@"@type" : @"inputFileLocal", @"path" : path},
+		},
+	}];
+}
+
+- (void)sendLocation:(double)latitude longitude:(double)longitude toChat:(int64_t)chatId {
+	[self send:@{
+		@"@type"                : @"sendMessage",
+		@"chat_id"              : @(chatId),
+		@"input_message_content": @{
+			@"@type"    : @"inputMessageLocation",
+			@"location" : @{
+				@"@type"     : @"location",
+				@"latitude"  : @(latitude),
+				@"longitude" : @(longitude),
+			},
+		},
+	}];
+}
+
+- (void)sendContactNamed:(NSString *)name phone:(NSString *)phone toChat:(int64_t)chatId {
+	if (!phone.length)
+		return;
+	[self send:@{
+		@"@type"                : @"sendMessage",
+		@"chat_id"              : @(chatId),
+		@"input_message_content": @{
+			@"@type"   : @"inputMessageContact",
+			@"contact" : @{
+				@"@type"        : @"contact",
+				@"phone_number" : phone,
+				@"first_name"   : name ?: @"",
+				@"user_id"      : @(0),
+			},
+		},
+	}];
+}
+
 - (void)sendPhotoAtPath:(NSString *)path toChat:(int64_t)chatId {
 	if (!path.length)
 		return;
@@ -945,6 +1060,17 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 			@"@type" : @"inputMessagePhoto",
 			@"photo" : @{@"@type" : @"inputFileLocal", @"path" : path},
 		},
+	}];
+}
+
+- (void)reactTo:(int64_t)messageId inChat:(int64_t)chatId emoji:(NSString *)emoji {
+	[self send:@{
+		@"@type"      : @"addMessageReaction",
+		@"chat_id"    : @(chatId),
+		@"message_id" : @(messageId),
+		@"reaction_type" : @{@"@type" : @"reactionTypeEmoji", @"emoji" : emoji},
+		@"is_big"     : @NO,
+		@"update_recent_reactions" : @YES,
 	}];
 }
 
@@ -1178,8 +1304,129 @@ static int64_t TGArchiveOrder(NSArray *positions) {
 		self.userPhotosById[user[@"id"]] = fileId;
 }
 
+- (int64_t)savedMessagesChatId {
+	return [self.me[@"id"] longLongValue];
+}
+
+- (void)statusForUser:(int64_t)userId completion:(void (^)(NSString *))completion {
+	[self request:@{@"@type" : @"getUser", @"user_id" : @(userId)}
+	   completion:^(NSDictionary *user){
+		NSDictionary *status = user[@"status"];
+		NSString *kind = status[@"@type"];
+		NSString *text = nil;
+
+		if ([kind isEqualToString:@"userStatusOnline"]){
+			text = @"online";
+		} else if ([kind isEqualToString:@"userStatusRecently"]){
+			text = @"last seen recently";
+		} else if ([kind isEqualToString:@"userStatusLastWeek"]){
+			text = @"last seen within a week";
+		} else if ([kind isEqualToString:@"userStatusLastMonth"]){
+			text = @"last seen within a month";
+		} else if ([kind isEqualToString:@"userStatusOffline"]){
+			NSTimeInterval was = [status[@"was_online"] doubleValue];
+			static NSDateFormatter *fmt = nil;
+			if (!fmt){
+				fmt = [[NSDateFormatter alloc] init];
+				[fmt setDateFormat:@"HH:mm"];
+			}
+			NSDate *date = [NSDate dateWithTimeIntervalSince1970:was];
+			BOOL today = [[NSCalendar currentCalendar]
+					components:NSDayCalendarUnit fromDate:date].day ==
+						 [[NSCalendar currentCalendar]
+					components:NSDayCalendarUnit fromDate:[NSDate date]].day;
+			text = today
+				? [NSString stringWithFormat:@"last seen at %@", [fmt stringFromDate:date]]
+				: @"last seen a long time ago";
+		}
+		if (completion) completion(text);
+	}];
+}
+
 - (NSNumber *)photoFileIdForUserId:(int64_t)userId {
 	return self.userPhotosById[@(userId)];
+}
+
+- (void)membersOfChat:(int64_t)chatId completion:(void (^)(NSArray *))completion {
+	__weak typeof(self) weakSelf = self;
+	[self request:@{@"@type" : @"getChat", @"chat_id" : @(chatId)}
+	   completion:^(NSDictionary *chat){
+		NSDictionary *type = chat[@"type"];
+		NSString *kind = type[@"@type"];
+
+		void (^collect)(NSArray *) = ^(NSArray *members){
+			TGClient *me = weakSelf;
+			NSMutableArray *out = [NSMutableArray array];
+			for (NSDictionary *member in members){
+				int64_t userId = [member[@"member_id"][@"user_id"] longLongValue];
+				if (!userId)
+					continue;
+				[out addObject:@{
+					@"id"   : @(userId),
+					@"name" : [me nameForUserId:userId] ?: @"",
+				}];
+			}
+			if (completion) completion(out);
+		};
+
+		if ([kind isEqualToString:@"chatTypeBasicGroup"]){
+			[weakSelf request:@{
+				@"@type"          : @"getBasicGroupFullInfo",
+				@"basic_group_id" : type[@"basic_group_id"],
+			} completion:^(NSDictionary *full){ collect(full[@"members"]); }];
+			return;
+		}
+		if ([kind isEqualToString:@"chatTypeSupergroup"]){
+			[weakSelf request:@{
+				@"@type"        : @"getSupergroupMembers",
+				@"supergroup_id": type[@"supergroup_id"],
+				@"filter"       : @{@"@type" : @"supergroupMembersFilterRecent"},
+				@"offset"       : @(0),
+				@"limit"        : @(50),
+			} completion:^(NSDictionary *result){ collect(result[@"members"]); }];
+			return;
+		}
+		if (completion) completion(@[]);
+	}];
+}
+
+- (void)canSendInChat:(int64_t)chatId completion:(void (^)(BOOL, BOOL))completion {
+	[self request:@{@"@type" : @"getChat", @"chat_id" : @(chatId)}
+	   completion:^(NSDictionary *chat){
+		NSDictionary *type = chat[@"type"];
+		BOOL isChannel = [type[@"@type"] isEqualToString:@"chatTypeSupergroup"] &&
+						 [type[@"is_channel"] boolValue];
+		// TDLib answers this directly; permissions alone would miss the case
+		// where the user is not a member at all.
+		BOOL canSend = [chat[@"permissions"][@"can_send_basic_messages"] boolValue];
+		if (isChannel)
+			canSend = [chat[@"can_be_edited"] boolValue] ||
+					  [chat[@"permissions"][@"can_send_basic_messages"] boolValue];
+		if (completion) completion(canSend, isChannel);
+	}];
+}
+
+- (void)deleteChat:(int64_t)chatId {
+	// A group has to be left as well, or it comes straight back on the next
+	// message.
+	[self request:@{@"@type" : @"getChat", @"chat_id" : @(chatId)}
+	   completion:^(NSDictionary *chat){
+		NSString *kind = chat[@"type"][@"@type"];
+		BOOL isMembership = [kind isEqualToString:@"chatTypeSupergroup"] ||
+							[kind isEqualToString:@"chatTypeBasicGroup"];
+		[self send:@{
+			@"@type"       : @"deleteChatHistory",
+			@"chat_id"     : @(chatId),
+			@"remove_from_chat_list" : @YES,
+			@"revoke"      : @NO,
+		}];
+		if (isMembership)
+			[self send:@{@"@type" : @"leaveChat", @"chat_id" : @(chatId)}];
+	}];
+}
+
+- (void)setChat:(int64_t)chatId joined:(BOOL)joined {
+	[self send:@{@"@type" : joined ? @"joinChat" : @"leaveChat", @"chat_id" : @(chatId)}];
 }
 
 - (void)pinnedMessageForChat:(int64_t)chatId

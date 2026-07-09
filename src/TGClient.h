@@ -54,6 +54,13 @@ typedef NS_ENUM(NSInteger, TGConnectionState) {
 /// Display name for a user TDLib has told us about, or nil.
 - (NSString *)nameForUserId:(int64_t)userId;
 
+/// "online", "last seen recently", "last seen at 12:30" - what a private chat
+/// shows under the name. Nil for anything that is not a user.
+- (void)statusForUser:(int64_t)userId completion:(void (^)(NSString *status))completion;
+
+/// Chat id of Saved Messages, which is the signed-in user's own chat.
+- (int64_t)savedMessagesChatId;
+
 /// Profile photo file id for a user, or nil if TDLib has not sent one.
 - (NSNumber *)photoFileIdForUserId:(int64_t)userId;
 
@@ -93,6 +100,19 @@ typedef NS_ENUM(NSInteger, TGConnectionState) {
 /// Empty for a chat that is not a forum.
 - (void)forumTopicsForChat:(int64_t)chatId completion:(void (^)(NSArray *topics))completion;
 
+/// Whether the signed-in user may post in a chat. A channel you only follow
+/// says NO, and the composer has to go away rather than fail on send.
+- (void)canSendInChat:(int64_t)chatId completion:(void (^)(BOOL canSend, BOOL isChannel))completion;
+
+/// Delete a chat's history for the current user, and leave it if it is a group.
+- (void)deleteChat:(int64_t)chatId;
+
+/// Join or leave a channel or supergroup.
+- (void)setChat:(int64_t)chatId joined:(BOOL)joined;
+
+/// Members of a group or supergroup: "id" and "name". Empty for anything else.
+- (void)membersOfChat:(int64_t)chatId completion:(void (^)(NSArray *members))completion;
+
 /// Members in a group or supergroup; 0 for anything else.
 - (void)memberCountForChat:(int64_t)chatId completion:(void (^)(NSInteger count))completion;
 
@@ -119,6 +139,10 @@ typedef NS_ENUM(NSInteger, TGConnectionState) {
 - (void)request:(NSDictionary *)request completion:(void (^)(NSDictionary *result))completion;
 
 #pragma mark - files
+
+/// Progress of a running download, 0..1, on the main queue. Fires for every
+/// file TDLib is fetching, so listeners must check the id they care about.
+@property (nonatomic, copy) void (^onFileProgress)(NSInteger fileId, float progress);
 
 /// Download a file by TDLib id. `completion` gets the local path, or nil.
 /// Already-downloaded files complete immediately.
@@ -175,12 +199,30 @@ typedef NS_ENUM(NSInteger, TGConnectionState) {
 - (void)messageWithId:(int64_t)messageId
                inChat:(int64_t)chatId
            completion:(void (^)(NSDictionary *message))completion;
+/// Stickers the user reached for lately: "fileId", "emoji", "isAnimated".
+- (void)recentStickersWithCompletion:(void (^)(NSArray *stickers))completion;
+
+/// Send a sticker TDLib already knows, by file id.
+- (void)sendStickerWithFileId:(NSInteger)fileId toChat:(int64_t)chatId thread:(int64_t)threadId;
+
 /// Send a recorded voice note (.oga), with its duration in seconds.
 - (void)sendVoiceAtPath:(NSString *)path duration:(NSInteger)seconds
                  toChat:(int64_t)chatId thread:(int64_t)threadId;
 
+/// Send a video file from the library.
+- (void)sendVideoAtPath:(NSString *)path toChat:(int64_t)chatId;
+
+/// Share a point on the map.
+- (void)sendLocation:(double)latitude longitude:(double)longitude toChat:(int64_t)chatId;
+
+/// Share someone from the address book.
+- (void)sendContactNamed:(NSString *)name phone:(NSString *)phone toChat:(int64_t)chatId;
+
 /// Send a local image file. TDLib uploads it and echoes the message back.
 - (void)sendPhotoAtPath:(NSString *)path toChat:(int64_t)chatId;
+/// React to a message with an emoji, as the current user.
+- (void)reactTo:(int64_t)messageId inChat:(int64_t)chatId emoji:(NSString *)emoji;
+
 - (void)deleteMessage:(int64_t)messageId inChat:(int64_t)chatId;
 - (void)markRead:(NSArray *)messageIds inChat:(int64_t)chatId;
 

@@ -8,6 +8,7 @@
 #import "AppDelegate.h"
 #import "RootViewController.h"
 #import "TGClient.h"
+#import "TGTheme.h"
 #import "TGChatViewController.h"
 #import "TGTopicsViewController.h"
 #import <QuartzCore/QuartzCore.h>
@@ -191,6 +192,8 @@
  *   itglegacy://tab/N            select a tab
  *   itglegacy://chatindex/N      open the Nth chat in the list
  *   itglegacy://profile          open the profile of the chat on screen
+ *   itglegacy://theme/NAME       apply a theme file from Documents ("none" clears)
+ *   itglegacy://stickers         open the sticker strip in the chat on screen
  *   itglegacy://phone/+NNN       hand a phone number to TDLib
  *   itglegacy://code/NNNNN       hand the login code to TDLib
  *   itglegacy://password/...     hand the 2FA password to TDLib
@@ -268,6 +271,36 @@
 			vc.hidesBottomBarWhenPushed = YES;
 			[nc pushViewController:vc animated:NO];
 			NSLog(@"open chat index %ld", (long)idx);
+		});
+		return YES;
+	}
+
+	// itglegacy://stickers - open the sticker strip, which needs a real tap.
+	if ([host isEqualToString:@"stickers"]){
+		dispatch_async(dispatch_get_main_queue(), ^{
+			UITabBarController *tabs = (UITabBarController *)self.rootViewController;
+			if (![tabs isKindOfClass:UITabBarController.class])
+				return;
+			UIViewController *top = [tabs.viewControllers[tabs.selectedIndex] topViewController];
+			if ([top respondsToSelector:@selector(toggleStickerPanel)])
+				[top performSelector:@selector(toggleStickerPanel)];
+		});
+		return YES;
+	}
+
+	// itglegacy://theme/<file> - apply a theme file sitting in Documents.
+	if ([host isEqualToString:@"theme"]){
+		dispatch_async(dispatch_get_main_queue(), ^{
+			if ([arg isEqualToString:@"none"]){
+				[[TGTheme shared] clearImportedTheme];
+				NSLog(@"theme: cleared");
+				return;
+			}
+			NSString *documents = [NSSearchPathForDirectoriesInDomains(
+					NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+			NSString *path = [documents stringByAppendingPathComponent:arg];
+			NSLog(@"theme: %@ -> %@", arg,
+					[[TGTheme shared] importThemeAtPath:path] ? @"applied" : @"rejected");
 		});
 		return YES;
 	}
