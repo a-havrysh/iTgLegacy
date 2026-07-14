@@ -9,6 +9,7 @@
 #import "RootViewController.h"
 #import "TGClient.h"
 #import "TGTheme.h"
+#import "TGDeviceViewController.h"
 #import "TGChatViewController.h"
 #import "TGTopicsViewController.h"
 #import <QuartzCore/QuartzCore.h>
@@ -194,6 +195,9 @@
  *   itglegacy://profile          open the profile of the chat on screen
  *   itglegacy://theme/NAME       apply a theme file from Documents ("none" clears)
  *   itglegacy://stickers         open the sticker strip in the chat on screen
+ *   itglegacy://tab/N            switch to tab N (0 chats, 1 contacts, 2 settings)
+ *   itglegacy://device           open the Device screen
+ *   itglegacy://scroll/N         scroll the visible table N points down
  *   itglegacy://phone/+NNN       hand a phone number to TDLib
  *   itglegacy://code/NNNNN       hand the login code to TDLib
  *   itglegacy://password/...     hand the 2FA password to TDLib
@@ -271,6 +275,49 @@
 			vc.hidesBottomBarWhenPushed = YES;
 			[nc pushViewController:vc animated:NO];
 			NSLog(@"open chat index %ld", (long)idx);
+		});
+		return YES;
+	}
+
+	// itglegacy://scroll/N - a screenshot only shows the top of a screen.
+	if ([host isEqualToString:@"scroll"]){
+		dispatch_async(dispatch_get_main_queue(), ^{
+			UITabBarController *tabs = (UITabBarController *)self.rootViewController;
+			if (![tabs isKindOfClass:UITabBarController.class])
+				return;
+			UIViewController *top = [tabs.viewControllers[tabs.selectedIndex] topViewController];
+			UIView *view = top.view;
+			UIScrollView *scroll = [view isKindOfClass:UIScrollView.class]
+					? (UIScrollView *)view : nil;
+			for (UIView *sub in view.subviews)
+				if (!scroll && [sub isKindOfClass:UIScrollView.class])
+					scroll = (UIScrollView *)sub;
+			[scroll setContentOffset:CGPointMake(0, [arg floatValue]) animated:NO];
+		});
+		return YES;
+	}
+
+	// itglegacy://device - the Device screen, which is three taps in otherwise.
+	if ([host isEqualToString:@"device"]){
+		dispatch_async(dispatch_get_main_queue(), ^{
+			UITabBarController *tabs = (UITabBarController *)self.rootViewController;
+			if (![tabs isKindOfClass:UITabBarController.class])
+				return;
+			tabs.selectedIndex = tabs.viewControllers.count - 1;
+			UINavigationController *nc = tabs.viewControllers[tabs.selectedIndex];
+			[nc popToRootViewControllerAnimated:NO];
+			[nc pushViewController:[[TGDeviceViewController alloc] init] animated:NO];
+		});
+		return YES;
+	}
+
+	// itglegacy://tab/N - switch tabs, so screens behind them can be checked.
+	if ([host isEqualToString:@"tab"]){
+		dispatch_async(dispatch_get_main_queue(), ^{
+			UITabBarController *tabs = (UITabBarController *)self.rootViewController;
+			if ([tabs isKindOfClass:UITabBarController.class])
+				tabs.selectedIndex = MIN((NSUInteger)[arg integerValue],
+										 tabs.viewControllers.count - 1);
 		});
 		return YES;
 	}

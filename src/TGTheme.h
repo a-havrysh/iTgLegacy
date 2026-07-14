@@ -42,6 +42,9 @@ extern NSString *const TGThemeChangedNotification;
 /// received in a chat and saved there. Paths.
 + (NSArray *)availableThemeFiles;
 
+/// Message text size in points. Persisted; 15 is the default.
+@property (nonatomic, assign) CGFloat messageFontSize;
+
 #pragma mark - wallpaper
 
 /// The chat wallpaper, or nil for a plain background. Either a picture the
@@ -67,6 +70,10 @@ extern NSString *const TGThemeChangedNotification;
 
 - (CGFloat)bubbleCornerRadius;
 - (CGFloat)bubbleBorderWidth;       ///< 0 when flat
+
+/// Style a table cell so an imported theme reaches the settings screens too;
+/// grouped tables draw white cells otherwise.
+- (void)styleCell:(UITableViewCell *)cell;
 
 /// Apply the bar styling to a navigation bar.
 - (void)styleNavigationBar:(UINavigationBar *)bar;

@@ -679,6 +679,23 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		extra = @"Message not supported on this client";
 		isService = YES;
 
+	} else if ([ctype isEqualToString:@"messagePoll"]){
+		// Rendered by the chat as a question with its options and their share
+		// of the vote; the flattened form carries them as one block of text.
+		NSDictionary *poll = content[@"poll"];
+		NSMutableString *lines = [NSMutableString stringWithFormat:@"%@\n",
+				poll[@"question"][@"text"] ?: poll[@"question"] ?: @"Poll"];
+		NSInteger total = [poll[@"total_voter_count"] integerValue];
+		for (NSDictionary *option in poll[@"options"]){
+			[lines appendFormat:@"%@  %@%ld%%\n",
+					[option[@"is_chosen"] boolValue] ? @"\u25c9" : @"\u25cb",
+					option[@"text"][@"text"] ?: option[@"text"] ?: @"",
+					(long)[option[@"vote_percentage"] integerValue]];
+		}
+		[lines appendFormat:@"%ld voted", (long)total];
+		extra = lines;
+		isService = NO;
+
 	} else if ([ctype isEqualToString:@"messageLocation"]){
 		NSDictionary *loc = content[@"location"];
 		extra = @"Location";
@@ -741,6 +758,8 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		@"albumId"   : m[@"media_album_id"] ?: @"",
 		// "\U0001F44D 3" per reaction, joined - enough to show under a bubble.
 		@"reactions" : TGReactionSummary(m) ?: @"",
+		// Options of a poll, so tapping one can vote.
+		@"pollOptions" : m[@"content"][@"poll"][@"options"] ?: @[],
 		@"senderId"  : m[@"sender_id"][@"user_id"] ?: @(0),
 		@"lat"       : latitude    ?: [NSNull null],
 		@"lon"       : longitude   ?: [NSNull null],
@@ -1063,6 +1082,15 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 	}];
 }
 
+- (void)votePoll:(int64_t)messageId inChat:(int64_t)chatId options:(NSArray *)optionIds {
+	[self send:@{
+		@"@type"      : @"setPollAnswer",
+		@"chat_id"    : @(chatId),
+		@"message_id" : @(messageId),
+		@"option_ids" : optionIds ?: @[],
+	}];
+}
+
 - (void)reactTo:(int64_t)messageId inChat:(int64_t)chatId emoji:(NSString *)emoji {
 	[self send:@{
 		@"@type"      : @"addMessageReaction",
@@ -1166,6 +1194,150 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 }
 
 #pragma mark - maintenance
+
+#pragma mark - people
+
+- (void)setUser:(int64_t)userId blocked:(BOOL)blocked {
+	[self send:@{
+		@"@type"      : @"setMessageSenderBlockList",
+		@"sender_id"  : @{@"@type" : @"messageSenderUser", @"user_id" : @(userId)},
+		// A null block list is how TDLib spells "not blocked".
+		@"block_list" : blocked ? @{@"@type" : @"blockListMain"} : [NSNull null],
+	}];
+}
+
+- (void)isUserBlocked:(int64_t)userId completion:(void (^)(BOOL))completion {
+	[self request:@{@"@type" : @"getUserFullInfo", @"user_id" : @(userId)}
+	   completion:^(NSDictionary *full){
+		if (completion)
+			completion([full[@"block_list"] isKindOfClass:NSDictionary.class]);
+	}];
+}
+
+- (void)giftsForUser:(int64_t)userId completion:(void (^)(NSArray *))completion {
+	[self request:@{
+		@"@type"    : @"getReceivedGifts",
+		@"owner_id" : @{@"@type" : @"messageSenderUser", @"user_id" : @(userId)},
+		@"offset"   : @"",
+		@"limit"    : @(20),
+	} completion:^(NSDictionary *result){
+		NSMutableArray *out = [NSMutableArray array];
+		for (NSDictionary *entry in result[@"gifts"]){
+			NSDictionary *gift = entry[@"gift"][@"gift"] ?: entry[@"gift"];
+			[out addObject:@{
+				@"title"     : gift[@"title"] ?: @"Gift",
+				@"starCount" : gift[@"star_count"] ?: @0,
+			}];
+		}
+		if (completion) completion(out);
+	}];
+}
+
+- (void)premiumStateWithCompletion:(void (^)(NSString *))completion {
+	[self request:@{@"@type" : @"getPremiumState"} completion:^(NSDictionary *state){
+		NSDictionary *me = self.me;
+		if (![me[@"is_premium"] boolValue]){
+			if (completion) completion(nil);
+			return;
+		}
+		// The state carries what is active; a date is the useful part of it.
+		NSNumber *until = state[@"state"][@"expiration_date"] ?: state[@"expiration_date"];
+		if (!until.doubleValue){
+			if (completion) completion(@"Active");
+			return;
+		}
+		static NSDateFormatter *fmt = nil;
+		if (!fmt){
+			fmt = [[NSDateFormatter alloc] init];
+			[fmt setDateFormat:@"d MMM yyyy"];
+		}
+		if (completion)
+			completion([NSString stringWithFormat:@"Until %@", [fmt stringFromDate:
+					[NSDate dateWithTimeIntervalSince1970:until.doubleValue]]]);
+	}];
+}
+
+#pragma mark - storage
+
+- (void)storageStatsWithCompletion:(void (^)(long long, NSInteger))completion {
+	[self request:@{@"@type" : @"getStorageStatisticsFast"}
+	   completion:^(NSDictionary *stats){
+		if (completion)
+			completion([stats[@"files_size"] longLongValue],
+					   [stats[@"file_count"] integerValue]);
+	}];
+}
+
+- (void)clearCacheOfTypes:(NSArray *)kinds completion:(void (^)(long long))completion {
+	NSMutableArray *types = [NSMutableArray array];
+	for (NSString *kind in kinds)
+		[types addObject:@{@"@type" : kind}];
+
+	// count/ttl/size of -1 mean "no limit of that sort", so only the file
+	// types listed decide what goes.
+	[self request:@{
+		@"@type"          : @"optimizeStorage",
+		@"size"           : @(-1),
+		@"ttl"            : @(-1),
+		@"count"          : @(-1),
+		@"immunity_delay" : @(0),
+		@"file_types"     : types,
+		@"chat_ids"       : @[],
+		@"exclude_chat_ids" : @[],
+		@"return_deleted_file_statistics" : @YES,
+		@"chat_limit"     : @(0),
+	} completion:^(NSDictionary *stats){
+		long long freed = 0;
+		for (NSDictionary *byChat in stats[@"by_chat"])
+			for (NSDictionary *byType in byChat[@"by_file_type"])
+				freed += [byType[@"size"] longLongValue];
+		if (completion) completion(freed);
+	}];
+}
+
+#pragma mark - account
+
+- (void)sessionsWithCompletion:(void (^)(NSArray *))completion {
+	[self request:@{@"@type" : @"getActiveSessions"} completion:^(NSDictionary *result){
+		NSMutableArray *out = [NSMutableArray array];
+		for (NSDictionary *session in result[@"sessions"]){
+			[out addObject:@{
+				@"id"         : session[@"id"] ?: @0,
+				@"name"       : session[@"application_name"] ?: @"",
+				@"platform"   : [NSString stringWithFormat:@"%@ %@",
+						session[@"platform"] ?: @"", session[@"system_version"] ?: @""],
+				@"ip"         : session[@"ip_address"] ?: session[@"ip"] ?: @"",
+				@"isCurrent"  : session[@"is_current"] ?: @NO,
+				@"lastActive" : session[@"last_active_date"] ?: @0,
+			}];
+		}
+		if (completion) completion(out);
+	}];
+}
+
+- (void)terminateSession:(long long)sessionId {
+	[self send:@{@"@type" : @"terminateSession", @"session_id" : @(sessionId)}];
+}
+
+- (void)setName:(NSString *)firstName last:(NSString *)lastName {
+	[self send:@{
+		@"@type"      : @"setName",
+		@"first_name" : firstName ?: @"",
+		@"last_name"  : lastName ?: @"",
+	}];
+}
+
+- (void)setBio:(NSString *)bio {
+	[self send:@{@"@type" : @"setBio", @"bio" : bio ?: @""}];
+}
+
+- (void)setUsername:(NSString *)username completion:(void (^)(BOOL))completion {
+	[self request:@{@"@type" : @"setUsername", @"username" : username ?: @""}
+	   completion:^(NSDictionary *result){
+		if (completion)
+			completion(![result[@"@type"] isEqualToString:@"error"]);
+	}];
+}
 
 - (void)clearLocalDatabase {
 	// Wipes cached chats/messages but keeps the session.

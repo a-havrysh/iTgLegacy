@@ -11,6 +11,8 @@
 @property (nonatomic, strong) NSArray *photos;    // flattened messages
 @property (nonatomic, strong) NSArray *files;
 @property (nonatomic, strong) NSArray *members;
+@property (nonatomic, strong) NSArray *gifts;
+@property (nonatomic, assign) BOOL blocked;
 @property (nonatomic, strong) UIImageView *avatarView;
 @end
 
@@ -33,6 +35,8 @@
 	self.title = @"Info";
 	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
 		self.edgesForExtendedLayout = UIRectEdgeNone;
+	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	self.tableView.separatorColor = [[TGTheme shared] bubbleBorderColour];
 
 	[self buildHeader];
 	[self loadDetails];
@@ -96,6 +100,8 @@
 	[[TGClient shared] userInfo:self.userId completion:^(NSDictionary *user){
 		if (!user) return;
 		NSMutableArray *rows = [NSMutableArray array];
+		if ([user[@"is_premium"] boolValue])
+			[rows addObject:@[@"Telegram Premium", @"\u2b50"]];
 		NSString *username = user[@"usernames"][@"active_usernames"][0];
 		if (username.length)
 			[rows addObject:@[@"username", [@"@" stringByAppendingString:username]]];
@@ -117,6 +123,17 @@
 
 - (void)loadMedia {
 	__weak typeof(self) weakSelf = self;
+	if (self.userId){
+		[[TGClient shared] giftsForUser:self.userId completion:^(NSArray *gifts){
+			weakSelf.gifts = gifts;
+			[weakSelf.tableView reloadData];
+		}];
+		[[TGClient shared] isUserBlocked:self.userId completion:^(BOOL blocked){
+			weakSelf.blocked = blocked;
+			[weakSelf.tableView reloadData];
+		}];
+	}
+
 	[[TGClient shared] mediaInChat:self.chatId
 							filter:@"searchMessagesFilterPhotoAndVideo"
 						completion:^(NSArray *messages){
@@ -131,18 +148,26 @@
 	}];
 }
 
+/// Settings has its own navigation controller, and nothing was styling
+/// its bar - an imported theme stopped at the top of the screen.
+- (void)viewWillAppear:(BOOL)animated {
+	[super viewWillAppear:animated];
+	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+}
+
 #pragma mark - table
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-	return 5;   // actions, details, members, photos, files
+	return 6;   // actions, details, members, photos, files, block
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
 	if (section == 0) return self.onSearchTapped ? 1 : 0;
-	if (section == 1) return self.details.count;
+	if (section == 1) return self.details.count + self.gifts.count;
 	if (section == 2) return self.members.count;
 	if (section == 3) return self.photos.count ? 1 : 0;   // a strip of thumbnails
-	return self.files.count;
+	if (section == 4) return self.files.count;
+	return self.userId ? 1 : 0;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
@@ -150,6 +175,8 @@
 		return [NSString stringWithFormat:@"%lu members", (unsigned long)self.members.count];
 	if (section == 3 && self.photos.count)
 		return [NSString stringWithFormat:@"%lu photos and videos", (unsigned long)self.photos.count];
+	if (section == 1 && self.gifts.count)
+		return [NSString stringWithFormat:@"%lu gifts received", (unsigned long)self.gifts.count];
 	if (section == 4 && self.files.count)
 		return [NSString stringWithFormat:@"%lu files", (unsigned long)self.files.count];
 	return nil;
@@ -168,6 +195,7 @@
 		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
 									  reuseIdentifier:@"row"];
 	cell.selectionStyle = UITableViewCellSelectionStyleNone;
+	[[TGTheme shared] styleCell:cell];
 
 	if (indexPath.section == 0){
 		cell.textLabel.text = @"Search in chat";
@@ -179,9 +207,16 @@
 
 	cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
 	if (indexPath.section == 1){
-		NSArray *pair = self.details[indexPath.row];
-		cell.textLabel.text = pair[0];
-		cell.detailTextLabel.text = pair[1];
+		if (indexPath.row < (NSInteger)self.details.count){
+			NSArray *pair = self.details[indexPath.row];
+			cell.textLabel.text = pair[0];
+			cell.detailTextLabel.text = pair[1];
+		} else {
+			NSDictionary *gift = self.gifts[indexPath.row - self.details.count];
+			cell.textLabel.text = gift[@"title"];
+			cell.detailTextLabel.text = [NSString stringWithFormat:@"%@ \u2b50",
+					gift[@"starCount"]];
+		}
 	} else if (indexPath.section == 2){
 		NSDictionary *member = self.members[indexPath.row];
 		int64_t userId = [member[@"id"] longLongValue];
@@ -192,6 +227,12 @@
 		cell.imageView.image = [TGIcons avatarWithInitials:
 				(name.length ? [name substringToIndex:1].uppercaseString : @"?")
 													  size:32 colourId:userId];
+	} else if (indexPath.section == 5){
+		cell.textLabel.text = self.blocked ? @"Unblock user" : @"Block user";
+		cell.textLabel.textColor = [UIColor colorWithRed:0.8f green:0.1f blue:0.1f alpha:1];
+		cell.detailTextLabel.text = nil;
+		cell.imageView.image = nil;
+		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
 	} else {
 		NSDictionary *m = self.files[indexPath.row];
 		cell.textLabel.text = m[@"docName"] ?: @"File";
@@ -205,8 +246,15 @@
 /// which iOS 6 has but this screen does not need.
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
-	if (indexPath.section == 0 && self.onSearchTapped)
+	if (indexPath.section == 0 && self.onSearchTapped){
 		self.onSearchTapped();
+		return;
+	}
+	if (indexPath.section == 5 && self.userId){
+		[[TGClient shared] setUser:self.userId blocked:!self.blocked];
+		self.blocked = !self.blocked;
+		[tableView reloadData];
+	}
 }
 
 - (UITableViewCell *)photoStripCell:(UITableView *)tableView {

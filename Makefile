@@ -68,6 +68,9 @@ INCLUDES  := -I$(ROOT_DIR)/include \
 
 DEFINES   :=
 
+WEBP_ARMV7 := -F$(ROOT_DIR)/src -framework WebP
+WEBP_ARM64 := -lwebp
+
 FRAMEWORKS := -framework UIKit -framework Foundation -framework QuickLook \
               -framework SystemConfiguration -framework CoreGraphics \
               -framework QuartzCore -framework MediaPlayer \
@@ -75,7 +78,7 @@ FRAMEWORKS := -framework UIKit -framework Foundation -framework QuickLook \
               -framework CoreMedia -framework AddressBook \
               -framework AddressBookUI -framework MobileCoreServices \
               -framework CoreLocation -framework MapKit \
-              -F$(ROOT_DIR)/src -framework WebP
+
 
 # TDLib is loaded at runtime from libtdjson.dylib, never linked.
 TDLIB_LIBS :=
@@ -93,6 +96,8 @@ APP_SRC_M := \
 	src/RootViewController.m \
 	src/main.m \
 	src/TGClient.m \
+	src/TGDevice.m \
+	src/TGCapabilities.m \
 	src/TGTheme.m \
 	src/TGThemeFile.m \
 	src/TGIcons.m \
@@ -103,6 +108,10 @@ APP_SRC_M := \
 	src/TGTopicsViewController.m \
 	src/TGForwardPicker.m \
 	src/TGProfileViewController.m \
+	src/TGEditProfileViewController.m \
+	src/TGDeviceViewController.m \
+	src/TGStorageViewController.m \
+	src/TGSessionsViewController.m \
 	src/TGSettingsViewController.m \
 	src/TGVoiceDecoder.m \
 	src/TGVoiceRecorder.m \
@@ -184,7 +193,7 @@ ipa-armv7: $(MACHOFIX) $(ARMV7_ALL_OBJS)
 	@mkdir -p "$(IPA_DIR)" "$(BUILD_DIR)/armv7/app/iTgLegacy.app"
 	$(CC) -arch armv7 -isysroot $(SDK_PATH) $(MIN_IOS) -Wl,-dead_strip -ObjC -Wl,-pagezero_size,0x1000 \
 		-L$(BUILD_DIR)/armv7/libs -L$(BUILD_DIR)/armv7/tdlib/lib -L$(ROOT_DIR)/src/opus/lib \
-		$(ARMV7_ALL_OBJS) $(FRAMEWORKS) $(TDLIB_LIBS) $(DEPS_LIBS) -o "$(BUILD_DIR)/armv7/app/iTgLegacy.app/iTgLegacy"
+		$(ARMV7_ALL_OBJS) $(FRAMEWORKS) $(WEBP_ARMV7) $(TDLIB_LIBS) $(DEPS_LIBS) -o "$(BUILD_DIR)/armv7/app/iTgLegacy.app/iTgLegacy"
 	@cp -f "$(ROOT_DIR)/src/Info.plist" "$(BUILD_DIR)/armv7/app/iTgLegacy.app/Info.plist" 2>/dev/null || true
 	@cp -rf "$(ROOT_DIR)/images/"* "$(BUILD_DIR)/armv7/app/iTgLegacy.app/" 2>/dev/null || true
 	@# TDLib rides along as its own image: statically linked it pushes __TEXT
@@ -204,7 +213,7 @@ ipa-arm64: $(ARM64_ALL_OBJS)
 	@mkdir -p "$(IPA_DIR)" "$(BUILD_DIR)/arm64/app/iTgLegacy.app"
 	$(CC) -arch arm64 -isysroot $(SDK_PATH) $(MIN_IOS) -Wl,-dead_strip \
 		-L$(BUILD_DIR)/arm64/libs -L$(BUILD_DIR)/arm64/tdlib/lib -L$(ROOT_DIR)/src/opus/lib \
-		$(ARM64_ALL_OBJS) $(FRAMEWORKS) $(TDLIB_LIBS) $(DEPS_LIBS) -o "$(BUILD_DIR)/arm64/app/iTgLegacy.app/iTgLegacy"
+		$(ARM64_ALL_OBJS) $(FRAMEWORKS) $(WEBP_ARM64) $(TDLIB_LIBS) $(DEPS_LIBS) -o "$(BUILD_DIR)/arm64/app/iTgLegacy.app/iTgLegacy"
 	@cp -f "$(ROOT_DIR)/src/Info.plist" "$(BUILD_DIR)/arm64/app/iTgLegacy.app/Info.plist" 2>/dev/null || true
 	@cp -rf "$(ROOT_DIR)/images/"* "$(BUILD_DIR)/arm64/app/iTgLegacy.app/" 2>/dev/null || true
 	@codesign -s - --force "$(BUILD_DIR)/arm64/app/iTgLegacy.app" 2>/dev/null || true

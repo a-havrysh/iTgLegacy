@@ -66,7 +66,7 @@ this does not.
 | *in progress* | Send stickers | a strip of recent stickers; animated ones stand in as their emoji |
 | | Sticker sets: install, browse, favourites | |
 | *in progress* | Photo viewer | zooms; no swipe between photos |
-| | Polls and quizzes | not rendered |
+| **done** | Polls | question, options and shares; tap to vote |
 
 ## 3 · Chats and groups
 
@@ -76,7 +76,7 @@ this does not.
 | **done** | Service messages | joins, leaves, renames, pins, creation |
 | **done** | Forum topics | opens on a topic list |
 | **done** | Member count in the header | |
-| **done** | Profile screen | avatar, username, phone, members, shared media |
+| **done** | Profile screen | avatar, username, phone, members, shared media, gifts, premium |
 | **done** | Sender avatars in groups | Telegram's own placeholder palette and mapping |
 | **done** | Start a new chat from contacts | |
 | *in progress* | Channels | read, join, mute; comments and reactions do not |
@@ -88,7 +88,8 @@ this does not.
 | | Invite links | |
 | | Create a group or channel | join only |
 | | Create and manage forum topics | read only |
-| | Block a user, report | |
+| **done** | Block a user | from the profile |
+| | Report a user or chat | |
 | **done** | Online status and last seen | in the header of a private chat |
 
 ## 4 · Presentation
@@ -121,58 +122,77 @@ this does not.
 
 ---
 
-## 6 · Not attempted, and why
+## 6 · The rest of Telegram
 
-These are the rest of the difference against Telegram for iOS. They are listed
-so the gap is honest, not because each is scheduled.
+Everything the official client has that this one does not, with what it would
+take. TDLib here is 1.8.66, so the API for nearly all of it is present - the
+question is almost always the screen, not the protocol.
 
-| Feature | Why it is not here |
+### Reachable, not yet written
+
+| Feature | TDLib | Note |
+|---|---|---|
+| Stories: view a contact's | `getChatActiveStories`, `getStory` | photo and video stories would draw; the ring in the chat list is the bigger job |
+| Premium status of the account | `getPremiumState` | what is active and until when |
+| Auto-download rules | `setAutoDownloadSettings` | worth having on 3G, which is what this phone has |
+| Per-chat notification settings | `setChatNotificationSettings` | mute is all that is wired |
+| Privacy settings | `getUserPrivacySettingRules` | last seen, photo, calls, forwards |
+| Two-step verification setup | `setPassword`, `getPasswordState` | login already handles an existing password |
+| Create a group or channel | `createNewBasicGroupChat` etc. | joining works |
+| Invite links | `createChatInviteLink` | |
+| Admin actions, member management | `setChatMemberStatus` | the member list is read-only |
+| Forum topic creation | `createForumTopic` | topics are read-only |
+| Scheduled and silent sending | `messageSendOptions` | |
+| Message multi-select | - | one at a time |
+| Sticker sets: browse, install | `getInstalledStickerSets` | only the recents strip exists |
+| GIF panel and saved GIFs | `getSavedAnimations` | |
+| Emoji and reaction pickers | `getAvailableReactions` | one hardcoded thumbs up |
+| Chat folder editing | `createChatFolder` | folders are read-only |
+| Archive settings, auto-delete timers | `setChatMessageAutoDeleteTime` | |
+| Story posting | `sendStory` | |
+
+### Blocked by the machine, not by the API
+
+Every device falls into one of four tiers, and a feature asks for a tier
+rather than for a version. `Settings > This device` lists them with what each
+one is waiting for, so a missing button is explained rather than mysterious.
+
+| Tier | Devices | What it means |
+|---|---|---|
+| Vintage | iPhone 3GS, 4, iPod touch 4 | armv7, 256-512MB, never went past iOS 7 |
+| Legacy | iPhone 4S, 5, 5c, iPod touch 5 | armv7, up to iOS 10 |
+| Modern | iPhone 5s, 6, 6 Plus, iPod touch 6 | the first 64-bit chips, all stopped at 12.5 |
+| Full | iPhone 6s and later | 2GB and up |
+
+What each gated feature waits for:
+
+| Feature | Gate | Where it turns on |
+|---|---|---|
+| Custom emoji, animated emoji status | `canAnimateInline` | any 64-bit device (A7+); one Lottie frame per message is more than an A5 has |
+| Mini apps, bot web apps, payment pages | `canRunWebApps` | iOS 9 and up, where WKWebView's JavaScript is usable |
+| Multiple accounts | `canHoldMultipleAccounts` | 1GB of RAM or more; each TDLib client costs tens of megabytes |
+| Video calls | `canEncodeVideoCall` | A7 and up, for a hardware H.264 encoder driven live |
+| Voice calls | - | not a hardware limit: libtgvoip ran on an iPhone 4S when Telegram shipped calls in 2017. It is a build problem - libtgvoip has to be compiled for armv7 and wired to TDLib's call signalling |
+
+The 64-bit build now links (`make ipa-arm64`); what it still lacks is an arm64
+`libtdjson.dylib`, which is the same script run for a second architecture. The
+WebP framework in the tree carries an arm64 slice, but its archive members were
+written by an `ar` that did not align them, so the link is fed a repacked copy.
+
+### Blocked by not being the official app
+
+No iOS version changes these.
+
+| Feature | Why |
 |---|---|
-| Voice and video calls | needs WebRTC; no build of it exists for armv7 iOS 7, and the A5 could not run video anyway |
-| Stories | a large surface built on features above (viewer, reactions, privacy) |
-| Premium: emoji status, custom emoji, boosts | custom emoji alone needs an animated-emoji renderer per message |
-| Secret chats | disabled at TDLib init; end-to-end key handling on top of everything else |
-| Bots: inline mode, keyboards, web apps | inline results and web apps need a browser surface |
-| Live locations | a background location task the OS will kill |
-| Payments, gifts, Stars | payment sheets and a web view |
+| Buying Premium, Stars or gifts | payment goes through StoreKit or Fragment; an app with no App Store receipt can complete neither. Sending a gift from a balance you already have is a plain API call and could be added |
+| Push notifications | the push has to be delivered to a bundle id whose APNs certificate Telegram's servers hold, which is the official app's |
 | Translation and transcription | server features gated behind Premium |
-| Multiple accounts | one TDLib client instance today |
-| Chat archive settings, auto-delete timers | small, just not written |
-| Privacy and security settings, sessions, blocked users | a settings tree of its own |
-| Auto-download and storage settings | TDLib exposes them; no UI |
-| Notification settings per chat | mute is all there is |
-| Username, bio and profile photo editing | the profile screen is read-only |
 
----
+### Just not written yet
 
-## Known constraints
-
-These are not scheduling decisions, they are properties of the target.
-
-**The linker is broken for armv7.** `ld-27036.1` drops the Thumb bit from every
-function pointer it writes into data — ObjC method IMPs, C++ vtables, `LC_MAIN`
-— and will not emit branch islands past 16 MB. `tools/machofix.c` repairs the
-binary after every link. An older Xcode with a working `-ld_classic` would make
-it unnecessary.
-
-**No thread-local storage on armv7 Darwin.** clang rejects `__thread` for the
-target outright, so TDLib runs single-threaded (`TD_THREAD_UNSUPPORTED`). That
-is a performance ceiling on an A5, not a bug to fix.
-
-**Apple's map tiles no longer serve iOS 7.** `MKMapSnapshotter` returns neither
-an image nor an error. Locations use a drawn card; a real map needs
-self-fetched tiles over plain HTTP, since TLS negotiation with modern servers
-mostly fails on this system.
-
-**No VP9 decoder.** `.webm` stickers and videos will stay static thumbnails
-unless one is ported.
-
----
-
-## Next up
-
-1. Reply, forward and edit — the three most-noticed gaps in daily use.
-2. Recording voice notes; the decode half is already done.
-3. Skeuomorphic icon set, so the theme switch covers chrome and not just colour.
-4. Archive and chat folders — TDLib already sends both.
-5. Verify on real iOS 6 hardware.
+| Feature | Why |
+|---|---|
+| Secret chats | disabled at TDLib init - one flag - plus the key-verification screens |
+| Live locations | a background location task iOS 7 will kill, but iOS 9 and up have the right API |
+| Group calls and live streams | as with calls, plus mixing |

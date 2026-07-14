@@ -5,6 +5,7 @@ NSString *const TGThemeChangedNotification = @"TGThemeChanged";
 
 static NSString *const kStyleKey  = @"themeStyle";
 static NSString *const kImportKey = @"themeImportPath";
+static NSString *const kFontKey   = @"messageFontSize";
 
 @implementation TGTheme {
 	NSDictionary *_imported;
@@ -35,6 +36,18 @@ static NSString *const kImportKey = @"themeImportPath";
 	if (imported.length)
 		[self loadImportedTheme:[TGTheme pathInDocuments:imported]];
 	return self;
+}
+
+- (CGFloat)messageFontSize {
+	CGFloat stored = [NSUserDefaults.standardUserDefaults floatForKey:kFontKey];
+	return stored > 0 ? stored : 15.0f;
+}
+
+- (void)setMessageFontSize:(CGFloat)size {
+	[NSUserDefaults.standardUserDefaults setFloat:size forKey:kFontKey];
+	[NSUserDefaults.standardUserDefaults synchronize];
+	[[NSNotificationCenter defaultCenter] postNotificationName:TGThemeChangedNotification
+													   object:nil];
 }
 
 #pragma mark - imported themes
@@ -112,6 +125,18 @@ static NSString *const kImportKey = @"themeImportPath";
 
 - (BOOL)isFlat {
 	return _style == TGThemeStyleFlat;
+}
+
+- (void)styleCell:(UITableViewCell *)cell {
+	if (!_imported)
+		return;
+	cell.backgroundColor = [self listBackgroundColour];
+	cell.textLabel.textColor = [self primaryTextColour];
+	cell.detailTextLabel.textColor = [self secondaryTextColour];
+	// A selection flash of white would be worse than none.
+	UIView *selected = [[UIView alloc] init];
+	selected.backgroundColor = [self bubbleTheirsColour];
+	cell.selectedBackgroundView = selected;
 }
 
 - (void)styleTabBar:(UITabBar *)bar {

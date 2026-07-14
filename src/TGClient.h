@@ -220,6 +220,9 @@ typedef NS_ENUM(NSInteger, TGConnectionState) {
 
 /// Send a local image file. TDLib uploads it and echoes the message back.
 - (void)sendPhotoAtPath:(NSString *)path toChat:(int64_t)chatId;
+/// Vote in a poll. `optionIds` are indexes into the poll's options.
+- (void)votePoll:(int64_t)messageId inChat:(int64_t)chatId options:(NSArray *)optionIds;
+
 /// React to a message with an emoji, as the current user.
 - (void)reactTo:(int64_t)messageId inChat:(int64_t)chatId emoji:(NSString *)emoji;
 
@@ -246,6 +249,41 @@ typedef NS_ENUM(NSInteger, TGConnectionState) {
 /// Resolve an address-book phone number to a Telegram user, or nil.
 /// Same dictionary shape as -contactsWithCompletion:.
 - (void)userForPhone:(NSString *)phone completion:(void (^)(NSDictionary *user))completion;
+
+#pragma mark - storage
+
+/// Cache size on disk, in bytes, and the file count. TDLib's fast variant:
+/// the full one walks every file and takes seconds on this hardware.
+- (void)storageStatsWithCompletion:(void (^)(long long bytes, NSInteger files))completion;
+
+/// Delete cached media. `kinds` are TDLib FileType names, or nil for all of
+/// them; `completion` gets the number of bytes freed.
+- (void)clearCacheOfTypes:(NSArray *)kinds completion:(void (^)(long long freed))completion;
+
+#pragma mark - account
+
+/// Other devices signed into this account: "id", "name", "platform", "ip",
+/// "isCurrent", "lastActive".
+- (void)sessionsWithCompletion:(void (^)(NSArray *sessions))completion;
+- (void)terminateSession:(long long)sessionId;
+
+/// Change the signed-in user's own name and bio.
+- (void)setName:(NSString *)firstName last:(NSString *)lastName;
+- (void)setBio:(NSString *)bio;
+- (void)setUsername:(NSString *)username completion:(void (^)(BOOL ok))completion;
+
+#pragma mark - people
+
+/// Block or unblock a user.
+- (void)setUser:(int64_t)userId blocked:(BOOL)blocked;
+/// Whether a user is blocked right now.
+- (void)isUserBlocked:(int64_t)userId completion:(void (^)(BOOL blocked))completion;
+
+/// Gifts a user has received and kept on their profile: "title", "starCount".
+- (void)giftsForUser:(int64_t)userId completion:(void (^)(NSArray *gifts))completion;
+
+/// Premium state of the signed-in account: nil when it is not active.
+- (void)premiumStateWithCompletion:(void (^)(NSString *summary))completion;
 
 #pragma mark - maintenance
 

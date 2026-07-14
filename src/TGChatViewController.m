@@ -6,6 +6,7 @@
 #import "TGVoiceRecorder.h"
 #import "TGProfileViewController.h"
 #import "TGThemeFile.h"
+#import "TGCapabilities.h"
 #import <AddressBookUI/AddressBookUI.h>
 #import <CoreLocation/CoreLocation.h>
 #import <AssetsLibrary/AssetsLibrary.h>
@@ -66,7 +67,7 @@ static const CGFloat kImageMax    = 200.0f;
 
 	self.body = [[UILabel alloc] init];
 	self.body.numberOfLines = 0;
-	self.body.font = [UIFont systemFontOfSize:15];
+	self.body.font = [UIFont systemFontOfSize:[TGTheme shared].messageFontSize];
 	self.body.backgroundColor = [UIColor clearColor];
 	[self.bubble addSubview:self.body];
 
@@ -209,7 +210,8 @@ static const CGFloat kImageMax    = 200.0f;
 	self.wallpaperView.clipsToBounds = YES;
 	self.wallpaperView.autoresizingMask = UIViewAutoresizingFlexibleWidth |
 										  UIViewAutoresizingFlexibleHeight;
-	self.wallpaperView.image = [[TGTheme shared] wallpaper];
+	if ([TGCapabilities canShowWallpaper])
+		self.wallpaperView.image = [[TGTheme shared] wallpaper];
 	[self.view addSubview:self.wallpaperView];
 
 	// Hold a message for the things a chat needs and a tap cannot carry.
@@ -786,6 +788,26 @@ static const CGFloat kImageMax    = 200.0f;
 	return NO;
 }
 
+/// Which option was tapped is worked out from the text layout: the question
+/// takes the first line, each option one after it.
+- (void)voteInPoll:(NSDictionary *)m atRow:(NSInteger)row {
+	NSArray *options = m[@"pollOptions"];
+	if (!options.count)
+		return;
+
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Vote"
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:nil];
+	for (NSDictionary *option in options)
+		[sheet addButtonWithTitle:(option[@"text"][@"text"] ?: option[@"text"] ?: @"")];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = kPollSheetTag;
+	self.actionMessage = m;
+	[sheet showInView:self.view];
+}
+
 #pragma mark - download progress
 
 /// A video or a document is megabytes over a 4S connection; without this the
@@ -1103,6 +1125,7 @@ static const CGFloat kImageMax    = 200.0f;
 
 static const NSInteger kAttachSheetTag  = 41;
 static const NSInteger kMessageSheetTag = 42;
+static const NSInteger kPollSheetTag    = 43;
 
 - (void)attachTapped {
 	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
@@ -1120,6 +1143,14 @@ static const NSInteger kMessageSheetTag = 42;
 - (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
 	if (index == sheet.cancelButtonIndex)
 		return;
+
+	if (sheet.tag == kPollSheetTag){
+		[[TGClient shared] votePoll:[self.actionMessage[@"id"] longLongValue]
+							 inChat:self.chatId
+							options:@[@(index)]];
+		self.actionMessage = nil;
+		return;
+	}
 
 	if (sheet.tag == kMessageSheetTag){
 		[self runMessageAction:[sheet buttonTitleAtIndex:index]];
@@ -1320,6 +1351,12 @@ static const NSInteger kMessageSheetTag = 42;
 	[tableView deselectRowAtIndexPath:indexPath animated:NO];
 	NSDictionary *m = self.messages[indexPath.row];
 	NSString *kind = m[@"kind"];
+
+	// A poll answers to a tap on the row: pick the option under the finger.
+	if ([kind isEqualToString:@"messagePoll"]){
+		[self voteInPoll:m atRow:indexPath.row];
+		return;
+	}
 
 	// A reply is unreadable if you cannot get to what it answers.
 	int64_t replyId = [m[@"replyId"] longLongValue];
@@ -1536,7 +1573,8 @@ static const NSInteger kMessageSheetTag = 42;
 	if (!text.length || [text rangeOfString:@"\n"].location != NSNotFound)
 		return NO;
 
-	CGFloat oneLine = [text sizeWithFont:[UIFont systemFontOfSize:15]].width;
+	CGFloat oneLine = [text sizeWithFont:
+			[UIFont systemFontOfSize:[TGTheme shared].messageFontSize]].width;
 	if (oneLine > kBubbleMaxW - 2 * kPadH)
 		return NO;   // it wraps, so there is no short last line to share
 
@@ -1547,7 +1585,7 @@ static const NSInteger kMessageSheetTag = 42;
 	NSString *text = m[@"text"] ?: @"";
 	if (!text.length)
 		return CGSizeZero;
-	return [text sizeWithFont:[UIFont systemFontOfSize:15]
+	return [text sizeWithFont:[UIFont systemFontOfSize:[TGTheme shared].messageFontSize]
 			constrainedToSize:CGSizeMake(kBubbleMaxW - 2 * kPadH, 10000)
 				lineBreakMode:NSLineBreakByWordWrapping];
 }
@@ -1887,7 +1925,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 
 	cell.body.hidden = (body.height == 0);
 	cell.body.numberOfLines = 0;
-	cell.body.font = [UIFont systemFontOfSize:15];
+	cell.body.font = [UIFont systemFontOfSize:[TGTheme shared].messageFontSize];
 	cell.body.text = m[@"text"];
 	cell.body.frame = CGRectMake(kPadH, y, body.width, body.height);
 
