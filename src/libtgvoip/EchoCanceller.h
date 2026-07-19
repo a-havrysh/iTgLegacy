@@ -13,6 +13,10 @@
 #include "MediaStreamItf.h"
 #include "utils.h"
 
+#ifndef TGVOIP_NO_DSP
+#include "api/scoped_refptr.h"
+#endif // TGVOIP_NO_DSP
+
 namespace webrtc{
 	class AudioProcessing;
 	class AudioFrame;
@@ -40,13 +44,13 @@ private:
 	bool enableVAD=false;
 	bool isOn;
 #ifndef TGVOIP_NO_DSP
-	webrtc::AudioProcessing* apm=NULL;
+	rtc::scoped_refptr<webrtc::AudioProcessing> apm;
 	webrtc::AudioFrame* audioFrame=NULL;
 	void RunBufferFarendThread();
 	bool didBufferFarend;
 	Thread* bufferFarendThread;
-	BlockingQueue<Buffer>* farendQueue;
-	BufferPool<960*2, 10> farendBufferPool;
+	BlockingQueue<int16_t*>* farendQueue;
+	BufferPool* farendBufferPool;
 	bool running;
 #endif
 };

@@ -31,11 +31,9 @@ typedef NS_ENUM(int, TGVVideoResolution){
 - (instancetype)initWithDelegate: (id<TGVVideoSourceDelegate>)delegate;
 - (void)sendVideoFrame: (CMSampleBufferRef)buffer;
 - (TGVVideoResolution)maximumSupportedVideoResolution;
-- (void)setVideoRotation: (unsigned int)rotation;
+- (void)setVideoRotation: (int)rotation;
 - (void)pauseStream;
 - (void)resumeStream;
 - (tgvoip::video::VideoSource*)nativeVideoSource;
-
-- (void)_requestFrameRate: (unsigned int)frameRate;
 
 @end

@@ -12,17 +12,22 @@
 #include "threading.h"
 #include "BlockingQueue.h"
 #include "Buffers.h"
-#include "EchoCanceller.h"
 #include "JitterBuffer.h"
 #include "utils.h"
 #include <stdio.h>
 #include <vector>
 #include <memory>
-//#include <atomic>
 
 struct OpusDecoder;
 
 namespace tgvoip{
+
+class EchoCanceller;
+
+namespace effects {
+class AudioEffect;
+} // namespace effects
+
 class OpusDecoder {
 public:
 	TGVOIP_DISALLOW_COPY_AND_ASSIGN(OpusDecoder);
@@ -50,13 +55,12 @@ private:
 	int DecodeNextFrame();
 	::OpusDecoder* dec;
 	::OpusDecoder* ecDec;
-	BlockingQueue<Buffer>* decodedQueue;
-	BufferPool<960*2, 32> bufferPool;
+	BlockingQueue<unsigned char*>* decodedQueue;
+	BufferPool* bufferPool;
 	unsigned char* buffer;
 	unsigned char* lastDecoded;
 	unsigned char* processedBuffer;
 	size_t outputBufferSize;
-	//std::atomic<bool> running;
 	bool running;
     Thread* thread;
 	Semaphore* semaphore;
@@ -75,7 +79,6 @@ private:
 	unsigned int packetsPerFrame;
 	ptrdiff_t remainingDataLen;
 	bool prevWasEC;
-	int16_t prevLastSample;
 };
 }
 

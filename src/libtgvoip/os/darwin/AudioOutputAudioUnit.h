@@ -7,10 +7,6 @@
 #ifndef LIBTGVOIP_AUDIOOUTPUTAUDIOUNIT_H
 #define LIBTGVOIP_AUDIOOUTPUTAUDIOUNIT_H
 
-
-#define TARGET_OS_OSX 0
-
-//#include <atomic>
 #include <AudioUnit/AudioUnit.h>
 #include "../../audio/AudioOutput.h"
 #include "../../utils.h"
@@ -32,7 +28,6 @@ public:
 #endif
 
 private:
-	//std::atomic<bool> isPlaying;
 	bool isPlaying;
 	unsigned char remainingData[10240];
 	size_t remainingDataSize;

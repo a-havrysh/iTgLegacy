@@ -12,9 +12,9 @@
 #include "threading.h"
 #include "utils.h"
 
-using namespace std;
-
 namespace tgvoip{
+
+using namespace std;
 
 template<typename T>
 class BlockingQueue{
@@ -59,7 +59,7 @@ public:
 		return GetInternal();
 	}
 
-	size_t Size(){
+	unsigned int Size(){
 		return queue.size();
 	}
 

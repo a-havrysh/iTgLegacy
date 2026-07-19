@@ -10,12 +10,26 @@
 #import "TGClient.h"
 #import "TGTheme.h"
 #import "TGDeviceViewController.h"
+#import "TGCall.h"
+#import "TGCallViewController.h"
 #import "TGChatViewController.h"
 #import "TGTopicsViewController.h"
 #import <QuartzCore/QuartzCore.h>
 #include <stdio.h>
 
 @implementation AppDelegate
+
+/// An incoming call is the one thing that takes over the screen on its own.
+static void TGWatchForIncomingCalls(void) {
+	[TGCall shared].onStateChanged = ^(TGCallState state){
+		if (state != TGCallStatePending || [TGCall shared].outgoing)
+			return;
+		int64_t userId = [TGCall shared].peerUserId;
+		[TGCallViewController presentForUserId:userId
+										  name:[[TGClient shared] nameForUserId:userId]
+									  outgoing:NO];
+	};
+}
 
 - (BOOL)application:(UIApplication *)application
 		didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
@@ -36,6 +50,7 @@
 	self.log = freopen(log.UTF8String, "a+", stderr);
 
 	NSLog(@"start...");
+	TGWatchForIncomingCalls();
 
 	self.syncData = [[NSOperationQueue alloc] init];
 	self.syncData.maxConcurrentOperationCount = 2;
@@ -197,6 +212,8 @@
  *   itglegacy://stickers         open the sticker strip in the chat on screen
  *   itglegacy://tab/N            switch to tab N (0 chats, 1 contacts, 2 settings)
  *   itglegacy://device           open the Device screen
+ *   itglegacy://call/USERID      place a call, for testing without a tap
+ *   itglegacy://callindex/N      call the other side of the Nth chat
  *   itglegacy://scroll/N         scroll the visible table N points down
  *   itglegacy://phone/+NNN       hand a phone number to TDLib
  *   itglegacy://code/NNNNN       hand the login code to TDLib
@@ -275,6 +292,45 @@
 			vc.hidesBottomBarWhenPushed = YES;
 			[nc pushViewController:vc animated:NO];
 			NSLog(@"open chat index %ld", (long)idx);
+		});
+		return YES;
+	}
+
+	// itglegacy://hangup - end whatever call is up.
+	if ([host isEqualToString:@"hangup"]){
+		dispatch_async(dispatch_get_main_queue(), ^{ [[TGCall shared] hangUp]; });
+		return YES;
+	}
+
+	// itglegacy://callindex/N - the private chat id is the user id, and this
+	// saves having to find one by hand.
+	if ([host isEqualToString:@"callindex"]){
+		dispatch_async(dispatch_get_main_queue(), ^{
+			NSArray *chats = [TGClient shared].chats;
+			NSInteger idx = [arg integerValue];
+			if (idx < 0 || idx >= (NSInteger)chats.count){
+				NSLog(@"callindex %ld out of range", (long)idx);
+				return;
+			}
+			NSDictionary *c = chats[idx];
+			if ([c[@"isGroup"] boolValue]){
+				NSLog(@"callindex %ld is a group", (long)idx);
+				return;
+			}
+			int64_t userId = [c[@"id"] longLongValue];
+			NSLog(@"calling %@ (%lld)", c[@"title"], userId);
+			[TGCallViewController presentForUserId:userId name:c[@"title"] outgoing:YES];
+		});
+		return YES;
+	}
+
+	// itglegacy://call/<user id> - placing a call needs a tap otherwise.
+	if ([host isEqualToString:@"call"]){
+		dispatch_async(dispatch_get_main_queue(), ^{
+			int64_t userId = [arg longLongValue];
+			[TGCallViewController presentForUserId:userId
+											  name:[[TGClient shared] nameForUserId:userId]
+										  outgoing:YES];
 		});
 		return YES;
 	}

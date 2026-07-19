@@ -171,8 +171,8 @@ What each gated feature waits for:
 | Custom emoji, animated emoji status | `canAnimateInline` | any 64-bit device (A7+); one Lottie frame per message is more than an A5 has |
 | Mini apps, bot web apps, payment pages | `canRunWebApps` | iOS 9 and up, where WKWebView's JavaScript is usable |
 | Multiple accounts | `canHoldMultipleAccounts` | 1GB of RAM or more; each TDLib client costs tens of megabytes |
-| Video calls | `canEncodeVideoCall` | A7 and up, for a hardware H.264 encoder driven live |
-| Voice calls | - | not a hardware limit: libtgvoip ran on an iPhone 4S when Telegram shipped calls in 2017. It is a build problem - libtgvoip has to be compiled for armv7 and wired to TDLib's call signalling |
+| Video calls | `canEncodeVideoCall` | not reachable at all today: video rides tgcalls, and TDLib names the field "supported tgcalls versions". tgcalls is WebRTC - C++17, no armv7 build - and iOS 7 has no public VideoToolbox encoder either |
+| Voice calls | - | **built, and the other end refuses.** libtgvoip is vendored, compiles for armv7 and rings the callee - a current Telegram for iOS answers with "cannot accept this call with this version". Modern clients speak only tgcalls; advertising `library_versions: ["2.4.4"]` with layers 65-92, which is exactly what the official clients sent while libtgvoip was theirs, is no longer enough. The call path works end to end between two peers that accept 2.4.4 |
 
 The 64-bit build now links (`make ipa-arm64`); what it still lacks is an arm64
 `libtdjson.dylib`, which is the same script run for a second architecture. The
@@ -195,4 +195,4 @@ No iOS version changes these.
 |---|---|
 | Secret chats | disabled at TDLib init - one flag - plus the key-verification screens |
 | Live locations | a background location task iOS 7 will kill, but iOS 9 and up have the right API |
-| Group calls and live streams | as with calls, plus mixing |
+| Group calls and live streams | the same tgcalls wall as video, plus mixing |

@@ -52,7 +52,9 @@ double CongestionControl::GetMinimumRTT(){
 }
 
 void CongestionControl::PacketAcknowledged(uint32_t seq){
-	for(int i=0;i<100;i++){
+	MutexGuard sync(mutex);
+	int i;
+	for(i=0;i<100;i++){
 		if(inflightPackets[i].seq==seq && inflightPackets[i].sendTime>0){
 			tmpRtt+=(VoIPController::GetCurrentTime()-inflightPackets[i].sendTime);
 			tmpRttCount++;
@@ -69,6 +71,7 @@ void CongestionControl::PacketSent(uint32_t seq, size_t size){
 		return;
 	}
 	lastSentSeq=seq;
+	MutexGuard sync(mutex);
 	double smallestSendTime=INFINITY;
 	tgvoip_congestionctl_packet_t* slot=NULL;
 	int i;
@@ -94,19 +97,10 @@ void CongestionControl::PacketSent(uint32_t seq, size_t size){
 	inflightDataSize+=size;
 }
 
-void CongestionControl::PacketLost(uint32_t seq){
-	for(int i=0;i<100;i++){
-		if(inflightPackets[i].seq==seq && inflightPackets[i].sendTime>0){
-			inflightPackets[i].sendTime=0;
-			inflightDataSize-=inflightPackets[i].size;
-			lossCount++;
-			break;
-		}
-	}
-}
 
 void CongestionControl::Tick(){
 	tickCount++;
+	MutexGuard sync(mutex);
 	if(tmpRttCount>0){
 		rttHistory.Add(tmpRtt/tmpRttCount);
 		tmpRtt=0;

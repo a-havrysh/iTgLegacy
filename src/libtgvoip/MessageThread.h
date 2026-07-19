@@ -9,7 +9,6 @@
 #include "utils.h"
 #include <vector>
 #include <functional>
-#include <atomic>
 
 namespace tgvoip{
 	class MessageThread : public Thread{
@@ -36,13 +35,13 @@ namespace tgvoip{
 		void Run();
 		void InsertMessageInternal(Message& m);
 
-		std::atomic<bool> running;
+		bool running=true;
 		std::vector<Message> queue;
 		Mutex queueMutex;
 		uint32_t lastMessageID=1;
 		bool cancelCurrent=false;
 
-#ifdef _WIN32
+#ifdef TGVOIP_WIN32_THREADING
 		HANDLE event;
 #else
 		pthread_cond_t cond;

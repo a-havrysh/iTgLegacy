@@ -1,4 +1,5 @@
 #import "TGClient.h"
+#import "TGCall.h"
 #import <UIKit/UIKit.h>
 #include <dlfcn.h>
 #include "api_id.h"
@@ -292,6 +293,18 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m);
 			self.onConnectionState(state, text);
 		return;
 	}
+	if ([type isEqualToString:@"updateNewCallSignalingData"]){
+		NSData *data = [[NSData alloc] initWithBase64EncodedString:obj[@"data"] options:0];
+		[[TGCall shared] handleSignalingData:data];
+		return;
+	}
+
+	if ([type isEqualToString:@"updateCall"]){
+		// TDLib signals the call; TGCall owns the audio.
+		[[TGCall shared] handleUpdate:obj[@"call"]];
+		return;
+	}
+
 	if ([type isEqualToString:@"updateFile"]){
 		// Big files take long enough on a 4S that silence looks like a hang.
 		NSDictionary *file = obj[@"file"];

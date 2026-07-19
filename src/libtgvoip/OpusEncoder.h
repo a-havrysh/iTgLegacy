@@ -12,15 +12,20 @@
 #include "threading.h"
 #include "BlockingQueue.h"
 #include "Buffers.h"
-#include "EchoCanceller.h"
 #include "utils.h"
 
 #include <stdint.h>
-#include <atomic>
 
 struct OpusEncoder;
 
 namespace tgvoip{
+
+class EchoCanceller;
+
+namespace effects {
+class AudioEffect;
+} // namespace effects
+
 class OpusEncoder{
 public:
 	TGVOIP_DISALLOW_COPY_AND_ASSIGN(OpusEncoder);
@@ -36,7 +41,7 @@ public:
 	uint32_t GetBitrate();
 	void SetDTX(bool enable);
 	void SetLevelMeter(AudioLevelMeter* levelMeter);
-	void SetCallback(std::function <void(unsigned char*, size_t, unsigned char*, size_t)> callback);
+	void SetCallback(void (*f)(unsigned char*, size_t, unsigned char*, size_t, void*), void* param);
 	void SetSecondaryEncoderEnabled(bool enabled);
 	void SetVadMode(bool vad);
 	void AddAudioEffect(effects::AudioEffect* effect);
@@ -54,16 +59,13 @@ private:
 	::OpusEncoder* enc;
 	::OpusEncoder* secondaryEncoder;
 	unsigned char buffer[4096];
-	//std::atomic<uint32_t> requestedBitrate;
 	uint32_t requestedBitrate;
 	uint32_t currentBitrate;
 	Thread* thread;
-	BlockingQueue<Buffer> queue;
-	BufferPool<960*2, 10> bufferPool;
+	BlockingQueue<unsigned char*> queue;
+	BufferPool bufferPool;
 	EchoCanceller* echoCanceller;
-	//std::atomic<int> complexity;
 	int complexity;
-	//std::atomic<bool> running;
 	bool running;
 	uint32_t frameDuration;
 	int packetLossPercent;
@@ -78,7 +80,8 @@ private:
 
 	bool wasSecondaryEncoderEnabled=false;
 
-	std::function <void(unsigned char*, size_t, unsigned char*, size_t)> callback;
+	void (*callback)(unsigned char*, size_t, unsigned char*, size_t, void*);
+	void* callbackParam;
 };
 }
 

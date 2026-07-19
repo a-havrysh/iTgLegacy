@@ -15,41 +15,11 @@
 #include <stdexcept>
 #include <array>
 #include <limits>
-#include <bitset>
 #include <stddef.h>
 #include "threading.h"
 #include "utils.h"
 
-
 namespace tgvoip{
-	
-	// fix lambda functions
-	//size_t BufferPoolBufSize, BufferPoolBufCount;
-
-	//std::bitset<BUFSIZ> BufferPoolUsedBuffers;
-	//unsigned char* BufferPoolBufferStart;
-	//Mutex BufferPoolMutex;
-
-	//void BufferPoolFreeFn(void *_buf){
-		//assert(_buf!=NULL);
-		//unsigned char* buf=(unsigned char*)_buf;
-		//size_t offset=buf-BufferPoolBufferStart;
-		//assert(offset%BufferPoolBufSize==0);
-		//size_t index=offset/BufferPoolBufSize;
-		//assert(index<BufferPoolBufCount);
-
-		//MutexGuard m(BufferPoolMutex);
-		//assert(BufferPoolUsedBuffers.test(index));
-		//BufferPoolUsedBuffers[index]=0;
-	//}
-
-	//void *BufferPoolResizeFn(void* buf, size_t newSize){
-		//if(newSize>BufferPoolBufSize)
-			//throw std::invalid_argument("newSize>bufferSize");
-		//return buf;
-	//}
-	//
-
 	class Buffer;
 
 	class BufferInputStream{
@@ -96,7 +66,7 @@ namespace tgvoip{
 		size_t GetLength();
 		void Reset();
 		void Rewind(size_t numBytes);
-		
+
 		BufferOutputStream& operator=(BufferOutputStream&& other){
 			if(this!=&other){
 				if(!bufferProvided && buffer)
@@ -118,25 +88,37 @@ namespace tgvoip{
 		bool bufferProvided;
 	};
 
+	class BufferPool{
+	public:
+		TGVOIP_DISALLOW_COPY_AND_ASSIGN(BufferPool);
+		BufferPool(unsigned int size, unsigned int count);
+		~BufferPool();
+		unsigned char* Get();
+		void Reuse(unsigned char* buffer);
+		size_t GetSingleBufferSize();
+		size_t GetBufferCount();
+
+	private:
+		uint64_t usedBuffers;
+		int bufferCount;
+		size_t size;
+		unsigned char* buffers[64];
+		Mutex mutex;
+	};
+
 	class Buffer{
 	public:
 		Buffer(size_t capacity){
-			if(capacity>0){
+			if(capacity>0)
 				data=(unsigned char *) malloc(capacity);
-				if(!data)
-					throw std::bad_alloc();
-			}else{
+			else
 				data=NULL;
-			}
 			length=capacity;
 		};
 		TGVOIP_DISALLOW_COPY_AND_ASSIGN(Buffer); // use Buffer::CopyOf to copy contents explicitly
-		//Buffer(Buffer&& other) noexcept {
-		Buffer(Buffer&& other) {
+		Buffer(Buffer&& other) noexcept {
 			data=other.data;
 			length=other.length;
-			freeFn=other.freeFn;
-			reallocFn=other.reallocFn;
 			other.data=NULL;
 		};
 		Buffer(BufferOutputStream&& stream){
@@ -149,29 +131,17 @@ namespace tgvoip{
 			length=0;
 		}
 		~Buffer(){
-			if(data){
-				if(freeFn)
-					freeFn(data);
-				else
-					free(data);
-			}
+			if(data)
+				free(data);
 			data=NULL;
-			length=0;
 		};
 		Buffer& operator=(Buffer&& other){
 			if(this!=&other){
-				if(data){
-					if(freeFn)
-						freeFn(data);
-					else
-						free(data);
-				}
+				if(data)
+					free(data);
 				data=other.data;
 				length=other.length;
-				freeFn=other.freeFn;
-				reallocFn=other.reallocFn;
 				other.data=NULL;
-				other.length=0;
 			}
 			return *this;
 		}
@@ -204,47 +174,23 @@ namespace tgvoip{
 			memcpy(data+dstOffset, ptr, count);
 		}
 		void Resize(size_t newSize){
-			if(reallocFn)
-				data=(unsigned char *) reallocFn(data, newSize);
-			else
-				data=(unsigned char *) realloc(data, newSize);
-			if(!data)
-				throw std::bad_alloc();
+			data=(unsigned char *) realloc(data, newSize);
 			length=newSize;
 		}
 		size_t Length() const{
 			return length;
 		}
 		bool IsEmpty() const{
-			return length==0 || !data;
+			return length==0;
 		}
 		static Buffer CopyOf(const Buffer& other){
-			if(other.IsEmpty())
-				return Buffer();
 			Buffer buf(other.length);
 			buf.CopyFrom(other, other.length);
 			return buf;
 		}
-		static Buffer CopyOf(const Buffer& other, size_t offset, size_t length){
-			if(offset+length>other.Length())
-				throw std::out_of_range("offset+length out of bounds");
-			Buffer buf(length);
-			buf.CopyFrom(other, length, offset);
-			return buf;
-		}
-		static Buffer Wrap(unsigned char* data, size_t size, std::function<void(void*)> freeFn, std::function<void*(void*, size_t)> reallocFn){
-			Buffer b=Buffer();
-			b.data=data;
-			b.length=size;
-			b.freeFn=freeFn;
-			b.reallocFn=reallocFn;
-			return b;
-		}
 	private:
 		unsigned char* data;
 		size_t length;
-		std::function<void(void*)> freeFn;
-		std::function<void*(void*, size_t)> reallocFn;
 	};
 
 	template <typename T, size_t size, typename AVG_T=T> class HistoricBuffer{
@@ -253,15 +199,15 @@ namespace tgvoip{
 			std::fill(data.begin(), data.end(), (T)0);
 		}
 
-		AVG_T Average() const {
+		AVG_T Average(){
 			AVG_T avg=(AVG_T)0;
-			for(T i:data){
+			for(T& i:data){
 				avg+=i;
 			}
 			return avg/(AVG_T)size;
 		}
 
-		AVG_T Average(size_t firstN) const {
+		AVG_T Average(size_t firstN){
 			AVG_T avg=(AVG_T)0;
 			for(size_t i=0;i<firstN;i++){
 				avg+=(*this)[i];
@@ -269,10 +215,10 @@ namespace tgvoip{
 			return avg/(AVG_T)firstN;
 		}
 
-		AVG_T NonZeroAverage() const {
+		AVG_T NonZeroAverage(){
 			AVG_T avg=(AVG_T)0;
 			int nonZeroCount=0;
-			for(T i:data){
+			for(T& i:data){
 				if(i!=0){
 					nonZeroCount++;
 					avg+=i;
@@ -288,18 +234,18 @@ namespace tgvoip{
 			offset=(offset+1)%size;
 		}
 
-		T Min() const {
+		T Min(){
 			T min=std::numeric_limits<T>::max();
-			for(T i:data){
+			for(T& i:data){
 				if(i<min)
 					min=i;
 			}
 			return min;
 		}
 
-		T Max() const {
+		T Max(){
 			T max=std::numeric_limits<T>::min();
-			for(T i:data){
+			for(T& i:data){
 				if(i>max)
 					max=i;
 			}
@@ -311,15 +257,6 @@ namespace tgvoip{
 			offset=0;
 		}
 
-		T operator[](size_t i) const {
-			assert(i<size);
-			// [0] should return the most recent entry, [1] the one before it, and so on
-			ptrdiff_t _i=offset-i-1;
-			if(_i<0)
-				_i=size+_i;
-			return data[_i];
-		}
-
 		T& operator[](size_t i){
 			assert(i<size);
 			// [0] should return the most recent entry, [1] the one before it, and so on
@@ -329,70 +266,12 @@ namespace tgvoip{
 			return data[_i];
 		}
 
-		size_t Size() const {
+		size_t Size(){
 			return size;
 		}
 	private:
 		std::array<T, size> data;
 		ptrdiff_t offset=0;
-	};
-
-	template <size_t bufSize, size_t bufCount> class BufferPool{
-	public:
-		TGVOIP_DISALLOW_COPY_AND_ASSIGN(BufferPool);
-		BufferPool(){
-			bufferStart=(unsigned char*)malloc(bufSize*bufCount);
-			if(!bufferStart)
-				throw std::bad_alloc();
-		};
-		~BufferPool(){
-			assert(usedBuffers.none());
-			free(bufferStart);
-		};
-		Buffer Get(){
-
-			// fix lambda functions
-			//BufferPoolBufSize = bufSize;
-			//BufferPoolBufCount = bufCount;
-			//BufferPoolBufferStart = bufferStart;
-
-			//BufferPoolUsedBuffers = usedBuffers;
-			//BufferPoolMutex = mutex;
-			//
-			
-			//void (*freeFn)(void *) = BufferPoolFreeFn;
-			auto freeFn=[this](void* _buf){
-								assert(_buf!=NULL);
-				unsigned char* buf=(unsigned char*)_buf;
-				size_t offset=buf-bufferStart;
-				assert(offset%bufSize==0);
-				size_t index=offset/bufSize;
-				assert(index<bufCount);
-
-				MutexGuard m(mutex);
-				assert(usedBuffers.test(index));
-				usedBuffers[index]=0;
-			};
-			//void *(*resizeFn)(void*,size_t) = BufferPoolResizeFn;
-			auto resizeFn=[](void* buf, size_t newSize)->void*{
-				if(newSize>bufSize)
-					throw std::invalid_argument("newSize>bufferSize");
-				return buf;
-			};
-			MutexGuard m(mutex);
-			for(size_t i=0;i<bufCount;i++){
-				if(!usedBuffers[i]){
-					usedBuffers[i]=1;
-					return Buffer::Wrap(bufferStart+(bufSize*i), bufSize, freeFn, resizeFn);
-				}
-			}
-			throw std::bad_alloc();
-		}
-
-	private:
-		std::bitset<bufCount> usedBuffers;
-		unsigned char* bufferStart;
-		Mutex mutex;
 	};
 }
 

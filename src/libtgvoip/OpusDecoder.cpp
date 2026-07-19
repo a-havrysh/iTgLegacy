@@ -5,15 +5,16 @@
 //
 
 #include "OpusDecoder.h"
+#include "EchoCanceller.h"
 #include "audio/Resampler.h"
 #include "logging.h"
 #include <assert.h>
 #include <math.h>
 #include <algorithm>
-#ifdef HAVE_CONFIG_H
+#if TGVOIP_INCLUDE_OPUS_PACKAGE
 #include <opus/opus.h>
 #else
-#include "opus.h"
+#include <opus.h>
 #endif
 
 #include "VoIPController.h"
@@ -40,10 +41,12 @@ tgvoip::OpusDecoder::OpusDecoder(MediaStreamItf* dst, bool isAsync, bool needEC)
 void tgvoip::OpusDecoder::Initialize(bool isAsync, bool needEC){
 	async=isAsync;
 	if(async){
-		decodedQueue=new BlockingQueue<Buffer>(33);
+		decodedQueue=new BlockingQueue<unsigned char*>(33);
+		bufferPool=new BufferPool(PACKET_SIZE, 32);
 		semaphore=new Semaphore(32, 0);
 	}else{
 		decodedQueue=NULL;
+		bufferPool=NULL;
 		semaphore=NULL;
 	}
 	dec=opus_decoder_create(48000, 1, NULL);
@@ -65,7 +68,6 @@ void tgvoip::OpusDecoder::Initialize(bool isAsync, bool needEC){
 	remainingDataLen=0;
 	processedBuffer=NULL;
 	prevWasEC=false;
-	prevLastSample=0;
 }
 
 tgvoip::OpusDecoder::~OpusDecoder(){
@@ -73,6 +75,8 @@ tgvoip::OpusDecoder::~OpusDecoder(){
 	if(ecDec)
 		opus_decoder_destroy(ecDec);
 	free(buffer);
+	if(bufferPool)
+		delete bufferPool;
 	if(decodedQueue)
 		delete decodedQueue;
 	if(semaphore)
@@ -106,10 +110,11 @@ size_t tgvoip::OpusDecoder::HandleCallback(unsigned char *data, size_t len){
 		}
 		assert(outputBufferSize==len && "output buffer size is supposed to be the same throughout callbacks");
 		if(len==PACKET_SIZE){
-			Buffer lastDecoded=decodedQueue->GetBlocking();
-			if(lastDecoded.IsEmpty())
+			lastDecoded=(unsigned char *) decodedQueue->GetBlocking();
+			if(!lastDecoded)
 				return 0;
-			memcpy(data, *lastDecoded, PACKET_SIZE);
+			memcpy(data, lastDecoded, PACKET_SIZE);
+			bufferPool->Reuse(lastDecoded);
 			semaphore->Release();
 			if(silentPacketCount>0){
 				silentPacketCount--;
@@ -179,19 +184,19 @@ void tgvoip::OpusDecoder::RunThread(){
 				LOGI("==== decoder exiting ====");
 				return;
 			}
-			try{
-				Buffer buf=bufferPool.Get();
+			unsigned char *buf=bufferPool->Get();
+			if(buf){
 				if(remainingDataLen>0){
 					for(effects::AudioEffect*& effect:postProcEffects){
 						effect->Process(reinterpret_cast<int16_t*>(processedBuffer+(PACKET_SIZE*i)), 960);
 					}
-					buf.CopyFrom(processedBuffer+(PACKET_SIZE*i), 0, PACKET_SIZE);
+					memcpy(buf, processedBuffer+(PACKET_SIZE*i), PACKET_SIZE);
 				}else{
 					//LOGE("Error decoding, result=%d", size);
-					memset(*buf, 0, PACKET_SIZE);
+					memset(buf, 0, PACKET_SIZE);
 				}
-				decodedQueue->Put(std::move(buf));
-			}catch(std::bad_alloc& x){
+				decodedQueue->Put(buf);
+			}else{
 				LOGW("decoder: no buffers left!");
 			}
 		}
@@ -229,7 +234,6 @@ int tgvoip::OpusDecoder::DecodeNextFrame(){
 			}
 		}
 		prevWasEC=isEC;
-		prevLastSample=decodeBuffer[size-1];
 	}else{ // do packet loss concealment
 		consecutiveLostPackets++;
 		if(consecutiveLostPackets>2 && enableDTX){

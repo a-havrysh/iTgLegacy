@@ -24,7 +24,7 @@ void tgvoip_log_file_write_header(FILE* file);
 
 //#define _LOG_WRAP(...) __BASE_FILE__":"LSTR_INT(__LINE__)": "__VA_ARGS__
 #define _LOG_WRAP(...) __VA_ARGS__
-#define TAG "tgvoip"
+#define TAG "tg-voip-native"
 #define LOGV(...) {__android_log_print(ANDROID_LOG_VERBOSE, TAG, _LOG_WRAP(__VA_ARGS__)); tgvoip_log_file_printf('V', __VA_ARGS__);}
 #define LOGD(...) {__android_log_print(ANDROID_LOG_DEBUG, TAG, _LOG_WRAP(__VA_ARGS__)); tgvoip_log_file_printf('D', __VA_ARGS__);}
 #define LOGI(...) {__android_log_print(ANDROID_LOG_INFO, TAG, _LOG_WRAP(__VA_ARGS__)); tgvoip_log_file_printf('I', __VA_ARGS__);}
@@ -41,7 +41,7 @@ void tgvoip_log_file_write_header(FILE* file);
 #define LOGW(msg, ...) {__tgvoip_call_tglog("W/tgvoip: " msg, ##__VA_ARGS__); tgvoip_log_file_printf('W', msg, ##__VA_ARGS__);}
 #define LOGE(msg, ...) {__tgvoip_call_tglog("E/tgvoip: " msg, ##__VA_ARGS__); tgvoip_log_file_printf('E', msg, ##__VA_ARGS__);}
 
-#elif defined(_WIN32) && defined(_DEBUG)
+#elif defined(_WIN32) && !defined(__MINGW32__) && defined(_DEBUG)
 
 #include <windows.h>
 #include <stdio.h>
@@ -58,21 +58,13 @@ void tgvoip_log_file_write_header(FILE* file);
 
 #include <stdio.h>
 
-#ifndef TGVOIP_NO_STDOUT_LOGS
-#ifndef TGVOIP_NO_STDOUT_COLOR
-#define _TGVOIP_LOG_PRINT(verb, color, msg, ...) {printf("\033[%dm%c/tgvoip: " msg "\033[0m\n", color, verb, ##__VA_ARGS__); tgvoip_log_file_printf(verb, msg, ##__VA_ARGS__);}
-#else
-#define _TGVOIP_LOG_PRINT(verb, color, msg, ...) {printf("%c/tgvoip: " msg "\n", verb, ##__VA_ARGS__); tgvoip_log_file_printf(verb, msg, ##__VA_ARGS__);}
-#endif
-#else
-#define _TGVOIP_LOG_PRINT(verb, color, msg, ...) {tgvoip_log_file_printf(verb, msg, ##__VA_ARGS__);}
-#endif
+#define _TGVOIP_LOG_PRINT(verb, msg, ...) {printf("%c/tgvoip: " msg "\n", verb, ##__VA_ARGS__); tgvoip_log_file_printf(verb, msg, ##__VA_ARGS__);}
 
-#define LOGV(msg, ...) _TGVOIP_LOG_PRINT('V', 90, msg, ##__VA_ARGS__)
-#define LOGD(msg, ...) _TGVOIP_LOG_PRINT('D', 37, msg, ##__VA_ARGS__)
-#define LOGI(msg, ...) _TGVOIP_LOG_PRINT('I', 94, msg, ##__VA_ARGS__)
-#define LOGW(msg, ...) _TGVOIP_LOG_PRINT('W', 93, msg, ##__VA_ARGS__)
-#define LOGE(msg, ...) _TGVOIP_LOG_PRINT('E', 91, msg, ##__VA_ARGS__)
+#define LOGV(msg, ...) _TGVOIP_LOG_PRINT('V', msg, ##__VA_ARGS__)
+#define LOGD(msg, ...) _TGVOIP_LOG_PRINT('D', msg, ##__VA_ARGS__)
+#define LOGI(msg, ...) _TGVOIP_LOG_PRINT('I', msg, ##__VA_ARGS__)
+#define LOGW(msg, ...) _TGVOIP_LOG_PRINT('W', msg, ##__VA_ARGS__)
+#define LOGE(msg, ...) _TGVOIP_LOG_PRINT('E', msg, ##__VA_ARGS__)
 
 #endif
 

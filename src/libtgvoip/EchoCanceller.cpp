@@ -5,8 +5,9 @@
 //
 
 #ifndef TGVOIP_NO_DSP
-#include "webrtc_dsp/modules/audio_processing/include/audio_processing.h"
-#include "webrtc_dsp/api/audio/audio_frame.h"
+#include "modules/audio_processing/include/audio_processing.h"
+#include "modules/audio_processing/include/audio_frame_proxies.h"
+#include "api/audio/audio_frame.h"
 #endif
 
 #include "EchoCanceller.h"
@@ -27,12 +28,14 @@ EchoCanceller::EchoCanceller(bool enableAEC, bool enableNS, bool enableAGC){
 	this->enableNS=enableNS;
 	isOn=true;
 
+#ifdef TGVOIP_USE_DESKTOP_DSP_BUNDLED
 	webrtc::Config extraConfig;
-#ifdef TGVOIP_USE_DESKTOP_DSP
 	extraConfig.Set(new webrtc::DelayAgnostic(true));
-#endif
 
 	apm=webrtc::AudioProcessingBuilder().Create(extraConfig);
+#else
+	apm=webrtc::AudioProcessingBuilder().Create();
+#endif
 
 	webrtc::AudioProcessing::Config config;
 	config.echo_canceller.enabled = enableAEC;
@@ -43,28 +46,35 @@ EchoCanceller::EchoCanceller(bool enableAEC, bool enableNS, bool enableAGC){
 #endif
 	config.high_pass_filter.enabled = enableAEC;
 	config.gain_controller2.enabled = enableAGC;
+
+#ifdef TGVOIP_USE_DESKTOP_DSP_BUNDLED
 	apm->ApplyConfig(config);
-	
-	webrtc::NoiseSuppression::Level nsLevel;
+
+	using Level = webrtc::NoiseSuppression::Level;
+#else
+	using Level = webrtc::AudioProcessing::Config::NoiseSuppression::Level;
+#endif
+	Level nsLevel;
 #ifdef __APPLE__
 	switch(ServerConfig::GetSharedInstance()->GetInt("webrtc_ns_level_vpio", 0)){
 #else
 	switch(ServerConfig::GetSharedInstance()->GetInt("webrtc_ns_level", 2)){
 #endif
 		case 0:
-			nsLevel=webrtc::NoiseSuppression::Level::kLow;
+			nsLevel=Level::kLow;
 			break;
 		case 1:
-			nsLevel=webrtc::NoiseSuppression::Level::kModerate;
+			nsLevel=Level::kModerate;
 			break;
 		case 3:
-			nsLevel=webrtc::NoiseSuppression::Level::kVeryHigh;
+			nsLevel=Level::kVeryHigh;
 			break;
 		case 2:
 		default:
-			nsLevel=webrtc::NoiseSuppression::Level::kHigh;
+			nsLevel=Level::kHigh;
 			break;
 	}
+#ifdef TGVOIP_USE_DESKTOP_DSP_BUNDLED
 	apm->noise_suppression()->set_level(nsLevel);
 	apm->noise_suppression()->Enable(enableNS);
 	if(enableAGC){
@@ -74,16 +84,27 @@ EchoCanceller::EchoCanceller(bool enableAEC, bool enableNS, bool enableAGC){
 		apm->gain_control()->set_compression_gain_db(ServerConfig::GetSharedInstance()->GetInt("webrtc_agc_compression_gain", 20));
 	}
 	apm->voice_detection()->set_likelihood(webrtc::VoiceDetection::Likelihood::kVeryLowLikelihood);
+#else
+	config.noise_suppression.level = nsLevel;
+	config.noise_suppression.enabled = enableNS;
+	if(enableAGC){
+		config.gain_controller1.mode = webrtc::AudioProcessing::Config::GainController1::kAdaptiveDigital;
+		config.gain_controller1.target_level_dbfs = ServerConfig::GetSharedInstance()->GetInt("webrtc_agc_target_level", 9);
+		config.gain_controller1.enable_limiter = ServerConfig::GetSharedInstance()->GetBoolean("webrtc_agc_enable_limiter", true);
+		config.gain_controller1.compression_gain_db = ServerConfig::GetSharedInstance()->GetInt("webrtc_agc_compression_gain", 20);
+	}
+	apm->ApplyConfig(config);
+#endif
 
 	audioFrame=new webrtc::AudioFrame();
 	audioFrame->samples_per_channel_=480;
 	audioFrame->sample_rate_hz_=48000;
 	audioFrame->num_channels_=1;
 
-	farendQueue=new BlockingQueue<Buffer>(11);
+	farendQueue=new BlockingQueue<int16_t*>(11);
+	farendBufferPool=new BufferPool(960*2, 10);
 	running=true;
 	bufferFarendThread=new Thread(std::bind(&EchoCanceller::RunBufferFarendThread, this));
-	bufferFarendThread->SetName("VoipECBufferFarEnd");
 	bufferFarendThread->Start();
 
 #else
@@ -94,11 +115,9 @@ EchoCanceller::EchoCanceller(bool enableAEC, bool enableNS, bool enableAGC){
 
 EchoCanceller::~EchoCanceller(){
 #ifndef TGVOIP_NO_DSP
-	delete apm;
+	apm = nullptr;
 	delete audioFrame;
-	farendQueue->Put(Buffer());
-	bufferFarendThread->Join();
-	delete bufferFarendThread;
+	delete farendBufferPool;
 #endif
 }
 
@@ -112,15 +131,13 @@ void EchoCanceller::Stop(){
 
 
 void EchoCanceller::SpeakerOutCallback(unsigned char* data, size_t len){
-    if(len!=960*2 || !enableAEC || !isOn)
+	if(len!=960*2 || !enableAEC || !isOn)
 		return;
 #ifndef TGVOIP_NO_DSP
-    try{
-    	Buffer buf=farendBufferPool.Get();
-    	buf.CopyFrom(data, 0, 960*2);
-    	farendQueue->Put(std::move(buf));
-	}catch(std::bad_alloc& x){
-    	LOGW("Echo canceller can't keep up with real time");
+	int16_t* buf=(int16_t*)farendBufferPool->Get();
+	if(buf){
+		memcpy(buf, data, 960*2);
+		farendQueue->Put(buf);
 	}
 #endif
 }
@@ -132,17 +149,15 @@ void EchoCanceller::RunBufferFarendThread(){
 	frame.sample_rate_hz_=48000;
 	frame.samples_per_channel_=480;
 	while(running){
-		Buffer buf=farendQueue->GetBlocking();
-		if(buf.IsEmpty()){
-			LOGI("Echo canceller buffer farend thread exiting");
-			return;
+		int16_t* samplesIn=farendQueue->GetBlocking();
+		if(samplesIn){
+			memcpy(frame.mutable_data(), samplesIn, 480*2);
+			webrtc::ProcessReverseAudioFrame(apm.get(), &frame);
+			memcpy(frame.mutable_data(), samplesIn+480, 480*2);
+			webrtc::ProcessReverseAudioFrame(apm.get(), &frame);
+			didBufferFarend=true;
+			farendBufferPool->Reuse(reinterpret_cast<unsigned char*>(samplesIn));
 		}
-		int16_t* samplesIn=(int16_t*)*buf;
-		memcpy(frame.mutable_data(), samplesIn, 480*2);
-		apm->ProcessReverseStream(&frame);
-		memcpy(frame.mutable_data(), samplesIn+480, 480*2);
-		apm->ProcessReverseStream(&frame);
-		didBufferFarend=true;
 	}
 }
 #endif
@@ -161,17 +176,25 @@ void EchoCanceller::ProcessInput(int16_t* inOut, size_t numSamples, bool& hasVoi
 
 	memcpy(audioFrame->mutable_data(), inOut, 480*2);
 	if(enableAEC)
-    	apm->set_stream_delay_ms(delay);
-	apm->ProcessStream(audioFrame);
+		apm->set_stream_delay_ms(delay);
+	webrtc::ProcessAudioFrame(apm.get(), audioFrame);
 	if(enableVAD)
-    	hasVoice=apm->voice_detection()->stream_has_voice();
+#ifdef TGVOIP_USE_DESKTOP_DSP_BUNDLED
+		hasVoice=apm->voice_detection()->stream_has_voice();
+#else
+		hasVoice= apm->GetStatistics().voice_detected.value_or(false);
+#endif
 	memcpy(inOut, audioFrame->data(), 480*2);
 	memcpy(audioFrame->mutable_data(), inOut+480, 480*2);
 	if(enableAEC)
-    	apm->set_stream_delay_ms(delay);
-	apm->ProcessStream(audioFrame);
+		apm->set_stream_delay_ms(delay);
+	webrtc::ProcessAudioFrame(apm.get(), audioFrame);
 	if(enableVAD){
-    	hasVoice=hasVoice || apm->voice_detection()->stream_has_voice();
+#ifdef TGVOIP_USE_DESKTOP_DSP_BUNDLED
+		hasVoice=hasVoice || apm->voice_detection()->stream_has_voice();
+#else
+		hasVoice=hasVoice || apm->GetStatistics().voice_detected.value_or(false);
+#endif
 	}
 	memcpy(inOut+480, audioFrame->data(), 480*2);
 #endif
@@ -193,7 +216,9 @@ void EchoCanceller::SetAECStrength(int strength){
 void EchoCanceller::SetVoiceDetectionEnabled(bool enabled){
 	enableVAD=enabled;
 #ifndef TGVOIP_NO_DSP
+#ifdef TGVOIP_USE_DESKTOP_DSP_BUNDLED
 	apm->voice_detection()->Enable(enabled);
+#endif
 #endif
 }
 

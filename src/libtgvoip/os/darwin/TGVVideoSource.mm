@@ -15,7 +15,7 @@
 
 - (instancetype)initWithDelegate: (id<TGVVideoSourceDelegate>)delegate{
 	self=[super init];
-	nativeSource=new tgvoip::video::VideoToolboxEncoderSource(self);
+	nativeSource=new tgvoip::video::VideoToolboxEncoderSource();
 	self->delegate=delegate;
 	return self;
 }
@@ -29,29 +29,23 @@
 }
 
 - (TGVVideoResolution)maximumSupportedVideoResolution{
-	return tgvoip::video::VideoToolboxEncoderSource::SupportsFullHD() ? TGVVideoResolution1080 : TGVVideoResolution720;
+	return TGVVideoResolution1080;
 }
 
-- (void)setVideoRotation: (unsigned int)rotation{
-	nativeSource->SetRotation(rotation);
+- (void)setVideoRotation: (int)rotation{
+
 }
 
 - (void)pauseStream{
-	nativeSource->SetStreamPaused(true);
+
 }
 
 - (void)resumeStream{
-	nativeSource->SetStreamPaused(false);
+
 }
 
 - (tgvoip::video::VideoSource*)nativeVideoSource{
 	return nativeSource;
-}
-
-- (void)_requestFrameRate: (unsigned int)frameRate{
-	dispatch_async(dispatch_get_main_queue(), ^{
-		[delegate setFrameRate:frameRate];
-	});
 }
 
 @end

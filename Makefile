@@ -78,15 +78,55 @@ FRAMEWORKS := -framework UIKit -framework Foundation -framework QuickLook \
               -framework CoreMedia -framework AddressBook \
               -framework AddressBookUI -framework MobileCoreServices \
               -framework CoreLocation -framework MapKit \
+              -framework CoreTelephony \
 
 
 # TDLib is loaded at runtime from libtdjson.dylib, never linked.
 TDLIB_LIBS :=
-DEPS_LIBS  := -lopus -lstdc++ -lz
+# libcrypto: TDLib brings its own copy inside the dylib, but libtgvoip is
+# linked into the app and needs AES and SHA here.
+DEPS_LIBS  := -lopus -lstdc++ -lz -lcrypto
 
 # ------------------------------------------------------------------------------
 # Source Files
 # ------------------------------------------------------------------------------
+# libtgvoip - voice calls. Public domain (UNLICENSE), vendored because there is
+# no armv7 iOS build of it anywhere. The WebRTC DSP is left out: TGVOIP_NO_DSP
+# drops echo cancellation and noise suppression, which an A5 cannot afford and
+# whose sources this fork does not fully carry anyway.
+VOIP_SRC_CXX := \
+	src/libtgvoip/VoIPController.cpp \
+	src/libtgvoip/VoIPServerConfig.cpp \
+	src/libtgvoip/logging.cpp \
+	src/libtgvoip/json11.cpp \
+	src/libtgvoip/video/ScreamCongestionController.cpp \
+	src/libtgvoip/JitterBuffer.cpp \
+	src/libtgvoip/OpusEncoder.cpp \
+	src/libtgvoip/OpusDecoder.cpp \
+	src/libtgvoip/NetworkSocket.cpp \
+	src/libtgvoip/CongestionControl.cpp \
+	src/libtgvoip/EchoCanceller.cpp \
+	src/libtgvoip/MessageThread.cpp \
+	src/libtgvoip/Buffers.cpp \
+	src/libtgvoip/BlockingQueue.cpp \
+	src/libtgvoip/MediaStreamItf.cpp \
+	src/libtgvoip/PacketReassembler.cpp \
+	src/libtgvoip/audio/AudioIO.cpp \
+	src/libtgvoip/audio/AudioInput.cpp \
+	src/libtgvoip/audio/AudioOutput.cpp \
+	src/libtgvoip/audio/Resampler.cpp \
+	src/libtgvoip/os/darwin/AudioUnitIO.cpp \
+	src/libtgvoip/os/darwin/AudioInputAudioUnit.cpp \
+	src/libtgvoip/os/darwin/AudioOutputAudioUnit.cpp \
+	src/libtgvoip/os/posix/NetworkSocketPosix.cpp
+
+VOIP_SRC_MM := \
+	src/libtgvoip/os/darwin/DarwinSpecific.mm \
+	src/TGCall.mm
+
+VOIP_FLAGS := -DTGVOIP_NO_DSP -DWEBRTC_POSIX -DTGVOIP_USE_CUSTOM_CRYPTO \
+              -I$(ROOT_DIR)/src/libtgvoip -Wno-everything
+
 LIBTG_SRC_C :=
 
 LIBTG_SRC_CXX :=
@@ -107,6 +147,7 @@ APP_SRC_M := \
 	src/TGContactsViewController.m \
 	src/TGTopicsViewController.m \
 	src/TGForwardPicker.m \
+	src/TGCallViewController.m \
 	src/TGProfileViewController.m \
 	src/TGEditProfileViewController.m \
 	src/TGDeviceViewController.m \
@@ -114,6 +155,9 @@ APP_SRC_M := \
 	src/TGSessionsViewController.m \
 	src/TGSettingsViewController.m \
 	src/TGVoiceDecoder.m \
+	src/TGCallStun.m \
+	src/TGCallMessages.m \
+	src/TGCallReflector.m \
 	src/TGVoiceRecorder.m \
 	src/opusenc/opusenc.m \
 	src/UIImage+WebP.m \
@@ -121,6 +165,7 @@ APP_SRC_M := \
 
 APP_SRC_C := \
 	src/tlv_polyfill.c \
+	src/TGCallCrypto.c \
 	src/opusfile/internal.c \
 	src/opusfile/opusfile.c \
 	src/opusfile/info.c \
@@ -135,8 +180,11 @@ APP_SRC_C := \
 ARMV7_OBJ_DIR := $(BUILD_DIR)/armv7/obj
 ARMV7_LIBTG_OBJS := $(patsubst %.c,$(ARMV7_OBJ_DIR)/%.o,$(LIBTG_SRC_C)) \
                     $(patsubst %.cpp,$(ARMV7_OBJ_DIR)/%.o,$(LIBTG_SRC_CXX))
+ARMV7_VOIP_OBJS  := $(patsubst %.cpp,$(ARMV7_OBJ_DIR)/%.o,$(VOIP_SRC_CXX)) \
+                    $(patsubst %.mm,$(ARMV7_OBJ_DIR)/%.o,$(VOIP_SRC_MM))
 ARMV7_APP_OBJS   := $(patsubst %.m,$(ARMV7_OBJ_DIR)/%.o,$(APP_SRC_M)) \
-                    $(patsubst %.c,$(ARMV7_OBJ_DIR)/%.o,$(APP_SRC_C))
+                    $(patsubst %.c,$(ARMV7_OBJ_DIR)/%.o,$(APP_SRC_C)) \
+                    $(ARMV7_VOIP_OBJS)
 ARMV7_ALL_OBJS   := $(ARMV7_LIBTG_OBJS) $(ARMV7_APP_OBJS)
 
 # Object mapping for arm64
@@ -233,6 +281,14 @@ $(ARMV7_OBJ_DIR)/%.o: %.c
 $(ARMV7_OBJ_DIR)/%.o: %.m
 	@mkdir -p $(dir $@)
 	$(CC) $(OBJCFLAGS_ARMV7) -c $< -o $@
+
+$(ARMV7_OBJ_DIR)/src/libtgvoip/%.o: src/libtgvoip/%.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(subst -std=c++11,-std=c++14,$(CXXFLAGS_ARMV7)) $(VOIP_FLAGS) -c $< -o $@
+
+$(ARMV7_OBJ_DIR)/%.o: %.mm
+	@mkdir -p $(dir $@)
+	$(CXX) $(subst -std=c++11,-std=c++14,$(CXXFLAGS_ARMV7)) $(VOIP_FLAGS) -fobjc-arc -c $< -o $@
 
 $(ARMV7_OBJ_DIR)/%.o: %.cpp
 	@mkdir -p $(dir $@)

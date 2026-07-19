@@ -11,9 +11,4 @@
 TypeName(const TypeName&) = delete;   \
 void operator=(TypeName&) = delete
 
-#define TGVOIP_MOVE_ONLY(TypeName) \
-TGVOIP_DISALLOW_COPY_AND_ASSIGN(TypeName); \
-TypeName(TypeName&&) = default; \
-TypeName& operator=(TypeName&&) = default
-
 #endif /* LIBTGVOIP_UTILS_H */

@@ -2,6 +2,7 @@
 #import "TGClient.h"
 #import "TGTheme.h"
 #import "TGIcons.h"
+#import "TGCallViewController.h"
 
 @interface TGProfileViewController ()
 @property (nonatomic, assign) int64_t chatId;
@@ -162,7 +163,7 @@
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-	if (section == 0) return self.onSearchTapped ? 1 : 0;
+	if (section == 0) return (self.onSearchTapped ? 1 : 0) + (self.userId ? 1 : 0);
 	if (section == 1) return self.details.count + self.gifts.count;
 	if (section == 2) return self.members.count;
 	if (section == 3) return self.photos.count ? 1 : 0;   // a strip of thumbnails
@@ -196,6 +197,14 @@
 									  reuseIdentifier:@"row"];
 	cell.selectionStyle = UITableViewCellSelectionStyleNone;
 	[[TGTheme shared] styleCell:cell];
+
+	if (indexPath.section == 0 && indexPath.row == 1){
+		cell.textLabel.text = @"Call";
+		cell.detailTextLabel.text = nil;
+		cell.textLabel.textColor = [[TGTheme shared] accentColour];
+		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+		return cell;
+	}
 
 	if (indexPath.section == 0){
 		cell.textLabel.text = @"Search in chat";
@@ -246,6 +255,12 @@
 /// which iOS 6 has but this screen does not need.
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	if (indexPath.section == 0 && indexPath.row == 1 && self.userId){
+		[TGCallViewController presentForUserId:self.userId
+										  name:self.name
+									  outgoing:YES];
+		return;
+	}
 	if (indexPath.section == 0 && self.onSearchTapped){
 		self.onSearchTapped();
 		return;

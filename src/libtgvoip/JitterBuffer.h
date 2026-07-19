@@ -42,11 +42,11 @@ public:
 
 private:
 	struct jitter_packet_t{
-        Buffer buffer=Buffer();
-		size_t size;
-		uint32_t timestamp;
-		bool isEC;
-		double recvTimeDiff;
+		unsigned char* buffer = nullptr;
+		size_t size = 0;
+		uint32_t timestamp = 0;
+		bool isEC = false;
+		double recvTimeDiff = 0.;
 	};
 	static size_t CallbackIn(unsigned char* data, size_t len, void* param);
 	static size_t CallbackOut(unsigned char* data, size_t len, void* param);
@@ -54,7 +54,7 @@ private:
 	int GetInternal(jitter_packet_t* pkt, int offset, bool advance);
 	void Advance();
 
-	BufferPool<JITTER_SLOT_SIZE, JITTER_SLOT_COUNT> bufferPool;
+	BufferPool bufferPool;
 	Mutex mutex;
 	jitter_packet_t slots[JITTER_SLOT_COUNT];
 	int64_t nextTimestamp=0;

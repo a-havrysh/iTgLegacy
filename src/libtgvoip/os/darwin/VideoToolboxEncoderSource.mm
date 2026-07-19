@@ -5,7 +5,6 @@
 //
 
 #import <Foundation/Foundation.h>
-#import "TGVVideoSource.h"
 #include "VideoToolboxEncoderSource.h"
 #include "../../PrivateDefines.h"
 #include "../../logging.h"
@@ -15,8 +14,8 @@ using namespace tgvoip::video;
 
 #define CHECK_ERR(err, msg) if(err!=noErr){LOGE("VideoToolboxEncoder: " msg " failed: %d", err); return;}
 
-VideoToolboxEncoderSource::VideoToolboxEncoderSource(TGVVideoSource* parent){
-	objcObject=parent;
+VideoToolboxEncoderSource::VideoToolboxEncoderSource(){
+
 }
 
 VideoToolboxEncoderSource::~VideoToolboxEncoderSource(){
@@ -78,14 +77,6 @@ void VideoToolboxEncoderSource::Reset(uint32_t codec, int maxResolution){
 			height=360;
 			break;
 	}
-	unsigned int targetFrameRate=15;
-	if(codec==CODEC_HEVC && maxResolution>=INIT_VIDEO_RES_720)
-		targetFrameRate=30;
-	if(lastFrameRate!=targetFrameRate){
-		lastFrameRate=targetFrameRate;
-		[objcObject _requestFrameRate:targetFrameRate];
-	}
-	
 	OSStatus status=VTCompressionSessionCreate(NULL, width, height, codecType, NULL, NULL, NULL, [](void *outputCallbackRefCon, void *sourceFrameRefCon, OSStatus status, VTEncodeInfoFlags infoFlags, CMSampleBufferRef sampleBuffer){
 		reinterpret_cast<VideoToolboxEncoderSource*>(outputCallbackRefCon)->EncoderCallback(status, sampleBuffer, infoFlags);
 	}, this, &session);
@@ -96,13 +87,15 @@ void VideoToolboxEncoderSource::Reset(uint32_t codec, int maxResolution){
 	LOGD("Created VTCompressionSession");
 	status=VTSessionSetProperty(session, kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse);
 	CHECK_ERR(status, "VTSessionSetProperty(AllowFrameReordering)");
-	int64_t interval=5;
+	int64_t interval=15;
 	status=VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, (__bridge CFTypeRef)@(interval));
 	CHECK_ERR(status, "VTSessionSetProperty(MaxKeyFrameIntervalDuration)");
 	SetEncoderBitrateAndLimit(lastBitrate);
 	status=VTSessionSetProperty(session, kVTCompressionPropertyKey_RealTime, kCFBooleanTrue);
 	CHECK_ERR(status, "VTSessionSetProperty(RealTime)");
 	LOGD("VTCompressionSession initialized");
+
+	// TODO change camera frame rate dynamically based on resolution + codec
 }
 
 void VideoToolboxEncoderSource::RequestKeyFrame(){
@@ -132,7 +125,7 @@ void VideoToolboxEncoderSource::EncodeFrame(CMSampleBufferRef frame){
 		frameProps=CFDictionaryCreate(NULL, keys, values, 1, NULL, NULL);
 		keyframeRequested=false;
 	}
-	
+
 	//CMVideoDimensions size=CMVideoFormatDescriptionGetDimensions(format);
 	//LOGD("EncodeFrame %d x %d", size.width, size.height);
 	CVImageBufferRef imgBuffer=CMSampleBufferGetImageBuffer(frame);
@@ -160,9 +153,6 @@ void VideoToolboxEncoderSource::EncoderCallback(OSStatus status, CMSampleBufferR
 		LOGW("Empty CMSampleBuffer");
 		return;
 	}
-	if(!callback){
-		return;
-	}
 	const uint8_t startCode[]={0, 0, 0, 1};
 	if(needUpdateStreamParams){
 		LOGI("VideoToolboxEncoder: Updating stream params");
@@ -183,6 +173,7 @@ void VideoToolboxEncoderSource::EncoderCallback(OSStatus status, CMSampleBufferR
 				csd.push_back(std::move(b));
 			}
 		}else if(codec==CODEC_HEVC){
+			LOGD("here1");
 			BufferOutputStream csdBuf(1024);
 			for(size_t i=0;i<3;i++){
 				const uint8_t* ps=NULL;
@@ -211,7 +202,7 @@ void VideoToolboxEncoderSource::EncoderCallback(OSStatus status, CMSampleBufferR
 	}else{
 		frameFlags |= VIDEO_FRAME_FLAG_KEYFRAME;
 	}
-	
+
 	Buffer frame(len);
 	CMBlockBufferCopyDataBytes(blockBuffer, 0, len, *frame);
 	uint32_t offset=0;
@@ -221,15 +212,15 @@ void VideoToolboxEncoderSource::EncoderCallback(OSStatus status, CMSampleBufferR
 		frame.CopyFrom(startCode, offset, 4);
 		offset+=nalLen+4;
 	}
-	callback(std::move(frame), frameFlags, rotation);
-	
+	callback(std::move(frame), frameFlags);
+
 	//LOGV("EncoderCallback: %u bytes total", (unsigned int)len);
 }
 
 void VideoToolboxEncoderSource::SetEncoderBitrateAndLimit(uint32_t bitrate){
 	OSStatus status=VTSessionSetProperty(session, kVTCompressionPropertyKey_AverageBitRate, (__bridge CFTypeRef)@(bitrate));
 	CHECK_ERR(status, "VTSessionSetProperty(AverageBitRate)");
-	
+
 	int64_t dataLimitValue=(int64_t)(bitrate/8);
 	CFNumberRef bytesPerSecond=CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt64Type, &dataLimitValue);
 	int64_t oneValue=1;
@@ -241,15 +232,6 @@ void VideoToolboxEncoderSource::SetEncoderBitrateAndLimit(uint32_t bitrate){
 	CFRelease(one);
 	CFRelease(limits);
 	CHECK_ERR(status, "VTSessionSetProperty(DataRateLimits");
-}
-
-bool VideoToolboxEncoderSource::SupportsFullHD(){
-	std::vector<uint32_t> encoders=GetAvailableEncoders();
-	return std::find(encoders.begin(), encoders.end(), CODEC_HEVC)!=encoders.end();
-}
-
-void VideoToolboxEncoderSource::SetStreamPaused(bool paused){
-	
 }
 
 std::vector<uint32_t> VideoToolboxEncoderSource::GetAvailableEncoders(){
