@@ -23,6 +23,7 @@
 @property (nonatomic, readonly) uint32_t localTag;
 /// Set once the other side's four bytes are known.
 @property (nonatomic, assign) uint32_t remoteTag;
+@property (nonatomic, readonly) uint16_t port;
 
 /// Main queue, for every datagram that arrives.
 @property (nonatomic, copy) void (^onPacket)(NSData *payload);
@@ -30,5 +31,9 @@
 - (BOOL)start;
 - (void)stop;
 - (void)sendPayload:(NSData *)payload;
+
+/// Send to one particular tag. The peer runs a port per network interface,
+/// each with its own four bytes, so an answer belongs to whichever one asked.
+- (void)sendPayload:(NSData *)payload toTag:(uint32_t)tag;
 
 @end

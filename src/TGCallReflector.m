@@ -9,10 +9,12 @@
 
 @interface TGCallReflector ()
 @property (nonatomic, strong) NSString *host;
-@property (nonatomic, assign) uint16_t port;
+
 @property (nonatomic, strong) NSData *peerTag;
 @property (nonatomic, assign) int socketHandle;
 @property (nonatomic, strong) NSThread *reader;
+@property (nonatomic, assign) uint32_t observedTag;
+@property (nonatomic, assign) uint32_t lastDestination;
 @property (nonatomic, strong) NSTimer *pinger;
 @end
 
@@ -98,13 +100,45 @@
 	[self send:packet];
 }
 
+- (void)sendPayload:(NSData *)payload toTag:(uint32_t)tag {
+	NSData *destination = [self tagFor:tag];
+	if (!destination)
+		return;
+
+	NSMutableData *packet = [NSMutableData dataWithData:destination];
+	[packet appendBytes:&_localTag length:4];
+
+	uint32_t size = CFSwapInt32HostToBig((uint32_t)payload.length);
+	[packet appendBytes:&size length:4];
+	[packet appendData:payload];
+
+	while (packet.length % 4)
+		[packet appendBytes:"\0" length:1];
+
+	[self send:packet];
+}
+
 - (void)sendPayload:(NSData *)payload {
-	if (!self.remoteTag){
-		NSLog(@"TGCallReflector: the peer's tag is not known yet");
+	// Answer whoever actually wrote to us: the tag in the header of the last
+	// packet is the truth, and a tag read out of a candidate can be stale or
+	// belong to a different reflector.
+	uint32_t destination = self.observedTag ?: self.remoteTag;
+	if (!destination){
+		NSLog(@"TGCallReflector: nothing has come from the peer yet");
 		return;
 	}
+	if (destination != self.lastDestination){
+		self.lastDestination = destination;
+		NSLog(@"TGCallReflector: addressing tag %u", destination);
+	}
 
-	NSMutableData *packet = [NSMutableData dataWithData:[self tagFor:self.remoteTag]];
+	NSData *tag = [self tagFor:destination];
+	if (!tag){
+		NSLog(@"TGCallReflector: no usable tag, peer tag is %lu bytes",
+				(unsigned long)self.peerTag.length);
+		return;
+	}
+	NSMutableData *packet = [NSMutableData dataWithData:tag];
 	[packet appendBytes:&_localTag length:4];
 
 	uint32_t size = CFSwapInt32HostToBig((uint32_t)payload.length);
@@ -132,6 +166,14 @@
 			break;
 
 		NSData *packet = [NSData dataWithBytes:buffer length:got];
+		// A relayed packet carries the sender's four bytes right after the
+		// sixteen-byte tag; that is the address to answer.
+		if (got > 20){
+			uint32_t sender = 0;
+			memcpy(&sender, buffer + 16, 4);
+			if (sender && sender != self.localTag)
+				self.observedTag = sender;
+		}
 		dispatch_async(dispatch_get_main_queue(), ^{
 			NSLog(@"TGCallReflector: %ld bytes in", (long)got);
 			if (self.onPacket)

@@ -2,6 +2,8 @@
 #import "TGClient.h"
 #import "TGCallReflector.h"
 #import "TGCallMessages.h"
+#import "TGCallIce.h"
+#import "TGCallStun.h"
 #include "TGCallCrypto.h"
 #import <AVFoundation/AVFoundation.h>
 
@@ -109,7 +111,8 @@ static void TGInstallCrypto(void) {
 @property (nonatomic, assign) BOOL muted;
 @property (nonatomic, strong) NSDate *establishedAt;
 @property (nonatomic, strong) NSString *endReason;
-@property (nonatomic, strong) TGCallReflector *reflector;
+@property (nonatomic, strong) TGCallReflector *reflector;      // the chosen one
+@property (nonatomic, strong) NSMutableArray *reflectors;      // all of them
 @property (nonatomic, strong) NSData *callKey;
 @property (nonatomic, strong) NSString *localUfrag;
 @property (nonatomic, strong) NSString *localPwd;
@@ -118,8 +121,12 @@ static void TGInstallCrypto(void) {
 @property (nonatomic, assign) int64_t reflectorId;
 @property (nonatomic, assign) uint32_t signallingSeq;
 @property (nonatomic, assign) BOOL sentCandidates;
+@property (nonatomic, assign) BOOL loggedHeader;
+@property (nonatomic, assign) uint32_t currentSenderTag;
+@property (nonatomic, strong) TGCallReflector *currentReflector;
 @property (nonatomic, strong) NSString *peerUfrag;
 @property (nonatomic, strong) NSString *peerPwd;
+@property (nonatomic, strong) TGCallIce *ice;
 @end
 
 @implementation TGCall {
@@ -170,16 +177,46 @@ static void TGInstallCrypto(void) {
 	self.localUfrag = [self randomIceStringOfLength:4];
 	self.localPwd = [self randomIceStringOfLength:24];
 
+	self.ice = [[TGCallIce alloc] init];
+	self.ice.localUfrag = self.localUfrag;
+	self.ice.localPwd = self.localPwd;
+	__weak __typeof__(self) weakSelf = self;
+	self.ice.transport = ^(NSData *packet){
+		TGCall *me = weakSelf;
+		// An answer goes to the port that asked; anything else - our own
+		// checks - goes to every tag the peer has shown us.
+		if (me.currentSenderTag){
+			[me.currentReflector ?: me.reflector sendPayload:packet
+													   toTag:me.currentSenderTag];
+			return;
+		}
+		for (TGCallReflector *reflector in me.reflectors)
+			[reflector sendPayload:packet];
+	};
+	self.ice.onConnected = ^(NSString *address, uint16_t port){
+		NSLog(@"TGCall: media path is %@:%u", address, port);
+		weakSelf.state = TGCallStateEstablished;
+	};
+	[self.ice start];
+
 	// The address is a name rather than an IP: the peer reads our four-byte
 	// tag out of it and uses that to address us through the reflector.
-	NSString *hostname = [NSString stringWithFormat:@"reflector-%u-%u.reflector",
-			(uint32_t)self.reflectorId, self.reflector.localTag];
-	NSString *candidate = [NSString stringWithFormat:
-			@"candidate:1 1 udp 2130706431 %@ %u typ relay raddr 0.0.0.0 rport 0 "
-			@"generation 0 ufrag %@ network-id 1",
-			hostname, self.reflectorPort, self.localUfrag];
+	NSMutableArray *candidates = [NSMutableArray array];
+	NSInteger index = 0;
+	for (TGCallReflector *reflector in self.reflectors){
+		index++;
+		NSString *hostname = [NSString stringWithFormat:@"reflector-%ld-%u.reflector",
+				(long)index, reflector.localTag];
+		// Written exactly the way the peer writes its own: component 0, no
+		// raddr or rport. A line their parser rejects takes the whole message
+		// with it, and then they never learn our credentials at all.
+		[candidates addObject:[NSString stringWithFormat:
+				@"candidate:%u 0 udp 41878272 %@ %u typ relay generation 0 "
+				@"ufrag %@ network-id 9 network-cost 50",
+				reflector.localTag, hostname, reflector.port, self.localUfrag]];
+	}
 
-	NSData *body = [TGCallMessages candidatesBody:@[candidate]
+	NSData *body = [TGCallMessages candidatesBody:candidates
 											ufrag:self.localUfrag
 											  pwd:self.localPwd];
 	NSData *message = [TGCallMessages messageWithType:TGCallMessageCandidates body:body];
@@ -225,10 +262,13 @@ static void TGInstallCrypto(void) {
 		NSDictionary *ice = [TGCallMessages parseCandidates:message[@"body"]];
 		self.peerUfrag = ice[@"ufrag"];
 		self.peerPwd = ice[@"pwd"];
+		self.ice.peerUfrag = self.peerUfrag;
+		self.ice.peerPwd = self.peerPwd;
 		NSLog(@"TGCall: peer ICE ufrag=%@ pwd=%@", self.peerUfrag, self.peerPwd);
 		for (NSString *candidate in ice[@"candidates"]){
 			NSLog(@"TGCall: peer candidate: %@", candidate);
 			[self readPeerTagFromCandidate:candidate];
+			[self.ice addPeerCandidate:candidate];
 		}
 	}
 }
@@ -245,8 +285,10 @@ static void TGInstallCrypto(void) {
 	if (parts.count < 2)
 		return;
 
-	self.reflector.remoteTag = (uint32_t)[parts[1] longLongValue];
-	NSLog(@"TGCall: peer reflector tag %u", self.reflector.remoteTag);
+	uint32_t tag = (uint32_t)[parts[1] longLongValue];
+	for (TGCallReflector *reflector in self.reflectors)
+		reflector.remoteTag = tag;
+	NSLog(@"TGCall: peer reflector tag %u", tag);
 }
 
 - (void)sendSignalling:(NSData *)plaintext seq:(uint32_t)seq {
@@ -312,17 +354,21 @@ static void TGInstallCrypto(void) {
 - (NSDictionary *)protocol {
 	return @{
 		@"@type"            : @"callProtocol",
-		// The peer offers a public server-reflexive address, so a direct path
-		// is both possible and better than pushing everything through a
-		// reflector. Reaching it is what the connectivity checks are for.
-		@"udp_p2p"          : @YES,
+		// A direct path needs an address the peer can reach, and behind a
+		// carrier NAT there is none: checks sent to their public address are
+		// dropped by their NAT because nothing has come from us before. The
+		// reflector exists for exactly this, so it is what we ask for.
+		@"udp_p2p"          : @NO,
 		@"udp_reflector"    : @YES,
 		@"min_layer"        : @(65),
 		@"max_layer"        : @(92),
 		// Probing which tgcalls versions this peer still accepts. 2.4.4 alone
 		// is refused outright; if 3.0.0 is taken, its media is plain RTP with
 		// Opus inside an EncryptedConnection, which is implementable here.
-		@"library_versions" : @[@"3.0.0", @"2.4.4"],
+		// Probing what the peer prefers. 9.0.0 is the current tgcalls version;
+		// if it takes that, the negotiation runs v2 - JSON signalling, relay
+		// candidates with a resolvable tag, and DTLS-SRTP for the media.
+		@"library_versions" : @[@"9.0.0", @"3.0.0", @"2.4.4"],
 	};
 }
 
@@ -455,7 +501,15 @@ static void TGInstallCrypto(void) {
 /// our four-byte tag, which travels over the signalling channel - so for now
 /// this proves the socket, the tag format and the address, and logs anything
 /// the reflector says on its own.
+/// Both ends have to sit on the same reflector: the twelve-byte prefix of the
+/// tag is per server, so packets crossing different ones never meet. TDLib
+/// hands out several and the peer picks its own, so this connects to all of
+/// them and lets the tags decide which one carries the call.
 - (void)probeReflectorsIn:(NSDictionary *)state key:(NSData *)key {
+	self.reflectors = [NSMutableArray array];
+	__weak __typeof__(self) weakSelf = self;
+
+	NSInteger index = 0;
 	for (NSDictionary *server in state[@"servers"]){
 		NSDictionary *type = server[@"type"];
 		if (![type[@"@type"] isEqualToString:@"callServerTypeTelegramReflector"])
@@ -463,20 +517,29 @@ static void TGInstallCrypto(void) {
 
 		NSData *peerTag = [[NSData alloc] initWithBase64EncodedString:type[@"peer_tag"]
 															 options:0];
-		self.reflector = [[TGCallReflector alloc] initWithHost:server[@"ip_address"]
-														  port:(uint16_t)[server[@"port"] intValue]
-													   peerTag:peerTag];
-		__weak __typeof__(self) weakSelf = self;
-		self.reflector.onPacket = ^(NSData *packet){
+		TGCallReflector *reflector = [[TGCallReflector alloc]
+				initWithHost:server[@"ip_address"]
+						port:(uint16_t)[server[@"port"] intValue]
+					 peerTag:peerTag];
+		__weak TGCallReflector *weakReflector = reflector;
+		reflector.onPacket = ^(NSData *packet){
+			weakSelf.currentReflector = weakReflector;
 			[weakSelf inspectReflectorPacket:packet];
 		};
-		self.reflectorHost = server[@"ip_address"];
-		self.reflectorPort = (uint16_t)[server[@"port"] intValue];
-		self.reflectorId = [server[@"id"] longLongValue];
-		[self.reflector start];
-		[self sendOurCandidates];
-		return;   // one is enough to learn from
+		[reflector start];
+		[self.reflectors addObject:reflector];
+
+		NSLog(@"TGCall: reflector %ld at %@:%d, our tag %u", (long)++index,
+				server[@"ip_address"], [server[@"port"] intValue], reflector.localTag);
+
+		if (!self.reflector){
+			self.reflector = reflector;
+			self.reflectorHost = server[@"ip_address"];
+			self.reflectorPort = (uint16_t)[server[@"port"] intValue];
+			self.reflectorId = index;
+		}
 	}
+	[self sendOurCandidates];
 }
 
 /// Anything that arrives gets held against the call key both ways round: if it
@@ -489,18 +552,40 @@ static void TGInstallCrypto(void) {
 		return;
 	}
 
-	// Peer traffic arrives with the 16-byte tag in front of it.
-	size_t offset = 16;
+	// The header the reflector puts in front of relayed data is not worth
+	// guessing at: STUN announces itself with a magic cookie four bytes in, so
+	// the payload is found by looking for it.
+	static const size_t offsets[] = { 24, 16, 20, 0 };
+	for (unsigned i = 0; i < sizeof(offsets) / sizeof(offsets[0]); i++){
+		size_t offset = offsets[i];
+		if (packet.length <= offset + 20)
+			continue;
+		NSData *payload = [packet subdataWithRange:
+				NSMakeRange(offset, packet.length - offset)];
+		if ([TGCallStun messageTypeOf:payload] < 0)
+			continue;
+		// The eight bytes between the tag and the payload decide how a reply is
+		// addressed, so they are logged every time rather than once: syslog
+		// drops lines under a burst and this one must not be missed.
+		// The sender's four bytes sit between the destination tag and the
+		// length; an answer goes back to exactly those.
+		const uint8_t *raw = (const uint8_t *)packet.bytes;
+		if (offset >= 24)
+			memcpy(&_currentSenderTag, raw + 16, 4);
+		if (offset >= 24)
+			NSLog(@"hdr %02x%02x%02x%02x|%02x%02x%02x%02x|%02x%02x%02x%02x ours %08x",
+					raw[12], raw[13], raw[14], raw[15],
+					raw[16], raw[17], raw[18], raw[19],
+					raw[20], raw[21], raw[22], raw[23],
+					self.reflector.localTag);
+		[self.ice handleRelayedPacket:payload];
+		return;
+	}
 
-	NSMutableData *out = [NSMutableData dataWithLength:packet.length];
-	uint32_t seq = 0;
-	int decrypted = TGCallDecryptPacket((const uint8_t *)self.callKey.bytes,
-										self.outgoing, 0,
-										bytes + offset, packet.length - offset,
-										(uint8_t *)out.mutableBytes, &seq);
-	NSLog(@"TGCall: %lu bytes from the reflector, decrypt %s (seq %u)",
-			(unsigned long)packet.length,
-			decrypted > 0 ? "OK" : "no", seq);
+	// Not STUN, so it is either the reflector's own service traffic or media.
+	if (packet.length > 32)
+		NSLog(@"TGCall: %lu bytes from the reflector, not STUN",
+				(unsigned long)packet.length);
 }
 
 - (void)setMuted:(BOOL)muted {
@@ -510,7 +595,11 @@ static void TGInstallCrypto(void) {
 }
 
 - (void)teardown {
-	[self.reflector stop];
+	[self.ice stop];
+	self.ice = nil;
+	for (TGCallReflector *reflector in self.reflectors)
+		[reflector stop];
+	self.reflectors = nil;
 	self.reflector = nil;
 	if (_controller){
 		_controller->Stop();

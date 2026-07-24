@@ -155,6 +155,7 @@ APP_SRC_M := \
 	src/TGSessionsViewController.m \
 	src/TGSettingsViewController.m \
 	src/TGVoiceDecoder.m \
+	src/TGCallIce.m \
 	src/TGCallStun.m \
 	src/TGCallMessages.m \
 	src/TGCallReflector.m \

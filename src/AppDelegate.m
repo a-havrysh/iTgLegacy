@@ -296,6 +296,15 @@ static void TGWatchForIncomingCalls(void) {
 		return YES;
 	}
 
+	// itglegacy://answer - the 4S is not in reach of a finger during a test.
+	if ([host isEqualToString:@"answer"]){
+		dispatch_async(dispatch_get_main_queue(), ^{
+			NSLog(@"answering call %d", [TGCall shared].callId);
+			[[TGCall shared] accept];
+		});
+		return YES;
+	}
+
 	// itglegacy://hangup - end whatever call is up.
 	if ([host isEqualToString:@"hangup"]){
 		dispatch_async(dispatch_get_main_queue(), ^{ [[TGCall shared] hangUp]; });

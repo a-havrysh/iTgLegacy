@@ -123,9 +123,15 @@ static void TGAppendIntegrityAndFingerprint(NSMutableData *message, NSString *pa
 	// The transaction id ties the answer to the question.
 	[message appendBytes:((const uint8_t *)request.bytes) + 8 length:12];
 
-	// XOR-MAPPED-ADDRESS tells the peer how we saw it, which is how it learns
-	// its own public address.
-	const struct sockaddr_in *from = (const struct sockaddr_in *)address.bytes;
+	// XOR-MAPPED-ADDRESS tells the peer how we saw it. Over a reflector there
+	// is no such thing, and the attribute is left out.
+	// Without a real address, name the unspecified one rather than leaving the
+	// attribute out: a response without it is discarded outright.
+	struct sockaddr_in unspecified;
+	memset(&unspecified, 0, sizeof(unspecified));
+	unspecified.sin_family = AF_INET;
+	const struct sockaddr_in *from = address.length >= sizeof(struct sockaddr_in)
+			? (const struct sockaddr_in *)address.bytes : &unspecified;
 	NSMutableData *mapped = [NSMutableData data];
 	uint8_t header[2] = { 0, 1 };   // reserved, family IPv4
 	[mapped appendBytes:header length:2];
