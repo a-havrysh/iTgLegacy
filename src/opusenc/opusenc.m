@@ -121,14 +121,15 @@ static inline int writeOggPage(ogg_page *page, NSFileHandle *fileHandle)
     comment_init(&inopt.comments, &inopt.comments_length, opus_version);
     
     bitrate = 16 * 1024;
-    
+
     inopt.rawmode = 1;
     inopt.ignorelength = 1;
     inopt.samplesize = 16;
-    inopt.rate = 16000;
+    // The rate the caller asked for. This used to be pinned to 16000 no matter
+    // what was passed, so anything recorded at 48kHz came out three times too
+    // long: the file said 16kHz, the decoder ran it at 48.
+    inopt.rate = rate;
     inopt.channels = 1;
-    
-    rate = inopt.rate;
     inopt.skip = 0;
     
     // In order to code the complete length we'll need to do a little padding

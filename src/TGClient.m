@@ -1015,7 +1015,10 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		@"message_thread_id"    : @(threadId),
 		@"input_message_content": @{
 			@"@type"   : @"inputMessageSticker",
-			@"sticker" : @{@"@type" : @"inputFileId", @"id" : @(fileId)},
+			@"sticker" : @{
+				@"@type"   : @"inputSticker",
+				@"sticker" : @{@"@type" : @"inputFileId", @"id" : @(fileId)},
+			},
 		},
 	}];
 }
@@ -1024,15 +1027,33 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
                  toChat:(int64_t)chatId thread:(int64_t)threadId {
 	if (!path.length)
 		return;
-	[self send:@{
+
+	NSDictionary *attributes = [[NSFileManager defaultManager]
+			attributesOfItemAtPath:path error:nil];
+	NSLog(@"TGClient: sending voice %@ (%llu bytes, %lds) to %lld",
+			path.lastPathComponent, [attributes fileSize], (long)seconds, chatId);
+
+	// Answered rather than fire-and-forget: a rejected voice note is silent
+	// otherwise, and the file it points at lives in a temporary directory.
+	[self request:@{
 		@"@type"                : @"sendMessage",
 		@"chat_id"              : @(chatId),
 		@"message_thread_id"    : @(threadId),
 		@"input_message_content": @{
 			@"@type"      : @"inputMessageVoiceNote",
-			@"voice_note" : @{@"@type" : @"inputFileLocal", @"path" : path},
-			@"duration"   : @(seconds),
+			@"voice_note" : @{
+				@"@type"      : @"inputVoiceNote",
+				@"voice_note" : @{@"@type" : @"inputFileLocal", @"path" : path},
+				@"duration"   : @(seconds),
+				@"waveform"   : @"",
+			},
 		},
+	} completion:^(NSDictionary *result){
+		if ([result[@"@type"] isEqualToString:@"error"])
+			NSLog(@"TGClient: voice rejected: %@ %@",
+					result[@"code"], result[@"message"]);
+		else
+			NSLog(@"TGClient: voice accepted, message %@", result[@"id"]);
 	}];
 }
 
@@ -1044,7 +1065,10 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		@"chat_id"              : @(chatId),
 		@"input_message_content": @{
 			@"@type" : @"inputMessageVideo",
-			@"video" : @{@"@type" : @"inputFileLocal", @"path" : path},
+			@"video" : @{
+				@"@type" : @"inputVideo",
+				@"video" : @{@"@type" : @"inputFileLocal", @"path" : path},
+			},
 		},
 	}];
 }
@@ -1090,7 +1114,10 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		@"chat_id"              : @(chatId),
 		@"input_message_content": @{
 			@"@type" : @"inputMessagePhoto",
-			@"photo" : @{@"@type" : @"inputFileLocal", @"path" : path},
+			@"photo" : @{
+				@"@type" : @"inputPhoto",
+				@"photo" : @{@"@type" : @"inputFileLocal", @"path" : path},
+			},
 		},
 	}];
 }

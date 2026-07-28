@@ -296,6 +296,61 @@ static void TGWatchForIncomingCalls(void) {
 		return YES;
 	}
 
+	// itglegacy://touch/X/Y and itglegacy://hold/X/Y/MS - a finger, for the
+	// things a URL cannot express: holding the microphone, tapping a sticker,
+	// answering a call. Only reaches this app, which is all that is needed.
+	if ([host isEqualToString:@"touch"] || [host isEqualToString:@"hold"]){
+		BOOL holding = [host isEqualToString:@"hold"];
+		// `arg` has had every slash stripped out of it, so the path is read
+		// straight from the URL here.
+		NSMutableArray *parts = [NSMutableArray array];
+		for (NSString *component in url.pathComponents)
+			if (![component isEqualToString:@"/"] && component.length)
+				[parts addObject:component];
+		if (parts.count < 2){
+			NSLog(@"touch: expected x and y, got %@", url.path);
+			return YES;
+		}
+
+		CGPoint point = CGPointMake([parts[0] floatValue], [parts[1] floatValue]);
+		NSTimeInterval seconds = (holding && parts.count > 2)
+				? [parts[2] doubleValue] / 1000.0 : 0;
+
+		dispatch_async(dispatch_get_main_queue(), ^{
+			UIWindow *window = [UIApplication sharedApplication].keyWindow;
+			UIView *hit = [window hitTest:point withEvent:nil];
+			NSLog(@"touch at %.0f,%.0f hit %@", point.x, point.y, [hit class]);
+
+			// A control is driven through its actions; a plain view gets its
+			// gesture recognisers fired instead.
+			UIControl *control = nil;
+			for (UIView *view = hit; view; view = view.superview)
+				if ([view isKindOfClass:UIControl.class]){
+					control = (UIControl *)view;
+					break;
+				}
+
+			if (control){
+				[control sendActionsForControlEvents:UIControlEventTouchDown];
+				if (seconds > 0){
+					dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+							(int64_t)(seconds * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+						[control sendActionsForControlEvents:UIControlEventTouchUpInside];
+						NSLog(@"released after %.0f ms", seconds * 1000);
+					});
+				} else {
+					[control sendActionsForControlEvents:UIControlEventTouchUpInside];
+				}
+				return;
+			}
+
+			// Rows are reachable through itglegacy://tap/N, so anything that is
+			// not a control is left alone rather than guessed at.
+			NSLog(@"touch: nothing actionable at that point");
+		});
+		return YES;
+	}
+
 	// itglegacy://answer - the 4S is not in reach of a finger during a test.
 	if ([host isEqualToString:@"answer"]){
 		dispatch_async(dispatch_get_main_queue(), ^{

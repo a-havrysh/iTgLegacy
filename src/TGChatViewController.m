@@ -998,6 +998,57 @@ static const CGFloat kImageMax    = 200.0f;
 	return placeholder;
 }
 
+#pragma mark - compose banner
+
+/// Back to composing a plain message: no reply, no edit, no banner. Also
+/// missing, and reached from the recorder and from the banner's own cancel.
+- (void)clearComposeState {
+	self.replyToId = 0;
+	self.editingId = 0;
+	self.composeBanner.hidden = YES;
+	[self inputChanged];
+}
+
+/// A strip above the composer saying what the next message will be: a reply,
+/// an edit, or a recording in progress. Declared and used from three places
+/// but never written, so holding the microphone brought the app down.
+- (void)showComposeBanner:(NSString *)text {
+	if (!self.composeBanner){
+		CGRect b = self.view.bounds;
+		self.composeBanner = [[UIView alloc] initWithFrame:
+				CGRectMake(0, CGRectGetMinY(self.inputBar.frame) - 28, b.size.width, 28)];
+		self.composeBanner.backgroundColor = [[TGTheme shared] inputBarColour];
+		self.composeBanner.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+											  UIViewAutoresizingFlexibleTopMargin;
+
+		UILabel *label = [[UILabel alloc] initWithFrame:
+				CGRectMake(10, 4, b.size.width - 50, 20)];
+		label.font = [UIFont systemFontOfSize:13];
+		label.textColor = [[TGTheme shared] accentColour];
+		label.backgroundColor = [UIColor clearColor];
+		label.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+		[self.composeBanner addSubview:label];
+
+		UIButton *cancel = [UIButton buttonWithType:UIButtonTypeCustom];
+		cancel.frame = CGRectMake(b.size.width - 40, 0, 40, 28);
+		cancel.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+		[cancel setTitle:@"\u00d7" forState:UIControlStateNormal];
+		[cancel setTitleColor:[[TGTheme shared] secondaryTextColour]
+					 forState:UIControlStateNormal];
+		cancel.titleLabel.font = [UIFont systemFontOfSize:22];
+		[cancel addTarget:self action:@selector(clearComposeState)
+		 forControlEvents:UIControlEventTouchUpInside];
+		[self.composeBanner addSubview:cancel];
+
+		[self.view addSubview:self.composeBanner];
+	}
+
+	UILabel *label = (UILabel *)[self.composeBanner.subviews firstObject];
+	if ([label isKindOfClass:UILabel.class])
+		label.text = text;
+	self.composeBanner.hidden = NO;
+}
+
 #pragma mark - stickers
 
 /// A strip of the stickers used lately. A full sticker-set browser is a screen
@@ -1359,8 +1410,11 @@ static const NSInteger kPollSheetTag    = 43;
 	}
 
 	// A reply is unreadable if you cannot get to what it answers.
-	int64_t replyId = [m[@"replyId"] longLongValue];
-	if (replyId && [self scrollToMessageId:replyId])
+	// The flattened message stores absent values as NSNull, which answers no
+	// number selector - asking it for a long long is what brought the app
+	// down on the first tap on a voice note.
+	NSNumber *replyTo = [m[@"replyId"] isKindOfClass:NSNumber.class] ? m[@"replyId"] : nil;
+	if (replyTo && [self scrollToMessageId:replyTo.longLongValue])
 		return;
 
 	// A theme file is the one document worth opening in place: tapping it
@@ -1398,10 +1452,14 @@ static const NSInteger kPollSheetTag    = 43;
 		[self beginDownloadHUDForFile:[docId integerValue]];
 		[[TGClient shared] downloadFile:[docId integerValue] completion:^(NSString *path){
 			[self endDownloadHUD];
+			NSLog(@"voice: file %@", path.lastPathComponent ?: @"(not downloaded)");
 			if (!path)
 				return;
 			dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
 				NSString *wav = [TGVoiceDecoder wavFromOpusFile:path];
+				NSLog(@"voice: decoded to %@ (%llu bytes)", wav.lastPathComponent ?: @"nothing",
+						[[[NSFileManager defaultManager] attributesOfItemAtPath:wav ?: @""
+																		  error:nil] fileSize]);
 				dispatch_async(dispatch_get_main_queue(), ^{
 					if (!wav){
 						[self showPlaybackFailure];
@@ -1418,6 +1476,7 @@ static const NSInteger kPollSheetTag    = 43;
 						[self showPlaybackFailure];
 						return;
 					}
+					NSLog(@"voice: playing %.1f s", self.voicePlayer.duration);
 					[self.voicePlayer play];
 				});
 			});

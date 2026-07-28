@@ -57,7 +57,7 @@ this does not.
 | **done** | Send a photo from the library | untested — needs a real tap |
 | | `.webm` stickers | VP9; no decoder exists on this hardware |
 | | Lottie: masks, mattes, trim paths, gradients, repeaters | stickers using them draw approximately |
-| **done** | Record and send a voice note | libopusenc; hold the microphone |
+| **done** | Record and send a voice note | libopusenc; hold the microphone. Verified on a 4S: 4 seconds encodes to 22KB and arrives |
 | **done** | Send video, location, contacts | documents still missing - no file browser on iOS 7 |
 | **done** | Albums (grouped media) | one block, one timestamp |
 | *in progress* | Download progress and cancel | progress shown; no cancel |
