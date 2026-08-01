@@ -7,8 +7,11 @@
 #import "TGTopicsViewController.h"
 #import <QuartzCore/QuartzCore.h>
 
-static const CGFloat kRowHeight = 68.0f;
-static const CGFloat kAvatar    = 52.0f;
+// Their chat item is 80dp on a 360dp screen; on 320pt that is 71, and 72
+// is what iOS uses for a two-line row anyway.
+static const CGFloat kRowHeight = 72.0f;
+// 57dp avatar scaled the same way.
+static const CGFloat kAvatar = 50.0f;
 
 #pragma mark - cell
 
@@ -18,6 +21,8 @@ static const CGFloat kAvatar    = 52.0f;
 @property (nonatomic, strong) UILabel *previewLabel;
 @property (nonatomic, strong) UILabel *dateLabel;
 @property (nonatomic, strong) UILabel *badge;
+@property (nonatomic, strong) UIView *onlineDot;
+@property (nonatomic, strong) UIImageView *tick;   // your own last message
 @end
 
 @implementation TGChatCell
@@ -46,7 +51,7 @@ static const CGFloat kAvatar    = 52.0f;
 	[self.contentView addSubview:self.previewLabel];
 
 	self.dateLabel = [[UILabel alloc] init];
-	self.dateLabel.font = [UIFont systemFontOfSize:13];
+	self.dateLabel.font = [UIFont systemFontOfSize:12];
 	self.dateLabel.textColor = [UIColor colorWithWhite:0.55f alpha:1.0f];
 	self.dateLabel.textAlignment = NSTextAlignmentRight;
 	[self.contentView addSubview:self.dateLabel];
@@ -54,12 +59,26 @@ static const CGFloat kAvatar    = 52.0f;
 	self.badge = [[UILabel alloc] init];
 	self.badge.font = [UIFont boldSystemFontOfSize:13];
 	self.badge.textColor = [UIColor whiteColor];
-	self.badge.backgroundColor = [[TGTheme shared] accentColour];
+	self.badge.backgroundColor = [[TGTheme shared] badgeColour];
 	self.badge.textAlignment = NSTextAlignmentCenter;
 	self.badge.layer.cornerRadius = 10;
 	self.badge.clipsToBounds = YES;
 	self.badge.hidden = YES;
 	[self.contentView addSubview:self.badge];
+
+	// The dot sits half off the avatar, so it needs a ring of the row's own
+	// colour to stay legible against a photo.
+	self.onlineDot = [[UIView alloc] initWithFrame:
+			CGRectMake(10 + kAvatar - 14, 8 + kAvatar - 14, 14, 14)];
+	self.onlineDot.backgroundColor = [[TGTheme shared] onlineColour];
+	self.onlineDot.layer.cornerRadius = 7;
+	self.onlineDot.layer.borderWidth = 2;
+	self.onlineDot.hidden = YES;
+	[self.contentView addSubview:self.onlineDot];
+
+	self.tick = [[UIImageView alloc] init];
+	self.tick.hidden = YES;
+	[self.contentView addSubview:self.tick];
 
 	self.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 	return self;
@@ -74,6 +93,12 @@ static const CGFloat kAvatar    = 52.0f;
 	self.dateLabel.frame  = CGRectMake(w - right, 10, right - 8, 16);
 	self.titleLabel.frame = CGRectMake(left, 9, w - left - right, 20);
 	self.previewLabel.frame = CGRectMake(left, 30, w - left - right + 40, 32);
+
+	// Your own last message is marked, the way it is in their chat item.
+	if (!self.tick.hidden){
+		CGSize s = [self.dateLabel.text sizeWithFont:self.dateLabel.font];
+		self.tick.frame = CGRectMake(w - 8 - s.width - 19, 13, 15, 9);
+	}
 
 	if (!self.badge.hidden){
 		CGSize s = [self.badge.text sizeWithFont:self.badge.font];
@@ -125,9 +150,7 @@ static const CGFloat kAvatar    = 52.0f;
 	self.searchBar = [[UISearchBar alloc] initWithFrame:CGRectMake(0, 0, 320, 44)];
 	self.searchBar.delegate = self;
 	self.searchBar.placeholder = @"Search";
-	if ([self.searchBar respondsToSelector:@selector(setBarTintColor:)])
-		self.searchBar.barTintColor = [[TGTheme shared] listBackgroundColour];
-	self.searchBar.tintColor = [[TGTheme shared] accentColour];
+	[self styleSearchBar];
 	self.tableView.tableHeaderView = self.searchBar;
 
 	// Hold a row for the two things clients put there: pin and mute.
@@ -144,6 +167,7 @@ static const CGFloat kAvatar    = 52.0f;
 
 	__weak typeof(self) weakSelf = self;
 	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	self.tableView.separatorColor = [[TGTheme shared] separatorColour];
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
 	[[TGTheme shared] styleTabBar:self.tabBarController.tabBar];
 
@@ -154,10 +178,9 @@ static const CGFloat kAvatar    = 52.0f;
 		[TGIcons flush];
 		[[TGTheme shared] styleNavigationBar:weakSelf.navigationController.navigationBar];
 		weakSelf.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
-		weakSelf.tableView.separatorColor = [[TGTheme shared] bubbleBorderColour];
+		weakSelf.tableView.separatorColor = [[TGTheme shared] separatorColour];
 		[[TGTheme shared] styleTabBar:weakSelf.tabBarController.tabBar];
-		if ([weakSelf.searchBar respondsToSelector:@selector(setBarTintColor:)])
-			weakSelf.searchBar.barTintColor = [[TGTheme shared] listBackgroundColour];
+		[weakSelf styleSearchBar];
 		[weakSelf.tableView reloadData];
 	}];
 
@@ -172,6 +195,17 @@ static const CGFloat kAvatar    = 52.0f;
 		weakSelf.title = text ?: @"Chats";
 	};
 	[self reload];
+}
+
+/// barTintColor paints the bar around the field but leaves the field itself
+/// white, which on a dark list is a slab of light at the top. barStyle is what
+/// turns the field over too.
+- (void)styleSearchBar {
+	TGTheme *theme = [TGTheme shared];
+	self.searchBar.barStyle = theme.isDark ? UIBarStyleBlack : UIBarStyleDefault;
+	if ([self.searchBar respondsToSelector:@selector(setBarTintColor:)])
+		self.searchBar.barTintColor = [theme listBackgroundColour];
+	self.searchBar.tintColor = [theme accentColour];
 }
 
 /// Saved Messages is your own chat; it is not always in the list, and every
@@ -441,7 +475,9 @@ static const NSInteger kChatActionsTag = 77;
 	cell.titleLabel.textColor = [theme primaryTextColour];
 	cell.previewLabel.textColor = [theme secondaryTextColour];
 	cell.dateLabel.textColor = [theme secondaryTextColour];
-	cell.badge.backgroundColor = [theme accentColour];
+	cell.onlineDot.hidden = YES;
+	cell.tick.hidden = YES;
+	cell.onlineDot.layer.borderColor = [theme listBackgroundColour].CGColor;
 
 	if ([self hasArchiveRow] && indexPath.row == 0){
 		cell.titleLabel.text = @"Archived Chats";
@@ -459,8 +495,19 @@ static const NSInteger kChatActionsTag = 77;
 			? self.searchResults[indexPath.row]
 			: self.chats[indexPath.row - ([self hasArchiveRow] ? 1 : 0)];
 	cell.titleLabel.text = c[@"title"];
-	cell.previewLabel.text = c[@"text"];
 	cell.dateLabel.text = TGChatDate([c[@"date"] doubleValue]);
+
+	// Someone typing takes the preview over for as long as it lasts, in their
+	// blurple rather than the grey the preview uses.
+	NSString *action = c[@"action"];
+	if ([action length]){
+		cell.previewLabel.text = action;
+		cell.previewLabel.textColor = [theme typingColour];
+	} else {
+		cell.previewLabel.text = c[@"text"];
+	}
+
+	cell.onlineDot.hidden = ![c[@"isOnline"] boolValue];
 
 	// A muted chat says so in its title; a pinned one keeps a marker where the
 	// date sits when it has none.
@@ -473,6 +520,9 @@ static const NSInteger kChatActionsTag = 77;
 	NSInteger unread = [c[@"unread"] integerValue];
 	cell.badge.hidden = (unread <= 0);
 	cell.badge.text = unread > 0 ? [NSString stringWithFormat:@"%ld", (long)unread] : @"";
+	// A muted chat still counts, it just stops shouting about it.
+	cell.badge.backgroundColor = [c[@"isMuted"] boolValue]
+			? [theme mutedBadgeColour] : [theme badgeColour];
 
 	NSNumber *fileId = c[@"photoFileId"];
 	UIImage *photo = fileId ? self.avatars[fileId] : nil;

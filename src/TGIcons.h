@@ -20,7 +20,27 @@
 + (UIImage *)document;
 + (UIImage *)pin;
 + (UIImage *)microphone;
-+ (UIImage *)sticker;          ///< map marker
++ (UIImage *)sticker;
+
+/// The circular play button their media blocks use: a 42dp disc in blue with
+/// a white glyph, scaled to whatever side is asked for.
++ (UIImage *)mediaDiscOfSide:(CGFloat)side playing:(BOOL)playing;
+
+/// The same disc carrying a sheet of paper, which is what their file block puts
+/// on its tile.
++ (UIImage *)fileDiscOfSide:(CGFloat)side;
+
+/// The microphone drawn solid in one colour, for the record button - the tab
+/// bar glyphs are template images and cannot carry a fill of their own.
++ (UIImage *)microphoneOfSide:(CGFloat)side colour:(UIColor *)colour;
+
+/// The bars of a voice message, drawn from TDLib's five-bits-per-sample
+/// waveform. `played` is how much of it has been listened to, 0 to 1.
++ (UIImage *)waveform:(NSData *)waveform size:(CGSize)size
+               played:(CGFloat)played colour:(UIColor *)colour;
+
+/// The 6x10 tail Telegram hangs off the corner of a bubble.
++ (UIImage *)bubbleTailForColour:(UIColor *)colour outgoing:(BOOL)outgoing;          ///< map marker
 
 /// Delivery ticks, drawn the way Telegram draws them: two checks overlapping
 /// into one mark, not two separate glyphs side by side.

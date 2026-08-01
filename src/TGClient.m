@@ -335,8 +335,30 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m);
 		else if ([kind hasPrefix:@"chatActionUploading"])
 			phrase = @"sending a file...";
 		// chatActionCancel and anything unknown clear it.
+		int64_t actingChat = [obj[@"chat_id"] longLongValue];
+		// The chat list shows this in place of the preview, so it has to live
+		// on the chat rather than only reach whichever chat is open.
+		NSMutableDictionary *acting = self.chatsById[@(actingChat)];
+		if (acting){
+			acting[@"action"] = phrase ?: @"";
+			[self rebuildChats];
+		}
 		if (self.onChatAction)
-			self.onChatAction([obj[@"chat_id"] longLongValue], phrase);
+			self.onChatAction(actingChat, phrase);
+		return;
+	}
+
+	// A private chat's id is the user's id, so presence lands straight on the
+	// chat the list is drawing.
+	if ([type isEqualToString:@"updateUserStatus"]){
+		NSMutableDictionary *chat = self.chatsById[obj[@"user_id"]];
+		if (!chat)
+			return;
+		BOOL online = [obj[@"status"][@"@type"] isEqualToString:@"userStatusOnline"];
+		if ([chat[@"isOnline"] boolValue] == online)
+			return;
+		chat[@"isOnline"] = @(online);
+		[self rebuildChats];
 		return;
 	}
 
@@ -526,6 +548,8 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 	NSString *docName     = nil;
 	NSString *extra       = nil;   // text the content itself carries
 	NSNumber *latitude = nil, *longitude = nil;
+	NSNumber *duration = nil;
+	NSData *waveform = nil;
 	BOOL isService = NO;
 
 	if ([ctype isEqualToString:@"messagePhoto"]){
@@ -583,9 +607,12 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 
 	} else if ([ctype isEqualToString:@"messageVoiceNote"]){
 		docFileId = content[@"voice_note"][@"voice"][@"id"];
-		NSNumber *dur = content[@"voice_note"][@"duration"];
-		extra = [NSString stringWithFormat:@"Voice message  %ld:%02ld",
-				(long)(dur.integerValue / 60), (long)(dur.integerValue % 60)];
+		duration  = content[@"voice_note"][@"duration"];
+		// Telegram sends the shape of the sound with the message: five bits
+		// per sample, which is what the bars in the bubble are drawn from.
+		waveform  = [[NSData alloc] initWithBase64EncodedString:
+				content[@"voice_note"][@"waveform"] ?: @"" options:0];
+		extra = @"";
 
 	} else if ([ctype isEqualToString:@"messageAudio"]){
 		docFileId = content[@"audio"][@"audio"][@"id"];
@@ -773,6 +800,8 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		@"reactions" : TGReactionSummary(m) ?: @"",
 		// Options of a poll, so tapping one can vote.
 		@"pollOptions" : m[@"content"][@"poll"][@"options"] ?: @[],
+		@"duration"  : duration ?: @0,
+		@"waveform"  : waveform ?: [NSData data],
 		@"senderId"  : m[@"sender_id"][@"user_id"] ?: @(0),
 		@"lat"       : latitude    ?: [NSNull null],
 		@"lon"       : longitude   ?: [NSNull null],

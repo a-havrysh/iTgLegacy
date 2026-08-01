@@ -21,7 +21,7 @@
 	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
 		self.edgesForExtendedLayout = UIRectEdgeNone;
 	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
-	self.tableView.separatorColor = [[TGTheme shared] bubbleBorderColour];
+	self.tableView.separatorColor = [[TGTheme shared] separatorColour];
 
 	self.title = @"Settings";
 }
@@ -57,7 +57,7 @@
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
 	if (section == 0) return 1;
-	if (section == 1) return 4;   // skeuomorphic / flat / wallpaper / text size
+	if (section == 1) return 5;   // skeuomorphic / flat / dark / wallpaper / text size
 	if (section == 2) return [TGTheme availableThemeFiles].count + 1;   // + "None"
 	if (section == 3) return 3;   // edit profile, devices, this device
 	return 3;   // storage, clear database, log out
@@ -88,7 +88,7 @@
 		return cell;
 	}
 
-	if (indexPath.section == 1 && indexPath.row == 3){
+	if (indexPath.section == 1 && indexPath.row == 4){
 		cell.textLabel.text = @"Message text size";
 		cell.detailTextLabel.text = [NSString stringWithFormat:@"%.0f pt",
 				[TGTheme shared].messageFontSize];
@@ -105,7 +105,7 @@
 		return cell;
 	}
 
-	if (indexPath.section == 1 && indexPath.row == 2){
+	if (indexPath.section == 1 && indexPath.row == 3){
 		cell.textLabel.text = @"Chat wallpaper";
 		cell.detailTextLabel.text = [TGTheme shared].wallpaper ? @"Set" : @"None";
 		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
@@ -113,10 +113,11 @@
 	}
 
 	if (indexPath.section == 1){
-		BOOL flat = [TGTheme shared].isFlat;
-		cell.textLabel.text = (indexPath.row == 0) ? @"Skeuomorphic" : @"Flat";
+		static NSArray *styles = nil;
+		if (!styles) styles = @[@"Skeuomorphic", @"Flat", @"Dark"];
+		cell.textLabel.text = styles[indexPath.row];
 		cell.detailTextLabel.text = @"";
-		cell.accessoryType = ((indexPath.row == 1) == flat)
+		cell.accessoryType = (indexPath.row == [TGTheme shared].style)
 			? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
 		return cell;
 	}
@@ -156,12 +157,12 @@
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
 
-	if (indexPath.section == 1 && indexPath.row == 2){
+	if (indexPath.section == 1 && indexPath.row == 3){
 		[self chooseWallpaper];
 		return;
 	}
 
-	if (indexPath.section == 1 && indexPath.row == 3){
+	if (indexPath.section == 1 && indexPath.row == 4){
 		[self chooseTextSize];
 		return;
 	}
@@ -177,9 +178,10 @@
 	}
 
 	if (indexPath.section == 1){
-		[TGTheme shared].style = (indexPath.row == 0)
-			? TGThemeStyleSkeuomorphic : TGThemeStyleFlat;
+		[TGTheme shared].style = (TGThemeStyle)indexPath.row;
 		[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+		self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+		self.tableView.separatorColor = [[TGTheme shared] separatorColour];
 		[tableView reloadData];
 		return;
 	}

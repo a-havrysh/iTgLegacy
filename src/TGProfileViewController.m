@@ -46,12 +46,15 @@
 
 /// Avatar and name above the table, the way every client opens a profile.
 - (void)buildHeader {
-	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 150)];
-	header.backgroundColor = [UIColor clearColor];
+	// Their profile header is a coloured block 175dp tall with the picture and
+	// the name on it; at 320pt that is 155.
+	UIView *header = [[UIView alloc] initWithFrame:
+			CGRectMake(0, 0, self.view.bounds.size.width, 155)];
+	header.backgroundColor = [[TGTheme shared] profileHeaderColour];
 
-	CGFloat side = 88;
+	CGFloat side = 80;
 	self.avatarView = [[UIImageView alloc] initWithFrame:
-			CGRectMake((header.bounds.size.width - side) / 2, 16, side, side)];
+			CGRectMake((header.bounds.size.width - side) / 2, 20, side, side)];
 	self.avatarView.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin |
 			UIViewAutoresizingFlexibleRightMargin;
 	self.avatarView.layer.cornerRadius = side / 2;
@@ -63,13 +66,13 @@
 	[header addSubview:self.avatarView];
 
 	UILabel *nameLabel = [[UILabel alloc] initWithFrame:
-			CGRectMake(10, 112, header.bounds.size.width - 20, 24)];
+			CGRectMake(10, 110, header.bounds.size.width - 20, 24)];
 	nameLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	nameLabel.text = self.name;
 	nameLabel.font = [UIFont boldSystemFontOfSize:19];
 	nameLabel.textAlignment = NSTextAlignmentCenter;
 	nameLabel.backgroundColor = [UIColor clearColor];
-	nameLabel.textColor = [[TGTheme shared] primaryTextColour];
+	nameLabel.textColor = [UIColor whiteColor];
 	[header addSubview:nameLabel];
 
 	self.tableView.tableHeaderView = header;

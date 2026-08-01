@@ -200,6 +200,162 @@ static NSMutableDictionary *sCache = nil;
 	}];
 }
 
++ (UIImage *)mediaDiscOfSide:(CGFloat)side playing:(BOOL)playing {
+	UIGraphicsBeginImageContextWithOptions(CGSizeMake(side, side), NO, 0);
+	CGContextRef ctx = UIGraphicsGetCurrentContext();
+
+	// #72B5E9, the blue their file and media blocks put behind a glyph.
+	CGContextSetRGBFillColor(ctx, 0.447f, 0.710f, 0.914f, 1.0f);
+	CGContextFillEllipseInRect(ctx, CGRectMake(0, 0, side, side));
+
+	CGContextSetRGBFillColor(ctx, 1, 1, 1, 1);
+	if (playing){
+		CGFloat w = side * 0.10f, h = side * 0.30f, gap = side * 0.10f;
+		CGContextFillRect(ctx, CGRectMake(side/2 - gap/2 - w, (side - h)/2, w, h));
+		CGContextFillRect(ctx, CGRectMake(side/2 + gap/2,     (side - h)/2, w, h));
+	} else {
+		// A triangle, nudged right so it looks centred inside the disc.
+		CGContextMoveToPoint(ctx, side * 0.40f, side * 0.32f);
+		CGContextAddLineToPoint(ctx, side * 0.68f, side * 0.50f);
+		CGContextAddLineToPoint(ctx, side * 0.40f, side * 0.68f);
+		CGContextClosePath(ctx);
+		CGContextFillPath(ctx);
+	}
+
+	UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return image;
+}
+
++ (UIImage *)fileDiscOfSide:(CGFloat)side {
+	UIGraphicsBeginImageContextWithOptions(CGSizeMake(side, side), NO, 0);
+	CGContextRef ctx = UIGraphicsGetCurrentContext();
+
+	CGContextSetRGBFillColor(ctx, 0.447f, 0.710f, 0.914f, 1.0f);   // #72B5E9
+	CGContextFillEllipseInRect(ctx, CGRectMake(0, 0, side, side));
+
+	// A sheet with the top right corner turned down, drawn as one path so the
+	// fold reads as a notch rather than a separate shape.
+	CGContextSetRGBFillColor(ctx, 1, 1, 1, 1);
+	CGFloat l = side * 0.34f, r = side * 0.66f, t = side * 0.28f, b = side * 0.72f;
+	CGFloat fold = side * 0.12f;
+	CGContextMoveToPoint(ctx, l, t);
+	CGContextAddLineToPoint(ctx, r - fold, t);
+	CGContextAddLineToPoint(ctx, r, t + fold);
+	CGContextAddLineToPoint(ctx, r, b);
+	CGContextAddLineToPoint(ctx, l, b);
+	CGContextClosePath(ctx);
+	CGContextFillPath(ctx);
+
+	// The fold itself, punched back out in the disc's blue.
+	CGContextSetRGBFillColor(ctx, 0.447f, 0.710f, 0.914f, 1.0f);
+	CGContextMoveToPoint(ctx, r - fold, t);
+	CGContextAddLineToPoint(ctx, r, t + fold);
+	CGContextAddLineToPoint(ctx, r - fold, t + fold);
+	CGContextClosePath(ctx);
+	CGContextFillPath(ctx);
+
+	UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return image;
+}
+
++ (UIImage *)microphoneOfSide:(CGFloat)side colour:(UIColor *)colour {
+	UIGraphicsBeginImageContextWithOptions(CGSizeMake(side, side), NO, 0);
+	CGContextRef ctx = UIGraphicsGetCurrentContext();
+	[colour set];
+
+	// capsule head, the arc under it, the stand and the foot
+	UIBezierPath *head = [UIBezierPath bezierPathWithRoundedRect:
+			CGRectMake(side * 0.40f, side * 0.18f, side * 0.20f, side * 0.38f)
+												   cornerRadius:side * 0.10f];
+	[head fill];
+
+	CGContextSetLineWidth(ctx, MAX(1.5f, side * 0.055f));
+	CGContextSetLineCap(ctx, kCGLineCapRound);
+	CGContextAddArc(ctx, side / 2, side * 0.50f, side * 0.20f, 0, M_PI, 0);
+	CGContextStrokePath(ctx);
+
+	CGContextMoveToPoint(ctx, side / 2, side * 0.70f);
+	CGContextAddLineToPoint(ctx, side / 2, side * 0.80f);
+	CGContextStrokePath(ctx);
+
+	CGContextMoveToPoint(ctx, side * 0.38f, side * 0.80f);
+	CGContextAddLineToPoint(ctx, side * 0.62f, side * 0.80f);
+	CGContextStrokePath(ctx);
+
+	UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return image;
+}
+
++ (UIImage *)waveform:(NSData *)waveform size:(CGSize)size
+               played:(CGFloat)played colour:(UIColor *)colour {
+	UIGraphicsBeginImageContextWithOptions(size, NO, 0);
+	CGContextRef ctx = UIGraphicsGetCurrentContext();
+
+	const uint8_t *bytes = (const uint8_t *)waveform.bytes;
+	NSUInteger bits = waveform.length * 8 / 5;      // five bits per sample
+	CGFloat barW = 2, gap = 1;
+	NSUInteger bars = (NSUInteger)(size.width / (barW + gap));
+	if (bars == 0)
+		return nil;
+
+	for (NSUInteger i = 0; i < bars; i++){
+		CGFloat value = 0.35f;                       // a flat line when there
+		if (bits > 0){                               // is no waveform at all
+			NSUInteger index = i * bits / bars;
+			NSUInteger bit = index * 5;
+			NSUInteger byte = bit / 8;
+			if (byte + 1 < waveform.length){
+				uint16_t window = (uint16_t)((bytes[byte] | (bytes[byte + 1] << 8)) >> (bit % 8));
+				value = (window & 0x1F) / 31.0f;
+			}
+		}
+
+		CGFloat height = MAX(2.0f, value * size.height);
+		CGFloat x = i * (barW + gap);
+		CGRect bar = CGRectMake(x, (size.height - height) / 2, barW, height);
+
+		// The part already heard is solid; the rest is faded, which is how
+		// Telegram shows progress through a message.
+		CGFloat alpha = (i < bars * played) ? 1.0f : 0.4f;
+		[[colour colorWithAlphaComponent:alpha] set];
+		UIBezierPath *rounded = [UIBezierPath bezierPathWithRoundedRect:bar cornerRadius:1];
+		[rounded fill];
+	}
+
+	UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return image;
+}
+
++ (UIImage *)bubbleTailForColour:(UIColor *)colour outgoing:(BOOL)outgoing {
+	CGSize size = CGSizeMake(6, 10);
+	UIGraphicsBeginImageContextWithOptions(size, NO, 0);
+	CGContextRef ctx = UIGraphicsGetCurrentContext();
+	[colour set];
+
+	// A curl off the bottom corner, mirrored for an incoming bubble.
+	if (outgoing){
+		CGContextMoveToPoint(ctx, 0, 0);
+		CGContextAddLineToPoint(ctx, 0, 10);
+		CGContextAddCurveToPoint(ctx, 3, 9, 5, 7, 6, 4);
+		CGContextAddLineToPoint(ctx, 0, 4);
+	} else {
+		CGContextMoveToPoint(ctx, 6, 0);
+		CGContextAddLineToPoint(ctx, 6, 10);
+		CGContextAddCurveToPoint(ctx, 3, 9, 1, 7, 0, 4);
+		CGContextAddLineToPoint(ctx, 6, 4);
+	}
+	CGContextClosePath(ctx);
+	CGContextFillPath(ctx);
+
+	UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return image;
+}
+
 + (UIImage *)ticksWhite:(BOOL)white {
 	CGSize size = CGSizeMake(15, 9);
 	UIGraphicsBeginImageContextWithOptions(size, NO, 0);

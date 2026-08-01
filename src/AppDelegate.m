@@ -208,7 +208,8 @@ static void TGWatchForIncomingCalls(void) {
  *   itglegacy://tab/N            select a tab
  *   itglegacy://chatindex/N      open the Nth chat in the list
  *   itglegacy://profile          open the profile of the chat on screen
- *   itglegacy://theme/NAME       apply a theme file from Documents ("none" clears)
+ *   itglegacy://theme/NAME       apply a theme file from Documents ("none" clears,
+ *                                "skeuomorphic"/"flat"/"dark" pick a built-in)
  *   itglegacy://stickers         open the sticker strip in the chat on screen
  *   itglegacy://tab/N            switch to tab N (0 chats, 1 contacts, 2 settings)
  *   itglegacy://device           open the Device screen
@@ -456,8 +457,19 @@ static void TGWatchForIncomingCalls(void) {
 	}
 
 	// itglegacy://theme/<file> - apply a theme file sitting in Documents.
+	// The three built-in styles answer to their own names, because reaching a
+	// settings row from a URL is not possible and checking a theme on the
+	// device otherwise means a finger.
 	if ([host isEqualToString:@"theme"]){
 		dispatch_async(dispatch_get_main_queue(), ^{
+			NSArray *builtIn = @[@"skeuomorphic", @"flat", @"dark"];
+			NSUInteger style = [builtIn indexOfObject:arg.lowercaseString];
+			if (style != NSNotFound){
+				[[TGTheme shared] clearImportedTheme];
+				[TGTheme shared].style = (TGThemeStyle)style;
+				NSLog(@"theme: built-in %@", arg);
+				return;
+			}
 			if ([arg isEqualToString:@"none"]){
 				[[TGTheme shared] clearImportedTheme];
 				NSLog(@"theme: cleared");

@@ -19,12 +19,20 @@
 #import "UIImage+WebP.h"
 #import "TGLottieView.h"
 
-static const CGFloat kInputHeight = 44.0f;
+// Their design system is drawn for Android at 360dp; a 4S is 320pt, so
+// everything taken from it is scaled by 0.889 and rounded to a whole point.
+static const CGFloat kInputHeight = 48.0f;
 static const CGFloat kBubbleMaxW  = 240.0f;
 static const CGFloat kPadH        = 10.0f;
 static const CGFloat kAvatarSide  = 28.0f;   // sender avatar in groups
 static const CGFloat kPadV        = 7.0f;
 static const CGFloat kImageMax    = 200.0f;
+static const CGFloat kSendSide    = 36.0f;   // the round send button
+// Their file block: an 80dp tile carrying a 42dp disc, 71 and 37 here.
+static const CGFloat kFileTile    = 71.0f;
+static const CGFloat kFileDisc    = 37.0f;
+// A picture in a bubble is clipped to the same radius their media uses.
+static const CGFloat kMediaRadius = 6.0f;
 
 #pragma mark - bubble cell
 
@@ -41,6 +49,10 @@ static const CGFloat kImageMax    = 200.0f;
 @property (nonatomic, strong) UILabel *quote;      // what is being replied to
 @property (nonatomic, strong) UIImageView *ticks;  // delivery marks
 @property (nonatomic, strong) UIImageView *senderAvatar;  // groups only
+@property (nonatomic, strong) UIImageView *tail;         // the curl off the corner
+@property (nonatomic, strong) UIImageView *disc;        // play button on media
+@property (nonatomic, strong) UIImageView *wave;        // voice message bars
+@property (nonatomic, strong) UILabel *mediaStamp;      // the time over a picture
 @end
 
 @implementation TGBubbleCell
@@ -76,6 +88,18 @@ static const CGFloat kImageMax    = 200.0f;
 	self.sender.backgroundColor = [UIColor clearColor];
 	self.sender.hidden = YES;
 	[self.contentView addSubview:self.sender];
+
+	self.disc = [[UIImageView alloc] init];
+	self.disc.hidden = YES;
+	[self.bubble addSubview:self.disc];
+
+	self.wave = [[UIImageView alloc] init];
+	self.wave.hidden = YES;
+	[self.bubble addSubview:self.wave];
+
+	self.tail = [[UIImageView alloc] init];
+	self.tail.hidden = YES;
+	[self.contentView addSubview:self.tail];
 
 	self.senderAvatar = [[UIImageView alloc] init];
 	self.senderAvatar.layer.cornerRadius = kAvatarSide / 2;
@@ -117,6 +141,17 @@ static const CGFloat kImageMax    = 200.0f;
 	self.lottie.hidden = YES;
 	[self.bubble addSubview:self.lottie];
 
+	// A stamp on a picture cannot be grey on nothing - it needs its own plate,
+	// which is what their mediaDateAndStatusBg is.
+	self.mediaStamp = [[UILabel alloc] init];
+	self.mediaStamp.font = [UIFont systemFontOfSize:11];
+	self.mediaStamp.textColor = [UIColor whiteColor];
+	self.mediaStamp.textAlignment = NSTextAlignmentCenter;
+	self.mediaStamp.layer.cornerRadius = 8;
+	self.mediaStamp.clipsToBounds = YES;
+	self.mediaStamp.hidden = YES;
+	[self.bubble addSubview:self.mediaStamp];
+
 	self.time = [[UILabel alloc] init];
 	self.time.font = [UIFont systemFontOfSize:11];
 	self.time.backgroundColor = [UIColor clearColor];
@@ -155,6 +190,10 @@ static const CGFloat kImageMax    = 200.0f;
 @property (nonatomic, strong) UISearchBar *chatSearchBar;
 @property (nonatomic, strong) NSArray *messagesBeforeSearch;
 @property (nonatomic, strong) NSTimer *recordTimer;
+@property (nonatomic, strong) UIView *recordPanel;      // shown while holding
+@property (nonatomic, strong) UILabel *recordClock;
+@property (nonatomic, strong) UIView *recordDot;
+@property (nonatomic, assign) int64_t playingMessageId;
 @property (nonatomic, strong) NSMutableDictionary *senderAvatars;   // userId -> UIImage
 @property (nonatomic, strong) NSMutableSet *senderAvatarsRequested;
 @property (nonatomic, strong) UILabel *downloadHUD;
@@ -303,6 +342,10 @@ static const CGFloat kImageMax    = 200.0f;
 		me.view.backgroundColor = [[TGTheme shared] chatBackgroundColour];
 		me.table.backgroundColor = [UIColor clearColor];
 		me.inputBar.backgroundColor = [[TGTheme shared] inputBarColour];
+		me.input.backgroundColor = [[TGTheme shared] listBackgroundColour];
+		me.input.textColor = [[TGTheme shared] primaryTextColour];
+		me.input.layer.borderColor = [[TGTheme shared] separatorColour].CGColor;
+		me.sendButton.backgroundColor = [[TGTheme shared] accentColour];
 		me.wallpaperView.image = [[TGTheme shared] wallpaper];
 		[[TGTheme shared] styleNavigationBar:me.navigationController.navigationBar];
 		[me.table reloadData];
@@ -338,37 +381,52 @@ static const CGFloat kImageMax    = 200.0f;
 	self.inputBar.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin;
 
 	UIView *hair = [[UIView alloc] initWithFrame:CGRectMake(0, 0, b.size.width, 1)];
-	hair.backgroundColor = [UIColor colorWithWhite:0.75f alpha:1.0f];
+	hair.backgroundColor = [[TGTheme shared] separatorColour];
 	hair.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	[self.inputBar addSubview:hair];
 
+	CGFloat sendY = (kInputHeight - kSendSide) / 2;
+
 	UIButton *attach = [UIButton buttonWithType:UIButtonTypeCustom];
-	attach.frame = CGRectMake(4, 6, 34, kInputHeight - 12);
+	attach.frame = CGRectMake(4, sendY, 34, kSendSide);
 	[attach setImage:[TGIcons attach] forState:UIControlStateNormal];
 	attach.tintColor = [[TGTheme shared] accentColour];
 	[attach addTarget:self action:@selector(attachTapped)
 			forControlEvents:UIControlEventTouchUpInside];
 	[self.inputBar addSubview:attach];
 
+	// Their composer is a rounded field on a pale strip, not a bordered box.
 	self.input = [[UITextField alloc] initWithFrame:
-			CGRectMake(38, 7, b.size.width - 142, kInputHeight - 14)];
-	self.input.borderStyle = UITextBorderStyleRoundedRect;
+			CGRectMake(40, 7, b.size.width - 120, kInputHeight - 14)];
+	self.input.borderStyle = UITextBorderStyleNone;
+	self.input.background = nil;
+	self.input.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	self.input.layer.cornerRadius = (kInputHeight - 14) / 2;
+	self.input.layer.borderWidth = 1.0f;
+	self.input.layer.borderColor = [[TGTheme shared] separatorColour].CGColor;
+	// A rounded field with no left inset puts the caret against the curve.
+	self.input.leftView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 10, 1)];
+	self.input.leftViewMode = UITextFieldViewModeAlways;
 	self.input.placeholder = @"Message";
+	self.input.textColor = [[TGTheme shared] primaryTextColour];
 	self.input.font = [UIFont systemFontOfSize:15];
 	self.input.returnKeyType = UIReturnKeySend;
+	self.input.keyboardAppearance = [TGTheme shared].isDark
+			? UIKeyboardAppearanceAlert : UIKeyboardAppearanceDefault;
 	self.input.delegate = self;
 	self.input.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	[self.inputBar addSubview:self.input];
 
-	// UIButtonTypeSystem is iOS 7; RoundedRect is its iOS 6 equivalent and is
-	// merely deprecated later, not absent.
-	UIButtonType sendType = UIButtonTypeRoundedRect;
-	if (NSFoundationVersionNumber > 993.00 /* NSFoundationVersionNumber_iOS_6_1 */)
-		sendType = UIButtonTypeSystem;
-	self.sendButton = [UIButton buttonWithType:sendType];
-	self.sendButton.frame = CGRectMake(b.size.width - 64, 6, 58, kInputHeight - 12);
-	[self.sendButton setTitle:@"Send" forState:UIControlStateNormal];
-	self.sendButton.titleLabel.font = [UIFont boldSystemFontOfSize:16];
+	// Their send button is a blue disc with a white plane, not a word.
+	self.sendButton = [UIButton buttonWithType:UIButtonTypeCustom];
+	self.sendButton.frame = CGRectMake(b.size.width - kSendSide - 6, sendY,
+									   kSendSide, kSendSide);
+	self.sendButton.backgroundColor = [[TGTheme shared] accentColour];
+	self.sendButton.layer.cornerRadius = kSendSide / 2;
+	[self.sendButton setImage:[TGIcons send] forState:UIControlStateNormal];
+	self.sendButton.tintColor = [UIColor whiteColor];
+	// The plane reads as centred only when it is nudged off centre.
+	self.sendButton.imageEdgeInsets = UIEdgeInsetsMake(0, 2, 0, 0);
 	self.sendButton.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
 	[self.sendButton addTarget:self action:@selector(sendTapped)
 			forControlEvents:UIControlEventTouchUpInside];
@@ -376,9 +434,10 @@ static const CGFloat kImageMax    = 200.0f;
 
 	// A sticker button beside the composer, as clients place it.
 	self.stickerButton = [UIButton buttonWithType:UIButtonTypeCustom];
-	self.stickerButton.frame = CGRectMake(b.size.width - 100, 6, 30, kInputHeight - 12);
+	self.stickerButton.frame = CGRectMake(b.size.width - kSendSide - 42, sendY,
+										  30, kSendSide);
 	[self.stickerButton setImage:[TGIcons sticker] forState:UIControlStateNormal];
-	self.stickerButton.tintColor = [[TGTheme shared] accentColour];
+	self.stickerButton.tintColor = [[TGTheme shared] secondaryTextColour];
 	self.stickerButton.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
 	[self.stickerButton addTarget:self action:@selector(toggleStickerPanel)
 				 forControlEvents:UIControlEventTouchUpInside];
@@ -389,7 +448,7 @@ static const CGFloat kImageMax    = 200.0f;
 	self.micButton = [UIButton buttonWithType:UIButtonTypeCustom];
 	self.micButton.frame = self.sendButton.frame;
 	[self.micButton setImage:[TGIcons microphone] forState:UIControlStateNormal];
-	self.micButton.tintColor = [[TGTheme shared] accentColour];
+	self.micButton.tintColor = [[TGTheme shared] secondaryTextColour];
 	self.micButton.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
 	[self.micButton addTarget:self action:@selector(recordStart)
 			 forControlEvents:UIControlEventTouchDown];
@@ -647,7 +706,8 @@ static const CGFloat kImageMax    = 200.0f;
 
 /// Telegram puts the chat's picture top right, and it opens the profile.
 - (void)buildAvatarButton {
-	CGFloat side = 30;
+	// 42dp in their header, which is 37 here and still clears a 44pt bar.
+	CGFloat side = 37;
 	UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
 	button.frame = CGRectMake(0, 0, side, side);
 	button.layer.cornerRadius = side / 2;
@@ -1127,12 +1187,84 @@ static const CGFloat kImageMax    = 200.0f;
 	self.micButton.hidden = hasText;
 }
 
+/// Their recording panel: a red dot, the running time, "Slide to cancel", and
+/// the microphone grown into a disc with a halo around it. It takes over the
+/// composer for as long as the finger is down.
+- (void)showRecordPanel {
+	CGRect bar = self.inputBar.frame;
+	if (!self.recordPanel){
+		self.recordPanel = [[UIView alloc] initWithFrame:bar];
+		self.recordPanel.backgroundColor = [[TGTheme shared] listBackgroundColour];
+		self.recordPanel.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+											UIViewAutoresizingFlexibleTopMargin;
+
+		UIView *hair = [[UIView alloc] initWithFrame:CGRectMake(0, 0, bar.size.width, 1)];
+		hair.backgroundColor = [[TGTheme shared] separatorColour];
+		hair.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+		[self.recordPanel addSubview:hair];
+
+		// 10dp in their panel, and it blinks the way a recorder's does.
+		self.recordDot = [[UIView alloc] initWithFrame:
+				CGRectMake(14, (kInputHeight - 9) / 2, 9, 9)];
+		self.recordDot.backgroundColor = [UIColor colorWithRed:0.878f green:0.329f
+														 blue:0.341f alpha:1.0f];
+		self.recordDot.layer.cornerRadius = 4.5f;
+		[self.recordPanel addSubview:self.recordDot];
+
+		self.recordClock = [[UILabel alloc] initWithFrame:
+				CGRectMake(32, (kInputHeight - 20) / 2, 62, 20)];
+		self.recordClock.font = [UIFont systemFontOfSize:16];
+		self.recordClock.textColor = [UIColor colorWithRed:0.557f green:0.584f
+													  blue:0.608f alpha:1.0f];
+		self.recordClock.backgroundColor = [UIColor clearColor];
+		[self.recordPanel addSubview:self.recordClock];
+
+		UILabel *cancel = [[UILabel alloc] initWithFrame:
+				CGRectMake(100, (kInputHeight - 20) / 2, bar.size.width - 180, 20)];
+		cancel.text = @"‹ Slide to cancel";
+		cancel.font = [UIFont systemFontOfSize:15];
+		cancel.textColor = [UIColor colorWithRed:0.565f green:0.592f
+											blue:0.616f alpha:1.0f];
+		cancel.backgroundColor = [UIColor clearColor];
+		cancel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+		[self.recordPanel addSubview:cancel];
+
+		// 89dp with the button itself at 63 inside it; scaled to fit the strip.
+		CGFloat halo = kInputHeight + 12, disc = 44;
+		UIView *ring = [[UIView alloc] initWithFrame:
+				CGRectMake(bar.size.width - halo + 4, (kInputHeight - halo) / 2, halo, halo)];
+		ring.backgroundColor = [[TGTheme shared] accentColour];
+		ring.alpha = 0.25f;
+		ring.layer.cornerRadius = halo / 2;
+		ring.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+		[self.recordPanel addSubview:ring];
+
+		UIImageView *button = [[UIImageView alloc] initWithFrame:CGRectMake(
+				CGRectGetMidX(ring.frame) - disc / 2, (kInputHeight - disc) / 2, disc, disc)];
+		button.backgroundColor = [UIColor colorWithRed:0.369f green:0.655f
+												  blue:0.871f alpha:1.0f];   // #5EA7DE
+		button.layer.cornerRadius = disc / 2;
+		button.image = [TGIcons microphoneOfSide:disc colour:[UIColor whiteColor]];
+		button.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+		[self.recordPanel addSubview:button];
+	}
+
+	self.recordPanel.frame = bar;
+	self.recordClock.text = @"0:00,0";
+	self.recordDot.alpha = 1.0f;
+	[self.view addSubview:self.recordPanel];
+}
+
+- (void)hideRecordPanel {
+	[self.recordPanel removeFromSuperview];
+}
+
 - (void)recordStart {
 	if (![[TGVoiceRecorder shared] start]){
 		[self showPlaybackFailure];
 		return;
 	}
-	[self showComposeBanner:@"Recording... 0:00"];
+	[self showRecordPanel];
 	self.recordTimer = [NSTimer scheduledTimerWithTimeInterval:0.5
 													   target:self
 													 selector:@selector(recordTick)
@@ -1142,15 +1274,16 @@ static const CGFloat kImageMax    = 200.0f;
 
 - (void)recordTick {
 	NSTimeInterval d = [TGVoiceRecorder shared].duration;
-	UILabel *label = (UILabel *)[self.composeBanner.subviews firstObject];
-	if ([label isKindOfClass:UILabel.class])
-		label.text = [NSString stringWithFormat:@"Recording... %ld:%02ld",
-				(long)(d / 60), (long)((NSInteger)d % 60)];
+	// Their panel shows tenths, which is what makes it read as running.
+	self.recordClock.text = [NSString stringWithFormat:@"%ld:%02ld,%ld",
+			(long)(d / 60), (long)((NSInteger)d % 60), (long)((NSInteger)(d * 10) % 10)];
+	self.recordDot.alpha = (self.recordDot.alpha < 1.0f) ? 1.0f : 0.25f;
 }
 
 - (void)recordFinish {
 	[self.recordTimer invalidate];
 	self.recordTimer = nil;
+	[self hideRecordPanel];
 
 	__weak typeof(self) weakSelf = self;
 	[[TGVoiceRecorder shared] stopWithCompletion:^(NSString *path, NSTimeInterval seconds){
@@ -1168,6 +1301,7 @@ static const CGFloat kImageMax    = 200.0f;
 - (void)recordCancel {
 	[self.recordTimer invalidate];
 	self.recordTimer = nil;
+	[self hideRecordPanel];
 	[[TGVoiceRecorder shared] cancel];
 	[self clearComposeState];
 }
@@ -1477,6 +1611,8 @@ static const NSInteger kPollSheetTag    = 43;
 						return;
 					}
 					NSLog(@"voice: playing %.1f s", self.voicePlayer.duration);
+					self.playingMessageId = [m[@"id"] longLongValue];
+					[self.table reloadData];
 					[self.voicePlayer play];
 				});
 			});
@@ -1593,12 +1729,28 @@ static const NSInteger kPollSheetTag    = 43;
 	return fetched[@"text"] ?: @"...";
 }
 
+/// Who wrote the message being answered. Only known once the original has been
+/// fetched; TDLib's inline quote carries the text but not the author.
+- (NSString *)quoteAuthorFor:(NSDictionary *)m {
+	NSNumber *replyId = [m[@"replyId"] isKindOfClass:NSNumber.class] ? m[@"replyId"] : nil;
+	if (!replyId)
+		return nil;
+	NSDictionary *original = self.quotes[replyId];
+	if (!original)
+		return nil;
+	if ([original[@"outgoing"] boolValue])
+		return @"You";
+	return [[TGClient shared] nameForUserId:[original[@"senderId"] longLongValue]];
+}
+
 - (CGFloat)decorationHeightFor:(NSDictionary *)m {
 	CGFloat h = 0;
 	if ([m[@"forward"] length])
 		h += 16;
+	// Their reply block is two lines beside a stripe: the author, then what
+	// they said.
 	if ([self quoteTextFor:m])
-		h += 32;
+		h += 38;
 	if ([m[@"reactions"] length])
 		h += 18;
 	return h;
@@ -1640,6 +1792,15 @@ static const NSInteger kPollSheetTag    = 43;
 	return (oneLine + 6 + [self timeWidthFor:m]) <= (kBubbleMaxW - 2 * kPadH);
 }
 
+/// A picture with no caption carries its own stamp on a plate, so the bubble
+/// does not need a strip of empty space under it for one.
+- (BOOL)stampSitsOnPictureFor:(NSDictionary *)m {
+	return [self imageSizeFor:m].height > 0 && [self bodySizeFor:m].height == 0 &&
+		   ![m[@"kind"] isEqualToString:@"messageVideoNote"] &&
+		   ![m[@"kind"] isEqualToString:@"messageSticker"] &&
+		   ![m[@"kind"] isEqualToString:@"messageAnimatedEmoji"];
+}
+
 - (CGSize)bodySizeFor:(NSDictionary *)m {
 	NSString *text = m[@"text"] ?: @"";
 	if (!text.length)
@@ -1669,6 +1830,10 @@ static const NSInteger kPollSheetTag    = 43;
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
 	NSDictionary *m = self.messages[indexPath.row];
+	// A voice message is a fixed block rather than a run of text: the disc,
+	// the bars and the duration, sized the way their media components are.
+	BOOL isVoice = [m[@"kind"] isEqualToString:@"messageVoiceNote"];
+
 	CGSize body = [self bodySizeFor:m];
 	CGSize pic  = [self imageSizeFor:m];
 
@@ -1681,12 +1846,17 @@ static const NSInteger kPollSheetTag    = 43;
 	if ([m[@"service"] boolValue])
 		return 30;
 
+	// Their media block is 80dp tall; a voice message needs only the disc and
+	// the bars, which comes to 54 on this screen.
+	if ([m[@"kind"] isEqualToString:@"messageVoiceNote"])
+		return 62;
+
 	if ([m[@"kind"] isEqualToString:@"messageDocument"] ||
 		[m[@"kind"] isEqualToString:@"messageContact"])
-		return 64;
+		return kFileTile + 2 * kPadV + 6;
 
 	CGFloat h = kPadV * 2 + [self decorationHeightFor:m] +
-			([self stampFitsInlineFor:m] ? 0 : 14);
+			([self stampFitsInlineFor:m] || [self stampSitsOnPictureFor:m] ? 0 : 14);
 	if (self.isGroup && ![m[@"outgoing"] boolValue] &&
 		[[TGClient shared] nameForUserId:[m[@"senderId"] longLongValue]])
 		h += 15;                                // room for the sender line
@@ -1733,28 +1903,41 @@ static UIColor *TGSenderColour(int64_t userId) {
 	cell.subtitle.hidden = YES;
 	cell.sender.hidden = YES;
 	cell.senderAvatar.hidden = YES;
+	cell.tail.hidden = YES;
+	cell.disc.hidden = YES;
+	cell.wave.hidden = YES;
 
 	// Service messages sit centred on the wallpaper, not in a bubble - joins,
 	// renames, pins. Groups are full of them.
 	if ([m[@"service"] boolValue]){
-		CGFloat width = tableView.bounds.size.width - 40;
-		cell.bubble.frame = CGRectMake(20, 4, width, 22);
-		cell.bubble.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.10f];
+		TGTheme *serviceTheme = [TGTheme shared];
+		// "joined the group" reads oddly with nobody attached to it.
+		NSString *who = [[TGClient shared] nameForUserId:[m[@"senderId"] longLongValue]];
+		NSString *line = who.length
+				? [NSString stringWithFormat:@"%@ %@", who, m[@"text"]]
+				: (m[@"text"] ?: @"");
+
+		// Their service message is a plate the width of its own text, centred -
+		// not a bar across the chat. It sits over the wallpaper, so it is a
+		// wash with white text rather than grey on grey.
+		UIFont *font = [UIFont systemFontOfSize:12];
+		CGFloat full = tableView.bounds.size.width;
+		CGFloat textW = MIN([line sizeWithFont:font].width, full - 60);
+		CGFloat plateW = textW + 20;
+
+		cell.bubble.frame = CGRectMake((full - plateW) / 2, 4, plateW, 21);
+		cell.bubble.backgroundColor = [serviceTheme serviceBubbleColour];
 		cell.bubble.layer.borderWidth = 0;
-		cell.bubble.layer.cornerRadius = 11;
+		cell.bubble.layer.cornerRadius = 10.5f;
 		cell.picture.hidden = YES;
 		cell.time.text = @"";
 		cell.body.hidden = NO;
 		cell.body.numberOfLines = 1;
-		cell.body.font = [UIFont systemFontOfSize:12];
+		cell.body.font = font;
 		cell.body.textAlignment = NSTextAlignmentCenter;
-		cell.body.textColor = [[TGTheme shared] secondaryTextColour];
-		// "joined the group" reads oddly with nobody attached to it.
-		NSString *who = [[TGClient shared] nameForUserId:[m[@"senderId"] longLongValue]];
-		cell.body.text = who.length
-				? [NSString stringWithFormat:@"%@ %@", who, m[@"text"]]
-				: m[@"text"];
-		cell.body.frame = CGRectMake(0, 3, width, 16);
+		cell.body.textColor = [serviceTheme serviceTextColour];
+		cell.body.text = line;
+		cell.body.frame = CGRectMake(0, 2, plateW, 17);
 		return cell;
 	}
 	cell.body.textAlignment = NSTextAlignmentLeft;
@@ -1772,52 +1955,77 @@ static UIColor *TGSenderColour(int64_t userId) {
 		NSString *first = lines.count ? lines[0] : @"";
 		NSString *second = lines.count > 1 ? lines[1] : @"";
 
-		CGFloat width = 250;
-		CGFloat height = 58;
+		TGTheme *cardTheme = [TGTheme shared];
+		// Their file block is 253x87 at 360dp: an 80dp tile on the left, the
+		// name and the size stacked beside it.
+		CGFloat width = 225;
+		CGFloat height = kFileTile + 2 * kPadV;
 		CGFloat x = mine ? (tableView.bounds.size.width - width - 8) : 8;
 		cell.bubble.frame = CGRectMake(x, 3, width, height);
-		TGTheme *cardTheme = [TGTheme shared];
 		cell.bubble.backgroundColor = mine ? [cardTheme bubbleMineColour]
 										   : [cardTheme bubbleTheirsColour];
 		cell.bubble.layer.borderWidth = [cardTheme bubbleBorderWidth];
 		cell.bubble.layer.borderColor = [cardTheme bubbleBorderColour].CGColor;
+		cell.bubble.layer.cornerRadius = [cardTheme bubbleCornerRadius];
 
+		// A document gets the tile; a contact keeps its initials, because a
+		// sheet of paper says nothing about a person.
 		cell.icon.hidden = NO;
-		cell.icon.frame = CGRectMake(kPadH, 11, 36, 36);
-		cell.icon.layer.cornerRadius = 18;
+		cell.icon.frame = CGRectMake(kPadH, kPadV, kFileTile, kFileTile);
 		if (isDoc){
-			cell.icon.text = @"\u25a4";              // a sheet of paper
-			cell.icon.backgroundColor = [[TGTheme shared] accentColour];
+			cell.icon.text = @"";
+			cell.icon.layer.cornerRadius = 3;
+			cell.icon.backgroundColor = [cardTheme fileTileColour];
+
+			cell.disc.hidden = NO;
+			cell.disc.image = [TGIcons fileDiscOfSide:kFileDisc];
+			cell.disc.frame = CGRectMake(kPadH + (kFileTile - kFileDisc) / 2,
+										 kPadV + (kFileTile - kFileDisc) / 2,
+										 kFileDisc, kFileDisc);
 		} else {
-			// initials read better than a generic person glyph
 			NSString *initials = first.length ? [first substringToIndex:1] : @"?";
 			NSArray *words = [first componentsSeparatedByString:@" "];
 			if (words.count > 1 && [words[1] length])
 				initials = [initials stringByAppendingString:[words[1] substringToIndex:1]];
 			cell.icon.text = initials.uppercaseString;
-			cell.icon.backgroundColor = [UIColor colorWithRed:0.36f green:0.72f blue:0.45f alpha:1.0f];
+			cell.icon.font = [UIFont boldSystemFontOfSize:24];
+			cell.icon.layer.cornerRadius = kFileTile / 2;
+			cell.icon.backgroundColor = [cardTheme mediaCircleColour];
 		}
 
+		CGFloat textX = kPadH + kFileTile + 10;
 		cell.body.hidden = NO;
-		cell.body.numberOfLines = 1;
-		cell.body.font = [UIFont boldSystemFontOfSize:15];
-		cell.body.textColor = [cardTheme primaryTextColour];
+		cell.body.numberOfLines = 2;
+		cell.body.font = [UIFont systemFontOfSize:15];
+		cell.body.textColor = isDoc ? [cardTheme fileNameColour]
+									: [cardTheme primaryTextColour];
 		cell.body.text = first;
-		cell.body.frame = CGRectMake(56, 10, width - 66, 20);
+		cell.body.frame = CGRectMake(textX, kPadV + 8, width - textX - kPadH, 38);
 
 		cell.subtitle.hidden = NO;
+		cell.subtitle.font = [UIFont systemFontOfSize:13];
+		cell.subtitle.textColor = [cardTheme fileMetaColour];
 		cell.subtitle.text = second;
-		cell.subtitle.frame = CGRectMake(56, 30, width - 66, 18);
+		cell.subtitle.frame = CGRectMake(textX, kPadV + 46, width - textX - kPadH, 17);
 
-		static NSDateFormatter *hmd = nil;
-		if (!hmd){ hmd = [[NSDateFormatter alloc] init]; [hmd setDateFormat:@"HH:mm"]; }
-		cell.time.text = [hmd stringFromDate:
-				[NSDate dateWithTimeIntervalSince1970:[m[@"date"] doubleValue]]];
-		cell.time.textColor = [UIColor colorWithWhite:0.45f alpha:1.0f];
-		cell.time.frame = CGRectMake(width - 50, height - 16, 44, 12);
+		cell.time.text = [self stampFor:m];
+		cell.time.textColor = [cardTheme timeColour];
+		CGFloat fileTimeW = [self timeWidthFor:m];
+		CGFloat fileTicks = mine ? 18 : 0;
+		cell.time.frame = CGRectMake(width - fileTimeW - kPadH, height - 17,
+									 fileTimeW - fileTicks, 12);
+		cell.ticks.hidden = !mine;
+		if (mine){
+			cell.ticks.image = [TGIcons ticksWhite:NO];
+			cell.ticks.frame = CGRectMake(width - kPadH - 15, height - 15, 15, 9);
+		}
 		cell.picture.hidden = YES;
 		return cell;
 	}
+
+	// A voice message is a fixed block rather than a run of text: the disc,
+	// the bars and the duration, sized the way their media components are.
+	BOOL isVoice = [m[@"kind"] isEqualToString:@"messageVoiceNote"];
 
 	CGSize body = [self bodySizeFor:m];
 	CGSize pic  = [self imageSizeFor:m];
@@ -1833,10 +2041,17 @@ static UIColor *TGSenderColour(int64_t userId) {
 	if (inlineStamp)
 		contentW = MAX(contentW, body.width + 6 + timeW);   // they share the last line
 
+	if (isVoice)
+		contentW = 190;
 	CGFloat bubbleW = MAX(contentW + 2 * kPadH, timeW + 2 * kPadH + 8);
 	bubbleW = MIN(bubbleW, kBubbleMaxW + 2 * kPadH);
-	CGFloat bubbleH  = kPadV * 2 + (inlineStamp ? 0 : 14) + [self decorationHeightFor:m] +
+	BOOL stampOnPicture = [self stampSitsOnPictureFor:m];
+	CGFloat bubbleH  = kPadV * 2 + (inlineStamp || stampOnPicture ? 0 : 14) +
+			[self decorationHeightFor:m] +
 			(pic.height ? pic.height + 4 : 0) + body.height;
+	// The voice block has its own size: a 40pt disc with the bars beside it.
+	if (isVoice)
+		bubbleH = 56;
 
 	CGFloat x = mine ? (tableView.bounds.size.width - bubbleW - 8) : 8;
 	// Photos of one album sit flush against each other, so the block reads as
@@ -1861,6 +2076,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 	}
 
 	cell.bubble.frame = CGRectMake(x, top, bubbleW, bubbleH);
+
 	if (!cell.senderAvatar.hidden)
 		cell.senderAvatar.frame = CGRectMake(8, top + bubbleH - kAvatarSide,
 											 kAvatarSide, kAvatarSide);
@@ -1868,14 +2084,24 @@ static UIColor *TGSenderColour(int64_t userId) {
 	// Outgoing green, incoming white - the convention every client uses.
 	// A sticker gets neither: no fill, no border.
 	TGTheme *theme = [TGTheme shared];
-	cell.bubble.backgroundColor = isSticker ? [UIColor clearColor] : (mine
-		? [theme bubbleMineColour] : [theme bubbleTheirsColour]);
+	UIColor *fill = mine ? [theme bubbleMineColour] : [theme bubbleTheirsColour];
+	cell.bubble.backgroundColor = isSticker ? [UIColor clearColor] : fill;
+
+	// The tail hangs off the bottom corner on the side the message came from.
+	// It has to be drawn from `fill` rather than from the bubble's own colour,
+	// which on a freshly dequeued cell has not been set yet and reads as black.
+	cell.tail.hidden = isSticker;
+	if (!cell.tail.hidden){
+		cell.tail.image = [TGIcons bubbleTailForColour:fill outgoing:mine];
+		cell.tail.frame = mine
+				? CGRectMake(x + bubbleW - 1, top + bubbleH - 10, 6, 10)
+				: CGRectMake(x - 5, top + bubbleH - 10, 6, 10);
+	}
 	cell.bubble.layer.borderWidth = isSticker ? 0.0f : [theme bubbleBorderWidth];
 	cell.bubble.layer.borderColor = [theme bubbleBorderColour].CGColor;
 	cell.bubble.layer.cornerRadius = [theme bubbleCornerRadius];
 	// A flat outgoing bubble is a solid accent colour, so its text inverts.
-	cell.body.textColor = (mine && theme.isFlat)
-		? [UIColor whiteColor] : [theme primaryTextColour];
+	cell.body.textColor = [theme primaryTextColour];
 
 	// A video note is a circle, with no bubble around it - that is how every
 	// client draws them.
@@ -1943,43 +2169,127 @@ static UIColor *TGSenderColour(int64_t userId) {
 	}
 
 	NSString *quoted = [self quoteTextFor:m];
+	UILabel *quoteAuthor = (UILabel *)[cell.bubble viewWithTag:0x9003];
 	if (quoted){
+		// A 2pt stripe the height of the block, then the author's name and the
+		// line being answered - which is how their reply reads at a glance.
 		cell.quoteBar.hidden = NO;
 		cell.quoteBar.backgroundColor = [theme accentColour];
-		cell.quoteBar.frame = CGRectMake(kPadH, y, 2, 28);
+		cell.quoteBar.frame = CGRectMake(kPadH, y, 2, 34);
+
+		if (!quoteAuthor){
+			quoteAuthor = [[UILabel alloc] init];
+			quoteAuthor.tag = 0x9003;
+			quoteAuthor.backgroundColor = [UIColor clearColor];
+			[cell.bubble addSubview:quoteAuthor];
+		}
+		quoteAuthor.hidden = NO;
+		quoteAuthor.font = [UIFont boldSystemFontOfSize:13];
+		quoteAuthor.textColor = [theme accentColour];
+		quoteAuthor.text = [self quoteAuthorFor:m] ?: @"Reply";
+		quoteAuthor.frame = CGRectMake(kPadH + 8, y, bubbleW - 2 * kPadH - 10, 16);
 
 		// the forward line above reuses the same label, so build a second one
 		UILabel *q = cell.quote.hidden ? cell.quote : nil;
 		if (!q){
 			q = [[UILabel alloc] init];
 			q.tag = 0x9001;
-			q.font = [UIFont systemFontOfSize:13];
-			q.numberOfLines = 2;
 			q.backgroundColor = [UIColor clearColor];
 			UILabel *existing = (UILabel *)[cell.bubble viewWithTag:0x9001];
 			if (existing) q = existing; else [cell.bubble addSubview:q];
 		}
 		q.hidden = NO;
-		q.numberOfLines = 2;
+		q.numberOfLines = 1;
 		q.font = [UIFont systemFontOfSize:13];
-		q.textColor = [theme secondaryTextColour];
+		q.textColor = [theme primaryTextColour];
 		q.text = quoted;
-		q.frame = CGRectMake(kPadH + 8, y, bubbleW - 2 * kPadH - 10, 28);
-		y += 32;
+		q.frame = CGRectMake(kPadH + 8, y + 17, bubbleW - 2 * kPadH - 10, 17);
+		y += 38;
 	} else {
 		UILabel *existing = (UILabel *)[cell.bubble viewWithTag:0x9001];
 		existing.hidden = YES;
+		quoteAuthor.hidden = YES;
 	}
 
+	cell.mediaStamp.hidden = YES;
 	if (pic.height > 0){
 		cell.picture.hidden = NO;
 		cell.picture.image = [self imageFor:m];
 		cell.picture.frame = CGRectMake(kPadH, y, pic.width, pic.height);
-		cell.picture.layer.cornerRadius = 8;
+		cell.picture.layer.cornerRadius = kMediaRadius;
+
+		// A video says so with a play button in the middle of the frame.
+		cell.disc.hidden = ![kind isEqualToString:@"messageVideo"] &&
+						   ![kind isEqualToString:@"messageAnimation"];
+		if (!cell.disc.hidden){
+			CGFloat disc = 42;
+			cell.disc.image = [TGIcons mediaDiscOfSide:disc playing:NO];
+			cell.disc.frame = CGRectMake(kPadH + (pic.width - disc) / 2,
+										 y + (pic.height - disc) / 2, disc, disc);
+		}
+
+		// With no caption under it the stamp has nowhere grey to sit, so it
+		// goes on the picture itself, on a plate.
+		if (!body.height){
+			NSString *stamp = [self stampFor:m];
+			CGFloat plateW = [stamp sizeWithFont:cell.mediaStamp.font].width +
+					(mine ? 30 : 14);
+			cell.mediaStamp.hidden = NO;
+			cell.mediaStamp.backgroundColor = [theme mediaStampColour];
+			cell.mediaStamp.text = stamp;
+			cell.mediaStamp.frame = CGRectMake(
+					kPadH + pic.width - plateW - 5, y + pic.height - 21, plateW, 16);
+			// The ticks were added to the bubble before the plate was, so
+			// without this they end up behind it.
+			[cell.bubble bringSubviewToFront:cell.ticks];
+		}
 		y += pic.height + 4;
 	} else {
 		cell.picture.hidden = YES;
 		cell.picture.image = nil;
+	}
+
+	if (isVoice){
+		TGTheme *voiceTheme = [TGTheme shared];
+		CGFloat disc = 36;
+		CGFloat left = kPadH + disc + 8;
+
+		cell.disc.hidden = NO;
+		cell.disc.image = [TGIcons mediaDiscOfSide:disc
+										   playing:(self.playingMessageId ==
+													[m[@"id"] longLongValue])];
+		cell.disc.frame = CGRectMake(kPadH, (bubbleH - disc) / 2, disc, disc);
+
+		// The bars take the width left over once the stamp has its corner.
+		cell.wave.hidden = NO;
+		CGSize waveSize = CGSizeMake(bubbleW - left - kPadH, 18);
+		cell.wave.image = [TGIcons waveform:m[@"waveform"]
+									   size:waveSize
+									 played:0
+									 colour:[voiceTheme accentColour]];
+		cell.wave.frame = CGRectMake(left, 10, waveSize.width, waveSize.height);
+
+		NSInteger seconds = [m[@"duration"] integerValue];
+		cell.body.hidden = NO;
+		cell.body.numberOfLines = 1;
+		cell.body.font = [UIFont systemFontOfSize:12];
+		cell.body.textColor = [voiceTheme secondaryTextColour];
+		cell.body.text = [NSString stringWithFormat:@"%ld:%02ld",
+				(long)(seconds / 60), (long)(seconds % 60)];
+		cell.body.frame = CGRectMake(left, bubbleH - 20, 44, 14);
+
+		cell.picture.hidden = YES;
+		cell.time.text = [self stampFor:m];
+		cell.time.textColor = [voiceTheme timeColour];
+		CGFloat tickRoom = mine ? 18 : 0;
+		cell.time.frame = CGRectMake(bubbleW - timeW - kPadH, bubbleH - 20,
+									 timeW - tickRoom, 12);
+		cell.ticks.hidden = !mine;
+		if (mine){
+			cell.ticks.image = [TGIcons ticksWhite:NO];
+			cell.ticks.frame = CGRectMake(bubbleW - kPadH - 15, bubbleH - 18, 15, 9);
+		}
+		return cell;
 	}
 
 	cell.body.hidden = (body.height == 0);
@@ -2001,22 +2311,31 @@ static UIColor *TGSenderColour(int64_t userId) {
 		}
 		reactions.hidden = NO;
 		reactions.text = reactionText;
-		reactions.textColor = (mine && theme.isFlat)
-				? [UIColor whiteColor] : [theme secondaryTextColour];
+		reactions.textColor = [theme secondaryTextColour];
 		reactions.frame = CGRectMake(kPadH, y + body.height + 2, bubbleW - 2 * kPadH, 16);
 	} else {
 		reactions.hidden = YES;
 	}
 
-	cell.time.text = [self albumContinuesAfterRow:indexPath.row] ? @"" : [self stampFor:m];
-	cell.time.textColor = [UIColor colorWithWhite:0.45f alpha:1.0f];
+	// A stamp already on the picture must not be repeated under it.
+	BOOL onPicture = !cell.mediaStamp.hidden;
+	cell.time.text = (onPicture || [self albumContinuesAfterRow:indexPath.row])
+			? @"" : [self stampFor:m];
+	cell.time.textColor = [theme timeColour];
 	CGFloat tickW = mine ? 18 : 0;
 	CGFloat stampY = inlineStamp ? (y + body.height - 14) : (bubbleH - kPadV - 13);
 	cell.time.frame = CGRectMake(bubbleW - timeW - kPadH, stampY, timeW - tickW, 12);
 
 	cell.ticks.hidden = !mine;
-	if (mine){
-		cell.ticks.image = [TGIcons ticksWhite:theme.isFlat];
+	if (mine && onPicture){
+		// Inside the plate the ticks need white; green would vanish into it.
+		cell.ticks.image = [TGIcons ticksWhite:YES];
+		cell.ticks.frame = CGRectMake(CGRectGetMaxX(cell.mediaStamp.frame) - 20,
+									  CGRectGetMidY(cell.mediaStamp.frame) - 4, 15, 9);
+	} else if (mine){
+		// Checks sit on a pale bubble now, so they are drawn in their green
+		// rather than white.
+		cell.ticks.image = [TGIcons ticksWhite:NO];
 		cell.ticks.frame = CGRectMake(bubbleW - kPadH - 15, stampY + 2, 15, 9);
 	}
 

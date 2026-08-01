@@ -119,7 +119,9 @@ typedef NS_ENUM(NSInteger, TGConnectionState) {
 /// Chat list, most recent first. Each entry is a dictionary with keys
 /// "id" (NSNumber), "title", "text" (last message preview), "unread"
 /// (NSNumber), "date" (NSNumber, unix time), "isGroup" (NSNumber BOOL - a
-/// basic group, supergroup or channel, where messages need a sender name).
+/// basic group, supergroup or channel, where messages need a sender name),
+/// "action" (NSString - "typing..." and the like, empty when nobody is), and
+/// "isOnline" (NSNumber BOOL, private chats only).
 /// Main queue only.
 @property (nonatomic, readonly) NSArray *chats;
 
