@@ -17,6 +17,7 @@
 + (UIImage *)send;
 + (UIImage *)attach;
 + (UIImage *)play;         ///< over video thumbnails
++ (UIImage *)pause;
 + (UIImage *)document;
 + (UIImage *)pin;
 + (UIImage *)microphone;
@@ -50,6 +51,11 @@
 + (UIImage *)avatarWithInitials:(NSString *)initials
                            size:(CGFloat)size
                        colourId:(int64_t)colourId;
+
+/// A line glyph for a row of the pop-up menu, by name: "reply", "forward",
+/// "copy", "edit", "delete", "pin", "unpin", "mute", "unmute", "archive",
+/// "react". Nil for a name it does not draw, which leaves the row plain.
++ (UIImage *)menuGlyphNamed:(NSString *)name;
 
 /// Drop the cache after a theme change.
 + (void)flush;

@@ -80,10 +80,6 @@ typedef NS_ENUM(NSInteger, TGConnectionState) {
 /// attributed. `completion` runs once the name is cached.
 - (void)ensureUserName:(int64_t)userId completion:(void (^)(void))completion;
 
-/// Remember unsent text for a chat, so leaving a conversation does not throw
-/// it away. Pass nil to clear.
-- (void)setDraft:(NSString *)text forChat:(int64_t)chatId thread:(int64_t)threadId;
-
 /// Chats in the archive, same shape as `chats`.
 @property (nonatomic, readonly) NSArray *archivedChats;
 /// Called on the main queue when the archive changes.
@@ -177,6 +173,9 @@ typedef NS_ENUM(NSInteger, TGConnectionState) {
 - (void)setChat:(int64_t)chatId pinned:(BOOL)pinned;
 /// Mute forever, or unmute.
 - (void)setChat:(int64_t)chatId muted:(BOOL)muted;
+
+/// Move a chat into the archive, or back out of it.
+- (void)setChat:(int64_t)chatId archived:(BOOL)archived;
 
 /// Fired on the main queue when a message arrives, is edited or deleted in
 /// any chat. `message` is the flattened form; nil means it was deleted.

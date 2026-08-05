@@ -198,6 +198,19 @@ shot() {
 	remote="$(ssh $SSH_OPTS "$SSH_HOST" \
 		'ls -t /var/mobile/Applications/*/Library/Caches/screen.png 2>/dev/null | head -1')"
 	[ -n "$remote" ] || { echo "app did not write a screenshot" >&2; return 1; }
+
+	# A screen.png left over from an earlier run is still a file, so without
+	# this the command happily returns a picture of yesterday whenever the app
+	# fails to launch - which is worse than returning nothing.
+	local age
+	age="$(ssh $SSH_OPTS "$SSH_HOST" \
+		"expr \$(date +%s) - \$(date -r '$remote' +%s 2>/dev/null || echo 0)")"
+	if [ -z "$age" ] || [ "$age" -gt 60 ]; then
+		echo "stale screenshot: ${age}s old, so the app did not answer." >&2
+		echo "It is probably not running - check the launch first." >&2
+		return 1
+	fi
+
 	scp $SSH_OPTS "$SSH_HOST:$remote" "$LOGDIR/screen-$STAMP.png" >/dev/null 2>&1 \
 		&& echo "$LOGDIR/screen-$STAMP.png"
 }

@@ -141,6 +141,9 @@ APP_SRC_M := \
 	src/TGTheme.m \
 	src/TGThemeFile.m \
 	src/TGIcons.m \
+	src/TGPopupMenu.m \
+	src/TGSnackbar.m \
+	src/TGSearchViewController.m \
 	src/TGLoginViewController.m \
 	src/TGChatListViewController.m \
 	src/TGChatViewController.m \

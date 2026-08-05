@@ -1,0 +1,153 @@
+#import "TGSnackbar.h"
+#import "TGTheme.h"
+#import "TGIcons.h"
+#import <QuartzCore/QuartzCore.h>
+
+// Their snackbar at 360dp: a 48 tall plate inset 8, a 24 countdown ring at 16
+// from the left, the wording at 15, UNDO on the right in blue.
+static const CGFloat kBarHeight = 44.0f;
+static const CGFloat kBarInset  = 7.0f;
+static const CGFloat kRingSide  = 22.0f;
+
+static TGSnackbar *sOpenBar = nil;
+
+@implementation TGSnackbar {
+	NSTimer *_tick;
+	NSInteger _left;
+	NSInteger _total;
+	void (^_commit)(void);
+	UILabel *_count;
+	CAShapeLayer *_ring;
+}
+
++ (void)commitNow {
+	TGSnackbar *bar = sOpenBar;
+	if (!bar)
+		return;
+	sOpenBar = nil;
+	[bar->_tick invalidate];
+	bar->_tick = nil;
+	void (^commit)(void) = bar->_commit;
+	bar->_commit = nil;
+	[bar removeFromSuperview];
+	if (commit)
+		commit();
+}
+
++ (void)showInView:(UIView *)host
+              text:(NSString *)text
+           seconds:(NSInteger)seconds
+          onCommit:(void (^)(void))commit
+{
+	if (!host)
+		return;
+	// Whatever was waiting has now really happened; only one can be pending.
+	[self commitNow];
+
+	CGRect b = host.bounds;
+	TGSnackbar *bar = [[TGSnackbar alloc] initWithFrame:CGRectMake(
+			kBarInset, b.size.height - kBarHeight - kBarInset,
+			b.size.width - 2 * kBarInset, kBarHeight)];
+	bar->_total = MAX((NSInteger)1, seconds);
+	bar->_left = bar->_total;
+	bar->_commit = [commit copy];
+	bar.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+						   UIViewAutoresizingFlexibleTopMargin;
+	[bar buildWithText:text];
+	[host addSubview:bar];
+	sOpenBar = bar;
+
+	// Up from below the edge, the way it arrives in their design.
+	CGRect resting = bar.frame;
+	bar.frame = CGRectOffset(resting, 0, kBarHeight + kBarInset);
+	[UIView animateWithDuration:0.2 animations:^{ bar.frame = resting; }];
+
+	bar->_tick = [NSTimer scheduledTimerWithTimeInterval:1.0
+												  target:bar
+												selector:@selector(second)
+												userInfo:nil
+												 repeats:YES];
+}
+
+- (void)buildWithText:(NSString *)text {
+	// steel-gray_dark, which is what their plate is - it has to read over both
+	// a light and a dark chat.
+	self.backgroundColor = [UIColor colorWithRed:0.24f green:0.28f blue:0.33f alpha:0.97f];
+	self.layer.cornerRadius = 5;
+
+	CGRect ring = CGRectMake(14, (kBarHeight - kRingSide) / 2, kRingSide, kRingSide);
+	_ring = [CAShapeLayer layer];
+	_ring.frame = ring;
+	_ring.path = [UIBezierPath bezierPathWithOvalInRect:
+			CGRectInset(CGRectMake(0, 0, kRingSide, kRingSide), 1, 1)].CGPath;
+	_ring.fillColor = [UIColor clearColor].CGColor;
+	_ring.strokeColor = [UIColor whiteColor].CGColor;
+	_ring.lineWidth = 1.5f;
+	// Wound from the top and unwinding as the seconds go, so the plate says how
+	// long is left without anyone having to read the number.
+	_ring.strokeEnd = 1.0f;
+	_ring.transform = CATransform3DMakeRotation(-M_PI_2, 0, 0, 1);
+	[self.layer addSublayer:_ring];
+
+	_count = [[UILabel alloc] initWithFrame:ring];
+	_count.textAlignment = NSTextAlignmentCenter;
+	_count.font = [UIFont systemFontOfSize:12];
+	_count.textColor = [UIColor whiteColor];
+	_count.backgroundColor = [UIColor clearColor];
+	_count.text = [NSString stringWithFormat:@"%ld", (long)_left];
+	[self addSubview:_count];
+
+	UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(
+			46, 0, self.bounds.size.width - 46 - 76, kBarHeight)];
+	label.text = text;
+	label.font = [UIFont systemFontOfSize:15];
+	label.textColor = [UIColor whiteColor];
+	label.backgroundColor = [UIColor clearColor];
+	label.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	[self addSubview:label];
+
+	UIButton *undo = [UIButton buttonWithType:UIButtonTypeCustom];
+	undo.frame = CGRectMake(self.bounds.size.width - 76, 0, 70, kBarHeight);
+	undo.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+	[undo setTitle:@"UNDO" forState:UIControlStateNormal];
+	[undo setTitleColor:[UIColor colorWithRed:0.30f green:0.70f blue:0.96f alpha:1.0f]
+			   forState:UIControlStateNormal];
+	undo.titleLabel.font = [UIFont boldSystemFontOfSize:14];
+	undo.titleEdgeInsets = UIEdgeInsetsMake(0, 14, 0, 0);
+	[undo addTarget:self action:@selector(undoTapped)
+   forControlEvents:UIControlEventTouchUpInside];
+	[self addSubview:undo];
+
+	UIImageView *arrow = [[UIImageView alloc] initWithFrame:CGRectMake(
+			self.bounds.size.width - 74, (kBarHeight - 18) / 2, 18, 18)];
+	arrow.image = [TGIcons menuGlyphNamed:@"undo"];
+	arrow.contentMode = UIViewContentModeScaleAspectFit;
+	arrow.tintColor = [UIColor colorWithRed:0.30f green:0.70f blue:0.96f alpha:1.0f];
+	arrow.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+	[self insertSubview:arrow belowSubview:undo];
+}
+
+- (void)second {
+	_left--;
+	if (_left <= 0){
+		[TGSnackbar commitNow];
+		return;
+	}
+	_count.text = [NSString stringWithFormat:@"%ld", (long)_left];
+	_ring.strokeEnd = (CGFloat)_left / (CGFloat)_total;
+}
+
+- (void)undoTapped {
+	sOpenBar = nil;
+	[_tick invalidate];
+	_tick = nil;
+	_commit = nil;             // the action never happens
+	UIView *me = self;
+	[UIView animateWithDuration:0.2
+					 animations:^{ me.alpha = 0; }
+					 completion:^(BOOL done){ [me removeFromSuperview]; }];
+}
+
+@end
+
+// vim:ft=objc

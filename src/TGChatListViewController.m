@@ -5,6 +5,9 @@
 #import "TGIcons.h"
 #import "TGContactsViewController.h"
 #import "TGTopicsViewController.h"
+#import "TGPopupMenu.h"
+#import "TGSnackbar.h"
+#import "TGSearchViewController.h"
 #import <QuartzCore/QuartzCore.h>
 
 // Their chat item is 80dp on a 360dp screen; on 320pt that is 71, and 72
@@ -42,12 +45,15 @@ static const CGFloat kAvatar = 50.0f;
 	self.titleLabel = [[UILabel alloc] init];
 	self.titleLabel.font = [UIFont boldSystemFontOfSize:16];
 	self.titleLabel.textColor = [UIColor colorWithWhite:0.1f alpha:1.0f];
+	// A long name has to stop at the date rather than slide under it.
+	self.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
 	[self.contentView addSubview:self.titleLabel];
 
 	self.previewLabel = [[UILabel alloc] init];
 	self.previewLabel.font = [UIFont systemFontOfSize:14];
 	self.previewLabel.textColor = [UIColor colorWithWhite:0.45f alpha:1.0f];
 	self.previewLabel.numberOfLines = 2;
+	self.previewLabel.lineBreakMode = NSLineBreakByTruncatingTail;
 	[self.contentView addSubview:self.previewLabel];
 
 	self.dateLabel = [[UILabel alloc] init];
@@ -197,6 +203,15 @@ static const CGFloat kAvatar = 50.0f;
 	[self reload];
 }
 
+/// The bar in the header is a way in, not a place to type: touching it hands
+/// over to the search page, which has room for the results and the keyboard.
+- (BOOL)searchBarShouldBeginEditing:(UISearchBar *)searchBar {
+	TGSearchViewController *search = [[TGSearchViewController alloc] init];
+	search.hidesBottomBarWhenPushed = YES;
+	[self.navigationController pushViewController:search animated:YES];
+	return NO;
+}
+
 /// barTintColor paints the bar around the field but leaves the field itself
 /// white, which on a dark list is a slab of light at the top. barStyle is what
 /// turns the field over too.
@@ -250,10 +265,22 @@ static const CGFloat kAvatar = 50.0f;
 	[self fetchMissingAvatars];
 }
 
-/// The archive is one row above the list, as clients place it.
+/// The rows that sit above the chats themselves: the archive when there is one,
+/// and Saved Messages, which every client keeps reachable whether or not it
+/// has anything in it. Returned in the order they are drawn.
+- (NSArray *)headerRows {
+	if (self.searchResults || self.showsArchive || self.folderId != 0)
+		return @[];
+	NSMutableArray *rows = [NSMutableArray array];
+	if ([TGClient shared].archivedChats.count > 0)
+		[rows addObject:@"archive"];
+	if ([[TGClient shared] savedMessagesChatId] != 0)
+		[rows addObject:@"saved"];
+	return rows;
+}
+
 - (BOOL)hasArchiveRow {
-	return !self.searchResults && !self.showsArchive && self.folderId == 0 &&
-			[TGClient shared].archivedChats.count > 0;
+	return [[self headerRows] containsObject:@"archive"];
 }
 
 - (void)openArchive {
@@ -266,8 +293,16 @@ static const CGFloat kAvatar = 50.0f;
 /// Folders are a filter over the same chats, offered as a choice.
 - (void)foldersTapped {
 	NSArray *folders = [TGClient shared].folders;
-	if (!folders.count)
+	// Tapping and getting nothing back reads as a broken button; an account
+	// with no folders has to say so.
+	if (!folders.count){
+		UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Folders"
+				message:@"This account has no chat folders. They are set up in "
+						@"Telegram on a desktop or a newer phone, and appear here."
+			   delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+		[alert show];
 		return;
+	}
 
 	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Show"
 													   delegate:self
@@ -284,32 +319,14 @@ static const CGFloat kAvatar = 50.0f;
 	if (index == sheet.cancelButtonIndex)
 		return;
 
-	if (sheet.tag == kChatActionsTag){
-		int64_t chatId = [self.actionChat[@"id"] longLongValue];
-		if (index == 0)
-			[[TGClient shared] setChat:chatId pinned:![self.actionChat[@"isPinned"] boolValue]];
-		else if (index == 1)
-			[[TGClient shared] setChat:chatId muted:![self.actionChat[@"isMuted"] boolValue]];
-		else if (index == sheet.destructiveButtonIndex)
-			[self confirmDeleteChat:chatId];
-		self.actionChat = nil;
-		return;
-	}
-
+	// Saved Messages has its own row now, so this sheet is All chats followed
+	// by the folders themselves.
 	NSArray *folders = [TGClient shared].folders;
-	if (index == 1){
-		[self openSavedMessages];
-		return;
-	}
 	if (index == 0){
 		self.folderId = 0;
 		self.title = self.showsArchive ? @"Archived" : @"Chats";
-	if (!self.showsArchive)
-		self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc]
-				initWithTitle:@"Folders" style:UIBarButtonItemStylePlain
-					   target:self action:@selector(foldersTapped)];
-	} else if (index - 2 < (NSInteger)folders.count){
-		NSDictionary *f = folders[index - 2];
+	} else if (index - 1 < (NSInteger)folders.count){
+		NSDictionary *f = folders[index - 1];
 		self.folderId = [f[@"id"] integerValue];
 		self.title = f[@"title"];
 	}
@@ -367,43 +384,86 @@ static const NSInteger kChatActionsTag = 77;
 		return;
 
 	NSIndexPath *path = [self.tableView indexPathForRowAtPoint:[hold locationInView:self.tableView]];
-	if (!path || ([self hasArchiveRow] && path.row == 0))
+	if (path)
+		[self showActionsForRow:path.row];
+}
+
+/// Split out from the gesture so itglegacy://holdrow/N can reach it: a long
+/// press cannot be delivered through a URL, and this menu needs checking.
+- (void)showActionsForRow:(NSInteger)row {
+	NSInteger index = row - [self headerRows].count;
+	if (index < 0)
 		return;
 
-	NSArray *rows = self.searchResults ?: self.chats;
-	NSInteger index = path.row - ([self hasArchiveRow] ? 1 : 0);
-	if (index < 0 || index >= (NSInteger)rows.count)
+	NSArray *rows = [self visibleChats];
+	if (index >= (NSInteger)rows.count)
 		return;
 	self.actionChat = rows[index];
 
-	UIActionSheet *sheet = [[UIActionSheet alloc]
-			initWithTitle:self.actionChat[@"title"]
-				 delegate:self
-		cancelButtonTitle:nil
-   destructiveButtonTitle:nil
-		otherButtonTitles:([self.actionChat[@"isPinned"] boolValue] ? @"Unpin" : @"Pin"),
-						  ([self.actionChat[@"isMuted"] boolValue] ? @"Unmute" : @"Mute"), nil];
-	sheet.destructiveButtonIndex = [sheet addButtonWithTitle:@"Delete and Leave"];
-	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
-	sheet.tag = kChatActionsTag;
-	[sheet showInView:self.view];
+	BOOL pinned = [self.actionChat[@"isPinned"] boolValue];
+	BOOL muted  = [self.actionChat[@"isMuted"] boolValue];
+	NSArray *items = @[
+		@{@"title" : (pinned ? @"Unpin" : @"Pin"),
+		  @"icon"  : (pinned ? @"unpin" : @"pin")},
+		@{@"title" : (muted ? @"Unmute" : @"Mute"),
+		  @"icon"  : (muted ? @"unmute" : @"mute")},
+		@{@"title" : (self.showsArchive ? @"Unarchive" : @"Archive"),
+		  @"icon"  : (self.showsArchive ? @"unarchive" : @"archive")},
+		@{@"title" : @"Delete and Leave", @"icon" : @"delete", @"destructive" : @YES},
+	];
+
+	CGRect rect = [self.tableView rectForRowAtIndexPath:
+			[NSIndexPath indexPathForRow:row inSection:0]];
+	CGPoint where = [self.tableView convertPoint:
+			CGPointMake(120, CGRectGetMaxY(rect) - 10) toView:self.navigationController.view];
+
+	__weak typeof(self) weakSelf = self;
+	[TGPopupMenu showItems:items atPoint:where inView:self.navigationController.view
+				  onChoice:^(NSInteger choice, NSString *title){
+		[weakSelf runChatAction:choice];
+	}];
 }
 
-/// Leaving is not undoable, so it asks first.
+- (void)runChatAction:(NSInteger)choice {
+	int64_t chatId = [self.actionChat[@"id"] longLongValue];
+	if (choice == 0)
+		[[TGClient shared] setChat:chatId pinned:![self.actionChat[@"isPinned"] boolValue]];
+	else if (choice == 1)
+		[[TGClient shared] setChat:chatId muted:![self.actionChat[@"isMuted"] boolValue]];
+	else if (choice == 2)
+		[[TGClient shared] setChat:chatId archived:!self.showsArchive];
+	else
+		[self confirmDeleteChat:chatId];
+	self.actionChat = nil;
+}
+
+/// Leaving cannot be taken back once it has happened, so it does not happen at
+/// once: the row goes, and the count on the plate is the window to change your
+/// mind. Their design answers this with a snackbar rather than a dialog.
 - (void)confirmDeleteChat:(int64_t)chatId {
 	self.chatPendingDeletion = chatId;
-	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Delete and Leave"
-			message:@"This chat will be removed from the list."
-		   delegate:self
-  cancelButtonTitle:@"Cancel"
-  otherButtonTitles:@"Delete", nil];
-	[alert show];
-}
+	[self.tableView reloadData];
 
-- (void)alertView:(UIAlertView *)alert clickedButtonAtIndex:(NSInteger)index {
-	if (index != alert.cancelButtonIndex && self.chatPendingDeletion)
-		[[TGClient shared] deleteChat:self.chatPendingDeletion];
-	self.chatPendingDeletion = 0;
+	__weak typeof(self) weakSelf = self;
+	[TGSnackbar showInView:self.navigationController.view
+					  text:@"Chat deleted"
+				   seconds:5
+				  onCommit:^{
+		[[TGClient shared] deleteChat:chatId];
+		TGChatListViewController *me = weakSelf;
+		me.chatPendingDeletion = 0;
+		[me reload];
+	}];
+
+	// UNDO simply never commits; the row has to come back when it does not.
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6.0 * NSEC_PER_SEC)),
+			dispatch_get_main_queue(), ^{
+		TGChatListViewController *me = weakSelf;
+		if (me.chatPendingDeletion == chatId){
+			me.chatPendingDeletion = 0;
+			[me.tableView reloadData];
+		}
+	});
 }
 
 #pragma mark - search
@@ -454,14 +514,33 @@ static const NSInteger kChatActionsTag = 77;
 	[self.tableView reloadData];
 }
 
+/// Saved Messages has a row of its own above the list, so leaving it among the
+/// chats as well would show it twice.
 - (NSArray *)visibleChats {
-	return self.searchResults ?: self.chats;
+	if (self.searchResults)
+		return self.searchResults;
+
+	BOOL hideSaved = [[self headerRows] containsObject:@"saved"];
+	int64_t saved = hideSaved ? [[TGClient shared] savedMessagesChatId] : 0;
+	if (!hideSaved && !self.chatPendingDeletion)
+		return self.chats;
+
+	NSMutableArray *rest = [NSMutableArray array];
+	for (NSDictionary *c in self.chats){
+		int64_t chatId = [c[@"id"] longLongValue];
+		// A chat waiting on the undo plate is already off the list; putting it
+		// back is what UNDO does.
+		if (chatId == saved || chatId == self.chatPendingDeletion)
+			continue;
+		[rest addObject:c];
+	}
+	return rest;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
 	if (self.searchResults)
 		return self.searchResults.count;
-	return self.chats.count + ([self hasArchiveRow] ? 1 : 0);
+	return [self visibleChats].count + [self headerRows].count;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -479,21 +558,25 @@ static const NSInteger kChatActionsTag = 77;
 	cell.tick.hidden = YES;
 	cell.onlineDot.layer.borderColor = [theme listBackgroundColour].CGColor;
 
-	if ([self hasArchiveRow] && indexPath.row == 0){
-		cell.titleLabel.text = @"Archived Chats";
-		cell.previewLabel.text = [NSString stringWithFormat:@"%lu chats",
-				(unsigned long)[TGClient shared].archivedChats.count];
+	NSArray *header = [self headerRows];
+	if (indexPath.row < (NSInteger)header.count){
+		BOOL isArchive = [header[indexPath.row] isEqualToString:@"archive"];
+		cell.titleLabel.text = isArchive ? @"Archived Chats" : @"Saved Messages";
+		cell.previewLabel.text = isArchive
+				? [NSString stringWithFormat:@"%lu chats",
+						(unsigned long)[TGClient shared].archivedChats.count]
+				: @"Your own notes and forwards";
 		cell.dateLabel.text = @"";
 		cell.badge.hidden = YES;
-		cell.avatar.image = [TGIcons avatarWithInitials:@"\u25bc" size:kAvatar colourId:7];
+		cell.avatar.image = [TGIcons avatarWithInitials:(isArchive ? @"\u25bc" : @"\u2605")
+												   size:kAvatar
+											   colourId:(isArchive ? 7 : 5)];
 		cell.avatar.backgroundColor = [UIColor clearColor];
 		[cell setNeedsLayout];
 		return cell;
 	}
 
-	NSDictionary *c = self.searchResults
-			? self.searchResults[indexPath.row]
-			: self.chats[indexPath.row - ([self hasArchiveRow] ? 1 : 0)];
+	NSDictionary *c = [self visibleChats][indexPath.row - header.count];
 	cell.titleLabel.text = c[@"title"];
 	cell.dateLabel.text = TGChatDate([c[@"date"] doubleValue]);
 
@@ -543,14 +626,16 @@ static const NSInteger kChatActionsTag = 77;
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
 
-	if ([self hasArchiveRow] && indexPath.row == 0){
-		[self openArchive];
+	NSArray *header = [self headerRows];
+	if (indexPath.row < (NSInteger)header.count){
+		if ([header[indexPath.row] isEqualToString:@"archive"])
+			[self openArchive];
+		else
+			[self openSavedMessages];
 		return;
 	}
 
-	NSDictionary *c = self.searchResults
-			? self.searchResults[indexPath.row]
-			: self.chats[indexPath.row - ([self hasArchiveRow] ? 1 : 0)];
+	NSDictionary *c = [self visibleChats][indexPath.row - header.count];
 	NSLog(@"open chat: group=%@ forum=%@", c[@"isGroup"], c[@"isForum"] ?: @"(absent)");
 
 	if ([c[@"isForum"] boolValue]){

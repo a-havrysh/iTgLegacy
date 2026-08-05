@@ -9,6 +9,8 @@
 #import "RootViewController.h"
 #import "TGClient.h"
 #import "TGTheme.h"
+#import "TGSnackbar.h"
+#import "TGSearchViewController.h"
 #import "TGDeviceViewController.h"
 #import "TGCall.h"
 #import "TGCallViewController.h"
@@ -199,6 +201,18 @@ static void TGWatchForIncomingCalls(void) {
 
 #pragma mark - remote control by URL
 
+/// The view currently taking keystrokes, wherever it is in the tree.
+- (UIView *)firstResponderUnder:(UIView *)view {
+	if (view.isFirstResponder)
+		return view;
+	for (UIView *sub in view.subviews){
+		UIView *found = [self firstResponderUnder:sub];
+		if (found)
+			return found;
+	}
+	return nil;
+}
+
 /**
  * Nobody can tap this device remotely, so the app is driven by its own URL
  * scheme instead. scripts/devrun.sh uses these.
@@ -208,6 +222,7 @@ static void TGWatchForIncomingCalls(void) {
  *   itglegacy://tab/N            select a tab
  *   itglegacy://chatindex/N      open the Nth chat in the list
  *   itglegacy://profile          open the profile of the chat on screen
+ *   itglegacy://holdrow/N        hold the Nth row, for the menus behind it
  *   itglegacy://theme/NAME       apply a theme file from Documents ("none" clears,
  *                                "skeuomorphic"/"flat"/"dark" pick a built-in)
  *   itglegacy://stickers         open the sticker strip in the chat on screen
@@ -400,6 +415,89 @@ static void TGWatchForIncomingCalls(void) {
 		return YES;
 	}
 
+	// itglegacy://type/TEXT - put text into whatever is being typed into, and
+	// tell its delegate, which is what a keyboard would have done. Keyboard
+	// keys are not controls, so touch/ cannot reach them.
+	if ([host isEqualToString:@"type"]){
+		dispatch_async(dispatch_get_main_queue(), ^{
+			NSString *text = [arg stringByReplacingPercentEscapesUsingEncoding:
+					NSUTF8StringEncoding] ?: arg;
+			UIView *responder = [self firstResponderUnder:self.window];
+			if ([responder isKindOfClass:UITextField.class]){
+				UITextField *field = (UITextField *)responder;
+				field.text = text;
+				[field sendActionsForControlEvents:UIControlEventEditingChanged];
+			}
+
+			// A search bar owns a text field but may be the responder itself,
+			// and either way its delegate is what wants to hear about this.
+			UIView *bar = responder;
+			while (bar && ![bar isKindOfClass:UISearchBar.class])
+				bar = bar.superview;
+			if (bar){
+				[(UISearchBar *)bar setText:text];
+				id<UISearchBarDelegate> delegate = [(UISearchBar *)bar delegate];
+				if ([delegate respondsToSelector:@selector(searchBar:textDidChange:)])
+					[delegate searchBar:(UISearchBar *)bar textDidChange:text];
+			}
+			NSLog(@"type: %@ into %@", text, responder ? [responder class] : (id)@"nothing");
+		});
+		return YES;
+	}
+
+	// itglegacy://search - open the search page. Tapping the bar in the header
+	// cannot be delivered through touch/, which drives controls rather than
+	// first responders.
+	if ([host isEqualToString:@"search"]){
+		dispatch_async(dispatch_get_main_queue(), ^{
+			UITabBarController *tabs = (UITabBarController *)self.rootViewController;
+			if (![tabs isKindOfClass:UITabBarController.class])
+				return;
+			UINavigationController *nc = tabs.viewControllers[tabs.selectedIndex];
+			[nc pushViewController:[[TGSearchViewController alloc] init] animated:YES];
+		});
+		return YES;
+	}
+
+	// itglegacy://snackbar - show the undo plate over whatever is on screen,
+	// committing nothing. The real one sits behind a delete, and checking how
+	// it looks is not worth destroying a chat to find out.
+	if ([host isEqualToString:@"snackbar"]){
+		dispatch_async(dispatch_get_main_queue(), ^{
+			[TGSnackbar showInView:self.window.rootViewController.view
+							  text:@"Chat deleted"
+						   seconds:5
+						  onCommit:^{ NSLog(@"snackbar: committed (test, no-op)"); }];
+		});
+		return YES;
+	}
+
+	// itglegacy://holdrow/N - hold the Nth row. A long press cannot be sent
+	// through touch/, which only drives controls, and the menus behind it are
+	// the ones most worth looking at.
+	if ([host isEqualToString:@"holdrow"]){
+		dispatch_async(dispatch_get_main_queue(), ^{
+			UITabBarController *tabs = (UITabBarController *)self.rootViewController;
+			if (![tabs isKindOfClass:UITabBarController.class])
+				return;
+			UIViewController *top = [tabs.viewControllers[tabs.selectedIndex] topViewController];
+			if (![top respondsToSelector:@selector(showActionsForRow:)]){
+				NSLog(@"holdrow: %@ has no row menu", [top class]);
+				return;
+			}
+			NSLog(@"holdrow: %ld on %@", (long)[arg integerValue], [top class]);
+			NSInteger row = [arg integerValue];
+			NSMethodSignature *sig = [top methodSignatureForSelector:
+					@selector(showActionsForRow:)];
+			NSInvocation *call = [NSInvocation invocationWithMethodSignature:sig];
+			call.selector = @selector(showActionsForRow:);
+			call.target = top;
+			[call setArgument:&row atIndex:2];
+			[call invoke];
+		});
+		return YES;
+	}
+
 	// itglegacy://scroll/N - a screenshot only shows the top of a screen.
 	if ([host isEqualToString:@"scroll"]){
 		dispatch_async(dispatch_get_main_queue(), ^{
@@ -530,22 +628,44 @@ static void TGWatchForIncomingCalls(void) {
 				return;
 			UINavigationController *nc = tabs.viewControllers[tabs.selectedIndex];
 			UIViewController *top = nc.topViewController;
-			if ([top isKindOfClass:[TGChatViewController class]])
+			// Any table screen can answer this, not only a chat: rows are not
+			// controls, so touch/ cannot reach them and every list would
+			// otherwise be unreachable without a finger.
+			UITableView *table = [top isKindOfClass:UITableViewController.class]
+					? [(UITableViewController *)top tableView] : nil;
+			if ([top isKindOfClass:[TGChatViewController class]]){
 				[(TGChatViewController *)top simulateTapOnRow:[arg integerValue]];
-			else
-				NSLog(@"tap: no chat open");
+			} else if (table){
+				NSIndexPath *path = [NSIndexPath indexPathForRow:[arg integerValue]
+													   inSection:0];
+				NSLog(@"tap: row %@ on %@", arg, [top class]);
+				[table.delegate tableView:table didSelectRowAtIndexPath:path];
+			} else {
+				NSLog(@"tap: %@ has no rows", [top class]);
+			}
 		});
 		return YES;
 	}
 
 	if ([host isEqualToString:@"screenshot"]){
 		dispatch_async(dispatch_get_main_queue(), ^{
-			UIWindow *w = self.window;
 			// Opaque: with an alpha channel, white text over a solid bubble
 			// composited wrongly and came out orange in the capture - a
 			// screenshot artifact that looked exactly like a colour bug.
-			UIGraphicsBeginImageContextWithOptions(w.bounds.size, YES, 0.0f);
-			[w.layer renderInContext:UIGraphicsGetCurrentContext()];
+			UIGraphicsBeginImageContextWithOptions(self.window.bounds.size, YES, 0.0f);
+			CGContextRef ctx = UIGraphicsGetCurrentContext();
+			// An action sheet, an alert and the keyboard each live in a window
+			// of their own, so rendering only ours photographed the screen
+			// underneath them and made a menu that was open look like one that
+			// had never opened.
+			for (UIWindow *w in [UIApplication sharedApplication].windows){
+				if (w.hidden || w.alpha <= 0.01f)
+					continue;
+				CGContextSaveGState(ctx);
+				CGContextTranslateCTM(ctx, w.frame.origin.x, w.frame.origin.y);
+				[w.layer renderInContext:ctx];
+				CGContextRestoreGState(ctx);
+			}
 			UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
 			UIGraphicsEndImageContext();
 

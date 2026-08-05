@@ -93,19 +93,29 @@ static NSMutableDictionary *sCache = nil;
 
 #pragma mark - actions
 
+/// A pencil laid across the open corner of a sheet - their compose glyph. The
+/// previous one drew the sheet as two bare strokes meeting at a right angle,
+/// which read as a stray corner rather than paper.
 + (UIImage *)compose {
 	return [self iconNamed:@"compose" draw:^(CGContextRef ctx, CGFloat s){
-		// pencil over a sheet
-		CGContextSetLineWidth(ctx, 2);
-		CGContextMoveToPoint(ctx, 5, s - 6);
-		CGContextAddLineToPoint(ctx, 5, 8);
-		CGContextAddLineToPoint(ctx, 15, 8);
+		// The sheet: three sides, left open where the pencil crosses it.
+		CGContextSetLineWidth(ctx, 1.8f);
+		CGContextSetLineCap(ctx, kCGLineCapRound);
+		CGContextSetLineJoin(ctx, kCGLineJoinRound);
+		CGContextMoveToPoint(ctx, s - 9, 5);
+		CGContextAddLineToPoint(ctx, 5, 5);
+		CGContextAddLineToPoint(ctx, 5, s - 5);
+		CGContextAddLineToPoint(ctx, s - 5, s - 5);
+		CGContextAddLineToPoint(ctx, s - 5, 10);
 		CGContextStrokePath(ctx);
 
-		CGContextMoveToPoint(ctx, 10, s - 8);
-		CGContextAddLineToPoint(ctx, s - 6, 5);
-		CGContextAddLineToPoint(ctx, s - 3, 8);
-		CGContextAddLineToPoint(ctx, 13, s - 5);
+		// The pencil: a shaft with a nib, pointing down and left.
+		CGFloat tipX = 11, tipY = s - 10;
+		CGContextMoveToPoint(ctx, tipX, tipY);
+		CGContextAddLineToPoint(ctx, tipX + 2, tipY + 3.5f);
+		CGContextAddLineToPoint(ctx, tipX + 5.5f, tipY + 1.5f);
+		CGContextAddLineToPoint(ctx, s - 5, 6.5f);
+		CGContextAddLineToPoint(ctx, s - 8.5f, 3);
 		CGContextClosePath(ctx);
 		CGContextFillPath(ctx);
 	}];
@@ -142,6 +152,13 @@ static NSMutableDictionary *sCache = nil;
 		CGContextAddLineToPoint(ctx, 8, s - 5);
 		CGContextClosePath(ctx);
 		CGContextFillPath(ctx);
+	}];
+}
+
++ (UIImage *)pause {
+	return [self iconNamed:@"pause" draw:^(CGContextRef ctx, CGFloat s){
+		CGContextFillRect(ctx, CGRectMake(s * 0.32f, 5, s * 0.13f, s - 10));
+		CGContextFillRect(ctx, CGRectMake(s * 0.55f, 5, s * 0.13f, s - 10));
 	}];
 }
 
@@ -197,6 +214,139 @@ static NSMutableDictionary *sCache = nil;
 		CGContextFillEllipseInRect(ctx, CGRectMake(s * 0.60f, s * 0.34f, 2.5f, 3.5f));
 		CGContextAddArc(ctx, s / 2, s * 0.52f, s * 0.22f, 0.5f, M_PI - 0.5f, 0);
 		CGContextStrokePath(ctx);
+	}];
+}
+
+#pragma mark - menu glyphs
+
+/// The line art beside each row of their pop-up menu. Drawn as strokes at a
+/// single weight so the set reads as one family, which is what their 27x27
+/// outline icons do.
++ (UIImage *)menuGlyphNamed:(NSString *)name {
+	static NSSet *known = nil;
+	if (!known)
+		known = [NSSet setWithObjects:@"reply", @"undo", @"forward", @"copy",
+				@"edit", @"delete", @"pin", @"unpin", @"mute", @"unmute",
+				@"archive", @"unarchive", @"react", nil];
+	// An unknown name has to answer nil, not a blank square: a row with no
+	// glyph is better than a row with a hole where one should be.
+	if (![known containsObject:name])
+		return nil;
+
+	NSString *key = [@"menu-" stringByAppendingString:name];
+	return [self iconNamed:key draw:^(CGContextRef ctx, CGFloat s){
+		CGContextSetLineWidth(ctx, 1.8f);
+		CGContextSetLineCap(ctx, kCGLineCapRound);
+		CGContextSetLineJoin(ctx, kCGLineJoinRound);
+		CGFloat m = s * 0.18f;              // margin, so every glyph shares a box
+
+		if ([name isEqualToString:@"reply"] || [name isEqualToString:@"undo"]){
+			// an arrow turning back on itself
+			CGContextMoveToPoint(ctx, m + 5, s * 0.30f);
+			CGContextAddLineToPoint(ctx, m, s * 0.45f);
+			CGContextAddLineToPoint(ctx, m + 5, s * 0.60f);
+			CGContextStrokePath(ctx);
+			CGContextMoveToPoint(ctx, m, s * 0.45f);
+			CGContextAddLineToPoint(ctx, s - m - 5, s * 0.45f);
+			CGContextAddArc(ctx, s - m - 5, s * 0.62f, s * 0.17f, -M_PI_2, 0, 0);
+			CGContextStrokePath(ctx);
+
+		} else if ([name isEqualToString:@"forward"]){
+			// the same arrow mirrored
+			CGContextMoveToPoint(ctx, s - m - 5, s * 0.30f);
+			CGContextAddLineToPoint(ctx, s - m, s * 0.45f);
+			CGContextAddLineToPoint(ctx, s - m - 5, s * 0.60f);
+			CGContextStrokePath(ctx);
+			CGContextMoveToPoint(ctx, s - m, s * 0.45f);
+			CGContextAddLineToPoint(ctx, m + 5, s * 0.45f);
+			CGContextAddArc(ctx, m + 5, s * 0.62f, s * 0.17f, -M_PI_2, M_PI, 1);
+			CGContextStrokePath(ctx);
+
+		} else if ([name isEqualToString:@"copy"]){
+			// two sheets, one behind the other
+			CGContextStrokeRect(ctx, CGRectMake(m, m, s * 0.46f, s * 0.46f));
+			CGContextStrokeRect(ctx, CGRectMake(s * 0.34f, s * 0.34f, s * 0.46f, s * 0.46f));
+
+		} else if ([name isEqualToString:@"edit"]){
+			// a pencil on its diagonal
+			CGContextMoveToPoint(ctx, m, s - m);
+			CGContextAddLineToPoint(ctx, m + s * 0.10f, s - m - s * 0.16f);
+			CGContextAddLineToPoint(ctx, s - m - s * 0.06f, m + s * 0.06f);
+			CGContextAddLineToPoint(ctx, s - m, m + s * 0.16f);
+			CGContextAddLineToPoint(ctx, m + s * 0.20f, s - m - s * 0.06f);
+			CGContextClosePath(ctx);
+			CGContextStrokePath(ctx);
+
+		} else if ([name isEqualToString:@"delete"]){
+			// a bin: lid, body, two ribs
+			CGContextMoveToPoint(ctx, m, s * 0.30f);
+			CGContextAddLineToPoint(ctx, s - m, s * 0.30f);
+			CGContextStrokePath(ctx);
+			CGContextMoveToPoint(ctx, s * 0.40f, s * 0.30f);
+			CGContextAddLineToPoint(ctx, s * 0.40f, s * 0.22f);
+			CGContextAddLineToPoint(ctx, s * 0.60f, s * 0.22f);
+			CGContextAddLineToPoint(ctx, s * 0.60f, s * 0.30f);
+			CGContextStrokePath(ctx);
+			CGContextMoveToPoint(ctx, m + 2, s * 0.30f);
+			CGContextAddLineToPoint(ctx, m + 4, s - m);
+			CGContextAddLineToPoint(ctx, s - m - 4, s - m);
+			CGContextAddLineToPoint(ctx, s - m - 2, s * 0.30f);
+			CGContextStrokePath(ctx);
+
+		} else if ([name isEqualToString:@"pin"] || [name isEqualToString:@"unpin"]){
+			// a drawing pin seen from the side
+			CGContextMoveToPoint(ctx, s * 0.34f, m);
+			CGContextAddLineToPoint(ctx, s * 0.66f, m);
+			CGContextAddLineToPoint(ctx, s * 0.58f, s * 0.46f);
+			CGContextAddLineToPoint(ctx, s * 0.76f, s * 0.60f);
+			CGContextAddLineToPoint(ctx, s * 0.24f, s * 0.60f);
+			CGContextAddLineToPoint(ctx, s * 0.42f, s * 0.46f);
+			CGContextClosePath(ctx);
+			CGContextStrokePath(ctx);
+			CGContextMoveToPoint(ctx, s / 2, s * 0.60f);
+			CGContextAddLineToPoint(ctx, s / 2, s - m);
+			CGContextStrokePath(ctx);
+
+		} else if ([name isEqualToString:@"mute"] || [name isEqualToString:@"unmute"]){
+			// a speaker cone
+			CGContextMoveToPoint(ctx, m, s * 0.38f);
+			CGContextAddLineToPoint(ctx, s * 0.34f, s * 0.38f);
+			CGContextAddLineToPoint(ctx, s * 0.54f, s * 0.20f);
+			CGContextAddLineToPoint(ctx, s * 0.54f, s * 0.80f);
+			CGContextAddLineToPoint(ctx, s * 0.34f, s * 0.62f);
+			CGContextAddLineToPoint(ctx, m, s * 0.62f);
+			CGContextClosePath(ctx);
+			CGContextStrokePath(ctx);
+			if ([name isEqualToString:@"mute"]){
+				CGContextMoveToPoint(ctx, s * 0.66f, s * 0.38f);
+				CGContextAddLineToPoint(ctx, s * 0.86f, s * 0.62f);
+				CGContextMoveToPoint(ctx, s * 0.86f, s * 0.38f);
+				CGContextAddLineToPoint(ctx, s * 0.66f, s * 0.62f);
+				CGContextStrokePath(ctx);
+			}
+
+		} else if ([name isEqualToString:@"archive"] || [name isEqualToString:@"unarchive"]){
+			// a box with a lid and a handle slot
+			CGContextStrokeRect(ctx, CGRectMake(m, m, s - 2 * m, s * 0.18f));
+			CGContextMoveToPoint(ctx, m + 2, m + s * 0.18f);
+			CGContextAddLineToPoint(ctx, m + 2, s - m);
+			CGContextAddLineToPoint(ctx, s - m - 2, s - m);
+			CGContextAddLineToPoint(ctx, s - m - 2, m + s * 0.18f);
+			CGContextStrokePath(ctx);
+			CGContextMoveToPoint(ctx, s * 0.40f, s * 0.58f);
+			CGContextAddLineToPoint(ctx, s * 0.60f, s * 0.58f);
+			CGContextStrokePath(ctx);
+
+		} else if ([name isEqualToString:@"react"]){
+			// a heart
+			CGContextMoveToPoint(ctx, s / 2, s - m - 2);
+			CGContextAddCurveToPoint(ctx, m, s * 0.60f, m, s * 0.22f, s / 2, s * 0.38f);
+			CGContextAddCurveToPoint(ctx, s - m, s * 0.22f, s - m, s * 0.60f, s / 2, s - m - 2);
+			CGContextStrokePath(ctx);
+
+		} else {
+			return;   // an unknown name draws nothing rather than a wrong glyph
+		}
 	}];
 }
 
@@ -318,8 +468,9 @@ static NSMutableDictionary *sCache = nil;
 		CGRect bar = CGRectMake(x, (size.height - height) / 2, barW, height);
 
 		// The part already heard is solid; the rest is faded, which is how
-		// Telegram shows progress through a message.
-		CGFloat alpha = (i < bars * played) ? 1.0f : 0.4f;
+		// Telegram shows progress through a message. The gap between the two
+		// has to be wide enough to read at a glance on a 3.5" screen.
+		CGFloat alpha = (i < bars * played) ? 1.0f : 0.32f;
 		[[colour colorWithAlphaComponent:alpha] set];
 		UIBezierPath *rounded = [UIBezierPath bezierPathWithRoundedRect:bar cornerRadius:1];
 		[rounded fill];

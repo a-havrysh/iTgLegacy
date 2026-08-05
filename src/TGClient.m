@@ -1213,12 +1213,16 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 			[weakSelf request:@{@"@type" : @"getUser", @"user_id" : uid}
 				   completion:^(NSDictionary *u){
 				if ([u[@"@type"] isEqualToString:@"user"]){
+					// The photo id travels with the row, so the list can show a
+					// face rather than a letter for everyone who has one.
+					[weakSelf cacheProfilePhoto:u];
 					[users addObject:@{
-						@"id"         : u[@"id"] ?: @(0),
-						@"first_name" : u[@"first_name"] ?: @"",
-						@"last_name"  : u[@"last_name"] ?: @"",
-						@"phone"      : u[@"phone_number"] ?: @"",
-						@"username"   : u[@"usernames"][@"active_usernames"][0] ?: @"",
+						@"id"          : u[@"id"] ?: @(0),
+						@"first_name"  : u[@"first_name"] ?: @"",
+						@"last_name"   : u[@"last_name"] ?: @"",
+						@"phone"       : u[@"phone_number"] ?: @"",
+						@"username"    : u[@"usernames"][@"active_usernames"][0] ?: @"",
+						@"photoFileId" : u[@"profile_photo"][@"small"][@"id"] ?: [NSNull null],
 					}];
 				}
 				if (--left == 0 && completion)
@@ -1579,6 +1583,11 @@ static int64_t TGArchiveOrder(NSArray *positions) {
 			text = today
 				? [NSString stringWithFormat:@"last seen at %@", [fmt stringFromDate:date]]
 				: @"last seen a long time ago";
+		} else {
+			// userStatusEmpty is what TDLib sends for someone who has turned
+			// their last-seen off, and for a user it will not talk about. Every
+			// client shows the same phrase rather than an empty subtitle.
+			text = @"last seen recently";
 		}
 		if (completion) completion(text);
 	}];
@@ -1685,6 +1694,72 @@ static int64_t TGArchiveOrder(NSArray *positions) {
 		@"chat_list" : @{@"@type" : @"chatListMain"},
 		@"chat_id"   : @(chatId),
 		@"is_pinned" : @(pinned),
+	}];
+}
+
+/// A folder is a chat list of its own in TDLib, so this is getChats against
+/// that list; the rows themselves are the ones the client already holds.
+- (void)chatsInFolder:(NSInteger)folderId completion:(void (^)(NSArray *))completion {
+	__weak typeof(self) weakSelf = self;
+	[self request:@{
+		@"@type"     : @"getChats",
+		@"chat_list" : @{@"@type" : @"chatListFolder",
+						 @"chat_folder_id" : @(folderId)},
+		@"limit"     : @(100),
+	} completion:^(NSDictionary *result){
+		TGClient *me = weakSelf;
+		if (!me){
+			if (completion) completion(@[]);
+			return;
+		}
+		NSMutableArray *out = [NSMutableArray array];
+		for (NSNumber *chatId in result[@"chat_ids"]){
+			NSDictionary *info = me.chatsById[chatId];
+			if (info)
+				[out addObject:info];
+		}
+		NSLog(@"TGClient: folder %ld holds %lu chats",
+				(long)folderId, (unsigned long)out.count);
+		if (completion) completion(out);
+	}];
+}
+
+/// A forum keeps several threads in one chat; each topic reads like a chat row.
+- (void)forumTopicsForChat:(int64_t)chatId completion:(void (^)(NSArray *))completion {
+	[self request:@{
+		@"@type"                    : @"getForumTopics",
+		@"chat_id"                  : @(chatId),
+		@"query"                    : @"",
+		@"offset_date"              : @(0),
+		@"offset_message_id"        : @(0),
+		@"offset_message_thread_id" : @(0),
+		@"limit"                    : @(100),
+	} completion:^(NSDictionary *result){
+		NSMutableArray *out = [NSMutableArray array];
+		for (NSDictionary *topic in result[@"topics"]){
+			NSDictionary *info = topic[@"info"];
+			NSDictionary *last = topic[@"last_message"];
+			[out addObject:@{
+				@"threadId" : info[@"message_thread_id"] ?: @(0),
+				@"name"     : info[@"name"] ?: @"",
+				@"text"     : [last isKindOfClass:NSDictionary.class]
+								? (TGMessagePreview(last) ?: @"") : @"",
+				@"unread"   : topic[@"unread_count"] ?: @(0),
+				@"date"     : last[@"date"] ?: @(0),
+			}];
+		}
+		NSLog(@"TGClient: %lu forum topics", (unsigned long)out.count);
+		if (completion) completion(out);
+	}];
+}
+
+/// Archiving is a move between the two chat lists, not a flag on the chat.
+/// TDLib answers with updateChatPosition, so the list rebuilds itself.
+- (void)setChat:(int64_t)chatId archived:(BOOL)archived {
+	[self send:@{
+		@"@type"     : @"addChatToList",
+		@"chat_id"   : @(chatId),
+		@"chat_list" : @{@"@type" : (archived ? @"chatListArchive" : @"chatListMain")},
 	}];
 }
 

@@ -18,6 +18,8 @@
 #import "TGVoiceDecoder.h"
 #import "UIImage+WebP.h"
 #import "TGLottieView.h"
+#import "TGPopupMenu.h"
+#import "TGSnackbar.h"
 
 // Their design system is drawn for Android at 360dp; a 4S is 320pt, so
 // everything taken from it is scaled by 0.889 and rounded to a whole point.
@@ -53,6 +55,9 @@ static const CGFloat kMediaRadius = 6.0f;
 @property (nonatomic, strong) UIImageView *disc;        // play button on media
 @property (nonatomic, strong) UIImageView *wave;        // voice message bars
 @property (nonatomic, strong) UILabel *mediaStamp;      // the time over a picture
+/// Kept so playback can repaint this one row's bars without a table reload.
+@property (nonatomic, assign) int64_t voiceMessageId;
+@property (nonatomic, strong) NSData *waveformData;
 @end
 
 @implementation TGBubbleCell
@@ -166,7 +171,7 @@ static const CGFloat kMediaRadius = 6.0f;
 #pragma mark - controller
 
 @interface TGChatViewController () <UISearchBarDelegate, CLLocationManagerDelegate,
-		UIScrollViewDelegate,
+		UIScrollViewDelegate, AVAudioPlayerDelegate,
 		ABPeoplePickerNavigationControllerDelegate>
 @property (nonatomic, strong) UITableView *table;
 @property (nonatomic, strong) UIView *inputBar;
@@ -194,6 +199,12 @@ static const CGFloat kMediaRadius = 6.0f;
 @property (nonatomic, strong) UILabel *recordClock;
 @property (nonatomic, strong) UIView *recordDot;
 @property (nonatomic, assign) int64_t playingMessageId;
+@property (nonatomic, strong) NSTimer *playbackTimer;
+@property (nonatomic, strong) MPMoviePlayerController *videoNotePlayer;
+@property (nonatomic, strong) UIView *playerBar;        // the strip under the header
+@property (nonatomic, strong) UIView *playerProgress;   // its line
+@property (nonatomic, strong) UIButton *playerToggle;
+@property (nonatomic, strong) UILabel *playerLabel;
 @property (nonatomic, strong) NSMutableDictionary *senderAvatars;   // userId -> UIImage
 @property (nonatomic, strong) NSMutableSet *senderAvatarsRequested;
 @property (nonatomic, strong) UILabel *downloadHUD;
@@ -465,7 +476,21 @@ static const CGFloat kMediaRadius = 6.0f;
 	[self.view addSubview:self.inputBar];
 }
 
+/// A voice note going on playing after you have left the chat is the one thing
+/// nobody expects, and the timer would outlive the screen it repaints.
+- (void)viewWillDisappear:(BOOL)animated {
+	[super viewWillDisappear:animated];
+	if (self.voicePlayer)
+		[self stopPlayback];
+	[self stopVideoNote];
+	// A pending delete must not be lost with the screen, and a menu must not
+	// outlive the messages it was opened over.
+	[TGSnackbar commitNow];
+	[TGPopupMenu dismiss];
+}
+
 - (void)dealloc {
+	[self.playbackTimer invalidate];
 	[[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
@@ -1306,6 +1331,199 @@ static const CGFloat kMediaRadius = 6.0f;
 	[self clearComposeState];
 }
 
+#pragma mark - video notes
+
+/// Plays a round note over the circle it belongs to, clipped to the same shape.
+/// MPMoviePlayerController is the only decoder iOS 7 offers, but it does not
+/// have to own the screen: its view goes in a mask of our own.
+- (void)playVideoNoteAtPath:(NSString *)path row:(NSInteger)row {
+	[self stopVideoNote];
+
+	CGRect rect = [self.table rectForRowAtIndexPath:
+			[NSIndexPath indexPathForRow:row inSection:0]];
+	CGRect inView = [self.table convertRect:rect toView:self.view];
+	// The circle is the row minus the strip its timestamp sits in.
+	CGFloat side = MIN(inView.size.height - 20, inView.size.width);
+	NSDictionary *m = self.messages[row];
+	CGFloat x = [m[@"outgoing"] boolValue]
+			? CGRectGetMaxX(inView) - side - 8 : 8;
+
+	UIView *circle = [[UIView alloc] initWithFrame:
+			CGRectMake(x, CGRectGetMinY(inView) + 3, side, side)];
+	circle.layer.cornerRadius = side / 2;
+	circle.clipsToBounds = YES;
+	circle.backgroundColor = [UIColor blackColor];
+	circle.tag = 0xF119;
+
+	MPMoviePlayerController *player = [[MPMoviePlayerController alloc]
+			initWithContentURL:[NSURL fileURLWithPath:path]];
+	player.controlStyle = MPMovieControlStyleNone;
+	player.scalingMode = MPMovieScalingModeAspectFill;
+	player.view.frame = circle.bounds;
+	player.shouldAutoplay = YES;
+	[circle addSubview:player.view];
+	[self.view addSubview:circle];
+	self.videoNotePlayer = player;
+
+	[circle addGestureRecognizer:[[UITapGestureRecognizer alloc]
+			initWithTarget:self action:@selector(stopVideoNote)]];
+
+	[[NSNotificationCenter defaultCenter] addObserver:self
+			selector:@selector(stopVideoNote)
+				name:MPMoviePlayerPlaybackDidFinishNotification
+			  object:player];
+	[player prepareToPlay];
+	[player play];
+}
+
+- (void)stopVideoNote {
+	if (!self.videoNotePlayer)
+		return;
+	[[NSNotificationCenter defaultCenter] removeObserver:self
+			name:MPMoviePlayerPlaybackDidFinishNotification
+		  object:self.videoNotePlayer];
+	[self.videoNotePlayer stop];
+	[[self.view viewWithTag:0xF119] removeFromSuperview];
+	self.videoNotePlayer = nil;
+}
+
+#pragma mark - playback
+
+/// Their player strip: an arrow, what is playing, a way out, and a line along
+/// the bottom that fills as it goes. It sits under the header, which is where
+/// a client puts it so the chat stays readable while something plays.
+- (void)showPlayerBar {
+	CGRect b = self.view.bounds;
+	if (!self.playerBar){
+		self.playerBar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, b.size.width, 36)];
+		self.playerBar.backgroundColor = [[TGTheme shared] listBackgroundColour];
+		self.playerBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+
+		self.playerToggle = [UIButton buttonWithType:UIButtonTypeCustom];
+		self.playerToggle.frame = CGRectMake(8, 4, 28, 28);
+		self.playerToggle.tintColor = [[TGTheme shared] accentColour];
+		[self.playerToggle addTarget:self action:@selector(togglePlayback)
+					forControlEvents:UIControlEventTouchUpInside];
+		[self.playerBar addSubview:self.playerToggle];
+
+		self.playerLabel = [[UILabel alloc] initWithFrame:
+				CGRectMake(40, 8, b.size.width - 80, 20)];
+		self.playerLabel.font = [UIFont systemFontOfSize:14];
+		self.playerLabel.backgroundColor = [UIColor clearColor];
+		self.playerLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+		[self.playerBar addSubview:self.playerLabel];
+
+		UIButton *close = [UIButton buttonWithType:UIButtonTypeCustom];
+		close.frame = CGRectMake(b.size.width - 38, 4, 34, 28);
+		[close setTitle:@"×" forState:UIControlStateNormal];
+		close.titleLabel.font = [UIFont systemFontOfSize:24];
+		close.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+		[close addTarget:self action:@selector(stopPlayback)
+		forControlEvents:UIControlEventTouchUpInside];
+		[self.playerBar addSubview:close];
+		[close setTitleColor:[[TGTheme shared] secondaryTextColour]
+					forState:UIControlStateNormal];
+
+		UIView *track = [[UIView alloc] initWithFrame:CGRectMake(0, 34, b.size.width, 2)];
+		track.backgroundColor = [[TGTheme shared] separatorColour];
+		track.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+		[self.playerBar addSubview:track];
+
+		self.playerProgress = [[UIView alloc] initWithFrame:CGRectMake(0, 34, 0, 2)];
+		self.playerProgress.backgroundColor = [[TGTheme shared] accentColour];
+		[self.playerBar addSubview:self.playerProgress];
+	}
+
+	self.playerLabel.textColor = [[TGTheme shared] primaryTextColour];
+	self.playerLabel.text = @"Voice message";
+	self.playerProgress.frame = CGRectMake(0, 34, 0, 2);
+	[self.playerToggle setImage:[TGIcons pause] forState:UIControlStateNormal];
+	[self.view addSubview:self.playerBar];
+
+	// Push the messages down so the strip does not cover the newest one.
+	UIEdgeInsets insets = self.table.contentInset;
+	insets.top += 36;
+	self.table.contentInset = insets;
+	self.table.scrollIndicatorInsets = insets;
+}
+
+- (void)hidePlayerBar {
+	if (!self.playerBar.superview)
+		return;
+	[self.playerBar removeFromSuperview];
+	UIEdgeInsets insets = self.table.contentInset;
+	insets.top -= 36;
+	self.table.contentInset = insets;
+	self.table.scrollIndicatorInsets = insets;
+}
+
+/// Five ticks a second is enough for the eye and cheap enough for a 4S: the
+/// waveform is redrawn each tick, and redrawing it sixty times would not be.
+- (void)startPlaybackTimer {
+	[self.playbackTimer invalidate];
+	self.playbackTimer = [NSTimer scheduledTimerWithTimeInterval:0.2
+														 target:self
+													   selector:@selector(playbackTick)
+													   userInfo:nil
+														repeats:YES];
+}
+
+- (CGFloat)playedFraction {
+	if (!self.voicePlayer || self.voicePlayer.duration <= 0)
+		return 0;
+	return (CGFloat)(self.voicePlayer.currentTime / self.voicePlayer.duration);
+}
+
+- (void)playbackTick {
+	CGFloat played = [self playedFraction];
+	self.playerProgress.frame = CGRectMake(0, 34,
+			self.playerBar.bounds.size.width * played, 2);
+
+	// Only the row being played changes, and reloading the whole table five
+	// times a second on this hardware is visible as a stutter.
+	for (UITableViewCell *cell in self.table.visibleCells){
+		if (![cell isKindOfClass:TGBubbleCell.class])
+			continue;
+		TGBubbleCell *bubble = (TGBubbleCell *)cell;
+		if (bubble.voiceMessageId != self.playingMessageId || bubble.wave.hidden)
+			continue;
+		bubble.wave.image = [TGIcons waveform:bubble.waveformData
+										 size:bubble.wave.bounds.size
+									   played:played
+									   colour:[[TGTheme shared] accentColour]];
+	}
+}
+
+- (void)togglePlayback {
+	if (!self.voicePlayer)
+		return;
+	if (self.voicePlayer.playing){
+		[self.voicePlayer pause];
+		[self.playbackTimer invalidate];
+		self.playbackTimer = nil;
+		[self.playerToggle setImage:[TGIcons play] forState:UIControlStateNormal];
+	} else {
+		[self.voicePlayer play];
+		[self startPlaybackTimer];
+		[self.playerToggle setImage:[TGIcons pause] forState:UIControlStateNormal];
+	}
+	[self.table reloadData];
+}
+
+- (void)stopPlayback {
+	[self.voicePlayer stop];
+	self.voicePlayer = nil;
+	[self.playbackTimer invalidate];
+	self.playbackTimer = nil;
+	self.playingMessageId = 0;
+	[self hidePlayerBar];
+	[self.table reloadData];
+}
+
+- (void)audioPlayerDidFinishPlaying:(AVAudioPlayer *)player successfully:(BOOL)flag {
+	[self stopPlayback];
+}
+
 #pragma mark - attachments
 
 static const NSInteger kAttachSheetTag  = 41;
@@ -1355,30 +1573,47 @@ static const NSInteger kPollSheetTag    = 43;
 		return;
 
 	NSIndexPath *path = [self.table indexPathForRowAtPoint:[hold locationInView:self.table]];
-	if (!path || path.row >= (NSInteger)self.messages.count)
+	if (path)
+		[self showActionsForRow:path.row];
+}
+
+/// Split out from the gesture so itglegacy://holdrow/N can reach it: a long
+/// press cannot be delivered through a URL.
+- (void)showActionsForRow:(NSInteger)row {
+	if (row < 0 || row >= (NSInteger)self.messages.count)
 		return;
 
-	NSDictionary *m = self.messages[path.row];
+	NSDictionary *m = self.messages[row];
 	if ([m[@"service"] boolValue])
 		return;
 	self.actionMessage = m;
 
 	BOOL mine = [m[@"outgoing"] boolValue];
-	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
-													   delegate:self
-											  cancelButtonTitle:nil
-										 destructiveButtonTitle:nil
-											  otherButtonTitles:@"Reply", @"Forward",
-															@"React \U0001F44D", nil];
+	NSMutableArray *items = [NSMutableArray arrayWithObjects:
+			@{@"title" : @"Reply",   @"icon" : @"reply"},
+			@{@"title" : @"Forward", @"icon" : @"forward"},
+			@{@"title" : @"React",   @"icon" : @"react"}, nil];
 	if ([m[@"text"] length])
-		[sheet addButtonWithTitle:@"Copy"];
+		[items addObject:@{@"title" : @"Copy", @"icon" : @"copy"}];
 	if (mine && [m[@"text"] length])
-		[sheet addButtonWithTitle:@"Edit"];
+		[items addObject:@{@"title" : @"Edit", @"icon" : @"edit"}];
 	if (mine)
-		sheet.destructiveButtonIndex = [sheet addButtonWithTitle:@"Delete"];
-	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
-	sheet.tag = kMessageSheetTag;
-	[sheet showInView:self.view];
+		[items addObject:@{@"title" : @"Delete", @"icon" : @"delete",
+						   @"destructive" : @YES}];
+
+	// Beside the message rather than over the whole screen, which is what
+	// makes it read as belonging to that bubble.
+	CGRect rect = [self.table rectForRowAtIndexPath:
+			[NSIndexPath indexPathForRow:row inSection:0]];
+	CGPoint where = [self.table convertPoint:
+			CGPointMake(mine ? CGRectGetMaxX(rect) - 60 : 60, CGRectGetMaxY(rect) - 8)
+									  toView:self.view];
+
+	__weak typeof(self) weakSelf = self;
+	[TGPopupMenu showItems:items atPoint:where inView:self.view
+				  onChoice:^(NSInteger index, NSString *title){
+		[weakSelf runMessageAction:title];
+	}];
 }
 
 - (void)runMessageAction:(NSString *)action {
@@ -1418,7 +1653,23 @@ static const NSInteger kPollSheetTag    = 43;
 		[self.input becomeFirstResponder];
 
 	} else if ([action isEqualToString:@"Delete"]){
-		[[TGClient shared] deleteMessage:messageId inChat:self.chatId];
+		// The message goes off the screen at once and off the server when the
+		// count runs out, so taking it back costs one tap and no dialog.
+		int64_t chatId = self.chatId;
+		NSMutableArray *without = [self.messages mutableCopy];
+		[without removeObject:m];
+		self.messages = without;
+		[self.table reloadData];
+
+		__weak typeof(self) weakSelf = self;
+		[TGSnackbar showInView:self.view text:@"Message deleted" seconds:5
+					  onCommit:^{
+			[[TGClient shared] deleteMessage:messageId inChat:chatId];
+		}];
+		// Undo has no callback of its own: whatever the answer, re-reading the
+		// history afterwards puts the row back or leaves it gone, correctly.
+		dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6.0 * NSEC_PER_SEC)),
+				dispatch_get_main_queue(), ^{ [weakSelf reload]; });
 	}
 	self.actionMessage = nil;
 }
@@ -1559,9 +1810,22 @@ static const NSInteger kPollSheetTag    = 43;
 		return;
 	}
 
-	// Video and video notes play; a photo opens full screen.
-	if ([kind isEqualToString:@"messageVideo"] ||
-		[kind isEqualToString:@"messageVideoNote"]){
+	// A video note plays where it sits, in its own circle - handing it to the
+	// full-screen player turns a two-second glance into a modal screen.
+	if ([kind isEqualToString:@"messageVideoNote"]){
+		NSNumber *docId = m[@"docId"];
+		if (![docId isKindOfClass:NSNumber.class])
+			return;
+		[self beginDownloadHUDForFile:[docId integerValue]];
+		[[TGClient shared] downloadFile:[docId integerValue] completion:^(NSString *path){
+			[self endDownloadHUD];
+			if (path)
+				[self playVideoNoteAtPath:path row:indexPath.row];
+		}];
+		return;
+	}
+
+	if ([kind isEqualToString:@"messageVideo"]){
 		NSNumber *docId = m[@"docId"];
 		if (![docId isKindOfClass:NSNumber.class])
 			return;
@@ -1583,6 +1847,15 @@ static const NSInteger kPollSheetTag    = 43;
 		NSNumber *docId = m[@"docId"];
 		if (![docId isKindOfClass:NSNumber.class])
 			return;
+
+		// Tapping the one already playing is how you stop it; without this the
+		// only way out was to leave the chat.
+		if (self.playingMessageId == [m[@"id"] longLongValue] && self.voicePlayer){
+			[self togglePlayback];
+			return;
+		}
+		if (self.voicePlayer)
+			[self stopPlayback];
 		[self beginDownloadHUDForFile:[docId integerValue]];
 		[[TGClient shared] downloadFile:[docId integerValue] completion:^(NSString *path){
 			[self endDownloadHUD];
@@ -1611,9 +1884,12 @@ static const NSInteger kPollSheetTag    = 43;
 						return;
 					}
 					NSLog(@"voice: playing %.1f s", self.voicePlayer.duration);
+					self.voicePlayer.delegate = self;
 					self.playingMessageId = [m[@"id"] longLongValue];
-					[self.table reloadData];
 					[self.voicePlayer play];
+					[self showPlayerBar];
+					[self startPlaybackTimer];
+					[self.table reloadData];
 				});
 			});
 		}];
@@ -1838,7 +2114,7 @@ static const NSInteger kPollSheetTag    = 43;
 	CGSize pic  = [self imageSizeFor:m];
 
 	if ([m[@"kind"] isEqualToString:@"messageVideoNote"] && pic.height > 0)
-		return MIN(pic.width, pic.height) + 20;
+		return MIN(MIN(pic.width, pic.height), 178) + 20;
 
 	if ([m[@"docName"] isEqualToString:@"tgs"] && self.lottiePaths[m[@"docId"]])
 		return 148;
@@ -1971,7 +2247,10 @@ static UIColor *TGSenderColour(int64_t userId) {
 		// A document gets the tile; a contact keeps its initials, because a
 		// sheet of paper says nothing about a person.
 		cell.icon.hidden = NO;
-		cell.icon.frame = CGRectMake(kPadH, kPadV, kFileTile, kFileTile);
+		// A document gets the square tile at their size; a contact gets a round
+		// avatar, which is smaller and sits centred beside the name.
+		CGFloat side = isDoc ? kFileTile : 48;
+		cell.icon.frame = CGRectMake(kPadH, kPadV + (kFileTile - side) / 2, side, side);
 		if (isDoc){
 			cell.icon.text = @"";
 			cell.icon.layer.cornerRadius = 3;
@@ -1982,18 +2261,21 @@ static UIColor *TGSenderColour(int64_t userId) {
 			cell.disc.frame = CGRectMake(kPadH + (kFileTile - kFileDisc) / 2,
 										 kPadV + (kFileTile - kFileDisc) / 2,
 										 kFileDisc, kFileDisc);
+			// The tile was added to the bubble after the disc was, so without
+			// this it covers the glyph it is supposed to carry.
+			[cell.bubble bringSubviewToFront:cell.disc];
 		} else {
 			NSString *initials = first.length ? [first substringToIndex:1] : @"?";
 			NSArray *words = [first componentsSeparatedByString:@" "];
 			if (words.count > 1 && [words[1] length])
 				initials = [initials stringByAppendingString:[words[1] substringToIndex:1]];
 			cell.icon.text = initials.uppercaseString;
-			cell.icon.font = [UIFont boldSystemFontOfSize:24];
-			cell.icon.layer.cornerRadius = kFileTile / 2;
+			cell.icon.font = [UIFont boldSystemFontOfSize:18];
+			cell.icon.layer.cornerRadius = side / 2;
 			cell.icon.backgroundColor = [cardTheme mediaCircleColour];
 		}
 
-		CGFloat textX = kPadH + kFileTile + 10;
+		CGFloat textX = kPadH + side + 10;
 		cell.body.hidden = NO;
 		cell.body.numberOfLines = 2;
 		cell.body.font = [UIFont systemFontOfSize:15];
@@ -2107,7 +2389,9 @@ static UIColor *TGSenderColour(int64_t userId) {
 	// client draws them.
 	BOOL isRound = [m[@"kind"] isEqualToString:@"messageVideoNote"];
 	if (isRound && pic.height > 0){
-		CGFloat side = MIN(pic.width, pic.height);
+		// Their video note is 200dp across; taking the thumbnail's own size
+		// filled almost the whole width of a 320pt screen.
+		CGFloat side = MIN(MIN(pic.width, pic.height), 178);
 		cell.bubble.backgroundColor = [UIColor clearColor];
 		cell.bubble.layer.borderWidth = 0;
 		cell.bubble.frame = CGRectMake(mine ? (tableView.bounds.size.width - side - 8) : 8,
@@ -2253,19 +2537,23 @@ static UIColor *TGSenderColour(int64_t userId) {
 		TGTheme *voiceTheme = [TGTheme shared];
 		CGFloat disc = 36;
 		CGFloat left = kPadH + disc + 8;
+		BOOL isPlaying = (self.playingMessageId == [m[@"id"] longLongValue]);
+
+		cell.voiceMessageId = [m[@"id"] longLongValue];
+		cell.waveformData = m[@"waveform"];
 
 		cell.disc.hidden = NO;
 		cell.disc.image = [TGIcons mediaDiscOfSide:disc
-										   playing:(self.playingMessageId ==
-													[m[@"id"] longLongValue])];
+										   playing:(isPlaying && self.voicePlayer.playing)];
 		cell.disc.frame = CGRectMake(kPadH, (bubbleH - disc) / 2, disc, disc);
 
-		// The bars take the width left over once the stamp has its corner.
+		// The bars take the width left over once the stamp has its corner, and
+		// the part already heard is drawn solid.
 		cell.wave.hidden = NO;
 		CGSize waveSize = CGSizeMake(bubbleW - left - kPadH, 18);
 		cell.wave.image = [TGIcons waveform:m[@"waveform"]
 									   size:waveSize
-									 played:0
+									 played:(isPlaying ? [self playedFraction] : 0)
 									 colour:[voiceTheme accentColour]];
 		cell.wave.frame = CGRectMake(left, 10, waveSize.width, waveSize.height);
 
