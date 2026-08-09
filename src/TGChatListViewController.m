@@ -26,6 +26,7 @@ static const CGFloat kAvatar = 50.0f;
 @property (nonatomic, strong) UILabel *badge;
 @property (nonatomic, strong) UIView *onlineDot;
 @property (nonatomic, strong) UIImageView *tick;   // your own last message
+@property (nonatomic, strong) UIImageView *pin;   // pinned to the top
 @end
 
 @implementation TGChatCell
@@ -86,6 +87,13 @@ static const CGFloat kAvatar = 50.0f;
 	self.tick.hidden = YES;
 	[self.contentView addSubview:self.tick];
 
+	// A pinned chat says so where the unread count would be, and gives the
+	// place up as soon as there is a count to show.
+	self.pin = [[UIImageView alloc] init];
+	self.pin.contentMode = UIViewContentModeScaleAspectFit;
+	self.pin.hidden = YES;
+	[self.contentView addSubview:self.pin];
+
 	self.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 	return self;
 }
@@ -111,6 +119,8 @@ static const CGFloat kAvatar = 50.0f;
 		CGFloat bw = MAX(20, s.width + 12);
 		self.badge.frame = CGRectMake(w - right + 30, 36, bw, 20);
 	}
+	if (!self.pin.hidden)
+		self.pin.frame = CGRectMake(w - right + 34, 38, 16, 16);
 }
 
 @end
@@ -127,6 +137,7 @@ static const CGFloat kAvatar = 50.0f;
 @property (nonatomic, strong) NSArray *searchResults;   // nil = not searching
 @property (nonatomic, strong) NSDictionary *actionChat; // long-pressed row
 @property (nonatomic, assign) int64_t chatPendingDeletion;
+@property (nonatomic, assign) CGFloat headerHeight;
 @end
 
 @implementation TGChatListViewController
@@ -157,7 +168,7 @@ static const CGFloat kAvatar = 50.0f;
 	self.searchBar.delegate = self;
 	self.searchBar.placeholder = @"Search";
 	[self styleSearchBar];
-	self.tableView.tableHeaderView = self.searchBar;
+	[self rebuildTableHeader];
 
 	// Hold a row for the two things clients put there: pin and mute.
 	UILongPressGestureRecognizer *hold = [[UILongPressGestureRecognizer alloc]
@@ -201,6 +212,62 @@ static const CGFloat kAvatar = 50.0f;
 		weakSelf.title = text ?: @"Chats";
 	};
 	[self reload];
+}
+
+/// The search bar and, when there is one, the archive: both above the first
+/// chat and both scrolled out of sight to begin with. Pulling the list down is
+/// what brings them back, which is how Telegram hides them.
+- (void)rebuildTableHeader {
+	CGFloat width = self.tableView.bounds.size.width ?: 320;
+	BOOL showArchive = !self.showsArchive && self.folderId == 0 &&
+					   [TGClient shared].archivedChats.count > 0;
+	CGFloat height = 44 + (showArchive ? kRowHeight : 0);
+
+	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, height)];
+	self.searchBar.frame = CGRectMake(0, 0, width, 44);
+	[header addSubview:self.searchBar];
+
+	if (showArchive){
+		TGChatCell *row = [[TGChatCell alloc] initWithStyle:UITableViewCellStyleDefault
+											reuseIdentifier:nil];
+		row.frame = CGRectMake(0, 44, width, kRowHeight);
+		row.titleLabel.text = @"Archived Chats";
+		row.titleLabel.textColor = [[TGTheme shared] primaryTextColour];
+		row.previewLabel.text = [NSString stringWithFormat:@"%lu chats",
+				(unsigned long)[TGClient shared].archivedChats.count];
+		row.previewLabel.textColor = [[TGTheme shared] secondaryTextColour];
+		row.avatar.image = [TGIcons archiveAvatarOfSide:kAvatar];
+		row.avatar.backgroundColor = [UIColor clearColor];
+		row.backgroundColor = [[TGTheme shared] listBackgroundColour];
+		row.userInteractionEnabled = YES;
+		[row addGestureRecognizer:[[UITapGestureRecognizer alloc]
+				initWithTarget:self action:@selector(openArchive)]];
+		[row layoutSubviews];
+		[header addSubview:row];
+
+		UIView *hair = [[UIView alloc] initWithFrame:
+				CGRectMake(0, height - 0.5f, width, 0.5f)];
+		hair.backgroundColor = [[TGTheme shared] separatorColour];
+		[header addSubview:hair];
+	}
+
+	CGFloat wasHidingHeader = self.headerHeight;
+	self.tableView.tableHeaderView = header;
+	self.headerHeight = height;
+	[self hideHeaderAboveFrom:wasHidingHeader];
+}
+
+/// Scroll the header off the top without animating, so the list opens on the
+/// first chat. The archive arrives after the first layout, which makes the
+/// header taller, so "still at the top" means the old height as well as zero -
+/// otherwise the row appears and stays on screen.
+- (void)hideHeaderAboveFrom:(CGFloat)previousHeight {
+	if (self.tableView.contentSize.height <= self.tableView.bounds.size.height)
+		return;
+	CGFloat y = self.tableView.contentOffset.y;
+	if (y > 0.5f && fabs(y - previousHeight) > 0.5f)
+		return;   // the user has scrolled somewhere of their own; leave it
+	self.tableView.contentOffset = CGPointMake(0, self.headerHeight);
 }
 
 /// The bar in the header is a way in, not a place to type: touching it hands
@@ -262,25 +329,20 @@ static const CGFloat kAvatar = 50.0f;
 
 	self.chats = [TGClient shared].chats;
 	[self.tableView reloadData];
+	[self rebuildTableHeader];
 	[self fetchMissingAvatars];
 }
 
-/// The rows that sit above the chats themselves: the archive when there is one,
-/// and Saved Messages, which every client keeps reachable whether or not it
-/// has anything in it. Returned in the order they are drawn.
+/// Nothing sits above the chats any more. The archive lives in the table's
+/// header, hidden above the top of the list until you pull down for it - which
+/// is where Telegram keeps it - and Saved Messages is simply a chat, because
+/// pinning your own notes to the top of the list is not something it does.
 - (NSArray *)headerRows {
-	if (self.searchResults || self.showsArchive || self.folderId != 0)
-		return @[];
-	NSMutableArray *rows = [NSMutableArray array];
-	if ([TGClient shared].archivedChats.count > 0)
-		[rows addObject:@"archive"];
-	if ([[TGClient shared] savedMessagesChatId] != 0)
-		[rows addObject:@"saved"];
-	return rows;
+	return @[];
 }
 
 - (BOOL)hasArchiveRow {
-	return [[self headerRows] containsObject:@"archive"];
+	return NO;
 }
 
 - (void)openArchive {
@@ -568,9 +630,9 @@ static const NSInteger kChatActionsTag = 77;
 				: @"Your own notes and forwards";
 		cell.dateLabel.text = @"";
 		cell.badge.hidden = YES;
-		cell.avatar.image = [TGIcons avatarWithInitials:(isArchive ? @"\u25bc" : @"\u2605")
-												   size:kAvatar
-											   colourId:(isArchive ? 7 : 5)];
+		cell.avatar.image = isArchive
+				? [TGIcons archiveAvatarOfSide:kAvatar]
+				: [TGIcons savedMessagesAvatarOfSide:kAvatar];
 		cell.avatar.backgroundColor = [UIColor clearColor];
 		[cell setNeedsLayout];
 		return cell;
@@ -597,11 +659,14 @@ static const NSInteger kChatActionsTag = 77;
 	cell.titleLabel.text = [c[@"isMuted"] boolValue]
 			? [NSString stringWithFormat:@"%@ \U0001F507", c[@"title"] ?: @""]
 			: c[@"title"];
-	if ([c[@"isPinned"] boolValue] && !cell.dateLabel.text.length)
-		cell.dateLabel.text = @"\U0001F4CC";
 
 	NSInteger unread = [c[@"unread"] integerValue];
 	cell.badge.hidden = (unread <= 0);
+	cell.pin.hidden = !([c[@"isPinned"] boolValue] && unread <= 0);
+	if (!cell.pin.hidden){
+		cell.pin.image = [TGIcons menuGlyphNamed:@"pin"];
+		cell.pin.tintColor = [theme secondaryTextColour];
+	}
 	cell.badge.text = unread > 0 ? [NSString stringWithFormat:@"%ld", (long)unread] : @"";
 	// A muted chat still counts, it just stops shouting about it.
 	cell.badge.backgroundColor = [c[@"isMuted"] boolValue]
@@ -609,6 +674,8 @@ static const NSInteger kChatActionsTag = 77;
 
 	NSNumber *fileId = c[@"photoFileId"];
 	UIImage *photo = fileId ? self.avatars[fileId] : nil;
+	if ([c[@"isSaved"] boolValue])
+		photo = [TGIcons savedMessagesAvatarOfSide:kAvatar];
 	if (!photo){
 		NSString *title = c[@"title"] ?: @"";
 		NSString *initials = title.length ? [title substringToIndex:1] : @"?";

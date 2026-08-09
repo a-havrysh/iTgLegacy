@@ -174,6 +174,60 @@ typedef NS_ENUM(NSInteger, TGConnectionState) {
 /// Mute forever, or unmute.
 - (void)setChat:(int64_t)chatId muted:(BOOL)muted;
 
+/// Everything a profile shows that the plain user record does not carry:
+/// "bio", "commonGroups" (NSNumber), "birthday" (NSString, empty when unset),
+/// "canCall" and "canVideoCall" (NSNumber BOOL).
+- (void)userProfile:(int64_t)userId completion:(void (^)(NSDictionary *info))completion;
+
+/// The same for a group or channel: "description", "members" (NSNumber),
+/// "admins" (NSNumber), "inviteLink".
+- (void)chatProfile:(int64_t)chatId completion:(void (^)(NSDictionary *info))completion;
+
+/// Muted state of one chat, as the list already knows it.
+- (BOOL)isChatMuted:(int64_t)chatId;
+
+/// Erase the messages of a chat without leaving it.
+- (void)clearHistoryInChat:(int64_t)chatId;
+
+/// Messages in this chat delete themselves after `seconds`; 0 turns it off.
+- (void)setChat:(int64_t)chatId autoDeleteSeconds:(NSInteger)seconds;
+
+#pragma mark - account settings
+
+/// Notification settings are kept per scope rather than per chat: private
+/// chats, groups and channels each have their own. `scope` is "private",
+/// "groups" or "channels"; `muted` is what the switch shows.
+- (void)notificationsMutedForScope:(NSString *)scope
+                        completion:(void (^)(BOOL muted))completion;
+- (void)setScope:(NSString *)scope muted:(BOOL)muted;
+
+/// The privacy rules, by the name TDLib gives them without the prefix:
+/// "ShowStatus", "ShowProfilePhoto", "AllowCalls", "AllowChatInvites",
+/// "ShowLinkInForwardedMessages", "ShowPhoneNumber". The answer and the new
+/// value are one of "everybody", "contacts" or "nobody" - the three choices
+/// every client offers, which is all the rule list can say without a screen
+/// for picking individual people.
+- (void)privacyRule:(NSString *)setting
+         completion:(void (^)(NSString *value))completion;
+- (void)setPrivacyRule:(NSString *)setting to:(NSString *)value;
+
+/// Everyone you have blocked: "id" and "name".
+- (void)blockedUsersWithCompletion:(void (^)(NSArray *users))completion;
+
+/// Days of inactivity before the account deletes itself.
+- (void)accountTtlWithCompletion:(void (^)(NSInteger days))completion;
+- (void)setAccountTtlDays:(NSInteger)days;
+
+/// Language packs this account can use: "id" and "name". `current` is the one
+/// in use.
+- (void)languagesWithCompletion:(void (^)(NSArray *languages, NSString *current))completion;
+- (void)setLanguage:(NSString *)packId;
+
+/// Look up a public chat by its @username, creating it locally if needed.
+/// Answers 0 when there is no such account.
+- (void)chatWithUsername:(NSString *)username
+              completion:(void (^)(int64_t chatId, NSString *title))completion;
+
 /// Move a chat into the archive, or back out of it.
 - (void)setChat:(int64_t)chatId archived:(BOOL)archived;
 

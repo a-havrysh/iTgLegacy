@@ -18,6 +18,7 @@
 #import "TGVoiceDecoder.h"
 #import "UIImage+WebP.h"
 #import "TGLottieView.h"
+#import "TGCallViewController.h"
 #import "TGPopupMenu.h"
 #import "TGSnackbar.h"
 
@@ -35,6 +36,8 @@ static const CGFloat kFileTile    = 71.0f;
 static const CGFloat kFileDisc    = 37.0f;
 // A picture in a bubble is clipped to the same radius their media uses.
 static const CGFloat kMediaRadius = 6.0f;
+// One option of a poll: a 16 circle, the text, the share, and the bar under it.
+static const CGFloat kPollRow     = 30.0f;
 
 #pragma mark - bubble cell
 
@@ -58,6 +61,10 @@ static const CGFloat kMediaRadius = 6.0f;
 /// Kept so playback can repaint this one row's bars without a table reload.
 @property (nonatomic, assign) int64_t voiceMessageId;
 @property (nonatomic, strong) NSData *waveformData;
+/// Which poll this cell is drawing, so an option knows what it is voting in.
+@property (nonatomic, assign) int64_t pollMessageId;
+/// "Forwarded from X" above the content, whatever the content turns out to be.
+@property (nonatomic, strong) UILabel *forwardLabel;
 @end
 
 @implementation TGBubbleCell
@@ -145,6 +152,12 @@ static const CGFloat kMediaRadius = 6.0f;
 	self.lottie = [[TGLottieView alloc] initWithFrame:CGRectZero];
 	self.lottie.hidden = YES;
 	[self.bubble addSubview:self.lottie];
+
+	self.forwardLabel = [[UILabel alloc] init];
+	self.forwardLabel.font = [UIFont systemFontOfSize:12];
+	self.forwardLabel.backgroundColor = [UIColor clearColor];
+	self.forwardLabel.hidden = YES;
+	[self.bubble addSubview:self.forwardLabel];
 
 	// A stamp on a picture cannot be grey on nothing - it needs its own plate,
 	// which is what their mediaDateAndStatusBg is.
@@ -364,6 +377,13 @@ static const CGFloat kMediaRadius = 6.0f;
 
 	[self loadPinnedMessage];
 	[self applyPostingRights];
+
+	// Saved Messages is a chat with yourself only in TDLib's bookkeeping; your
+	// own presence under your own notes is meaningless.
+	if (self.chatId == [[TGClient shared] savedMessagesChatId]){
+		subtitle.hidden = YES;
+		return;
+	}
 
 	if (!self.isGroup){
 		// A private chat shows presence where a group shows its size.
@@ -741,13 +761,21 @@ static const CGFloat kMediaRadius = 6.0f;
 	 forControlEvents:UIControlEventTouchUpInside];
 
 	NSString *title = self.chatTitle ?: @"";
-	[button setImage:[TGIcons avatarWithInitials:
-			(title.length ? [title substringToIndex:1].uppercaseString : @"?")
-											size:side colourId:self.chatId]
+	BOOL isSaved = (self.chatId == [[TGClient shared] savedMessagesChatId]);
+	[button setImage:(isSaved
+			? [TGIcons savedMessagesAvatarOfSide:side]
+			: [TGIcons avatarWithInitials:
+					(title.length ? [title substringToIndex:1].uppercaseString : @"?")
+									 size:side colourId:self.chatId])
 			forState:UIControlStateNormal];
 
 	self.navigationItem.rightBarButtonItem =
 			[[UIBarButtonItem alloc] initWithCustomView:button];
+
+	// Your own photo is not what Saved Messages is known by; the bookmark set
+	// above stays.
+	if (isSaved)
+		return;
 
 	NSNumber *fileId = [[TGClient shared] photoFileIdForChat:self.chatId];
 	if (!fileId)
@@ -873,24 +901,24 @@ static const CGFloat kMediaRadius = 6.0f;
 	return NO;
 }
 
-/// Which option was tapped is worked out from the text layout: the question
-/// takes the first line, each option one after it.
-- (void)voteInPoll:(NSDictionary *)m atRow:(NSInteger)row {
-	NSArray *options = m[@"pollOptions"];
-	if (!options.count)
+/// The option that was tapped votes for itself. Which poll it belongs to comes
+/// from the cell it sits in, because a button knows nothing about messages.
+- (void)pollOptionTapped:(UIButton *)option {
+	UIView *view = option;
+	while (view && ![view isKindOfClass:TGBubbleCell.class])
+		view = view.superview;
+	TGBubbleCell *cell = (TGBubbleCell *)view;
+	if (!cell || !cell.pollMessageId)
 		return;
 
-	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Vote"
-													   delegate:self
-											  cancelButtonTitle:nil
-										 destructiveButtonTitle:nil
-											  otherButtonTitles:nil];
-	for (NSDictionary *option in options)
-		[sheet addButtonWithTitle:(option[@"text"][@"text"] ?: option[@"text"] ?: @"")];
-	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
-	sheet.tag = kPollSheetTag;
-	self.actionMessage = m;
-	[sheet showInView:self.view];
+	NSInteger index = option.tag - 0x9100;
+	[[TGClient shared] votePoll:cell.pollMessageId
+						 inChat:self.chatId
+						options:@[@(index)]];
+
+	// TDLib answers with an updated message; re-read so the shares move.
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+			dispatch_get_main_queue(), ^{ [self reload]; });
 }
 
 #pragma mark - download progress
@@ -1528,7 +1556,6 @@ static const CGFloat kMediaRadius = 6.0f;
 
 static const NSInteger kAttachSheetTag  = 41;
 static const NSInteger kMessageSheetTag = 42;
-static const NSInteger kPollSheetTag    = 43;
 
 - (void)attachTapped {
 	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
@@ -1546,14 +1573,6 @@ static const NSInteger kPollSheetTag    = 43;
 - (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
 	if (index == sheet.cancelButtonIndex)
 		return;
-
-	if (sheet.tag == kPollSheetTag){
-		[[TGClient shared] votePoll:[self.actionMessage[@"id"] longLongValue]
-							 inChat:self.chatId
-							options:@[@(index)]];
-		self.actionMessage = nil;
-		return;
-	}
 
 	if (sheet.tag == kMessageSheetTag){
 		[self runMessageAction:[sheet buttonTitleAtIndex:index]];
@@ -1788,11 +1807,18 @@ static const NSInteger kPollSheetTag    = 43;
 	NSDictionary *m = self.messages[indexPath.row];
 	NSString *kind = m[@"kind"];
 
-	// A poll answers to a tap on the row: pick the option under the finger.
-	if ([kind isEqualToString:@"messagePoll"]){
-		[self voteInPoll:m atRow:indexPath.row];
+	// A call log entry calls back, which is the only thing anyone wants from
+	// one - and a missed call is otherwise a dead end.
+	if ([kind isEqualToString:@"messageCall"] && !self.isGroup){
+		[TGCallViewController presentForUserId:self.chatId
+										  name:self.chatTitle
+									  outgoing:YES];
 		return;
 	}
+
+	// A poll is voted in by tapping an option, which is a button of its own.
+	if ([kind isEqualToString:@"messagePoll"])
+		return;
 
 	// A reply is unreadable if you cannot get to what it answers.
 	// The flattened message stores absent values as NSNull, which answers no
@@ -2022,7 +2048,7 @@ static const NSInteger kPollSheetTag    = 43;
 - (CGFloat)decorationHeightFor:(NSDictionary *)m {
 	CGFloat h = 0;
 	if ([m[@"forward"] length])
-		h += 16;
+		h += 18;
 	// Their reply block is two lines beside a stripe: the author, then what
 	// they said.
 	if ([self quoteTextFor:m])
@@ -2066,6 +2092,55 @@ static const NSInteger kPollSheetTag    = 43;
 		return NO;   // it wraps, so there is no short last line to share
 
 	return (oneLine + 6 + [self timeWidthFor:m]) <= (kBubbleMaxW - 2 * kPadH);
+}
+
+/// Their forwarded line: "Forwarded from" in grey with the name after it in
+/// the accent colour. Returns the height it took, so every kind of bubble can
+/// carry it by shifting its own content down - a forwarded file used to look
+/// exactly like one you had been sent directly.
+- (CGFloat)layoutForwardIn:(TGBubbleCell *)cell
+				   message:(NSDictionary *)m
+					 width:(CGFloat)width
+{
+	NSString *from = m[@"forward"];
+	if (![from length]){
+		cell.forwardLabel.hidden = YES;
+		return 0;
+	}
+
+	TGTheme *theme = [TGTheme shared];
+	cell.forwardLabel.hidden = NO;
+	cell.forwardLabel.frame = CGRectMake(kPadH, kPadV, width - 2 * kPadH, 16);
+
+	NSString *line = [NSString stringWithFormat:@"Forwarded from %@", from];
+	if ([cell.forwardLabel respondsToSelector:@selector(setAttributedText:)]){
+		NSMutableAttributedString *styled =
+				[[NSMutableAttributedString alloc] initWithString:line];
+		[styled addAttribute:NSForegroundColorAttributeName
+					   value:[theme secondaryTextColour]
+					   range:NSMakeRange(0, line.length)];
+		[styled addAttribute:NSForegroundColorAttributeName
+					   value:[theme accentColour]
+					   range:NSMakeRange(15, from.length)];
+		[styled addAttribute:NSFontAttributeName
+					   value:[UIFont boldSystemFontOfSize:12]
+					   range:NSMakeRange(15, from.length)];
+		cell.forwardLabel.attributedText = styled;
+	} else {
+		cell.forwardLabel.textColor = [theme accentColour];
+		cell.forwardLabel.text = line;
+	}
+	return 18;
+}
+
+/// Question, the "N voted" line, one row per option, and the stamp.
+- (CGFloat)pollHeightFor:(NSDictionary *)m {
+	NSString *question = m[@"pollQuestion"] ?: @"Poll";
+	CGSize qs = [question sizeWithFont:[UIFont boldSystemFontOfSize:15]
+					 constrainedToSize:CGSizeMake(kBubbleMaxW - 2 * kPadH, 200)
+						 lineBreakMode:NSLineBreakByWordWrapping];
+	NSArray *options = m[@"pollOptions"];
+	return kPadV + qs.height + 22 + kPollRow * options.count + 18;
 }
 
 /// A picture with no caption carries its own stamp on a plate, so the bubble
@@ -2112,6 +2187,8 @@ static const NSInteger kPollSheetTag    = 43;
 
 	CGSize body = [self bodySizeFor:m];
 	CGSize pic  = [self imageSizeFor:m];
+	// A forwarded anything carries a line saying where it came from.
+	CGFloat forwarded = [m[@"forward"] length] ? 18 : 0;
 
 	if ([m[@"kind"] isEqualToString:@"messageVideoNote"] && pic.height > 0)
 		return MIN(MIN(pic.width, pic.height), 178) + 20;
@@ -2125,11 +2202,17 @@ static const NSInteger kPollSheetTag    = 43;
 	// Their media block is 80dp tall; a voice message needs only the disc and
 	// the bars, which comes to 54 on this screen.
 	if ([m[@"kind"] isEqualToString:@"messageVoiceNote"])
-		return 62;
+		return 62 + forwarded;
+
+	if ([m[@"kind"] isEqualToString:@"messagePoll"])
+		return [self pollHeightFor:m] + 6;
+
+	if ([m[@"kind"] isEqualToString:@"messageCall"])
+		return 50 + forwarded;
 
 	if ([m[@"kind"] isEqualToString:@"messageDocument"] ||
 		[m[@"kind"] isEqualToString:@"messageContact"])
-		return kFileTile + 2 * kPadV + 6;
+		return kFileTile + 2 * kPadV + 6 + forwarded;
 
 	CGFloat h = kPadV * 2 + [self decorationHeightFor:m] +
 			([self stampFitsInlineFor:m] || [self stampSitsOnPictureFor:m] ? 0 : 14);
@@ -2224,6 +2307,166 @@ static UIColor *TGSenderColour(int64_t userId) {
 	// Documents and contacts get their own layout: a round glyph on the left,
 	// a bold first line and a grey second one. Rendering them as plain text
 	// made them indistinguishable from a message that merely mentions a file.
+	// A poll is a question with its options stacked under it, each a circle,
+	// a line of text and its share of the vote - which is unreadable as the
+	// run of text it used to be, and unvotable in a group without it.
+	if ([kind isEqualToString:@"messagePoll"]){
+		TGTheme *pollTheme = [TGTheme shared];
+		NSArray *options = m[@"pollOptions"];
+		NSString *question = m[@"pollQuestion"] ?: @"Poll";
+		BOOL closed = [m[@"pollClosed"] boolValue];
+
+		CGFloat width = kBubbleMaxW;
+		CGFloat x = mine ? (tableView.bounds.size.width - width - 8) : 8;
+		CGFloat height = [self pollHeightFor:m];
+		cell.bubble.frame = CGRectMake(x, 3, width, height);
+		cell.bubble.backgroundColor = mine ? [pollTheme bubbleMineColour]
+										   : [pollTheme bubbleTheirsColour];
+		cell.bubble.layer.borderWidth = [pollTheme bubbleBorderWidth];
+		cell.bubble.layer.borderColor = [pollTheme bubbleBorderColour].CGColor;
+		cell.bubble.layer.cornerRadius = [pollTheme bubbleCornerRadius];
+
+		cell.body.hidden = NO;
+		cell.body.numberOfLines = 0;
+		cell.body.font = [UIFont boldSystemFontOfSize:15];
+		cell.body.textColor = [pollTheme primaryTextColour];
+		cell.body.text = question;
+		CGSize qs = [question sizeWithFont:cell.body.font
+						 constrainedToSize:CGSizeMake(width - 2 * kPadH, 200)
+							 lineBreakMode:NSLineBreakByWordWrapping];
+		cell.body.frame = CGRectMake(kPadH, kPadV, width - 2 * kPadH, qs.height);
+
+		cell.subtitle.hidden = NO;
+		cell.subtitle.font = [UIFont systemFontOfSize:12];
+		cell.subtitle.textColor = [pollTheme secondaryTextColour];
+		cell.subtitle.text = closed ? @"Final results"
+			: [NSString stringWithFormat:@"%@ voted",
+					[m[@"pollTotal"] integerValue] == 0 ? @"Nobody" : m[@"pollTotal"]];
+		cell.subtitle.frame = CGRectMake(kPadH, kPadV + qs.height + 2,
+										 width - 2 * kPadH, 16);
+
+		// The option rows are rebuilt rather than reused: a cell that came back
+		// from another poll would keep the wrong number of them.
+		for (UIView *old in [cell.bubble.subviews copy])
+			if (old.tag >= 0x9100 && old.tag < 0x9200)
+				[old removeFromSuperview];
+		cell.pollMessageId = [m[@"id"] longLongValue];
+
+		CGFloat y = kPadV + qs.height + 22;
+		for (NSUInteger i = 0; i < options.count; i++){
+			NSDictionary *option = options[i];
+			BOOL chosen = [option[@"is_chosen"] boolValue];
+			NSInteger share = [option[@"vote_percentage"] integerValue];
+
+			// The option itself is the button: a poll you vote in by choosing
+			// from a list of the same options is a menu about a menu.
+			// The option itself is the button: a poll you vote in by choosing
+			// from a list of the same options is a menu about a menu. The tag
+			// carries which option it is, and the cell carries which poll.
+			UIButton *row = [UIButton buttonWithType:UIButtonTypeCustom];
+			row.frame = CGRectMake(kPadH, y, width - 2 * kPadH, kPollRow);
+			row.tag = 0x9100 + (NSInteger)i;
+			row.enabled = !closed;
+			[row addTarget:self action:@selector(pollOptionTapped:)
+			  forControlEvents:UIControlEventTouchUpInside];
+			[cell.bubble addSubview:row];
+
+			UIView *dot = [[UIView alloc] initWithFrame:CGRectMake(0, 4, 16, 16)];
+			dot.layer.cornerRadius = 8;
+			dot.layer.borderWidth = 1.5f;
+			dot.layer.borderColor = [pollTheme accentColour].CGColor;
+			dot.backgroundColor = chosen ? [pollTheme accentColour] : [UIColor clearColor];
+			[row addSubview:dot];
+
+			UILabel *label = [[UILabel alloc] initWithFrame:
+					CGRectMake(24, 2, row.bounds.size.width - 66, 20)];
+			label.text = option[@"text"][@"text"] ?: option[@"text"] ?: @"";
+			label.font = [UIFont systemFontOfSize:14];
+			label.textColor = [pollTheme primaryTextColour];
+			label.backgroundColor = [UIColor clearColor];
+			[row addSubview:label];
+
+			UILabel *percent = [[UILabel alloc] initWithFrame:
+					CGRectMake(row.bounds.size.width - 40, 2, 40, 20)];
+			percent.text = [NSString stringWithFormat:@"%ld%%", (long)share];
+			percent.font = [UIFont systemFontOfSize:13];
+			percent.textAlignment = NSTextAlignmentRight;
+			percent.textColor = [pollTheme secondaryTextColour];
+			percent.backgroundColor = [UIColor clearColor];
+			[row addSubview:percent];
+
+			// The bar under each option is the only way the result reads at a
+			// glance; the number alone makes you compare digits.
+			UIView *track = [[UIView alloc] initWithFrame:
+					CGRectMake(24, kPollRow - 6, row.bounds.size.width - 24, 2)];
+			track.backgroundColor = [pollTheme separatorColour];
+			[row addSubview:track];
+
+			UIView *fill = [[UIView alloc] initWithFrame:CGRectMake(24, kPollRow - 6,
+					(row.bounds.size.width - 24) * share / 100.0f, 2)];
+			fill.backgroundColor = [pollTheme accentColour];
+			[row addSubview:fill];
+
+			y += kPollRow;
+		}
+
+		cell.picture.hidden = YES;
+		cell.disc.hidden = YES;
+		cell.time.text = [self stampFor:m];
+		cell.time.textColor = [pollTheme timeColour];
+		CGFloat pollTimeW = [self timeWidthFor:m];
+		cell.time.frame = CGRectMake(width - pollTimeW - kPadH, height - 17,
+									 pollTimeW - (mine ? 18 : 0), 12);
+		cell.ticks.hidden = !mine;
+		if (mine){
+			cell.ticks.image = [TGIcons ticksWhite:NO];
+			cell.ticks.frame = CGRectMake(width - kPadH - 15, height - 15, 15, 9);
+		}
+		return cell;
+	}
+
+	// A call reads as a small bubble with an arrow saying which way it went and
+	// whether it was answered. Tapping it calls back.
+	if ([kind isEqualToString:@"messageCall"]){
+		TGTheme *callTheme = [TGTheme shared];
+		BOOL missed = [m[@"callState"] isEqualToString:@"missed"];
+		NSString *line = m[@"text"] ?: @"Call";
+
+		CGFloat width = MIN(kBubbleMaxW,
+				[line sizeWithFont:[UIFont systemFontOfSize:15]].width + 76);
+		CGFloat fwd = [self layoutForwardIn:cell message:m width:width];
+		CGFloat height = 44 + fwd;
+		CGFloat x = mine ? (tableView.bounds.size.width - width - 8) : 8;
+		cell.bubble.frame = CGRectMake(x, 3, width, height);
+		cell.bubble.backgroundColor = mine ? [callTheme bubbleMineColour]
+										   : [callTheme bubbleTheirsColour];
+		cell.bubble.layer.borderWidth = [callTheme bubbleBorderWidth];
+		cell.bubble.layer.borderColor = [callTheme bubbleBorderColour].CGColor;
+		cell.bubble.layer.cornerRadius = [callTheme bubbleCornerRadius];
+
+		cell.disc.hidden = NO;
+		cell.disc.image = [TGIcons callArrowOutgoing:mine missed:missed];
+		cell.disc.frame = CGRectMake(kPadH, fwd + (height - fwd - 14) / 2, 14, 14);
+
+		cell.body.hidden = NO;
+		cell.body.numberOfLines = 1;
+		cell.body.font = [UIFont systemFontOfSize:15];
+		cell.body.textColor = [callTheme primaryTextColour];
+		cell.body.text = line;
+		cell.body.frame = CGRectMake(kPadH + 20, fwd + 6, width - kPadH - 26, 20);
+
+		cell.subtitle.hidden = NO;
+		cell.subtitle.font = [UIFont systemFontOfSize:12];
+		cell.subtitle.textColor = [callTheme timeColour];
+		cell.subtitle.text = [self stampFor:m];
+		cell.subtitle.frame = CGRectMake(kPadH + 20, fwd + 24, width - kPadH - 26, 14);
+
+		cell.picture.hidden = YES;
+		cell.time.text = @"";
+		cell.ticks.hidden = YES;
+		return cell;
+	}
+
 	if ([kind isEqualToString:@"messageDocument"] ||
 		[kind isEqualToString:@"messageContact"]){
 		BOOL isDoc = [kind isEqualToString:@"messageDocument"];
@@ -2235,7 +2478,8 @@ static UIColor *TGSenderColour(int64_t userId) {
 		// Their file block is 253x87 at 360dp: an 80dp tile on the left, the
 		// name and the size stacked beside it.
 		CGFloat width = 225;
-		CGFloat height = kFileTile + 2 * kPadV;
+		CGFloat fwd = [self layoutForwardIn:cell message:m width:width];
+		CGFloat height = kFileTile + 2 * kPadV + fwd;
 		CGFloat x = mine ? (tableView.bounds.size.width - width - 8) : 8;
 		cell.bubble.frame = CGRectMake(x, 3, width, height);
 		cell.bubble.backgroundColor = mine ? [cardTheme bubbleMineColour]
@@ -2250,7 +2494,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 		// A document gets the square tile at their size; a contact gets a round
 		// avatar, which is smaller and sits centred beside the name.
 		CGFloat side = isDoc ? kFileTile : 48;
-		cell.icon.frame = CGRectMake(kPadH, kPadV + (kFileTile - side) / 2, side, side);
+		cell.icon.frame = CGRectMake(kPadH, fwd + kPadV + (kFileTile - side) / 2, side, side);
 		if (isDoc){
 			cell.icon.text = @"";
 			cell.icon.layer.cornerRadius = 3;
@@ -2259,7 +2503,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 			cell.disc.hidden = NO;
 			cell.disc.image = [TGIcons fileDiscOfSide:kFileDisc];
 			cell.disc.frame = CGRectMake(kPadH + (kFileTile - kFileDisc) / 2,
-										 kPadV + (kFileTile - kFileDisc) / 2,
+										 fwd + kPadV + (kFileTile - kFileDisc) / 2,
 										 kFileDisc, kFileDisc);
 			// The tile was added to the bubble after the disc was, so without
 			// this it covers the glyph it is supposed to carry.
@@ -2282,13 +2526,13 @@ static UIColor *TGSenderColour(int64_t userId) {
 		cell.body.textColor = isDoc ? [cardTheme fileNameColour]
 									: [cardTheme primaryTextColour];
 		cell.body.text = first;
-		cell.body.frame = CGRectMake(textX, kPadV + 8, width - textX - kPadH, 38);
+		cell.body.frame = CGRectMake(textX, fwd + kPadV + 8, width - textX - kPadH, 38);
 
 		cell.subtitle.hidden = NO;
 		cell.subtitle.font = [UIFont systemFontOfSize:13];
 		cell.subtitle.textColor = [cardTheme fileMetaColour];
 		cell.subtitle.text = second;
-		cell.subtitle.frame = CGRectMake(textX, kPadV + 46, width - textX - kPadH, 17);
+		cell.subtitle.frame = CGRectMake(textX, fwd + kPadV + 46, width - textX - kPadH, 17);
 
 		cell.time.text = [self stampFor:m];
 		cell.time.textColor = [cardTheme timeColour];
@@ -2333,7 +2577,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 			(pic.height ? pic.height + 4 : 0) + body.height;
 	// The voice block has its own size: a 40pt disc with the bars beside it.
 	if (isVoice)
-		bubbleH = 56;
+		bubbleH = 56 + ([m[@"forward"] length] ? 18 : 0);
 
 	CGFloat x = mine ? (tableView.bounds.size.width - bubbleW - 8) : 8;
 	// Photos of one album sit flush against each other, so the block reads as
@@ -2441,16 +2685,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 	cell.quoteBar.hidden = YES;
 	cell.quote.hidden = YES;
 
-	NSString *forwarded = m[@"forward"];
-	if ([forwarded length]){
-		cell.quote.hidden = NO;
-		cell.quote.numberOfLines = 1;
-		cell.quote.font = [UIFont italicSystemFontOfSize:12];
-		cell.quote.textColor = [theme accentColour];
-		cell.quote.text = [NSString stringWithFormat:@"Forwarded from %@", forwarded];
-		cell.quote.frame = CGRectMake(kPadH, y, bubbleW - 2 * kPadH, 14);
-		y += 16;
-	}
+	y += [self layoutForwardIn:cell message:m width:bubbleW];
 
 	NSString *quoted = [self quoteTextFor:m];
 	UILabel *quoteAuthor = (UILabel *)[cell.bubble viewWithTag:0x9003];
@@ -2473,25 +2708,16 @@ static UIColor *TGSenderColour(int64_t userId) {
 		quoteAuthor.text = [self quoteAuthorFor:m] ?: @"Reply";
 		quoteAuthor.frame = CGRectMake(kPadH + 8, y, bubbleW - 2 * kPadH - 10, 16);
 
-		// the forward line above reuses the same label, so build a second one
-		UILabel *q = cell.quote.hidden ? cell.quote : nil;
-		if (!q){
-			q = [[UILabel alloc] init];
-			q.tag = 0x9001;
-			q.backgroundColor = [UIColor clearColor];
-			UILabel *existing = (UILabel *)[cell.bubble viewWithTag:0x9001];
-			if (existing) q = existing; else [cell.bubble addSubview:q];
-		}
-		q.hidden = NO;
-		q.numberOfLines = 1;
-		q.font = [UIFont systemFontOfSize:13];
-		q.textColor = [theme primaryTextColour];
-		q.text = quoted;
-		q.frame = CGRectMake(kPadH + 8, y + 17, bubbleW - 2 * kPadH - 10, 17);
+		// The forwarded line has a label of its own now, so the quote can use
+		// this one rather than a second one built at runtime.
+		cell.quote.hidden = NO;
+		cell.quote.numberOfLines = 1;
+		cell.quote.font = [UIFont systemFontOfSize:13];
+		cell.quote.textColor = [theme primaryTextColour];
+		cell.quote.text = quoted;
+		cell.quote.frame = CGRectMake(kPadH + 8, y + 17, bubbleW - 2 * kPadH - 10, 17);
 		y += 38;
 	} else {
-		UILabel *existing = (UILabel *)[cell.bubble viewWithTag:0x9001];
-		existing.hidden = YES;
 		quoteAuthor.hidden = YES;
 	}
 
@@ -2542,10 +2768,12 @@ static UIColor *TGSenderColour(int64_t userId) {
 		cell.voiceMessageId = [m[@"id"] longLongValue];
 		cell.waveformData = m[@"waveform"];
 
+		CGFloat fwd = [self layoutForwardIn:cell message:m width:bubbleW];
+
 		cell.disc.hidden = NO;
 		cell.disc.image = [TGIcons mediaDiscOfSide:disc
 										   playing:(isPlaying && self.voicePlayer.playing)];
-		cell.disc.frame = CGRectMake(kPadH, (bubbleH - disc) / 2, disc, disc);
+		cell.disc.frame = CGRectMake(kPadH, fwd + (bubbleH - fwd - disc) / 2, disc, disc);
 
 		// The bars take the width left over once the stamp has its corner, and
 		// the part already heard is drawn solid.
@@ -2555,7 +2783,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 									   size:waveSize
 									 played:(isPlaying ? [self playedFraction] : 0)
 									 colour:[voiceTheme accentColour]];
-		cell.wave.frame = CGRectMake(left, 10, waveSize.width, waveSize.height);
+		cell.wave.frame = CGRectMake(left, fwd + 10, waveSize.width, waveSize.height);
 
 		NSInteger seconds = [m[@"duration"] integerValue];
 		cell.body.hidden = NO;

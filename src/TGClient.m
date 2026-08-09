@@ -21,6 +21,9 @@ typedef const char *(*td_exec_fn)(void *client, const char *request);
 @property (nonatomic, strong) NSMutableDictionary *chatsById;   // id -> mutable info
 @property (nonatomic, strong) NSMutableDictionary *usersById;   // id -> display name
 @property (nonatomic, strong) NSMutableDictionary *userPhotosById; // id -> photo file id
+/// supergroup id -> is_forum. A chat only carries the supergroup's id; whether
+/// it is a forum lives on the supergroup, which arrives in its own update.
+@property (nonatomic, strong) NSMutableDictionary *forumSupergroups;
 @property (nonatomic, strong) NSArray *archivedChats;
 @property (nonatomic, strong) NSArray *folders;
 @property (nonatomic, strong) NSArray *chats;
@@ -48,6 +51,7 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m);
 		s.chatsById = [NSMutableDictionary dictionary];
 		s.usersById = [NSMutableDictionary dictionary];
 		s.userPhotosById = [NSMutableDictionary dictionary];
+		s.forumSupergroups = [NSMutableDictionary dictionary];
 		s.archivedChats = @[];
 		s.folders = @[];
 		s.chats = @[];
@@ -348,6 +352,32 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m);
 		return;
 	}
 
+	// Whether a supergroup is a forum is a property of the supergroup, not of
+	// the chat, and it arrives in an update of its own. Chats already built
+	// from that supergroup have to be told.
+	if ([type isEqualToString:@"updateSupergroup"]){
+		NSDictionary *group = obj[@"supergroup"];
+		NSNumber *groupId = group[@"id"];
+		if (!groupId)
+			return;
+		BOOL isForum = [group[@"is_forum"] boolValue];
+		if ([self.forumSupergroups[groupId] boolValue] == isForum &&
+			self.forumSupergroups[groupId])
+			return;
+		self.forumSupergroups[groupId] = @(isForum);
+
+		BOOL changed = NO;
+		for (NSMutableDictionary *chat in self.chatsById.allValues){
+			if (![chat[@"supergroupId"] isEqual:groupId])
+				continue;
+			chat[@"isForum"] = @(isForum);
+			changed = YES;
+		}
+		if (changed)
+			[self rebuildChats];
+		return;
+	}
+
 	// A private chat's id is the user's id, so presence lands straight on the
 	// chat the list is drawing.
 	if ([type isEqualToString:@"updateUserStatus"]){
@@ -539,6 +569,28 @@ static NSString *TGReactionSummary(NSDictionary *m) {
 	return [parts componentsJoinedByString:@"  "];
 }
 
+/// "messageVideoChatStarted" -> "Video chat started". TDLib's type names are
+/// already the sentence, written in camel case, and turning them back is a
+/// better answer for a content type nobody has written a branch for than
+/// either an empty bubble or the word "unsupported".
+static NSString *TGPhraseFromTypeName(NSString *ctype) {
+	NSString *rest = [ctype hasPrefix:@"message"] ? [ctype substringFromIndex:7] : ctype;
+	if (!rest.length)
+		return @"Message";
+
+	NSMutableString *out = [NSMutableString stringWithCapacity:rest.length + 8];
+	for (NSUInteger i = 0; i < rest.length; i++){
+		unichar c = [rest characterAtIndex:i];
+		if (i > 0 && c >= 'A' && c <= 'Z'){
+			[out appendString:@" "];
+			[out appendFormat:@"%C", (unichar)(c - 'A' + 'a')];
+		} else {
+			[out appendFormat:@"%C", c];
+		}
+	}
+	return out;
+}
+
 /// Flatten a TDLib message into what the UI needs.
 static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 	NSDictionary *content = m[@"content"];
@@ -551,6 +603,7 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 	NSNumber *duration = nil;
 	NSData *waveform = nil;
 	BOOL isService = NO;
+	NSString *callState = nil;     // "missed" or "answered" on a call message
 
 	if ([ctype isEqualToString:@"messagePhoto"]){
 		// sizes run small to large; take the largest present
@@ -690,22 +743,22 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		isService = YES;
 
 	} else if ([ctype isEqualToString:@"messageCall"]){
+		// A call is a row of its own, not a service line: it says which way it
+		// went and whether it was answered, and it can be returned with a tap.
 		NSNumber *dur = content[@"duration"];
-		extra = dur.integerValue > 0
-			? [NSString stringWithFormat:@"Call, %ld:%02ld",
-					(long)(dur.integerValue / 60), (long)(dur.integerValue % 60)]
-			: @"Call";
-		isService = YES;
+		NSString *reason = content[@"discard_reason"][@"@type"];
+		BOOL missed = [reason isEqualToString:@"callDiscardReasonMissed"] ||
+					  [reason isEqualToString:@"callDiscardReasonDeclined"];
+		BOOL outgoing = [m[@"is_outgoing"] boolValue];
 
-	} else if ([ctype isEqualToString:@"messagePoll"]){
-		NSDictionary *poll = content[@"poll"];
-		NSMutableString *lines = [NSMutableString stringWithFormat:@"%@",
-				poll[@"question"][@"text"] ?: poll[@"question"] ?: @"Poll"];
-		for (NSDictionary *opt in poll[@"options"])
-			[lines appendFormat:@"\n  %@  %@%%",
-					opt[@"text"][@"text"] ?: opt[@"text"] ?: @"",
-					opt[@"vote_percentage"] ?: @0];
-		extra = lines;
+		extra = missed
+			? (outgoing ? @"Cancelled call" : @"Missed call")
+			: (outgoing ? @"Outgoing call" : @"Incoming call");
+		if (!missed && dur.integerValue > 0)
+			extra = [NSString stringWithFormat:@"%@, %ld:%02ld", extra,
+					(long)(dur.integerValue / 60), (long)(dur.integerValue % 60)];
+		callState = missed ? @"missed" : @"answered";
+		isService = NO;
 
 	} else if ([ctype isEqualToString:@"messageDice"]){
 		extra = [NSString stringWithFormat:@"%@  %@",
@@ -741,6 +794,47 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		extra = @"Location";
 		latitude  = loc[@"latitude"];
 		longitude = loc[@"longitude"];
+
+	} else if ([ctype isEqualToString:@"messageLiveLocation"]){
+		// The same card as a fixed point, said differently: a live location is
+		// a place that keeps changing, and the map is still worth drawing.
+		NSDictionary *loc = content[@"location"];
+		extra = @"Live location";
+		latitude  = loc[@"latitude"];
+		longitude = loc[@"longitude"];
+
+	} else if ([ctype isEqualToString:@"messageInvoice"]){
+		NSInteger amount = [content[@"total_amount"] integerValue];
+		NSString *currency = content[@"currency"] ?: @"";
+		extra = amount > 0
+			? [NSString stringWithFormat:@"%@\n%.2f %@", content[@"product_info"][@"title"]
+					?: content[@"title"] ?: @"Invoice", amount / 100.0, currency]
+			: (content[@"product_info"][@"title"] ?: @"Invoice");
+
+	} else if ([ctype isEqualToString:@"messageStory"]){
+		extra = @"Story";
+
+	} else if ([ctype isEqualToString:@"messagePaidMedia"]){
+		extra = [NSString stringWithFormat:@"Paid media, %@ stars",
+				content[@"star_count"] ?: @0];
+
+	} else if ([ctype isEqualToString:@"messageChecklist"]){
+		NSDictionary *list = content[@"checklist"];
+		NSMutableString *lines = [NSMutableString stringWithFormat:@"%@\n",
+				list[@"title"][@"text"] ?: @"Checklist"];
+		for (NSDictionary *task in list[@"tasks"])
+			[lines appendFormat:@"%@ %@\n",
+					task[@"completed_by_user_id"] ? @"☑" : @"☐",
+					task[@"text"][@"text"] ?: @""];
+		extra = [lines stringByTrimmingCharactersInSet:
+				[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+
+	} else if ([ctype hasPrefix:@"messageExpired"]){
+		// A self-destructing photo that has gone. Saying so is the whole
+		// content; an empty bubble would look like a bug.
+		extra = @"Expired media";
+		isService = YES;
+
 	}
 
 	// A caption wins; then whatever the content itself says; and for a plain
@@ -751,6 +845,16 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 	else if (extra.length)   text = extra;
 	else if (photoFileId)    text = @"";
 	else                     text = TGMessagePreview(m);
+
+	// TDLib has over a hundred content types and gains more with every
+	// release, most of them one-line notices nobody has written a branch for.
+	// Anything that would otherwise be an empty bubble says what it is instead:
+	// messageVideoChatStarted reads as "Video chat started". Only content with
+	// nothing at all to show reaches this - text and media have already spoken.
+	if (!text.length && !photoFileId && !docFileId && !latitude){
+		text = TGPhraseFromTypeName(ctype);
+		isService = YES;
+	}
 
 	// Reply, forward and edit state - three things a chat is unreadable
 	// without, because a bare answer loses what it answers.
@@ -798,13 +902,19 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		@"albumId"   : m[@"media_album_id"] ?: @"",
 		// "\U0001F44D 3" per reaction, joined - enough to show under a bubble.
 		@"reactions" : TGReactionSummary(m) ?: @"",
-		// Options of a poll, so tapping one can vote.
-		@"pollOptions" : m[@"content"][@"poll"][@"options"] ?: @[],
+		// Options of a poll, so tapping one can vote, and the parts the chat
+		// draws around them.
+		@"pollOptions"  : m[@"content"][@"poll"][@"options"] ?: @[],
+		@"pollQuestion" : m[@"content"][@"poll"][@"question"][@"text"] ?: @"",
+		@"pollTotal"    : m[@"content"][@"poll"][@"total_voter_count"] ?: @0,
+		@"pollClosed"   : m[@"content"][@"poll"][@"is_closed"] ?: @NO,
+		@"pollAnonymous": m[@"content"][@"poll"][@"is_anonymous"] ?: @YES,
 		@"duration"  : duration ?: @0,
 		@"waveform"  : waveform ?: [NSData data],
 		@"senderId"  : m[@"sender_id"][@"user_id"] ?: @(0),
 		@"lat"       : latitude    ?: [NSNull null],
 		@"lon"       : longitude   ?: [NSNull null],
+		@"callState" : callState   ?: @"",
 	};
 }
 
@@ -1510,10 +1620,9 @@ static NSString *TGMessagePreview(NSDictionary *message) {
 		return @"pinned a message";
 	if ([ctype isEqualToString:@"messagePoll"])
 		return @"Poll";
-	// Unknown kinds read better without the "message" prefix than raw.
-	if ([ctype hasPrefix:@"message"])
-		return [ctype substringFromIndex:7];
-	return ctype ?: @"";
+	// Everything else reads as its own type name turned back into a sentence,
+	// the same way the chat itself renders it.
+	return ctype.length ? TGPhraseFromTypeName(ctype) : @"";
 }
 
 /// Chats are ordered by the "order" of their position in a list. It is an
@@ -1753,6 +1862,254 @@ static int64_t TGArchiveOrder(NSArray *positions) {
 	}];
 }
 
+- (void)userProfile:(int64_t)userId completion:(void (^)(NSDictionary *))completion {
+	[self request:@{@"@type" : @"getUserFullInfo", @"user_id" : @(userId)}
+	   completion:^(NSDictionary *full){
+		NSDictionary *birth = full[@"birthdate"];
+		NSString *birthday = @"";
+		if ([birth[@"day"] integerValue] > 0){
+			static NSArray *months = nil;
+			if (!months) months = @[@"", @"January", @"February", @"March", @"April",
+					@"May", @"June", @"July", @"August", @"September", @"October",
+					@"November", @"December"];
+			NSInteger month = [birth[@"month"] integerValue];
+			birthday = [NSString stringWithFormat:@"%@ %@",
+					(month > 0 && month < 13) ? months[month] : @"", birth[@"day"]];
+		}
+		if (completion) completion(@{
+			@"bio"          : full[@"bio"][@"text"] ?: @"",
+			@"commonGroups" : full[@"group_in_common_count"] ?: @0,
+			@"birthday"     : birthday,
+			// A user who has calls turned off should not be offered one.
+			@"canCall"      : full[@"can_be_called"] ?: @NO,
+			@"canVideoCall" : full[@"supports_video_calls"] ?: @NO,
+		});
+	}];
+}
+
+- (void)chatProfile:(int64_t)chatId completion:(void (^)(NSDictionary *))completion {
+	__weak typeof(self) weakSelf = self;
+	[self request:@{@"@type" : @"getChat", @"chat_id" : @(chatId)}
+	   completion:^(NSDictionary *chat){
+		NSString *kind = chat[@"type"][@"@type"];
+		void (^answer)(NSDictionary *) = ^(NSDictionary *full){
+			if (completion) completion(@{
+				@"description" : full[@"description"] ?: @"",
+				@"members"     : full[@"member_count"] ?: @0,
+				@"admins"      : full[@"administrator_count"] ?: @0,
+				@"inviteLink"  : full[@"invite_link"][@"invite_link"] ?: @"",
+			});
+		};
+
+		if ([kind isEqualToString:@"chatTypeSupergroup"]){
+			[weakSelf request:@{@"@type" : @"getSupergroupFullInfo",
+								@"supergroup_id" : chat[@"type"][@"supergroup_id"]}
+				   completion:answer];
+		} else if ([kind isEqualToString:@"chatTypeBasicGroup"]){
+			[weakSelf request:@{@"@type" : @"getBasicGroupFullInfo",
+								@"basic_group_id" : chat[@"type"][@"basic_group_id"]}
+				   completion:answer];
+		} else {
+			answer(@{});
+		}
+	}];
+}
+
+- (BOOL)isChatMuted:(int64_t)chatId {
+	return [self.chatsById[@(chatId)][@"isMuted"] boolValue];
+}
+
+- (void)clearHistoryInChat:(int64_t)chatId {
+	// Without remove_from_chat_list this empties the chat and leaves it there,
+	// which is what "clear history" means as opposed to "delete chat".
+	[self send:@{
+		@"@type"                 : @"deleteChatHistory",
+		@"chat_id"               : @(chatId),
+		@"remove_from_chat_list" : @NO,
+		@"revoke"                : @NO,
+	}];
+}
+
+- (void)setChat:(int64_t)chatId autoDeleteSeconds:(NSInteger)seconds {
+	[self send:@{
+		@"@type"   : @"setChatMessageAutoDeleteTime",
+		@"chat_id" : @(chatId),
+		@"message_auto_delete_time" : @(seconds),
+	}];
+}
+
+#pragma mark - account settings
+
+/// TDLib names the three scopes; the app names them shortly.
+static NSString *TGScopeType(NSString *scope) {
+	if ([scope isEqualToString:@"groups"])   return @"notificationSettingsScopeGroupChats";
+	if ([scope isEqualToString:@"channels"]) return @"notificationSettingsScopeChannelChats";
+	return @"notificationSettingsScopePrivateChats";
+}
+
+- (void)notificationsMutedForScope:(NSString *)scope
+                        completion:(void (^)(BOOL))completion {
+	[self request:@{
+		@"@type" : @"getScopeNotificationSettings",
+		@"scope" : @{@"@type" : TGScopeType(scope)},
+	} completion:^(NSDictionary *settings){
+		// There is no flag: a very large mute_for is how muting is expressed.
+		if (completion) completion([settings[@"mute_for"] integerValue] > 0);
+	}];
+}
+
+- (void)setScope:(NSString *)scope muted:(BOOL)muted {
+	[self send:@{
+		@"@type" : @"setScopeNotificationSettings",
+		@"scope" : @{@"@type" : TGScopeType(scope)},
+		@"notification_settings" : @{
+			@"@type"        : @"scopeNotificationSettings",
+			@"mute_for"     : @(muted ? 365 * 24 * 3600 : 0),
+			@"sound_id"     : @(0),
+			@"show_preview" : @YES,
+		},
+	}];
+}
+
+- (void)privacyRule:(NSString *)setting completion:(void (^)(NSString *))completion {
+	[self request:@{
+		@"@type"   : @"getUserPrivacySettingRules",
+		@"setting" : @{@"@type" : [@"userPrivacySetting" stringByAppendingString:setting]},
+	} completion:^(NSDictionary *rules){
+		// The rules are a list, most specific first. The three answers a client
+		// offers are the shapes of the first rule; anything more elaborate,
+		// set from another client, reads as the closest of the three.
+		NSString *first = [rules[@"rules"] firstObject][@"@type"];
+		NSString *value = @"nobody";
+		if ([first isEqualToString:@"userPrivacySettingRuleAllowAll"])
+			value = @"everybody";
+		else if ([first isEqualToString:@"userPrivacySettingRuleAllowContacts"])
+			value = @"contacts";
+		if (completion) completion(value);
+	}];
+}
+
+- (void)setPrivacyRule:(NSString *)setting to:(NSString *)value {
+	NSString *rule = @"userPrivacySettingRuleRestrictAll";
+	if ([value isEqualToString:@"everybody"])
+		rule = @"userPrivacySettingRuleAllowAll";
+	else if ([value isEqualToString:@"contacts"])
+		rule = @"userPrivacySettingRuleAllowContacts";
+
+	[self send:@{
+		@"@type"   : @"setUserPrivacySettingRules",
+		@"setting" : @{@"@type" : [@"userPrivacySetting" stringByAppendingString:setting]},
+		@"rules"   : @{@"@type" : @"userPrivacySettingRules",
+					   @"rules" : @[@{@"@type" : rule}]},
+	}];
+}
+
+- (void)blockedUsersWithCompletion:(void (^)(NSArray *))completion {
+	__weak typeof(self) weakSelf = self;
+	[self request:@{
+		@"@type"       : @"getBlockedMessageSenders",
+		@"block_list"  : @{@"@type" : @"blockListMain"},
+		@"offset"      : @(0),
+		@"limit"       : @(100),
+	} completion:^(NSDictionary *result){
+		NSMutableArray *out = [NSMutableArray array];
+		for (NSDictionary *sender in result[@"senders"]){
+			NSNumber *userId = sender[@"user_id"];
+			if (!userId)
+				continue;
+			[out addObject:@{
+				@"id"   : userId,
+				@"name" : [weakSelf nameForUserId:userId.longLongValue] ?: @"",
+			}];
+		}
+		if (completion) completion(out);
+	}];
+}
+
+- (void)accountTtlWithCompletion:(void (^)(NSInteger))completion {
+	[self request:@{@"@type" : @"getAccountTtl"} completion:^(NSDictionary *ttl){
+		if (completion) completion([ttl[@"days"] integerValue]);
+	}];
+}
+
+- (void)setAccountTtlDays:(NSInteger)days {
+	[self send:@{
+		@"@type" : @"setAccountTtl",
+		@"ttl"   : @{@"@type" : @"accountTtl", @"days" : @(days)},
+	}];
+}
+
+static NSArray *TGPacksFrom(NSDictionary *target) {
+	NSMutableArray *out = [NSMutableArray array];
+	for (NSDictionary *pack in target[@"language_packs"]){
+		if (![pack[@"id"] length])
+			continue;
+		[out addObject:@{@"id"   : pack[@"id"],
+						 @"name" : pack[@"native_name"] ?: pack[@"name"] ?: pack[@"id"]}];
+	}
+	return out;
+}
+
+- (void)languagesWithCompletion:(void (^)(NSArray *, NSString *))completion {
+	__weak typeof(self) weakSelf = self;
+
+	void (^answer)(NSArray *) = ^(NSArray *packs){
+		[weakSelf request:@{@"@type" : @"getOption",
+							@"name"  : @"language_pack_id"}
+			   completion:^(NSDictionary *option){
+			NSString *current = option[@"value"] ?: @"en";
+			NSArray *list = packs;
+			// With no list at all, say what is in use rather than nothing:
+			// an empty screen looks broken and tells you less than one row.
+			if (!list.count)
+				list = @[@{@"id" : current, @"name" : current}];
+			if (completion) completion(list, current);
+		}];
+	};
+
+	// The full list comes from Telegram's servers, and they answer 404 to an
+	// api_id with no language packs of its own - which is this app's case. The
+	// local query still knows about the packs already on the device.
+	[self request:@{@"@type" : @"getLocalizationTargetInfo",
+					@"only_local" : @NO}
+	   completion:^(NSDictionary *target){
+		NSArray *packs = TGPacksFrom(target);
+		if (packs.count){
+			answer(packs);
+			return;
+		}
+		[weakSelf request:@{@"@type" : @"getLocalizationTargetInfo",
+							@"only_local" : @YES}
+			   completion:^(NSDictionary *local){
+			answer(TGPacksFrom(local));
+		}];
+	}];
+}
+
+- (void)setLanguage:(NSString *)packId {
+	// The strings themselves are the official client's; this app is written in
+	// English throughout. Setting it still matters: TDLib uses it for the text
+	// it generates, and other clients on the account follow it.
+	[self send:@{
+		@"@type" : @"setOption",
+		@"name"  : @"language_pack_id",
+		@"value" : @{@"@type" : @"optionValueString", @"value" : packId ?: @"en"},
+	}];
+}
+
+- (void)chatWithUsername:(NSString *)username
+              completion:(void (^)(int64_t, NSString *))completion {
+	// searchPublicChat resolves the name and puts the chat in the local
+	// database in one step, which is what a link or a QR code needs.
+	[self request:@{
+		@"@type"    : @"searchPublicChat",
+		@"username" : username ?: @"",
+	} completion:^(NSDictionary *chat){
+		if (completion)
+			completion([chat[@"id"] longLongValue], chat[@"title"]);
+	}];
+}
+
 /// Archiving is a move between the two chat lists, not a flag on the chat.
 /// TDLib answers with updateChatPosition, so the list rebuilds itself.
 - (void)setChat:(int64_t)chatId archived:(BOOL)archived {
@@ -1879,6 +2236,15 @@ static int64_t TGArchiveOrder(NSArray *positions) {
 	info[@"id"] = chatId;
 	if (chat[@"title"])
 		info[@"title"] = chat[@"title"];
+
+	// The chat with yourself is Saved Messages everywhere in Telegram, not a
+	// conversation under your own name and photo.
+	if ([chatId longLongValue] == [self savedMessagesChatId] &&
+		[self savedMessagesChatId] != 0){
+		info[@"title"] = @"Saved Messages";
+		info[@"isSaved"] = @YES;
+		[info removeObjectForKey:@"photoFileId"];
+	}
 	if (chat[@"unread_count"])
 		info[@"unread"] = chat[@"unread_count"];
 
@@ -1888,9 +2254,31 @@ static int64_t TGArchiveOrder(NSArray *positions) {
 							 ![chatType isEqualToString:@"chatTypeSecret"]);
 
 	// A forum keeps several threads in one chat, so it opens on a topic list
-	// rather than a merged stream.
-	if (chat[@"is_forum"])
-		info[@"isForum"] = chat[@"is_forum"];
+	// rather than a merged stream. The flag is on the supergroup, not here:
+	// the chat only names which supergroup it is, and reading is_forum off the
+	// chat - which has no such field - meant no forum was ever recognised.
+	NSNumber *supergroupId = chat[@"type"][@"supergroup_id"];
+	if (supergroupId){
+		info[@"supergroupId"] = supergroupId;
+		NSNumber *known = self.forumSupergroups[supergroupId];
+		if (known){
+			info[@"isForum"] = known;
+		} else {
+			// Not seen yet: ask, and the answer updates the row in place.
+			__weak typeof(self) weakSelf = self;
+			[self request:@{@"@type" : @"getSupergroup",
+							@"supergroup_id" : supergroupId}
+			   completion:^(NSDictionary *group){
+				TGClient *me = weakSelf;
+				if (!me || !group[@"id"])
+					return;
+				me.forumSupergroups[group[@"id"]] = @([group[@"is_forum"] boolValue]);
+				NSMutableDictionary *row = me.chatsById[chatId];
+				row[@"isForum"] = @([group[@"is_forum"] boolValue]);
+				[me rebuildChats];
+			}];
+		}
+	}
 	if (chat[@"positions"]){
 		info[@"order"] = @(TGMainListOrder(chat[@"positions"]));
 		info[@"archiveOrder"] = @(TGArchiveOrder(chat[@"positions"]));

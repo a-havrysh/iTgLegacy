@@ -47,10 +47,19 @@
 /// into one mark, not two separate glyphs side by side.
 + (UIImage *)ticksWhite:(BOOL)white;
 
+/// The two rows that stand above the chat list draw a glyph, not a letter:
+/// a filled archive box, and the bookmark Telegram uses for Saved Messages.
++ (UIImage *)archiveAvatarOfSide:(CGFloat)side;
++ (UIImage *)savedMessagesAvatarOfSide:(CGFloat)side;
+
 /// Circular avatar with initials, for chats and contacts without a photo.
 + (UIImage *)avatarWithInitials:(NSString *)initials
                            size:(CGFloat)size
                        colourId:(int64_t)colourId;
+
+/// The arrow beside a call in a chat: down-left for one that came in, up-right
+/// for one that went out, red when it was never answered.
++ (UIImage *)callArrowOutgoing:(BOOL)outgoing missed:(BOOL)missed;
 
 /// A line glyph for a row of the pop-up menu, by name: "reply", "forward",
 /// "copy", "edit", "delete", "pin", "unpin", "mute", "unmute", "archive",

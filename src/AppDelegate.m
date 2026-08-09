@@ -266,9 +266,16 @@ static void TGWatchForIncomingCalls(void) {
 		dispatch_async(dispatch_get_main_queue(), ^{
 			UITabBarController *tabs = (UITabBarController *)self.rootViewController;
 			NSInteger idx = [arg integerValue];
-			if ([tabs isKindOfClass:UITabBarController.class] &&
-				idx >= 0 && idx < (NSInteger)tabs.viewControllers.count)
-				tabs.selectedIndex = idx;
+			if (![tabs isKindOfClass:UITabBarController.class] ||
+				idx < 0 || idx >= (NSInteger)tabs.viewControllers.count)
+				return;
+			tabs.selectedIndex = idx;
+			// Back to the top of that tab as well: picking a tab that stayed
+			// three screens deep looks like the URL did nothing, and every
+			// tap/ and holdrow/ after it lands on the wrong screen.
+			UIViewController *chosen = tabs.viewControllers[idx];
+			if ([chosen isKindOfClass:UINavigationController.class])
+				[(UINavigationController *)chosen popToRootViewControllerAnimated:NO];
 		});
 		return YES;
 	}
@@ -345,6 +352,17 @@ static void TGWatchForIncomingCalls(void) {
 					control = (UIControl *)view;
 					break;
 				}
+
+			// A switch changes its value from its own gesture handling, not
+			// from TouchUpInside, so sending that alone leaves it where it was
+			// and the screen looks like it ignored the tap.
+			if ([control isKindOfClass:UISwitch.class]){
+				UISwitch *toggle = (UISwitch *)control;
+				[toggle setOn:!toggle.on animated:YES];
+				[toggle sendActionsForControlEvents:UIControlEventValueChanged];
+				NSLog(@"touch: switch -> %@", toggle.on ? @"on" : @"off");
+				return;
+			}
 
 			if (control){
 				[control sendActionsForControlEvents:UIControlEventTouchDown];
@@ -636,9 +654,25 @@ static void TGWatchForIncomingCalls(void) {
 			if ([top isKindOfClass:[TGChatViewController class]]){
 				[(TGChatViewController *)top simulateTapOnRow:[arg integerValue]];
 			} else if (table){
-				NSIndexPath *path = [NSIndexPath indexPathForRow:[arg integerValue]
-													   inSection:0];
-				NSLog(@"tap: row %@ on %@", arg, [top class]);
+				// tap/N is row N of section 0; tap/S/R reaches a grouped table,
+				// where everything past the first group is otherwise unreachable.
+				NSMutableArray *parts = [NSMutableArray array];
+				for (NSString *component in url.pathComponents)
+					if (![component isEqualToString:@"/"] && component.length)
+						[parts addObject:component];
+				NSIndexPath *path = (parts.count > 1)
+						? [NSIndexPath indexPathForRow:[parts[1] integerValue]
+											 inSection:[parts[0] integerValue]]
+						: [NSIndexPath indexPathForRow:[arg integerValue] inSection:0];
+				// A row that is not there must not take the app down with it:
+				// this is driven from a script, and a stale index is normal.
+				NSInteger rows = [table numberOfRowsInSection:path.section];
+				if (path.section >= [table numberOfSections] || path.row >= rows){
+					NSLog(@"tap: %ld.%ld is out of range (%ld rows)",
+							(long)path.section, (long)path.row, (long)rows);
+					return;
+				}
+				NSLog(@"tap: %ld.%ld on %@", (long)path.section, (long)path.row, [top class]);
 				[table.delegate tableView:table didSelectRowAtIndexPath:path];
 			} else {
 				NSLog(@"tap: %@ has no rows", [top class]);
