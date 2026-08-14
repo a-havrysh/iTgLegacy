@@ -1,7 +1,5 @@
 #import "TGActionSheet.h"
 
-#import <objc/runtime.h>
-
 @implementation TGActionSheetAction
 
 - (instancetype)initWithTitle:(NSString *)title action:(NSString *)action
@@ -24,9 +22,6 @@
 @end
 
 @interface TGActionSheet () <UIActionSheetDelegate>
-{
-    int _replacedIndex;
-}
 
 @property (nonatomic, weak) id target;
 @property (nonatomic, copy) void (^actionBlock)(id target, NSString *action);
@@ -36,41 +31,70 @@
 
 @implementation TGActionSheet
 
+static NSString *TGActionSheetCancelTitle()
+{
+    NSString *title = NSLocalizedString(@"Common.Cancel", @"Cancel");
+    if (title.length == 0 || [title isEqualToString:@"Common.Cancel"])
+        title = @"Cancel";
+    return title;
+}
+
 - (instancetype)initWithTitle:(NSString *)title actions:(NSArray *)actions actionBlock:(void (^)(id target, NSString *action))actionBlock target:(id)target
 {
-    self = [super initWithTitle:title delegate:self cancelButtonTitle:nil destructiveButtonTitle:nil otherButtonTitles:nil];
+    NSString *sheetTitle = title.length == 0 ? nil : title;
+
+    self = [super initWithTitle:sheetTitle delegate:self cancelButtonTitle:nil destructiveButtonTitle:nil otherButtonTitles:nil];
     if (self != nil)
     {
         self.delegate = self;
         self.actionSheetStyle = UIActionSheetStyleDefault;
 
-        NSMutableArray *validActions = [[NSMutableArray alloc] init];
-        bool hasCancel = false;
+        NSMutableArray *orderedActions = [[NSMutableArray alloc] init];
+        TGActionSheetAction *cancelAction = nil;
+        bool hasDestructive = false;
+
         for (id item in actions)
         {
             if (![item isKindOfClass:[TGActionSheetAction class]])
                 continue;
+
             TGActionSheetAction *action = (TGActionSheetAction *)item;
-            if (action.title == nil || action.title.length == 0)
+            if (action.title.length == 0)
                 continue;
+
             if (action.type == TGActionSheetActionTypeCancel)
             {
-                if (hasCancel)
-                    continue;
-                hasCancel = true;
+                if (cancelAction == nil)
+                    cancelAction = action;
+                continue;
             }
-            [validActions addObject:action];
+
+            if (action.type == TGActionSheetActionTypeDestructive)
+            {
+                if (hasDestructive)
+                    action.type = TGActionSheetActionTypeGeneric;
+                else
+                    hasDestructive = true;
+            }
+
+            [orderedActions addObject:action];
         }
 
-        if (!hasCancel)
+        if (cancelAction == nil)
         {
-            TGActionSheetAction *cancelAction = [[TGActionSheetAction alloc] initWithTitle:NSLocalizedString(@"Common.Cancel", @"Cancel") action:@"cancel" type:TGActionSheetActionTypeCancel];
-            if (cancelAction.title == nil || cancelAction.title.length == 0 || [cancelAction.title isEqualToString:@"Common.Cancel"])
-                cancelAction.title = @"Cancel";
-            [validActions addObject:cancelAction];
+            cancelAction = [[TGActionSheetAction alloc] initWithTitle:TGActionSheetCancelTitle() action:@"cancel" type:TGActionSheetActionTypeCancel];
+        }
+        else if (cancelAction.title.length == 0)
+        {
+            cancelAction.title = TGActionSheetCancelTitle();
         }
 
-        _actions = validActions;
+        [orderedActions addObject:cancelAction];
+
+        _actions = orderedActions;
+
+        self.cancelButtonIndex = -1;
+        self.destructiveButtonIndex = -1;
 
         for (TGActionSheetAction *action in _actions)
         {
@@ -83,17 +107,12 @@
 
         self.actionBlock = actionBlock;
         self.target = target;
-        
-        _replacedIndex = -1;
     }
     return self;
 }
 
 - (void)actionSheet:(UIActionSheet *)__unused actionSheet clickedButtonAtIndex:(NSInteger)buttonIndex
 {
-    if (_replacedIndex != -1)
-        buttonIndex = _replacedIndex;
-
     if (buttonIndex < 0 || buttonIndex >= (NSInteger)_actions.count)
         return;
 

@@ -54,14 +54,14 @@
 		self.prefixLabel.hidden = NO;
 		self.verticalSeparator.hidden = NO;
 		self.prefixLabel.frame = CGRectMake(4, 13, 62, 16);
-		self.verticalSeparator.frame = CGRectMake(72, 0, 1.0f / [[UIScreen mainScreen] scale], bounds.size.height);
+		self.verticalSeparator.frame = CGRectMake(72, 0, 1.0f, bounds.size.height);
 		self.field.font = [UIFont boldSystemFontOfSize:15];
-		self.field.frame = CGRectMake(78, 11, bounds.size.width - 80 - 10, 20);
+		self.field.frame = CGRectMake(78, 11, bounds.size.width - 80, 20);
 	} else {
 		self.prefixLabel.hidden = YES;
 		self.verticalSeparator.hidden = YES;
 		self.field.font = [UIFont boldSystemFontOfSize:16];
-		self.field.frame = CGRectMake(15, 12, bounds.size.width - 15 - 10, 22);
+		self.field.frame = CGRectMake(15, 12, bounds.size.width - 20, 22);
 	}
 }
 
@@ -96,6 +96,7 @@
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
 	self.title = @"New Contact";
 	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	self.tableView.rowHeight = 44.0f;
 
 	UIButton *cancel = [TGIcons headerButtonWithTitle:@"Cancel" bold:NO
 												target:self action:@selector(cancelTapped)];
@@ -105,11 +106,11 @@
 											  target:self action:@selector(doneTapped)];
 	self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:self.doneButton];
 
-	self.firstNameField = [self makeFieldWithPlaceholder:@"First"];
+	self.firstNameField = [self makeFieldWithPlaceholder:@"First" font:[UIFont boldSystemFontOfSize:16]];
 	self.firstNameField.returnKeyType = UIReturnKeyNext;
-	self.lastNameField  = [self makeFieldWithPlaceholder:@"Last"];
+	self.lastNameField  = [self makeFieldWithPlaceholder:@"Last" font:[UIFont boldSystemFontOfSize:16]];
 	self.lastNameField.returnKeyType = UIReturnKeyNext;
-	self.phoneField = [self makeFieldWithPlaceholder:@"Phone Number"];
+	self.phoneField = [self makeFieldWithPlaceholder:@"Phone" font:[UIFont boldSystemFontOfSize:15]];
 	self.phoneField.keyboardType = UIKeyboardTypePhonePad;
 
 	self.syncSwitch = [[UISwitch alloc] init];
@@ -189,10 +190,17 @@
 	[alert show];
 }
 
-- (UITextField *)makeFieldWithPlaceholder:(NSString *)placeholder {
+- (UITextField *)makeFieldWithPlaceholder:(NSString *)placeholder font:(UIFont *)font {
 	UITextField *field = [[UITextField alloc] init];
 	field.placeholder = placeholder;
-	field.font = [UIFont boldSystemFontOfSize:16];
+	field.font = font;
+	if ([field respondsToSelector:@selector(setAttributedPlaceholder:)]){
+		UIColor *placeholderColour = [UIColor colorWithRed:0xb3 / 255.0f green:0xb3 / 255.0f blue:0xb3 / 255.0f alpha:1.0f];
+		NSDictionary *attributes = [NSDictionary dictionaryWithObjectsAndKeys:
+									placeholderColour, NSForegroundColorAttributeName,
+									font, NSFontAttributeName, nil];
+		field.attributedPlaceholder = [[NSAttributedString alloc] initWithString:placeholder attributes:attributes];
+	}
 	field.textColor = [[TGTheme shared] primaryTextColour];
 	field.backgroundColor = [UIColor clearColor];
 	field.contentMode = UIViewContentModeLeft;
@@ -370,6 +378,8 @@
 			cell = [[TGNewContactFieldCell alloc] initWithReuseIdentifier:reuse];
 		cell.prefixLabel.text = nil;
 		cell.field = (indexPath.row == 0) ? self.firstNameField : self.lastNameField;
+		[[TGTheme shared] styleCell:cell];
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
 		[cell setNeedsLayout];
 		[cell layoutIfNeeded];
 		return cell;
@@ -395,6 +405,8 @@
 			cell = [[TGNewContactFieldCell alloc] initWithReuseIdentifier:reuse];
 		cell.prefixLabel.text = self.countryDialCode.length ? self.countryDialCode : @"+";
 		cell.field = self.phoneField;
+		[[TGTheme shared] styleCell:cell];
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
 		[cell setNeedsLayout];
 		[cell layoutIfNeeded];
 		return cell;

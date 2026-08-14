@@ -25,7 +25,7 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 @property (nonatomic, strong) UIImageView *avatar;
 @property (nonatomic, strong) UILabel *title;
 @property (nonatomic, strong) UILabel *preview;
-@property (nonatomic, assign) CGFloat avatarSide;
+@property (nonatomic, assign) BOOL compact;
 @end
 
 @implementation TGForwardPickerCell
@@ -35,8 +35,6 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 	if (!self)
 		return nil;
 
-	_avatarSide = kChatAvatar;
-
 	_avatar = [[UIImageView alloc] init];
 	_avatar.backgroundColor = [UIColor clearColor];
 	_avatar.contentMode = UIViewContentModeScaleAspectFill;
@@ -45,28 +43,49 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 
 	_title = [[UILabel alloc] init];
 	_title.backgroundColor = [UIColor clearColor];
-	_title.font = [UIFont boldSystemFontOfSize:16];
 	_title.textColor = [UIColor colorWithRed:0x11 / 255.0f green:0x11 / 255.0f
 										blue:0x11 / 255.0f alpha:1.0f];
 	[self.contentView addSubview:_title];
 
 	_preview = [[UILabel alloc] init];
 	_preview.backgroundColor = [UIColor clearColor];
-	_preview.font = [UIFont systemFontOfSize:14];
 	_preview.textColor = [UIColor colorWithRed:0x88 / 255.0f green:0x88 / 255.0f
 										  blue:0x88 / 255.0f alpha:1.0f];
 	[self.contentView addSubview:_preview];
 
-	UIImage *plate = TGForwardStretchImage(@"DialogListCell.png", 1);
-	UIImage *platePressed = TGForwardStretchImage(@"DialogListCellHighlighted.png", 1);
-	if (plate)
-		self.backgroundView = [[UIImageView alloc] initWithImage:plate];
-	if (platePressed)
-		self.selectedBackgroundView = [[UIImageView alloc] initWithImage:platePressed];
+	self.backgroundView = [[UIImageView alloc] init];
+	self.selectedBackgroundView = [[UIImageView alloc] init];
 
 	self.accessoryType = UITableViewCellAccessoryNone;
 	self.selectionStyle = UITableViewCellSelectionStyleBlue;
+	[self applyStyle];
 	return self;
+}
+
+- (void)setCompact:(BOOL)compact {
+	if (_compact == compact)
+		return;
+	_compact = compact;
+	[self applyStyle];
+}
+
+- (void)applyStyle {
+	if (_compact) {
+		self.title.font = [UIFont systemFontOfSize:19];
+		self.preview.font = [UIFont systemFontOfSize:13];
+	} else {
+		self.title.font = [UIFont boldSystemFontOfSize:16];
+		self.preview.font = [UIFont systemFontOfSize:14];
+	}
+
+	UIImage *plate = TGForwardStretchImage(_compact ? @"Cell102.png" : @"DialogListCell.png", 1);
+	UIImage *platePressed = TGForwardStretchImage(
+			_compact ? @"CellHighlighted102.png" : @"DialogListCellHighlighted.png", 1);
+	if ([self.backgroundView isKindOfClass:UIImageView.class])
+		((UIImageView *)self.backgroundView).image = plate;
+	if ([self.selectedBackgroundView isKindOfClass:UIImageView.class])
+		((UIImageView *)self.selectedBackgroundView).image = platePressed;
+	[self setNeedsLayout];
 }
 
 - (void)layoutSubviews {
@@ -74,19 +93,33 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 
 	CGFloat w = self.contentView.bounds.size.width;
 	CGFloat h = self.contentView.bounds.size.height;
-	CGFloat side = _avatarSide;
-	CGFloat top = (CGFloat)(int)((h - side) / 2);
-	_avatar.frame = CGRectMake(8, top, side, side);
-	_avatar.layer.cornerRadius = side / 2;
 
-	CGFloat left = 8 + side + 9;
-	CGFloat right = 16;
+	CGRect selected = self.selectedBackgroundView.frame;
+	selected.origin.y = -1;
+	selected.size.height = self.bounds.size.height + 1;
+	self.selectedBackgroundView.frame = selected;
+
+	CGFloat side = _compact ? kContactAvatar : kChatAvatar;
+	CGFloat inset = _compact ? 5 : 8;
+	_avatar.frame = CGRectMake(inset, inset, side, side);
+	_avatar.layer.cornerRadius = _compact ? 4 : 5;
+
+	CGFloat left = _compact ? 49 : 73;
+	CGFloat right = _compact ? 5 : 10;
+	CGFloat width = w - left - right;
+	if (width < 0)
+		width = 0;
+
 	if (_preview.text.length == 0) {
-		_title.frame = CGRectMake(left, (CGFloat)(int)((h - 20) / 2), w - left - right, 20);
+		CGFloat titleHeight = _compact ? 24 : 20;
+		_title.frame = CGRectMake(left, (CGFloat)(int)((h - titleHeight) / 2), width, titleHeight);
 		_preview.frame = CGRectZero;
+	} else if (_compact) {
+		_title.frame = CGRectMake(left, 6, width, 22);
+		_preview.frame = CGRectMake(left + 1, 28, width, 18);
 	} else {
-		_title.frame = CGRectMake(left, 11, w - left - right, 20);
-		_preview.frame = CGRectMake(left, 35, w - left - right, 20);
+		_title.frame = CGRectMake(left, 6, width, 20);
+		_preview.frame = CGRectMake(left, 29, width, 20);
 	}
 }
 
@@ -125,7 +158,7 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 
 	self.tableView.rowHeight = kChatRowHeight;
 	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
-	self.tableView.separatorColor = [[TGTheme shared] separatorColour];
+	self.tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
 	self.tableView.contentInset = UIEdgeInsetsMake(0, 0, kToolbarHeight, 0);
 	self.tableView.scrollIndicatorInsets = self.tableView.contentInset;
 	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
@@ -403,9 +436,21 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 		currentX += kGroupButtonWidth;
 
 		if (i + 1 < titles.count) {
-			UIImageView *separator = [[UIImageView alloc] initWithImage:
-					TGForwardStretchImage(@"ButtonGroupDivider.png", 6)];
-			separator.frame = CGRectMake(currentX, 0, kGroupSeparatorWidth, kGroupButtonHeight);
+			UIView *separator = [[UIView alloc] initWithFrame:
+					CGRectMake(currentX, 0, kGroupSeparatorWidth, kGroupButtonHeight)];
+			NSArray *names = [NSArray arrayWithObjects:@"ButtonGroupDivider.png",
+					@"ButtonGroupDivider_LeftHighlighted.png",
+					@"ButtonGroupDivider_RightHighlighted.png", nil];
+			for (NSUInteger j = 0; j < names.count; j++) {
+				UIImageView *layer = [[UIImageView alloc] initWithImage:
+						TGForwardStretchImage([names objectAtIndex:j], 6)];
+				layer.tag = (NSInteger)(100 + j);
+				layer.frame = separator.bounds;
+				layer.alpha = (j == 0) ? 1.0f : 0.0f;
+				layer.autoresizingMask =
+						UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+				[separator addSubview:layer];
+			}
 			[group addSubview:separator];
 			[_groupSeparators addObject:separator];
 			currentX += kGroupSeparatorWidth;
@@ -441,13 +486,23 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 	}
 
 	for (NSUInteger i = 0; i < _groupSeparators.count; i++) {
-		UIImageView *separator = [_groupSeparators objectAtIndex:i];
-		NSString *name = @"ButtonGroupDivider.png";
+		UIView *separator = [_groupSeparators objectAtIndex:i];
+		UIView *normal = [separator viewWithTag:100];
+		UIView *leftLit = [separator viewWithTag:101];
+		UIView *rightLit = [separator viewWithTag:102];
+		UIView *shown = normal;
 		if (self.mode == (NSInteger)i)
-			name = @"ButtonGroupDivider_LeftHighlighted.png";
+			shown = leftLit;
 		else if (self.mode == (NSInteger)i + 1)
-			name = @"ButtonGroupDivider_RightHighlighted.png";
-		separator.image = TGForwardStretchImage(name, 6);
+			shown = rightLit;
+		shown.alpha = 1.0f;
+		[separator bringSubviewToFront:shown];
+		if (normal != shown)
+			normal.alpha = 0.0f;
+		if (leftLit != shown)
+			leftLit.alpha = 0.0f;
+		if (rightLit != shown)
+			rightLit.alpha = 0.0f;
 	}
 }
 
@@ -540,7 +595,7 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 	NSString *title = row ? [self titleForRow:row] : @"";
 	CGFloat side = (self.mode == 0) ? kChatAvatar : kContactAvatar;
 
-	cell.avatarSide = side;
+	cell.compact = (self.mode == 1);
 	cell.title.text = title;
 	cell.title.textColor = [[TGTheme shared] primaryTextColour];
 	cell.preview.textColor = [[TGTheme shared] secondaryTextColour];
@@ -550,6 +605,15 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 		NSString *text = row[@"text"];
 		if ([text isKindOfClass:NSString.class])
 			preview = text;
+	} else {
+		NSString *username = row[@"username"];
+		NSString *phone = row[@"phone"];
+		if ([username isKindOfClass:NSString.class] && username.length
+				&& ![title hasPrefix:@"@"])
+			preview = [NSString stringWithFormat:@"@%@", username];
+		else if ([phone isKindOfClass:NSString.class] && phone.length
+				&& ![title isEqualToString:phone])
+			preview = phone;
 	}
 	cell.preview.text = preview;
 

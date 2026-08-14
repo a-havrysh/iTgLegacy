@@ -35,6 +35,26 @@
 static const CGFloat kActionButtonHeight = 45.0f;
 static const CGFloat kActionButtonGap = 8.0f;
 static const CGFloat kTitleContainerHeight = 86.0f;
+static const CGFloat kProfileAvatarSide = 70.0f;
+static const CGFloat kProfileAvatarRadius = 10.0f;
+static const CGFloat kMemberRowHeight = 49.0f;
+static const CGFloat kMemberAvatarSide = 36.0f;
+static const CGFloat kStripInset = 6.0f;
+static const CGFloat kStripThumbSide = 76.0f;
+
+static CGFloat TGProfileRetinaPixel(void) {
+	return [UIScreen mainScreen].scale > 1.5f ? 0.5f : 0.0f;
+}
+
+static UIColor *TGProfileListBackground(void) {
+	TGTheme *theme = [TGTheme shared];
+	if (theme.isFlat || theme.isDark || theme.importedName)
+		return [theme listBackgroundColour];
+	UIImage *pattern = [UIImage imageNamed:@"SettingsBackground.png"];
+	if (pattern)
+		return [UIColor colorWithPatternImage:pattern];
+	return [theme listBackgroundColour];
+}
 
 static UIColor *TGProfileColour(int rgb) {
 	return [UIColor colorWithRed:((rgb >> 16) & 0xff) / 255.0f
@@ -96,8 +116,8 @@ static NSString *TGProfileInitial(NSString *name) {
 	self.title = @"Info";
 	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
 		self.edgesForExtendedLayout = UIRectEdgeNone;
-	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
-	self.tableView.separatorColor = [[TGTheme shared] bubbleBorderColour];
+	self.tableView.backgroundColor = TGProfileListBackground();
+	self.tableView.separatorColor = [[TGTheme shared] separatorColour];
 
 	[self buildHeader];
 	[self loadDetails];
@@ -110,7 +130,7 @@ static NSString *TGProfileInitial(NSString *name) {
 /// puts the actions in reach instead of colouring the top of the screen.
 - (void)buildHeader {
 	CGFloat width = self.view.bounds.size.width;
-	CGFloat side = 70;
+	CGFloat side = kProfileAvatarSide;
 	TGTheme *theme = [TGTheme shared];
 	NSArray *actions = [self actionItems];
 	CGFloat height = kTitleContainerHeight +
@@ -119,8 +139,9 @@ static NSString *TGProfileInitial(NSString *name) {
 	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, height)];
 	header.backgroundColor = [UIColor clearColor];
 
-	self.avatarView = [[UIImageView alloc] initWithFrame:CGRectMake(9, 14, side, side)];
-	self.avatarView.layer.cornerRadius = side * 0.12f;
+	self.avatarView = [[UIImageView alloc] initWithFrame:
+			CGRectMake(9 + TGProfileRetinaPixel(), 14, side, side)];
+	self.avatarView.layer.cornerRadius = kProfileAvatarRadius;
 	self.avatarView.clipsToBounds = YES;
 	self.avatarView.contentMode = UIViewContentModeScaleAspectFill;
 	self.avatarView.image = self.avatarImage
@@ -163,7 +184,7 @@ static NSString *TGProfileInitial(NSString *name) {
 	[self refreshStatus];
 
 	self.tableView.tableHeaderView = header;
-	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	self.tableView.backgroundColor = TGProfileListBackground();
 
 	if (self.avatarImage)
 		return;
@@ -505,7 +526,7 @@ static NSString *TGProfileInitial(NSString *name) {
 				if (!weakSelf.avatarImage)
 					weakSelf.avatarView.image =
 							[TGIcons avatarWithInitials:TGProfileInitial(weakSelf.name)
-												   size:70
+												   size:kProfileAvatarSide
 											   colourId:weakSelf.userId];
 			}
 		}
@@ -608,6 +629,8 @@ static NSString *TGProfileInitial(NSString *name) {
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+	self.tableView.backgroundColor = TGProfileListBackground();
+	self.tableView.separatorColor = [[TGTheme shared] separatorColour];
 	if (self.chatId){
 		BOOL muted = [[TGClient shared] isChatMuted:self.chatId];
 		if (muted != self.muted){
@@ -661,7 +684,8 @@ static NSString *TGProfileInitial(NSString *name) {
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
-	if (indexPath.section == 2) return 84;
+	if (indexPath.section == 2) return kStripThumbSide + kStripInset * 2;
+	if (indexPath.section == 1) return kMemberRowHeight;
 	return 44;
 }
 
@@ -699,10 +723,17 @@ static NSString *TGProfileInitial(NSString *name) {
 	cell.selectionStyle = UITableViewCellSelectionStyleNone;
 	cell.imageView.image = nil;
 	[[TGTheme shared] styleCell:cell];
-	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+	CGFloat retinaPixel = TGProfileRetinaPixel();
+	if (indexPath.section == 1){
+		cell.textLabel.font = [UIFont boldSystemFontOfSize:15 + retinaPixel];
+		cell.detailTextLabel.font = [UIFont systemFontOfSize:13 + retinaPixel];
+	} else {
+		cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+		cell.detailTextLabel.font = [UIFont systemFontOfSize:13];
+	}
 	cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
-	cell.detailTextLabel.font = [UIFont systemFontOfSize:13];
-	cell.detailTextLabel.textColor = [[TGTheme shared] secondaryTextColour];
+	cell.detailTextLabel.textColor = [TGTheme shared].isDark
+			? [[TGTheme shared] secondaryTextColour] : TGProfileColour(0x888888);
 
 	if (indexPath.section == 1){
 		id member = indexPath.row < (NSInteger)self.members.count
@@ -717,7 +748,8 @@ static NSString *TGProfileInitial(NSString *name) {
 		cell.textLabel.text = name ?: @"";
 		cell.detailTextLabel.text = TGProfileText(member[@"status"]);
 		cell.imageView.image = [TGIcons avatarWithInitials:TGProfileInitial(name)
-													  size:32 colourId:userId];
+													  size:kMemberAvatarSide
+												  colourId:userId];
 	} else {
 		id m = indexPath.row < (NSInteger)self.files.count
 				? self.files[indexPath.row] : nil;
@@ -842,7 +874,8 @@ static NSString *TGProfileInitial(NSString *name) {
 									  reuseIdentifier:@"strip"];
 		cell.selectionStyle = UITableViewCellSelectionStyleNone;
 		UIScrollView *strip = [[UIScrollView alloc] initWithFrame:
-				CGRectMake(0, 2, tableView.bounds.size.width, 80)];
+				CGRectMake(0, 0, tableView.bounds.size.width,
+						   kStripThumbSide + kStripInset * 2)];
 		strip.tag = 99;
 		strip.showsHorizontalScrollIndicator = NO;
 		[cell.contentView addSubview:strip];
@@ -852,16 +885,18 @@ static NSString *TGProfileInitial(NSString *name) {
 	for (UIView *v in strip.subviews)
 		[v removeFromSuperview];
 
-	CGFloat side = 76, gap = 4, x = gap;
+	CGFloat side = kStripThumbSide, gap = kStripInset, x = gap;
 	for (id m in self.photos){
 		if (![m isKindOfClass:[NSDictionary class]]) continue;
 		id fileId = m[@"photoId"];
 		if (![fileId isKindOfClass:[NSNumber class]] || [fileId integerValue] <= 0)
 			continue;
-		UIImageView *thumb = [[UIImageView alloc] initWithFrame:CGRectMake(x, 2, side, side)];
+		UIImageView *thumb = [[UIImageView alloc] initWithFrame:
+				CGRectMake(x, kStripInset, side, side)];
 		thumb.backgroundColor = [UIColor colorWithWhite:0.9f alpha:1];
 		thumb.contentMode = UIViewContentModeScaleAspectFill;
 		thumb.clipsToBounds = YES;
+		thumb.layer.cornerRadius = 4;
 		[strip addSubview:thumb];
 		x += side + gap;
 
@@ -875,7 +910,7 @@ static NSString *TGProfileInitial(NSString *name) {
 			});
 		}];
 	}
-	strip.contentSize = CGSizeMake(x, 80);
+	strip.contentSize = CGSizeMake(x, kStripThumbSide + kStripInset * 2);
 	return cell;
 }
 

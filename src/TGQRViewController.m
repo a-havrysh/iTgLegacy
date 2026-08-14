@@ -12,6 +12,10 @@
 @property (nonatomic, strong) AVCaptureDevice *camera;
 @property (nonatomic, strong) UILabel *hint;
 @property (nonatomic, strong) UIButton *torch;
+@property (nonatomic, strong) UIView *wash;
+@property (nonatomic, strong) UIView *outline;
+@property (nonatomic, strong) UIView *panel;
+@property (nonatomic, strong) UILabel *failureLabel;
 @property (nonatomic, strong) NSString *failure;
 @property (nonatomic, strong) NSString *pendingLink;
 @property (nonatomic, assign) CGRect window;
@@ -29,8 +33,8 @@
 	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
 		self.edgesForExtendedLayout = UIRectEdgeNone;
 
-	[self startCamera];
 	[self buildFrame];
+	[self startCamera];
 	if (self.failure.length)
 		[self showFailure:self.failure];
 }
@@ -85,8 +89,6 @@
 
 	AVCaptureMetadataOutput *codes = [[AVCaptureMetadataOutput alloc] init];
 	[self.session addOutput:codes];
-	// The available types are only populated once the output has a session, so
-	// this order matters: asking earlier says QR is not supported.
 	if (![codes.availableMetadataObjectTypes containsObject:AVMetadataObjectTypeQRCode]){
 		self.failure = @"This device cannot recognise QR codes.";
 		self.session = nil;
@@ -102,7 +104,9 @@
 	[self.view.layer insertSublayer:self.preview atIndex:0];
 
 	self.failure = nil;
+	[self hideFailure];
 	[self.session startRunning];
+	[self applyScanWindow];
 	[self updateTorchButton];
 }
 
@@ -125,7 +129,7 @@
 - (void)updateTorchButton {
 	if (!self.torch)
 		return;
-	self.torch.hidden = ![self torchAvailable];
+	self.torch.hidden = ![self torchAvailable] || self.failureLabel != nil;
 	BOOL on = self.camera.torchMode == AVCaptureTorchModeOn;
 	[self.torch setTitle:on ? @"Light Off" : @"Light On" forState:UIControlStateNormal];
 }
@@ -142,87 +146,118 @@
 	[self updateTorchButton];
 }
 
-/// A window in a dark wash, which is what tells you where to aim.
 - (void)buildFrame {
 	CGRect b = self.view.bounds;
 	CGFloat panelHeight = b.size.height > 440.0f ? 136.0f : 92.0f;
 	CGRect area = CGRectMake(0, 0, b.size.width, b.size.height - panelHeight);
-	CGFloat side = MIN(area.size.width, area.size.height) * 0.66f;
+	CGFloat side = (int)(MIN(area.size.width, area.size.height) * 0.66f);
 	CGRect window = CGRectMake((int)((area.size.width - side) / 2),
 							   (int)((area.size.height - side) / 2), side, side);
 
-	UIView *wash = [[UIView alloc] initWithFrame:b];
-	wash.backgroundColor = [UIColor colorWithWhite:0 alpha:0.5f];
-	wash.userInteractionEnabled = NO;
+	self.wash = [[UIView alloc] initWithFrame:b];
+	self.wash.backgroundColor = [UIColor colorWithWhite:0 alpha:0.5f];
+	self.wash.userInteractionEnabled = NO;
 
-	// The hole is cut with an even-odd mask rather than four strips, so the
-	// edges stay exact when the frame moves.
 	CAShapeLayer *mask = [CAShapeLayer layer];
 	UIBezierPath *path = [UIBezierPath bezierPathWithRect:b];
 	[path appendPath:[UIBezierPath bezierPathWithRoundedRect:window cornerRadius:8]];
 	mask.path = path.CGPath;
 	mask.fillRule = kCAFillRuleEvenOdd;
-	wash.layer.mask = mask;
-	[self.view addSubview:wash];
+	self.wash.layer.mask = mask;
+	[self.view addSubview:self.wash];
 
-	UIView *outline = [[UIView alloc] initWithFrame:window];
-	outline.layer.borderColor = [UIColor whiteColor].CGColor;
-	outline.layer.borderWidth = 2;
-	outline.layer.cornerRadius = 8;
-	outline.userInteractionEnabled = NO;
-	[self.view addSubview:outline];
+	self.outline = [[UIView alloc] initWithFrame:window];
+	self.outline.layer.borderColor = [UIColor whiteColor].CGColor;
+	self.outline.layer.borderWidth = 2;
+	self.outline.layer.cornerRadius = 8;
+	self.outline.userInteractionEnabled = NO;
+	[self.view addSubview:self.outline];
 
-	UIView *panel = [[UIView alloc] initWithFrame:CGRectMake(
+	self.panel = [[UIView alloc] initWithFrame:CGRectMake(
 			0, b.size.height - panelHeight, b.size.width, panelHeight)];
-	panel.userInteractionEnabled = NO;
-	UIImageView *panelBackground = [[UIImageView alloc] initWithFrame:panel.bounds];
+	self.panel.backgroundColor = [UIColor clearColor];
+	UIImageView *panelBackground = [[UIImageView alloc] initWithFrame:self.panel.bounds];
 	panelBackground.image = [[UIImage imageNamed:@"CameraStripeBottom.png"]
 			stretchableImageWithLeftCapWidth:6 topCapHeight:0];
-	[panel addSubview:panelBackground];
-	[self.view addSubview:panel];
+	panelBackground.userInteractionEnabled = NO;
+	[self.panel addSubview:panelBackground];
+	[self.view addSubview:self.panel];
 
 	self.hint = [[UILabel alloc] initWithFrame:CGRectMake(
-			20, (int)((panelHeight - 40) / 2), b.size.width - 40, 40)];
+			20, 8, b.size.width - 40, 32)];
 	self.hint.text = @"Point the camera at a QR code";
 	self.hint.numberOfLines = 2;
-	self.hint.textAlignment = NSTextAlignmentCenter;
+	self.hint.textAlignment = UITextAlignmentCenter;
 	self.hint.font = [UIFont boldSystemFontOfSize:14];
 	self.hint.textColor = [UIColor whiteColor];
-	self.hint.shadowColor = [UIColor colorWithWhite:0 alpha:0.3f];
-	self.hint.shadowOffset = CGSizeMake(0, 1);
+	self.hint.shadowColor = [UIColor colorWithWhite:0 alpha:0.5f];
+	self.hint.shadowOffset = CGSizeMake(0, -1);
 	self.hint.backgroundColor = [UIColor clearColor];
-	[panel addSubview:self.hint];
+	self.hint.userInteractionEnabled = NO;
+	[self.panel addSubview:self.hint];
 
 	self.window = window;
 	[self applyScanWindow];
 
+	UIImage *plate = [[UIImage imageNamed:@"GroupedActionButton.png"]
+			stretchableImageWithLeftCapWidth:24 topCapHeight:0];
+	UIImage *platePressed = [[UIImage imageNamed:@"GroupedActionButton_Highlighted.png"]
+			stretchableImageWithLeftCapWidth:24 topCapHeight:0];
 	self.torch = [UIButton buttonWithType:UIButtonTypeCustom];
-	self.torch.frame = CGRectMake((int)((b.size.width - 120) / 2),
-			(int)(CGRectGetMaxY(window) + 16), 120, 34);
+	self.torch.frame = CGRectMake((int)((b.size.width - 132) / 2),
+			(int)(panelHeight - 43 - 8), 132, 43);
 	self.torch.titleLabel.font = [UIFont boldSystemFontOfSize:14];
-	self.torch.titleLabel.shadowOffset = CGSizeMake(0, 1);
+	self.torch.titleLabel.shadowOffset = CGSizeMake(0, -1);
+	[self.torch setBackgroundImage:plate forState:UIControlStateNormal];
+	[self.torch setBackgroundImage:platePressed forState:UIControlStateHighlighted];
 	[self.torch setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-	[self.torch setTitleShadowColor:[UIColor colorWithWhite:0 alpha:0.3f]
+	[self.torch setTitleShadowColor:[UIColor colorWithWhite:0 alpha:0.5f]
 						   forState:UIControlStateNormal];
 	[self.torch addTarget:self action:@selector(toggleTorch)
 		 forControlEvents:UIControlEventTouchUpInside];
 	self.torch.hidden = YES;
-	[self.view addSubview:self.torch];
+	[self.panel addSubview:self.torch];
+	[self updateTorchButton];
+}
+
+- (void)hideFailure {
+	[self.failureLabel removeFromSuperview];
+	self.failureLabel = nil;
+	self.wash.hidden = NO;
+	self.outline.hidden = NO;
+	self.hint.hidden = NO;
 	[self updateTorchButton];
 }
 
 - (void)showFailure:(NSString *)message {
-	UILabel *label = [[UILabel alloc] initWithFrame:
-			CGRectInset(self.view.bounds, 24, 0)];
-	label.text = message;
-	label.numberOfLines = 0;
-	label.textAlignment = NSTextAlignmentCenter;
-	label.font = [UIFont boldSystemFontOfSize:14];
-	label.textColor = [UIColor whiteColor];
-	label.shadowColor = [UIColor colorWithWhite:0 alpha:0.3f];
-	label.shadowOffset = CGSizeMake(0, 1);
-	label.backgroundColor = [UIColor clearColor];
-	[self.view addSubview:label];
+	self.failure = message;
+	self.wash.hidden = YES;
+	self.outline.hidden = YES;
+	self.hint.hidden = YES;
+
+	if (!self.failureLabel){
+		self.failureLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+		self.failureLabel.numberOfLines = 0;
+		self.failureLabel.textAlignment = UITextAlignmentCenter;
+		self.failureLabel.font = [UIFont boldSystemFontOfSize:14];
+		self.failureLabel.textColor = [UIColor whiteColor];
+		self.failureLabel.shadowColor = [UIColor colorWithWhite:0 alpha:0.5f];
+		self.failureLabel.shadowOffset = CGSizeMake(0, -1);
+		self.failureLabel.backgroundColor = [UIColor clearColor];
+	}
+	self.failureLabel.text = message;
+
+	CGRect b = self.view.bounds;
+	CGFloat width = b.size.width - 48;
+	CGFloat panelHeight = self.panel ? self.panel.frame.size.height : 0;
+	CGSize fit = [message sizeWithFont:self.failureLabel.font
+					 constrainedToSize:CGSizeMake(width, b.size.height)
+						 lineBreakMode:UILineBreakModeWordWrap];
+	self.failureLabel.frame = CGRectMake(24,
+			(int)((b.size.height - panelHeight - fit.height) / 2), width, fit.height);
+	[self.view addSubview:self.failureLabel];
+	[self.view bringSubviewToFront:self.failureLabel];
+	[self updateTorchButton];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -266,7 +301,6 @@
 	}
 }
 
-/// t.me/name and tg://resolve?domain=name both mean "open this chat".
 - (NSString *)usernameIn:(NSString *)text {
 	NSString *candidate = nil;
 	NSRange marker = [text rangeOfString:@"t.me/"];

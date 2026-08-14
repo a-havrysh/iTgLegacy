@@ -21,6 +21,7 @@ typedef NS_ENUM(NSInteger, TGLoginStep) {
 @property (nonatomic, strong) UITextField *inputField;
 @property (nonatomic, strong) UIButton *nextButton;
 @property (nonatomic, strong) UIButton *resendButton;
+@property (nonatomic, strong) UILabel *timeoutLabel;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @property (nonatomic, copy) NSString *savedPhoneNumber;
 @property (nonatomic, assign) BOOL busy;
@@ -36,6 +37,13 @@ static UIColor *tgRGB(int rgb) {
                            green:((rgb >> 8) & 0xff) / 255.0f
                             blue:(rgb & 0xff) / 255.0f
                            alpha:1.0f];
+}
+
+static UIColor *tgRGBA(int rgb, CGFloat alpha) {
+    return [UIColor colorWithRed:((rgb >> 16) & 0xff) / 255.0f
+                           green:((rgb >> 8) & 0xff) / 255.0f
+                            blue:(rgb & 0xff) / 255.0f
+                           alpha:alpha];
 }
 
 static NSDictionary *tgDialCodes(void) {
@@ -71,6 +79,65 @@ static NSDictionary *tgDialCodes(void) {
     [self setupUI];
 }
 
+- (UIButton *)loginToolbarButtonWithTitle:(NSString *)title
+                                    plate:(NSString *)plateName
+                                  pressed:(NSString *)pressedName
+                                 leftCapHalf:(BOOL)leftCapHalf
+                                  leftCap:(int)leftCap
+                              shadowColour:(UIColor *)shadowColour
+                              paddingLeft:(CGFloat)paddingLeft
+                             paddingRight:(CGFloat)paddingRight
+                                 minWidth:(CGFloat)minWidth
+                                    isBack:(BOOL)isBack {
+    UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+    button.exclusiveTouch = YES;
+    button.adjustsImageWhenDisabled = NO;
+    button.adjustsImageWhenHighlighted = NO;
+
+    UIImage *raw = [UIImage imageNamed:plateName];
+    UIImage *rawPressed = [UIImage imageNamed:pressedName];
+    if (raw != nil) {
+        int cap = leftCapHalf ? (int)(raw.size.width / 2) : leftCap;
+        [button setBackgroundImage:[raw stretchableImageWithLeftCapWidth:cap topCapHeight:0] forState:UIControlStateNormal];
+    }
+    if (rawPressed != nil) {
+        int cap = leftCapHalf ? (int)(rawPressed.size.width / 2) : leftCap;
+        UIImage *stretched = [rawPressed stretchableImageWithLeftCapWidth:cap topCapHeight:0];
+        [button setBackgroundImage:stretched forState:UIControlStateHighlighted];
+        [button setBackgroundImage:stretched forState:UIControlStateSelected];
+        [button setBackgroundImage:stretched forState:UIControlStateHighlighted | UIControlStateSelected];
+    }
+
+    button.titleLabel.font = [UIFont boldSystemFontOfSize:12];
+    button.titleLabel.shadowOffset = CGSizeMake(0, -1);
+    button.titleLabel.backgroundColor = [UIColor clearColor];
+    [button setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    [button setTitleShadowColor:shadowColour forState:UIControlStateNormal];
+
+    CGFloat lift = isBack ? 0.5f : 1.0f;
+    button.titleEdgeInsets = UIEdgeInsetsMake(-lift, paddingLeft, lift, paddingRight);
+    [button setTitle:title forState:UIControlStateNormal];
+
+    [self sizeLoginToolbarButton:button
+                    paddingLeft:paddingLeft
+                   paddingRight:paddingRight
+                       minWidth:minWidth];
+
+    return button;
+}
+
+- (void)sizeLoginToolbarButton:(UIButton *)button
+                   paddingLeft:(CGFloat)paddingLeft
+                  paddingRight:(CGFloat)paddingRight
+                      minWidth:(CGFloat)minWidth {
+    NSString *title = [button titleForState:UIControlStateNormal];
+    CGSize textSize = title.length > 0 ? [title sizeWithFont:button.titleLabel.font] : CGSizeZero;
+    CGFloat width = paddingLeft + paddingRight + ceilf(textSize.width);
+    if (width < minWidth)
+        width = minWidth;
+    button.frame = CGRectMake(button.frame.origin.x, button.frame.origin.y, width, 30);
+}
+
 - (void)setupNavigationBar {
     UINavigationBar *bar = self.navigationController.navigationBar;
     if (bar == nil)
@@ -91,24 +158,22 @@ static NSDictionary *tgDialCodes(void) {
                                          UITextAttributeTextShadowOffset : [NSValue valueWithUIOffset:UIOffsetMake(0, 1)] };
     }
 
-    UIImage *rawNext = [UIImage imageNamed:@"HeaderButton_Login_Blue.png"];
-    UIImage *rawNextPressed = [UIImage imageNamed:@"HeaderButton_Login_Blue_Pressed.png"];
-
-    self.nextButton = [UIButton buttonWithType:UIButtonTypeCustom];
-    self.nextButton.frame = CGRectMake(0, 0, 52, 30);
-    if (rawNext != nil)
-        [self.nextButton setBackgroundImage:[rawNext stretchableImageWithLeftCapWidth:(int)(rawNext.size.width / 2) topCapHeight:0] forState:UIControlStateNormal];
-    if (rawNextPressed != nil)
-        [self.nextButton setBackgroundImage:[rawNextPressed stretchableImageWithLeftCapWidth:(int)(rawNextPressed.size.width / 2) topCapHeight:0] forState:UIControlStateHighlighted];
-    [self.nextButton setTitle:@"Next" forState:UIControlStateNormal];
-    [self.nextButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    [self.nextButton setTitleShadowColor:[UIColor colorWithRed:0x04 / 255.0f green:0x26 / 255.0f blue:0x51 / 255.0f alpha:0.3f] forState:UIControlStateNormal];
-    self.nextButton.titleLabel.font = [UIFont boldSystemFontOfSize:12];
-    self.nextButton.titleLabel.shadowOffset = CGSizeMake(0, -1);
+    self.nextButton = [self loginToolbarButtonWithTitle:@"Next"
+                                                  plate:@"HeaderButton_Login_Blue.png"
+                                                pressed:@"HeaderButton_Login_Blue_Pressed.png"
+                                            leftCapHalf:YES
+                                                leftCap:0
+                                           shadowColour:tgRGBA(0x042651, 0.3f)
+                                            paddingLeft:7
+                                           paddingRight:7
+                                               minWidth:52
+                                                 isBack:NO];
     [self.nextButton addTarget:self action:@selector(actionButtonTapped) forControlEvents:UIControlEventTouchUpInside];
 
     self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhite];
-    self.spinner.frame = CGRectMake(floorf((52 - self.spinner.frame.size.width) / 2), floorf((30 - self.spinner.frame.size.height) / 2), self.spinner.frame.size.width, self.spinner.frame.size.height);
+    self.spinner.frame = CGRectMake(floorf((self.nextButton.frame.size.width - self.spinner.frame.size.width) / 2),
+                                    floorf((self.nextButton.frame.size.height - self.spinner.frame.size.height) / 2),
+                                    self.spinner.frame.size.width, self.spinner.frame.size.height);
     self.spinner.hidesWhenStopped = YES;
     [self.nextButton addSubview:self.spinner];
 
@@ -128,6 +193,14 @@ static NSDictionary *tgDialCodes(void) {
         shadowView.image = shadow;
         shadowView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
         [self.view addSubview:shadowView];
+    }
+
+    UIImage *headerShadow = [UIImage imageNamed:@"HeaderLoginShadow.png"];
+    if (headerShadow != nil) {
+        UIImageView *headerShadowView = [[UIImageView alloc] initWithImage:[headerShadow stretchableImageWithLeftCapWidth:0 topCapHeight:0]];
+        headerShadowView.frame = CGRectMake(0, 0, self.view.bounds.size.width, headerShadow.size.height);
+        headerShadowView.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+        [self.view addSubview:headerShadowView];
     }
 
     self.noticeLabel = [[UILabel alloc] initWithFrame:CGRectZero];
@@ -211,12 +284,28 @@ static NSDictionary *tgDialCodes(void) {
     [self.inputField addTarget:self action:@selector(inputChanged) forControlEvents:UIControlEventEditingChanged];
     [self.view addSubview:self.inputField];
 
-    self.resendButton = [UIButton buttonWithType:UIButtonTypeCustom];
-    self.resendButton.titleLabel.font = [UIFont systemFontOfSize:14];
-    self.resendButton.titleLabel.shadowOffset = CGSizeMake(0, 1);
-    [self.resendButton setTitleColor:tgRGB(0xc0c5cc) forState:UIControlStateNormal];
-    [self.resendButton setTitleShadowColor:tgRGB(0x323c4a) forState:UIControlStateNormal];
-    [self.resendButton setTitleColor:[UIColor whiteColor] forState:UIControlStateHighlighted];
+    self.timeoutLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+    self.timeoutLabel.font = [UIFont systemFontOfSize:14];
+    self.timeoutLabel.textColor = tgRGB(0xc4c9d2);
+    self.timeoutLabel.shadowColor = tgRGB(0x25272b);
+    self.timeoutLabel.shadowOffset = CGSizeMake(0, 1);
+    self.timeoutLabel.textAlignment = NSTextAlignmentCenter;
+    self.timeoutLabel.contentMode = UIViewContentModeCenter;
+    self.timeoutLabel.numberOfLines = 0;
+    self.timeoutLabel.backgroundColor = [UIColor clearColor];
+    self.timeoutLabel.hidden = YES;
+    [self.view addSubview:self.timeoutLabel];
+
+    self.resendButton = [self loginToolbarButtonWithTitle:@"Send the code again"
+                                                    plate:@"HeaderButton_Login.png"
+                                                  pressed:@"HeaderButton_Login_Pressed.png"
+                                              leftCapHalf:NO
+                                                  leftCap:11
+                                             shadowColour:tgRGBA(0x07080a, 0.35f)
+                                              paddingLeft:7
+                                             paddingRight:7
+                                                 minWidth:0
+                                                   isBack:NO];
     [self.resendButton addTarget:self action:@selector(resendTapped) forControlEvents:UIControlEventTouchUpInside];
     self.resendButton.hidden = YES;
     [self.view addSubview:self.resendButton];
@@ -342,10 +431,17 @@ static NSDictionary *tgDialCodes(void) {
                                                        noticeSize.width, noticeSize.height));
     self.noticeLabel.alpha = self.noticeLabel.frame.origin.y < 0 ? 0.0f : 1.0f;
 
-    self.resendButton.frame = CGRectIntegral(CGRectMake(10,
-                                                        self.inputBackgroundView.frame.origin.y + self.inputBackgroundView.frame.size.height + 14,
-                                                        viewSize.width - 20, 20));
-    self.resendButton.hidden = self.currentStep != TGLoginStepCode;
+    CGFloat resendY = self.inputBackgroundView.frame.origin.y + self.inputBackgroundView.frame.size.height + 14;
+
+    CGSize timeoutSize = [self.timeoutLabel sizeThatFits:CGSizeMake(300, 1024)];
+    self.timeoutLabel.frame = CGRectIntegral(CGRectMake((viewSize.width - timeoutSize.width) / 2, resendY, timeoutSize.width, timeoutSize.height));
+
+    self.resendButton.frame = CGRectMake((int)((viewSize.width - self.resendButton.frame.size.width) / 2), resendY,
+                                         self.resendButton.frame.size.width, self.resendButton.frame.size.height);
+
+    BOOL onCodeStep = self.currentStep == TGLoginStepCode;
+    self.timeoutLabel.hidden = !onCodeStep || self.resendSeconds <= 0;
+    self.resendButton.hidden = !onCodeStep || self.resendSeconds > 0;
 }
 
 - (void)inputBackgroundTapped {
@@ -355,13 +451,10 @@ static NSDictionary *tgDialCodes(void) {
 - (void)setBusy:(BOOL)busy {
     _busy = busy;
     [self updateNextEnabled];
-    if (busy) {
-        self.nextButton.titleLabel.alpha = 0.0f;
+    if (busy)
         [self.spinner startAnimating];
-    } else {
-        self.nextButton.titleLabel.alpha = 1.0f;
+    else
         [self.spinner stopAnimating];
-    }
 }
 
 - (NSString *)trimmedInput {
@@ -392,7 +485,7 @@ static NSDictionary *tgDialCodes(void) {
 - (void)updateNextEnabled {
     BOOL enabled = !self.busy && [self hasSubmittableInput];
     self.nextButton.enabled = enabled;
-    self.nextButton.alpha = (enabled || self.busy) ? 1.0f : 0.6f;
+    self.nextButton.titleLabel.alpha = self.busy ? 0.0f : (enabled ? 1.0f : 0.6f);
 }
 
 - (void)inputChanged {
@@ -504,18 +597,16 @@ static NSDictionary *tgDialCodes(void) {
     if (self.navigationItem.leftBarButtonItem != nil)
         return;
 
-    UIButton *backButton = [UIButton buttonWithType:UIButtonTypeCustom];
-    backButton.frame = CGRectMake(0, 0, 52, 30);
-    UIImage *raw = [UIImage imageNamed:@"HeaderButton_Login_Blue.png"];
-    UIImage *rawPressed = [UIImage imageNamed:@"HeaderButton_Login_Blue_Pressed.png"];
-    if (raw != nil)
-        [backButton setBackgroundImage:[raw stretchableImageWithLeftCapWidth:(int)(raw.size.width / 2) topCapHeight:0] forState:UIControlStateNormal];
-    if (rawPressed != nil)
-        [backButton setBackgroundImage:[rawPressed stretchableImageWithLeftCapWidth:(int)(rawPressed.size.width / 2) topCapHeight:0] forState:UIControlStateHighlighted];
-    [backButton setTitle:@"Back" forState:UIControlStateNormal];
-    [backButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    backButton.titleLabel.font = [UIFont boldSystemFontOfSize:12];
-    backButton.titleLabel.shadowOffset = CGSizeMake(0, -1);
+    UIButton *backButton = [self loginToolbarButtonWithTitle:@"Back"
+                                                      plate:@"BackButton_Login.png"
+                                                    pressed:@"BackButton_Login_Pressed.png"
+                                                leftCapHalf:NO
+                                                    leftCap:15
+                                               shadowColour:tgRGBA(0x050608, 0.4f)
+                                                paddingLeft:15
+                                               paddingRight:9
+                                                   minWidth:0
+                                                     isBack:YES];
     [backButton addTarget:self action:@selector(backTapped) forControlEvents:UIControlEventTouchUpInside];
 
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:backButton];
@@ -558,15 +649,13 @@ static NSDictionary *tgDialCodes(void) {
 
 - (void)updateResendTitle {
     if (self.resendSeconds > 0) {
-        [self.resendButton setTitle:[NSString stringWithFormat:@"Haven't received the code? (%d)", (int)self.resendSeconds]
-                           forState:UIControlStateNormal];
+        self.timeoutLabel.text = [NSString stringWithFormat:@"You can request the code again in %d:%02d",
+                                  (int)self.resendSeconds / 60, (int)self.resendSeconds % 60];
         self.resendButton.enabled = NO;
-        self.resendButton.alpha = 0.6f;
     } else {
-        [self.resendButton setTitle:@"Send the code again" forState:UIControlStateNormal];
         self.resendButton.enabled = YES;
-        self.resendButton.alpha = 1.0f;
     }
+    [self layoutInterface];
 }
 
 - (void)resendTapped {

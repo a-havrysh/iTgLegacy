@@ -3,6 +3,13 @@
 #import "TGTheme.h"
 #import "TGIcons.h"
 
+static inline UIColor *TGEditProfileRGB(int rgb) {
+	return [UIColor colorWithRed:((rgb >> 16) & 0xff) / 255.0f
+						   green:((rgb >> 8) & 0xff) / 255.0f
+							blue:(rgb & 0xff) / 255.0f
+						   alpha:1.0f];
+}
+
 @interface TGEditProfileViewController () <UITextFieldDelegate>
 @property (nonatomic, strong) UITextField *firstField;
 @property (nonatomic, strong) UITextField *lastField;
@@ -26,6 +33,7 @@
 		self.edgesForExtendedLayout = UIRectEdgeNone;
 	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
 	self.tableView.separatorColor = [[TGTheme shared] separatorColour];
+	self.tableView.rowHeight = 44;
 
 	self.saveButton = [TGIcons headerButtonWithTitle:@"Save" bold:YES
 											  target:self action:@selector(save)];
@@ -114,7 +122,7 @@
 }
 
 - (UITextField *)fieldWithPlaceholder:(NSString *)placeholder text:(NSString *)text {
-	UITextField *field = [[UITextField alloc] initWithFrame:CGRectMake(15, 11, 290, 22)];
+	UITextField *field = [[UITextField alloc] initWithFrame:CGRectMake(15, 12, 290, 22)];
 	field.placeholder = placeholder;
 	field.text = [text isKindOfClass:NSString.class] ? text : @"";
 	field.font = [UIFont boldSystemFontOfSize:16];
@@ -253,10 +261,74 @@
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 3; }
 
-- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
-	if (section == 0) return @"Name";
-	if (section == 1) return @"Username";
-	return @"Bio";
+- (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
+	return 12;
+}
+
+- (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
+	UIView *spacer = [[UIView alloc] initWithFrame:
+			CGRectMake(0, 0, tableView.bounds.size.width, 12)];
+	spacer.backgroundColor = [UIColor clearColor];
+	return spacer;
+}
+
+- (NSString *)footerTextForSection:(NSInteger)section {
+	if (section == 1)
+		return @"You can choose a username on Telegram. Other people will be able to "
+				"find you by this username and contact you without knowing your phone "
+				"number.\n\nYou can use a-z, 0-9 and underscores. Minimum length is 5 "
+				"characters.";
+	if (section == 2)
+		return @"Any details such as age, occupation or city.";
+	return nil;
+}
+
+- (CGFloat)footerTextHeightForSection:(NSInteger)section width:(CGFloat)width {
+	NSString *text = [self footerTextForSection:section];
+	if (text.length == 0)
+		return 0;
+	CGSize bounded = [text sizeWithFont:[UIFont systemFontOfSize:14]
+					 constrainedToSize:CGSizeMake(width - 20, 400)
+						 lineBreakMode:NSLineBreakByWordWrapping];
+	return ceilf(bounded.height);
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForFooterInSection:(NSInteger)section {
+	CGFloat height = [self footerTextHeightForSection:section
+											   width:tableView.bounds.size.width];
+	if (height <= 0)
+		return 12;
+	return height + 14 + 12;
+}
+
+- (UIView *)tableView:(UITableView *)tableView viewForFooterInSection:(NSInteger)section {
+	NSString *text = [self footerTextForSection:section];
+	if (text.length == 0)
+		return nil;
+	CGFloat width = tableView.bounds.size.width;
+	CGFloat height = [self footerTextHeightForSection:section width:width];
+	BOOL dark = [[TGTheme shared] isDark];
+
+	UIView *container = [[UIView alloc] initWithFrame:
+			CGRectMake(0, 0, width, height + 14 + 12)];
+	container.backgroundColor = [UIColor clearColor];
+
+	UILabel *label = [[UILabel alloc] initWithFrame:
+			CGRectMake(10, 7, width - 20, height)];
+	label.text = text;
+	label.font = [UIFont systemFontOfSize:14];
+	label.textAlignment = NSTextAlignmentCenter;
+	label.lineBreakMode = NSLineBreakByWordWrapping;
+	label.numberOfLines = 0;
+	label.backgroundColor = [UIColor clearColor];
+	label.textColor = dark ? [[TGTheme shared] secondaryTextColour]
+						   : TGEditProfileRGB(0x697487);
+	if (!dark){
+		label.shadowColor = TGEditProfileRGB(0xdae0e8);
+		label.shadowOffset = CGSizeMake(0, 1);
+	}
+	[container addSubview:label];
+	return container;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
@@ -274,7 +346,8 @@
 	else if (indexPath.section == 1) field = self.usernameField;
 	else                             field = self.bioField;
 
-	field.frame = CGRectMake(15, 11, tableView.bounds.size.width - 20 - 20, 22);
+	CGFloat contentWidth = tableView.bounds.size.width - 20;
+	field.frame = CGRectMake(15, 12, contentWidth - 20, 22);
 	[cell.contentView addSubview:field];
 	return cell;
 }

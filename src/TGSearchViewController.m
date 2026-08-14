@@ -11,7 +11,8 @@ static const CGFloat kSearchRowHeight = 51.0f;
 static const CGFloat kSearchAvatarLeft = 5.0f;
 static const CGFloat kSearchAvatarTop = 5.0f;
 static const CGFloat kSearchTextLeft = 54.0f;
-static const CGFloat kSearchTextRight = 14.0f;
+static const CGFloat kSearchTextRight = 5.0f;
+static const CGFloat kSearchSectionHeight = 25.0f;
 
 @interface TGSearchResultCell : UITableViewCell
 @property (nonatomic, strong) UIImageView *avatarView;
@@ -24,26 +25,32 @@ static const CGFloat kSearchTextRight = 14.0f;
 - (id)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)reuseIdentifier {
 	self = [super initWithStyle:style reuseIdentifier:reuseIdentifier];
 	if (self){
-		UIImage *cellImage = [UIImage imageNamed:@"Cell102.png"];
-		UIImage *selectedCellImage = [UIImage imageNamed:@"CellHighlighted102.png"];
-		if (cellImage)
-			self.backgroundView = [[UIImageView alloc] initWithImage:cellImage];
-		if (selectedCellImage)
-			self.selectedBackgroundView = [[UIImageView alloc] initWithImage:selectedCellImage];
+		if (![TGTheme shared].isFlat){
+			UIImage *cellImage = [UIImage imageNamed:@"Cell102.png"];
+			UIImage *selectedCellImage = [UIImage imageNamed:@"CellHighlighted102.png"];
+			if (cellImage)
+				self.backgroundView = [[UIImageView alloc] initWithImage:cellImage];
+			if (selectedCellImage)
+				self.selectedBackgroundView = [[UIImageView alloc] initWithImage:selectedCellImage];
+		}
 
 		_titleLabel = [[UILabel alloc] init];
 		_titleLabel.backgroundColor = [UIColor clearColor];
 		_titleLabel.font = [UIFont systemFontOfSize:19];
-		_titleLabel.textColor = [UIColor colorWithRed:0x11 / 255.0f green:0x11 / 255.0f
-												 blue:0x11 / 255.0f alpha:1.0f];
+		_titleLabel.textColor = [TGTheme shared].isFlat
+				? [[TGTheme shared] primaryTextColour]
+				: [UIColor colorWithRed:0x11 / 255.0f green:0x11 / 255.0f
+								   blue:0x11 / 255.0f alpha:1.0f];
 		_titleLabel.highlightedTextColor = [UIColor whiteColor];
 		[self.contentView addSubview:_titleLabel];
 
 		_subtitleLabel = [[UILabel alloc] init];
 		_subtitleLabel.backgroundColor = [UIColor clearColor];
 		_subtitleLabel.font = [UIFont systemFontOfSize:13];
-		_subtitleLabel.textColor = [UIColor colorWithRed:0x80 / 255.0f green:0x80 / 255.0f
-													blue:0x80 / 255.0f alpha:1.0f];
+		_subtitleLabel.textColor = [TGTheme shared].isFlat
+				? [[TGTheme shared] secondaryTextColour]
+				: [UIColor colorWithRed:0x80 / 255.0f green:0x80 / 255.0f
+									blue:0x80 / 255.0f alpha:1.0f];
 		_subtitleLabel.highlightedTextColor = [UIColor whiteColor];
 		[self.contentView addSubview:_subtitleLabel];
 
@@ -58,6 +65,13 @@ static const CGFloat kSearchTextRight = 14.0f;
 
 - (void)layoutSubviews {
 	[super layoutSubviews];
+
+	if (self.selectedBackgroundView){
+		CGRect selectedFrame = self.selectedBackgroundView.frame;
+		selectedFrame.origin.y = -1;
+		selectedFrame.size.height = self.frame.size.height + 1;
+		self.selectedBackgroundView.frame = selectedFrame;
+	}
 
 	CGSize viewSize = self.contentView.frame.size;
 	_avatarView.frame = CGRectMake(kSearchAvatarLeft, kSearchAvatarTop,
@@ -106,6 +120,16 @@ static const NSUInteger kSearchRecentsLimit = 12;
 	NSInteger _pending;
 }
 
++ (UIImage *)transparentBarBackground {
+	static UIImage *image = nil;
+	if (!image){
+		UIGraphicsBeginImageContextWithOptions(CGSizeMake(1, 1), NO, 0);
+		image = UIGraphicsGetImageFromCurrentImageContext();
+		UIGraphicsEndImageContext();
+	}
+	return image;
+}
+
 - (void)viewDidLoad {
 	[super viewDidLoad];
 
@@ -138,6 +162,8 @@ static const NSUInteger kSearchRecentsLimit = 12;
 	self.bar.placeholder = @"Search";
 	self.bar.barStyle = [TGTheme shared].isDark ? UIBarStyleBlack : UIBarStyleDefault;
 	[self.bar tg_setTintColor:[[TGTheme shared] accentColour]];
+	if ([self.bar respondsToSelector:@selector(setBackgroundImage:)])
+		[self.bar setBackgroundImage:[[self class] transparentBarBackground]];
 	self.navigationItem.titleView = self.bar;
 	self.navigationItem.hidesBackButton = YES;
 	UIButton *cancel = [TGIcons headerButtonWithTitle:@"Cancel" bold:NO
@@ -232,6 +258,30 @@ static const NSUInteger kSearchRecentsLimit = 12;
 		field.borderStyle = UITextBorderStyleNone;
 		field.background = nil;
 		field.font = [UIFont systemFontOfSize:14];
+		field.clipsToBounds = NO;
+		field.textColor = [TGTheme shared].isFlat
+				? [[TGTheme shared] primaryTextColour]
+				: [UIColor blackColor];
+
+		UIColor *placeholderColour = [TGTheme shared].isFlat
+				? [[TGTheme shared] secondaryTextColour]
+				: [UIColor colorWithRed:0x8d / 255.0f green:0x92 / 255.0f
+								   blue:0x98 / 255.0f alpha:1.0f];
+		if ([field respondsToSelector:@selector(setAttributedPlaceholder:)] &&
+			field.placeholder.length){
+			field.attributedPlaceholder = [[NSAttributedString alloc]
+					initWithString:field.placeholder
+						attributes:@{NSForegroundColorAttributeName: placeholderColour}];
+		}
+
+		UIView *leftView = field.leftView;
+		if ([leftView isKindOfClass:[UIImageView class]]){
+			UIImage *icon = [UIImage imageNamed:@"SearchBarIcon.png"];
+			if (icon){
+				((UIImageView *)leftView).image = icon;
+				[leftView sizeToFit];
+			}
+		}
 
 		UIImage *inputImage = [UIImage imageNamed:@"SearchInputField.png"];
 		if (inputImage){
@@ -486,7 +536,7 @@ static const NSUInteger kSearchRecentsLimit = 12;
 		}
 	} else {
 		if (self.chatHits.count)
-			[built addObject:@{@"title": @"Chats", @"rows": self.chatHits}];
+			[built addObject:@{@"title": @"Conversations", @"rows": self.chatHits}];
 		if (self.contactHits.count)
 			[built addObject:@{@"title": @"Contacts", @"rows": self.contactHits}];
 		if (self.globalHits.count)
@@ -542,29 +592,70 @@ static const NSUInteger kSearchRecentsLimit = 12;
 - (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
 	if (section >= (NSInteger)self.sections.count)
 		return nil;
-	if (![((NSDictionary *)self.sections[section])[@"recent"] boolValue])
-		return nil;
+
+	NSDictionary *info = self.sections[section];
+	NSString *title = [info[@"title"] isKindOfClass:NSString.class] ? info[@"title"] : @"";
+	BOOL isRecent = [info[@"recent"] boolValue];
 
 	CGFloat width = tableView.bounds.size.width;
-	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, 28)];
+	UIView *header = [[UIView alloc] initWithFrame:
+			CGRectMake(0, 0, width, kSearchSectionHeight)];
+	header.clipsToBounds = NO;
 	header.backgroundColor = [UIColor clearColor];
 
-	UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(11, 4, width - 100, 20)];
+	UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
 	label.backgroundColor = [UIColor clearColor];
-	label.font = [UIFont boldSystemFontOfSize:13];
-	label.textColor = [[TGTheme shared] sectionHeaderColour];
-	label.text = @"Recent";
+	label.font = [UIFont boldSystemFontOfSize:15];
+	label.numberOfLines = 1;
+	label.text = title;
+
+	UIColor *actionColour;
+	if ([TGTheme shared].isFlat){
+		header.backgroundColor = [[TGTheme shared] listBackgroundColour];
+		label.textColor = [[TGTheme shared] sectionHeaderColour];
+		actionColour = [[TGTheme shared] accentColour];
+	} else {
+		UIImage *background = [UIImage imageNamed:
+				section == 0 ? @"CategoryDividerFirst.png" : @"CategoryDivider.png"];
+		if (background){
+			UIImageView *backgroundView = [[UIImageView alloc] initWithImage:background];
+			backgroundView.frame = CGRectMake(0, -1, width, kSearchSectionHeight + 1);
+			backgroundView.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+			[header addSubview:backgroundView];
+		} else {
+			header.backgroundColor = [UIColor colorWithRed:0xa8 / 255.0f green:0xb0 / 255.0f
+													  blue:0xb8 / 255.0f alpha:1.0f];
+		}
+		label.textColor = [UIColor whiteColor];
+		label.shadowColor = [UIColor colorWithRed:0x88 / 255.0f green:0x92 / 255.0f
+											 blue:0x9c / 255.0f alpha:1.0f];
+		label.shadowOffset = CGSizeMake(0, -1);
+		actionColour = [UIColor whiteColor];
+	}
+
+	[label sizeToFit];
+	label.frame = CGRectOffset(label.frame, 10, 1);
 	[header addSubview:label];
 
-	UIButton *clear = [UIButton buttonWithType:UIButtonTypeCustom];
-	clear.frame = CGRectMake(width - 91, 2, 80, 24);
-	clear.titleLabel.font = [UIFont systemFontOfSize:13];
-	[clear setTitle:@"Clear" forState:UIControlStateNormal];
-	[clear setTitleColor:[[TGTheme shared] accentColour] forState:UIControlStateNormal];
-	clear.contentHorizontalAlignment = UIControlContentHorizontalAlignmentRight;
-	[clear addTarget:self action:@selector(clearRecents)
-			forControlEvents:UIControlEventTouchUpInside];
-	[header addSubview:clear];
+	if (isRecent){
+		UIButton *clear = [UIButton buttonWithType:UIButtonTypeCustom];
+		clear.frame = CGRectMake(width - 90, 0, 80, kSearchSectionHeight);
+		clear.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+		clear.titleLabel.font = [UIFont boldSystemFontOfSize:13];
+		clear.contentHorizontalAlignment = UIControlContentHorizontalAlignmentRight;
+		[clear setTitle:@"Clear" forState:UIControlStateNormal];
+		[clear setTitleColor:actionColour forState:UIControlStateNormal];
+		if (![TGTheme shared].isFlat){
+			[clear setTitleShadowColor:[UIColor colorWithRed:0x88 / 255.0f
+													   green:0x92 / 255.0f
+														blue:0x9c / 255.0f alpha:1.0f]
+							  forState:UIControlStateNormal];
+			clear.titleLabel.shadowOffset = CGSizeMake(0, -1);
+		}
+		[clear addTarget:self action:@selector(clearRecents)
+				forControlEvents:UIControlEventTouchUpInside];
+		[header addSubview:clear];
+	}
 
 	return header;
 }
@@ -572,7 +663,7 @@ static const NSUInteger kSearchRecentsLimit = 12;
 - (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
 	if (section >= (NSInteger)self.sections.count)
 		return 0;
-	return [((NSDictionary *)self.sections[section])[@"recent"] boolValue] ? 28 : 24;
+	return kSearchSectionHeight;
 }
 
 - (UIImage *)avatarForChat:(int64_t)chatId

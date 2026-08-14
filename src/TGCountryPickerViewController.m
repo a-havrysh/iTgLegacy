@@ -66,11 +66,12 @@ static UIColor *TGCountryPickerColour(int rgb) {
 
 - (void)layoutSubviews {
 	[super layoutSubviews];
-	CGFloat width = self.contentView.frame.size.width;
-	_countryTitleLabel.frame = _useIndex ? CGRectMake(9, 12, width - 54 - 5, 20)
-										 : CGRectMake(9, 12, width - 54 - 15, 20);
-	_countryCodeLabel.frame = _useIndex ? CGRectMake(width - 49 - 32, 12, 50, 20)
-										: CGRectMake(width - 50 - 9, 12, 50, 20);
+	CGFloat contentWidth = self.contentView.frame.size.width;
+	CGFloat cellWidth = self.frame.size.width;
+	_countryTitleLabel.frame = _useIndex ? CGRectMake(9, 12, contentWidth - 54 - 5, 20)
+										 : CGRectMake(9, 12, contentWidth - 54 - 15, 20);
+	_countryCodeLabel.frame = _useIndex ? CGRectMake(cellWidth - 49 - 32, 12, 50, 20)
+										: CGRectMake(cellWidth - 50 - 9, 12, 50, 20);
 }
 
 @end
@@ -108,7 +109,9 @@ static BOOL TGCountryMatchesTokens(NSArray *tokens, NSArray *queryTokens) {
 	return YES;
 }
 
-@interface TGCountryPickerViewController () <UISearchBarDelegate>
+@interface TGCountryPickerViewController () <UISearchBarDelegate> {
+	BOOL _searchFieldStyled;
+}
 @property (nonatomic, strong) NSArray *countries;
 @property (nonatomic, strong) NSArray *filtered;
 @property (nonatomic, strong) NSArray *sections;
@@ -123,7 +126,7 @@ static BOOL TGCountryMatchesTokens(NSArray *tokens, NSArray *queryTokens) {
 	self = [super initWithStyle:UITableViewStylePlain];
 	if (!self)
 		return nil;
-	self.title = @"Choose a Country";
+	self.title = @"Country";
 	return self;
 }
 
@@ -154,6 +157,8 @@ static BOOL TGCountryMatchesTokens(NSArray *tokens, NSArray *queryTokens) {
 			[self.searchBar setBackgroundImage:background];
 	}
 	self.tableView.tableHeaderView = self.searchBar;
+	if (!flat)
+		[self hideStripe:self.searchBar];
 
 	self.emptyLabel = [[UILabel alloc] initWithFrame:CGRectZero];
 	self.emptyLabel.backgroundColor = [UIColor clearColor];
@@ -221,6 +226,72 @@ static BOOL TGCountryMatchesTokens(NSArray *tokens, NSArray *queryTokens) {
 			[me updateEmptyState];
 		});
 	}];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+	[super viewWillAppear:animated];
+	if (!_searchFieldStyled && ![[TGTheme shared] isFlat]){
+		_searchFieldStyled = YES;
+		[self.searchBar layoutIfNeeded];
+		[self styleSearchInputField:self.searchBar];
+		[self hideStripe:self.searchBar];
+	}
+}
+
+- (void)hideStripe:(UIView *)view {
+	if ([view isKindOfClass:[UIImageView class]] && view.frame.size.height == 1)
+		view.hidden = YES;
+	for (UIView *child in view.subviews)
+		[self hideStripe:child];
+}
+
+- (void)styleSearchInputField:(UIView *)view {
+	if ([view isKindOfClass:[UITextField class]]){
+		UITextField *field = (UITextField *)view;
+		field.borderStyle = UITextBorderStyleNone;
+		field.background = nil;
+		field.clipsToBounds = NO;
+		field.font = [UIFont systemFontOfSize:14];
+
+		UIImage *inputImage = [UIImage imageNamed:@"SearchInputField.png"];
+		if (inputImage){
+			inputImage = [inputImage stretchableImageWithLeftCapWidth:
+					(int)(inputImage.size.width / 2) topCapHeight:0];
+			UIImageView *inputImageView = [[UIImageView alloc] initWithFrame:
+					CGRectMake(0, 0.5f, field.frame.size.width, inputImage.size.height)];
+			inputImageView.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+			inputImageView.image = inputImage;
+			[field insertSubview:inputImageView atIndex:0];
+		}
+
+		SEL clearButtonSelector = NSSelectorFromString([[NSString alloc]
+				initWithFormat:@"%sBu%s", "clear", "tton"]);
+		if ([field respondsToSelector:clearButtonSelector]){
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+			UIButton *clearButton = [field performSelector:clearButtonSelector];
+#pragma clang diagnostic pop
+			if ([clearButton isKindOfClass:[UIButton class]]){
+				UIImage *clear = [UIImage imageNamed:@"ClearInput.png"];
+				UIImage *clearPressed = [UIImage imageNamed:@"ClearInput_Pressed.png"];
+				if (clear)
+					[clearButton setImage:clear forState:UIControlStateNormal];
+				if (clearPressed)
+					[clearButton setImage:clearPressed forState:UIControlStateHighlighted];
+			}
+		}
+
+		UIImage *icon = [UIImage imageNamed:@"SearchBarIcon.png"];
+		UIView *leftView = [field leftView];
+		if (icon && [leftView isKindOfClass:[UIImageView class]]){
+			[(UIImageView *)leftView setImage:icon];
+			[leftView sizeToFit];
+		}
+		return;
+	}
+
+	for (UIView *child in view.subviews)
+		[self styleSearchInputField:child];
 }
 
 - (void)viewDidLayoutSubviews {

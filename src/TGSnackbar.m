@@ -1,14 +1,13 @@
 #import "TGSnackbar.h"
 #import "TGTheme.h"
 #import "TGIcons.h"
-#import <QuartzCore/QuartzCore.h>
 #import "UIView+SafeTint.h"
 
-// Their snackbar at 360dp: a 48 tall plate inset 8, a 24 countdown ring at 16
-// from the left, the wording at 15, UNDO on the right in blue.
-static const CGFloat kBarHeight = 53.0f;
+static const CGFloat kBarHeight = 55.0f;
 static const CGFloat kBarInset  = 0.0f;
-static const CGFloat kRingSide  = 22.0f;
+static const CGFloat kBadgeHeight = 21.0f;
+static const CGFloat kBadgeMinWidth = 27.0f;
+static const CGFloat kBadgeLeft = 9.0f;
 static const CGFloat kButtonWidth  = 96.0f;
 static const CGFloat kButtonHeight = 32.0f;
 
@@ -24,7 +23,7 @@ static TGSnackbar *sOpenBar = nil;
 	NSInteger _shown;
 	void (^_commit)(void);
 	UILabel *_count;
-	CAShapeLayer *_ring;
+	UIImageView *_badge;
 	UIButton *_undo;
 	BOOL _finished;
 	BOOL _wasInWindow;
@@ -71,7 +70,6 @@ static TGSnackbar *sOpenBar = nil;
 {
 	if (!host)
 		return;
-	// Whatever was waiting has now really happened; only one can be pending.
 	[self commitNow];
 
 	CGRect b = host.bounds;
@@ -88,7 +86,6 @@ static TGSnackbar *sOpenBar = nil;
 	[host addSubview:bar];
 	sOpenBar = bar;
 
-	// Up from below the edge, the way it arrives in their design.
 	CGRect resting = bar.frame;
 	bar.frame = CGRectOffset(resting, 0, kBarHeight + kBarInset);
 	[UIView animateWithDuration:0.2 animations:^{ bar.frame = resting; }];
@@ -132,9 +129,8 @@ static TGSnackbar *sOpenBar = nil;
 }
 
 - (void)buildWithText:(NSString *)text {
-	// steel-gray_dark, which is what their plate is - it has to read over both
-	// a light and a dark chat.
-	self.backgroundColor = [UIColor colorWithRed:0.20f green:0.22f blue:0.24f alpha:1.0f];
+	CGFloat retinaPixel = ([UIScreen mainScreen].scale > 1.0f) ? 0.5f : 0.0f;
+	self.backgroundColor = [UIColor clearColor];
 	self.clipsToBounds = YES;
 
 	UIImage *plate = [UIImage imageNamed:@"ConversationActionBar.png"];
@@ -145,48 +141,53 @@ static TGSnackbar *sOpenBar = nil;
 		plateView.autoresizingMask = UIViewAutoresizingFlexibleWidth |
 									 UIViewAutoresizingFlexibleHeight;
 		[self addSubview:plateView];
+	} else {
+		self.backgroundColor = [UIColor colorWithRed:0.20f green:0.22f blue:0.24f alpha:1.0f];
 	}
 
-	CGRect ring = CGRectMake(12, (kBarHeight - kRingSide) / 2, kRingSide, kRingSide);
-	_ring = [CAShapeLayer layer];
-	_ring.frame = ring;
-	_ring.path = [UIBezierPath bezierPathWithOvalInRect:
-			CGRectInset(CGRectMake(0, 0, kRingSide, kRingSide), 1, 1)].CGPath;
-	_ring.fillColor = [UIColor clearColor].CGColor;
-	_ring.strokeColor = [UIColor whiteColor].CGColor;
-	_ring.lineWidth = 1.5f;
-	// Wound from the top and unwinding as the seconds go, so the plate says how
-	// long is left without anyone having to read the number.
-	_ring.strokeEnd = 1.0f;
-	_ring.transform = CATransform3DMakeRotation(-M_PI_2, 0, 0, 1);
-	[self.layer addSublayer:_ring];
+	UIImage *badgeImage = [UIImage imageNamed:@"DialogListUnreadBadge.png"];
+	if (badgeImage) {
+		_badge = [[UIImageView alloc] initWithImage:
+				[badgeImage stretchableImageWithLeftCapWidth:(int)(badgeImage.size.width / 2)
+											   topCapHeight:(int)(badgeImage.size.height / 2)]];
+		[self addSubview:_badge];
+	}
 
-	_count = [[UILabel alloc] initWithFrame:ring];
+	_count = [[UILabel alloc] initWithFrame:CGRectZero];
 	_count.textAlignment = NSTextAlignmentCenter;
-	_count.font = [UIFont boldSystemFontOfSize:12];
+	_count.font = [UIFont boldSystemFontOfSize:14];
 	_count.textColor = [UIColor whiteColor];
-	_count.shadowColor = [UIColor colorWithWhite:0.0f alpha:0.4f];
+	_count.shadowColor = [UIColor colorWithRed:0x80 / 255.0f
+										 green:0x91 / 255.0f
+										  blue:0xa6 / 255.0f
+										 alpha:1.0f];
 	_count.shadowOffset = CGSizeMake(0, -1);
 	_count.backgroundColor = [UIColor clearColor];
 	_count.text = [NSString stringWithFormat:@"%ld", (long)_shown];
 	[self addSubview:_count];
+	[self layoutCountdown];
 
+	CGFloat textLeft = kBadgeLeft + kBadgeMinWidth + 8.0f;
 	UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(
-			42, 0, self.bounds.size.width - 42 - kButtonWidth - 16, kBarHeight)];
+			textLeft, 0, self.bounds.size.width - textLeft - kButtonWidth - 16, kBarHeight)];
 	label.text = ([text isKindOfClass:[NSString class]] && text.length > 0) ? text : @"Done";
 	label.numberOfLines = 1;
 	label.lineBreakMode = NSLineBreakByTruncatingTail;
-	label.font = [UIFont systemFontOfSize:13];
+	label.font = [UIFont boldSystemFontOfSize:13];
 	label.textColor = [UIColor whiteColor];
-	label.shadowColor = [UIColor colorWithWhite:0.0f alpha:0.4f];
+	label.shadowColor = [UIColor colorWithRed:0x0e / 255.0f
+										green:0x28 / 255.0f
+										 blue:0x4d / 255.0f
+										alpha:0.4f];
 	label.shadowOffset = CGSizeMake(0, -1);
 	label.backgroundColor = [UIColor clearColor];
 	label.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	[self addSubview:label];
 
 	UIButton *undo = [UIButton buttonWithType:UIButtonTypeCustom];
-	undo.frame = CGRectMake(self.bounds.size.width - kButtonWidth - 8,
-			(int)((kBarHeight - kButtonHeight) / 2), kButtonWidth, kButtonHeight);
+	undo.frame = CGRectMake(self.bounds.size.width - kButtonWidth - 9,
+			(int)((kBarHeight - kButtonHeight) / 2) + retinaPixel,
+			kButtonWidth, kButtonHeight);
 	undo.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
 	undo.exclusiveTouch = YES;
 	undo.adjustsImageWhenHighlighted = NO;
@@ -226,6 +227,15 @@ static TGSnackbar *sOpenBar = nil;
 	[self addGestureRecognizer:pan];
 }
 
+- (void)layoutCountdown {
+	CGSize size = [_count.text sizeWithFont:_count.font];
+	CGFloat width = MAX(kBadgeMinWidth, size.width + 10.0f);
+	CGRect frame = CGRectMake(kBadgeLeft, (int)((kBarHeight - kBadgeHeight) / 2),
+			width, kBadgeHeight);
+	_badge.frame = frame;
+	_count.frame = frame;
+}
+
 - (void)second {
 	if (_finished)
 		return;
@@ -238,8 +248,8 @@ static TGSnackbar *sOpenBar = nil;
 	if (whole != _shown) {
 		_shown = whole;
 		_count.text = [NSString stringWithFormat:@"%ld", (long)_shown];
+		[self layoutCountdown];
 	}
-	_ring.strokeEnd = MAX(0.02f, _left / _total);
 }
 
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)recognizer

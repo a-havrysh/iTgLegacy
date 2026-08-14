@@ -243,6 +243,7 @@ static const CGFloat kPollRow     = 30.0f;
 @property (nonatomic, strong) UIButton *scrollDownButton;
 @property (nonatomic, strong) NSDate *lastTypingSent;
 @property (nonatomic, assign) BOOL postingBlocked;
+@property (nonatomic, assign) int64_t pinnedMessageId;
 
 - (void)clearComposeState;
 - (void)showComposeBanner:(NSString *)text;
@@ -457,6 +458,8 @@ static const CGFloat kPollRow     = 30.0f;
 }
 
 - (void)buildInputBar:(CGRect)b {
+	const CGFloat retinaPixel = ([UIScreen mainScreen].scale > 1.0f) ? 0.5f : 0.0f;
+
 	self.inputBar = [[UIView alloc] initWithFrame:
 			CGRectMake(0, b.size.height - kInputHeight, b.size.width, kInputHeight)];
 	self.inputBar.backgroundColor = [[TGTheme shared] inputBarColour];
@@ -496,7 +499,7 @@ static const CGFloat kPollRow     = 30.0f;
 	UIImage *fieldArt = [UIImage imageNamed:@"ConversationInputPanel"];
 	if (fieldArt){
 		UIView *plate = [[UIView alloc] initWithFrame:
-				CGRectMake(40, 4, b.size.width - 106, 36)];
+				CGRectMake(40, 4 - retinaPixel, b.size.width - 106, 36)];
 		plate.backgroundColor = [UIColor whiteColor];
 		plate.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 		[self.inputBar addSubview:plate];
@@ -510,10 +513,13 @@ static const CGFloat kPollRow     = 30.0f;
 		[self.inputBar addSubview:frameView];
 	}
 
-	CGFloat sendY = 7;
+	CGFloat sendY = 7 + retinaPixel;
 
 	UIButton *attach = [UIButton buttonWithType:UIButtonTypeCustom];
-	attach.frame = CGRectMake(6, 7, 29, 30);
+	attach.frame = CGRectMake(6, 7 + retinaPixel, 29, 30);
+	attach.exclusiveTouch = YES;
+	attach.autoresizingMask = UIViewAutoresizingFlexibleRightMargin |
+							  UIViewAutoresizingFlexibleTopMargin;
 	UIImage *attachImage = [UIImage imageNamed:@"AttachBtn"];
 	if (attachImage){
 		[attach setImage:attachImage forState:UIControlStateNormal];
@@ -530,7 +536,7 @@ static const CGFloat kPollRow     = 30.0f;
 	// Their placeholder starts at 49 and the field runs to 113 from the right;
 	// the sticker button takes 30 of that off the end.
 	self.input = [[UITextField alloc] initWithFrame:
-			CGRectMake(49, 5, b.size.width - 113 - 30, 34)];
+			CGRectMake(49, 5 - retinaPixel, b.size.width - 150, 34)];
 	self.input.borderStyle = UITextBorderStyleNone;
 	self.input.background = nil;
 	self.input.backgroundColor = [UIColor clearColor];
@@ -556,6 +562,7 @@ static const CGFloat kPollRow     = 30.0f;
 	self.sendButton = [UIButton buttonWithType:UIButtonTypeCustom];
 	self.sendButton.frame = CGRectMake(b.size.width - sendWidth - 5, sendY,
 									   sendWidth, 29);
+	self.sendButton.exclusiveTouch = YES;
 	UIImage *sendImage = [UIImage imageNamed:@"SendButton"];
 	if (sendImage){
 		[self.sendButton setBackgroundImage:
@@ -580,18 +587,27 @@ static const CGFloat kPollRow     = 30.0f;
 	self.sendButton.titleLabel.font = [UIFont boldSystemFontOfSize:14.5f];
 	self.sendButton.titleLabel.shadowOffset = CGSizeMake(0, -1);
 	self.sendButton.titleEdgeInsets = UIEdgeInsetsMake(1.5f, 0, 2, 0);
+	[self.sendButton setTitleColor:[UIColor colorWithRed:0.808f green:1.0f
+													blue:0.690f alpha:1.0f]
+						  forState:UIControlStateDisabled];
 	self.sendButton.adjustsImageWhenHighlighted = NO;
-	self.sendButton.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+	self.sendButton.adjustsImageWhenDisabled = NO;
+	self.sendButton.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin |
+									   UIViewAutoresizingFlexibleTopMargin;
 	[self.sendButton addTarget:self action:@selector(sendTapped)
 			forControlEvents:UIControlEventTouchUpInside];
 	[self.inputBar addSubview:self.sendButton];
 
 	// A sticker button beside the composer, as clients place it.
 	self.stickerButton = [UIButton buttonWithType:UIButtonTypeCustom];
-	self.stickerButton.frame = CGRectMake(b.size.width - 97, sendY, 30, 29);
+	self.stickerButton.frame = CGRectMake(b.size.width - 97, 7 + retinaPixel, 29, 30);
+	self.stickerButton.exclusiveTouch = YES;
 	[self.stickerButton setImage:[TGIcons sticker] forState:UIControlStateNormal];
-	[self.stickerButton tg_setTintColor:[[TGTheme shared] secondaryTextColour]];
-	self.stickerButton.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+	[self.stickerButton tg_setTintColor:
+			[UIColor colorWithRed:0.616f green:0.655f blue:0.702f alpha:1.0f]];
+	self.stickerButton.adjustsImageWhenHighlighted = YES;
+	self.stickerButton.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin |
+										  UIViewAutoresizingFlexibleTopMargin;
 	[self.stickerButton addTarget:self action:@selector(toggleStickerPanel)
 				 forControlEvents:UIControlEventTouchUpInside];
 	[self.inputBar addSubview:self.stickerButton];
@@ -600,9 +616,27 @@ static const CGFloat kPollRow     = 30.0f;
 	// where Send is and swaps with it depending on whether anything is typed.
 	self.micButton = [UIButton buttonWithType:UIButtonTypeCustom];
 	self.micButton.frame = self.sendButton.frame;
-	[self.micButton setImage:[TGIcons microphone] forState:UIControlStateNormal];
-	[self.micButton tg_setTintColor:[[TGTheme shared] secondaryTextColour]];
-	self.micButton.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+	self.micButton.exclusiveTouch = YES;
+	if (sendImage){
+		[self.micButton setBackgroundImage:
+				[sendImage stretchableImageWithLeftCapWidth:(int)(sendImage.size.width / 2)
+											   topCapHeight:0]
+								  forState:UIControlStateNormal];
+		UIImage *micPressed = [UIImage imageNamed:@"SendButton_Pressed"];
+		if (micPressed)
+			[self.micButton setBackgroundImage:
+					[micPressed stretchableImageWithLeftCapWidth:(int)(micPressed.size.width / 2)
+													topCapHeight:0]
+									  forState:UIControlStateHighlighted];
+		[self.micButton setImage:[TGIcons microphoneOfSide:20 colour:[UIColor whiteColor]]
+						forState:UIControlStateNormal];
+		self.micButton.adjustsImageWhenHighlighted = NO;
+	} else {
+		[self.micButton setImage:[TGIcons microphone] forState:UIControlStateNormal];
+		[self.micButton tg_setTintColor:[[TGTheme shared] secondaryTextColour]];
+	}
+	self.micButton.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin |
+									  UIViewAutoresizingFlexibleTopMargin;
 	[self.micButton addTarget:self action:@selector(recordStart)
 			 forControlEvents:UIControlEventTouchDown];
 	[self.micButton addTarget:self action:@selector(recordFinish)
@@ -1182,37 +1216,50 @@ static const CGFloat kPollRow     = 30.0f;
 		NSString *text = m[@"text"];
 		if (!text.length)
 			return;
-		[weakSelf showPinnedBanner:text];
+		TGChatViewController *me = weakSelf;
+		NSNumber *messageId = m[@"id"];
+		me.pinnedMessageId = [messageId isKindOfClass:NSNumber.class]
+				? messageId.longLongValue : 0;
+		[me showPinnedBanner:text];
 	}];
 }
 
 - (void)showPinnedBanner:(NSString *)text {
 	CGRect b = self.view.bounds;
-	UIView *banner = [[UIView alloc] initWithFrame:CGRectMake(0, 0, b.size.width, 34)];
-	banner.backgroundColor = [UIColor colorWithWhite:0.97f alpha:0.97f];
+	const CGFloat height = 39;
+	UIControl *banner = [[UIControl alloc] initWithFrame:
+			CGRectMake(0, 0, b.size.width, height)];
+	banner.backgroundColor = [[TGTheme shared] inputBarColour];
 	banner.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	[banner addTarget:self action:@selector(pinnedBannerTapped)
+	 forControlEvents:UIControlEventTouchUpInside];
 
-	UIView *stripe = [[UIView alloc] initWithFrame:CGRectMake(8, 5, 2, 24)];
-	stripe.backgroundColor = [[TGTheme shared] accentColour];
-	[banner addSubview:stripe];
+	UIView *rule = [[UIView alloc] initWithFrame:CGRectMake(9, 5, 2, height - 10)];
+	rule.backgroundColor = [[TGTheme shared] accentColour];
+	[banner addSubview:rule];
 
-	UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(16, 2, b.size.width - 24, 14)];
-	label.text = @"Pinned message";
-	label.font = [UIFont boldSystemFontOfSize:11];
-	label.textColor = [[TGTheme shared] accentColour];
-	label.backgroundColor = [UIColor clearColor];
-	[banner addSubview:label];
+	UILabel *caption = [[UILabel alloc] initWithFrame:
+			CGRectMake(19, 3, b.size.width - 29, 16)];
+	caption.text = @"Pinned message";
+	caption.font = [UIFont boldSystemFontOfSize:13];
+	caption.textColor = [UIColor colorWithRed:0.302f green:0.408f blue:0.549f alpha:1.0f];
+	caption.backgroundColor = [UIColor clearColor];
+	caption.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	[banner addSubview:caption];
 
-	UILabel *body = [[UILabel alloc] initWithFrame:CGRectMake(16, 16, b.size.width - 24, 16)];
+	UILabel *body = [[UILabel alloc] initWithFrame:
+			CGRectMake(19, 19, b.size.width - 29, 17)];
 	body.text = text;
 	body.font = [UIFont systemFontOfSize:13];
-	body.textColor = [[TGTheme shared] primaryTextColour];
+	body.textColor = [UIColor colorWithWhite:0.533f alpha:1.0f];
 	body.backgroundColor = [UIColor clearColor];
+	body.numberOfLines = 1;
 	body.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	[banner addSubview:body];
 
-	UIView *hair = [[UIView alloc] initWithFrame:CGRectMake(0, 33, b.size.width, 1)];
-	hair.backgroundColor = [UIColor colorWithWhite:0.8f alpha:1];
+	UIView *hair = [[UIView alloc] initWithFrame:
+			CGRectMake(0, height - 1, b.size.width, 1)];
+	hair.backgroundColor = [UIColor colorWithRed:0.835f green:0.871f blue:0.898f alpha:1.0f];
 	hair.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	[banner addSubview:hair];
 
@@ -1220,9 +1267,14 @@ static const CGFloat kPollRow     = 30.0f;
 
 	// Push the message list down so the banner does not cover the first row.
 	UIEdgeInsets insets = self.table.contentInset;
-	insets.top += 34;
+	insets.top += height;
 	self.table.contentInset = insets;
 	self.table.scrollIndicatorInsets = insets;
+}
+
+- (void)pinnedBannerTapped {
+	if (self.pinnedMessageId != 0)
+		[self scrollToMessageId:self.pinnedMessageId];
 }
 
 #pragma mark - search

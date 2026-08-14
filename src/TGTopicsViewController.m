@@ -2,10 +2,13 @@
 #import "TGChatViewController.h"
 #import "TGClient.h"
 #import "TGTheme.h"
+#import "TGIcons.h"
 #import <QuartzCore/QuartzCore.h>
 
-static const CGFloat kTopicRowHeight = 62.0f;
-static const CGFloat kTopicTextLeft = 15.0f;
+static const CGFloat kTopicRowHeight = 73.0f;
+static const CGFloat kTopicAvatar = 56.0f;
+static const CGFloat kTopicAvatarLeft = 8.0f;
+static const CGFloat kTopicTextLeft = 73.0f;
 
 static UIImage *TGTopicBadgeImage(void) {
 	static UIImage *normal = nil;
@@ -17,9 +20,30 @@ static UIImage *TGTopicBadgeImage(void) {
 	return normal;
 }
 
+static NSString *TGTopicDate(NSTimeInterval unix) {
+	if (unix <= 0)
+		return @"";
+
+	NSDate *date = [NSDate dateWithTimeIntervalSince1970:unix];
+	NSTimeInterval age = -[date timeIntervalSinceNow];
+
+	static NSDateFormatter *time = nil, *weekday = nil, *full = nil;
+	if (!time){
+		time = [[NSDateFormatter alloc] init];    [time setDateFormat:@"HH:mm"];
+		weekday = [[NSDateFormatter alloc] init]; [weekday setDateFormat:@"EEE"];
+		full = [[NSDateFormatter alloc] init];    [full setDateFormat:@"dd.MM.yy"];
+	}
+
+	if (age < 24 * 3600)     return [time stringFromDate:date];
+	if (age < 7 * 24 * 3600) return [weekday stringFromDate:date];
+	return [full stringFromDate:date];
+}
+
 @interface TGTopicCell : UITableViewCell
+@property (nonatomic, strong) UIImageView *avatar;
 @property (nonatomic, strong) UILabel *titleLabel;
 @property (nonatomic, strong) UILabel *previewLabel;
+@property (nonatomic, strong) UILabel *dateLabel;
 @property (nonatomic, strong) UIImageView *badgeBackground;
 @property (nonatomic, strong) UILabel *badge;
 @property (nonatomic, strong) UIImageView *arrow;
@@ -32,6 +56,14 @@ static UIImage *TGTopicBadgeImage(void) {
 	if (!self)
 		return nil;
 
+	self.avatar = [[UIImageView alloc] initWithFrame:
+			CGRectMake(kTopicAvatarLeft, 8, kTopicAvatar, kTopicAvatar)];
+	self.avatar.layer.cornerRadius = 5.0f;
+	self.avatar.clipsToBounds = YES;
+	self.avatar.backgroundColor = [UIColor clearColor];
+	self.avatar.contentMode = UIViewContentModeScaleAspectFill;
+	[self.contentView addSubview:self.avatar];
+
 	self.titleLabel = [[UILabel alloc] init];
 	self.titleLabel.font = [UIFont boldSystemFontOfSize:16];
 	self.titleLabel.textColor = [UIColor colorWithRed:0x11 / 255.0f green:0x11 / 255.0f blue:0x11 / 255.0f alpha:1.0f];
@@ -43,8 +75,16 @@ static UIImage *TGTopicBadgeImage(void) {
 	self.previewLabel.font = [UIFont systemFontOfSize:14];
 	self.previewLabel.textColor = [UIColor colorWithRed:0x88 / 255.0f green:0x88 / 255.0f blue:0x88 / 255.0f alpha:1.0f];
 	self.previewLabel.backgroundColor = [UIColor clearColor];
+	self.previewLabel.numberOfLines = 2;
 	self.previewLabel.lineBreakMode = NSLineBreakByTruncatingTail;
 	[self.contentView addSubview:self.previewLabel];
+
+	self.dateLabel = [[UILabel alloc] init];
+	self.dateLabel.font = [UIFont systemFontOfSize:13];
+	self.dateLabel.textColor = [UIColor colorWithRed:0x33 / 255.0f green:0x7a / 255.0f blue:0xcc / 255.0f alpha:1.0f];
+	self.dateLabel.textAlignment = NSTextAlignmentRight;
+	self.dateLabel.backgroundColor = [UIColor clearColor];
+	[self.contentView addSubview:self.dateLabel];
 
 	self.badgeBackground = [[UIImageView alloc] initWithImage:TGTopicBadgeImage()];
 	self.badgeBackground.hidden = YES;
@@ -78,22 +118,32 @@ static UIImage *TGTopicBadgeImage(void) {
 - (void)layoutSubviews {
 	[super layoutSubviews];
 	CGFloat w = self.contentView.bounds.size.width;
+	CGFloat left = kTopicTextLeft;
 	CGFloat rightPadding = 16;
+
+	self.avatar.frame = CGRectMake(kTopicAvatarLeft, 8, kTopicAvatar, kTopicAvatar);
 
 	CGFloat countWidth = (int)[self.badge.text sizeWithFont:self.badge.font].width;
 	CGFloat badgeWidth = MAX(27, countWidth + 10);
-	CGRect badgeFrame = CGRectMake(w - 28 - badgeWidth, 21, badgeWidth, 21);
+	CGRect badgeFrame = CGRectMake(w - 28 - badgeWidth, 29, badgeWidth, 21);
 	self.badgeBackground.frame = badgeFrame;
 	self.badge.frame = badgeFrame;
 	if (!self.badge.hidden)
 		rightPadding += badgeWidth + 7;
 
-	self.titleLabel.frame = CGRectMake(kTopicTextLeft, 8,
-			w - kTopicTextLeft - 10 - rightPadding, 20);
-	self.previewLabel.frame = CGRectMake(kTopicTextLeft, 30,
-			w - kTopicTextLeft - 10 - rightPadding, 20);
+	CGFloat dateWidth = (int)[self.dateLabel.text sizeWithFont:self.dateLabel.font].width;
+	CGFloat dateX = w - dateWidth - 9;
+	self.dateLabel.frame = CGRectMake(dateX - (75 - dateWidth), 9, 75, 15);
 
-	self.arrow.frame = CGRectMake(w - self.arrow.image.size.width - 6, 27,
+	CGFloat titleWidth = (int)(dateX - 4 - left - 18);
+	titleWidth = MIN(titleWidth, [self.titleLabel.text sizeWithFont:self.titleLabel.font].width);
+	if (titleWidth < 0)
+		titleWidth = 0;
+	self.titleLabel.frame = CGRectMake(left, 6, titleWidth, 20);
+
+	self.previewLabel.frame = CGRectMake(left, 29, w - left - 10 - rightPadding, 40);
+
+	self.arrow.frame = CGRectMake(w - self.arrow.image.size.width - 6, 33,
 			self.arrow.image.size.width, self.arrow.image.size.height);
 }
 
@@ -113,8 +163,6 @@ static UIImage *TGTopicBadgeImage(void) {
 	[super viewDidLoad];
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
 
-	// iOS 7 lays content out under the bars; these screens position their own
-	// frames and expect the old behaviour.
 	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
 		self.edgesForExtendedLayout = UIRectEdgeNone;
 
@@ -243,6 +291,19 @@ static UIImage *TGTopicBadgeImage(void) {
 		cell = [[TGTopicCell alloc] initWithStyle:UITableViewCellStyleDefault
 								  reuseIdentifier:reuse];
 
+	TGTheme *theme = [TGTheme shared];
+	BOOL plainPlate = (!theme.isDark && theme.importedName == nil);
+	cell.backgroundColor = [theme listBackgroundColour];
+	cell.backgroundView.hidden = !plainPlate;
+	cell.titleLabel.textColor = [theme primaryTextColour];
+	cell.previewLabel.textColor = [theme secondaryTextColour];
+	cell.dateLabel.textColor = [theme accentColour];
+	cell.dateLabel.text = @"";
+	cell.previewLabel.text = @"";
+	cell.badge.text = @"";
+	cell.badge.hidden = YES;
+	cell.badgeBackground.hidden = YES;
+
 	if (indexPath.row >= (NSInteger)self.topics.count)
 		return cell;
 
@@ -252,32 +313,23 @@ static UIImage *TGTopicBadgeImage(void) {
 
 	NSString *name = [t[@"name"] isKindOfClass:NSString.class] ? t[@"name"] : @"";
 	NSString *preview = [t[@"text"] isKindOfClass:NSString.class] ? t[@"text"] : @"";
-	cell.titleLabel.text = name.length ? name : @"Topic";
+	NSString *title = name.length ? name : @"Topic";
+	cell.titleLabel.text = title;
 	cell.previewLabel.text = preview;
+	cell.dateLabel.text = TGTopicDate([t[@"date"] doubleValue]);
+
+	long long threadId = [t[@"threadId"] respondsToSelector:@selector(longLongValue)]
+			? [t[@"threadId"] longLongValue] : 0;
+	cell.avatar.image = [TGIcons avatarWithInitials:[title substringToIndex:1].uppercaseString
+											   size:kTopicAvatar
+										   colourId:threadId];
 
 	if (unread > 0){
-		cell.badge.text = [NSString stringWithFormat:@"%ld", (long)unread];
+		cell.badge.text = unread < 1000
+				? [NSString stringWithFormat:@"%ld", (long)unread]
+				: [NSString stringWithFormat:@"%ldK", (long)(unread / 1000)];
 		cell.badge.hidden = NO;
 		cell.badgeBackground.hidden = NO;
-	} else {
-		cell.badge.text = nil;
-		cell.badge.hidden = YES;
-		cell.badgeBackground.hidden = YES;
-	}
-
-	TGTheme *theme = [TGTheme shared];
-	if (theme.isDark || theme.importedName != nil){
-		cell.backgroundView = nil;
-		cell.backgroundColor = [theme listBackgroundColour];
-		cell.titleLabel.textColor = [theme primaryTextColour];
-		cell.previewLabel.textColor = [theme secondaryTextColour];
-	} else if (cell.backgroundView == nil){
-		UIImage *plate = [[UIImage imageNamed:@"DialogListCell.png"]
-				stretchableImageWithLeftCapWidth:1 topCapHeight:0];
-		cell.backgroundView = [[UIImageView alloc] initWithImage:plate];
-		cell.backgroundColor = [UIColor clearColor];
-		cell.titleLabel.textColor = [UIColor colorWithRed:0x11 / 255.0f green:0x11 / 255.0f blue:0x11 / 255.0f alpha:1.0f];
-		cell.previewLabel.textColor = [UIColor colorWithRed:0x88 / 255.0f green:0x88 / 255.0f blue:0x88 / 255.0f alpha:1.0f];
 	}
 
 	[cell setNeedsLayout];

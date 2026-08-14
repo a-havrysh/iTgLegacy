@@ -55,47 +55,58 @@
 
 - (void)viewDidLoad {
 	[super viewDidLoad];
-	// A call screen is its own thing in every client: dark, centred, and with
-	// nothing on it but who and how long.
-	self.view.backgroundColor = [[TGTheme shared] listBackgroundColour];
+
+	CGFloat retinaPixel = ([UIScreen mainScreen].scale > 1.0f) ? 0.5f : 0.0f;
+
+	UIImage *linen = [UIImage imageNamed:@"DarkLinen.png"];
+	if (linen != nil)
+		self.view.backgroundColor = [UIColor colorWithPatternImage:linen];
+	else
+		self.view.backgroundColor = [UIColor colorWithRed:0x2f / 255.0f green:0x39 / 255.0f
+													 blue:0x48 / 255.0f alpha:1.0f];
 
 	CGRect b = self.view.bounds;
-	CGFloat side = 96;
+	CGFloat side = 90;
+	CGFloat avatarY = (CGFloat)(int)(b.size.height * 0.16f);
 	self.avatarView = [[UIImageView alloc] initWithFrame:
-			CGRectMake((b.size.width - side) / 2, 70, side, side)];
-	self.avatarView.layer.cornerRadius = side * 0.12f;
+			CGRectMake((CGFloat)(int)((b.size.width - side) / 2), avatarY, side, side)];
+	self.avatarView.layer.cornerRadius = (CGFloat)(int)(side / 11.0f + 0.5f);
 	self.avatarView.clipsToBounds = YES;
 	self.avatarView.image = [TGIcons avatarWithInitials:[self initials]
 												   size:side colourId:self.userId];
 	[self.view addSubview:self.avatarView];
 
-	self.nameLabel = [[UILabel alloc] initWithFrame:CGRectMake(9, 180, b.size.width - 18, 24)];
+	UIColor *chromeShadow = [UIColor colorWithRed:0x0e / 255.0f green:0x28 / 255.0f
+											 blue:0x4d / 255.0f alpha:0.4f];
+
+	self.nameLabel = [[UILabel alloc] initWithFrame:
+			CGRectMake(9, avatarY + side + 18 + retinaPixel, b.size.width - 18, 24)];
 	self.nameLabel.text = self.peerName.length ? self.peerName : @"Unknown";
 	self.nameLabel.adjustsFontSizeToFitWidth = YES;
 	if ([self.nameLabel respondsToSelector:@selector(setMinimumScaleFactor:)])
 		self.nameLabel.minimumScaleFactor = 0.7f;
 	self.nameLabel.font = [UIFont boldSystemFontOfSize:19];
-	self.nameLabel.textColor = [UIColor colorWithRed:0x22 / 255.0f green:0x29 / 255.0f blue:0x32 / 255.0f alpha:1.0f];
-	self.nameLabel.shadowColor = [UIColor colorWithRed:0xed / 255.0f green:0xf0 / 255.0f blue:0xf5 / 255.0f alpha:0.28f];
-	self.nameLabel.shadowOffset = CGSizeMake(0, 1);
+	self.nameLabel.textColor = [UIColor whiteColor];
+	self.nameLabel.shadowColor = chromeShadow;
+	self.nameLabel.shadowOffset = CGSizeMake(0, -1);
 	self.nameLabel.textAlignment = NSTextAlignmentCenter;
 	self.nameLabel.backgroundColor = [UIColor clearColor];
 	[self.view addSubview:self.nameLabel];
 
-	self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(9, 208, b.size.width - 18, 24)];
+	self.statusLabel = [[UILabel alloc] initWithFrame:
+			CGRectMake(9, CGRectGetMaxY(self.nameLabel.frame) + 4, b.size.width - 18, 24)];
 	self.statusLabel.font = [UIFont systemFontOfSize:14];
-	self.statusLabel.textColor = [UIColor colorWithRed:0x6d / 255.0f green:0x7d / 255.0f blue:0x90 / 255.0f alpha:1.0f];
-	self.statusLabel.shadowColor = [UIColor colorWithRed:0xed / 255.0f green:0xf0 / 255.0f blue:0xf5 / 255.0f alpha:0.28f];
-	self.statusLabel.shadowOffset = CGSizeMake(0, 1);
+	self.statusLabel.textColor = [UIColor colorWithWhite:1.0f alpha:0.65f];
+	self.statusLabel.shadowColor = chromeShadow;
+	self.statusLabel.shadowOffset = CGSizeMake(0, -1);
 	self.statusLabel.textAlignment = NSTextAlignmentCenter;
 	self.statusLabel.backgroundColor = [UIColor clearColor];
 	[self.view addSubview:self.statusLabel];
 
-	CGFloat buttonHeight = 43;
 	CGFloat buttonWidth = (CGFloat)(int)((b.size.width - 9 * 2 - 8) / 2);
-	CGFloat buttonY = b.size.height - 20 - buttonHeight;
-	CGRect leftFrame = CGRectMake(9, buttonY, buttonWidth, buttonHeight);
-	CGRect rightFrame = CGRectMake(b.size.width - 9 - buttonWidth, buttonY, buttonWidth, buttonHeight);
+	CGFloat baseline = b.size.height - 20;
+	CGRect leftFrame = CGRectMake(9, baseline - 43, buttonWidth, 43);
+	CGRect rightFrame = CGRectMake(b.size.width - 9 - buttonWidth, baseline - 45, buttonWidth, 45);
 
 	self.muteButton = [self buttonWithTitle:@"Mute"
 									  asset:@"GroupedActionButton"
@@ -106,7 +117,6 @@
 									 frame:rightFrame
 									action:@selector(end)];
 
-	// An incoming call needs an answer button where mute would be.
 	if (!self.outgoing){
 		self.acceptButton = [self buttonWithTitle:@"Answer"
 											asset:@"GroupedActionButtonGreen"

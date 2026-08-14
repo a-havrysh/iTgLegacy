@@ -129,20 +129,41 @@ static NSString *TGHumanSize(long long bytes) {
 	return container;
 }
 
+- (NSString *)footerText {
+	return @"Cleared media is downloaded again when you open the message. "
+		   @"Nothing is deleted from Telegram.";
+}
+
+- (CGFloat)footerHeightForWidth:(CGFloat)width {
+	CGSize size = [[self footerText] sizeWithFont:[UIFont systemFontOfSize:14]
+								constrainedToSize:CGSizeMake(width - 12 * 2, 1000)
+									lineBreakMode:NSLineBreakByWordWrapping];
+	return size.height + 7 * 2;
+}
+
 - (CGFloat)tableView:(UITableView *)tableView heightForFooterInSection:(NSInteger)section {
-	return section == 1 ? 58 : 1;
+	return section == 1 ? [self footerHeightForWidth:tableView.bounds.size.width] : 1;
 }
 
 - (UIView *)tableView:(UITableView *)tableView viewForFooterInSection:(NSInteger)section {
 	if (section != 1)
 		return nil;
 	BOOL dark = [[TGTheme shared] isDark];
+	CGFloat width = tableView.bounds.size.width;
+	CGFloat height = [self footerHeightForWidth:width];
+
+	UIView *container = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, height)];
+	container.backgroundColor = [UIColor clearColor];
+	container.opaque = NO;
+
 	UILabel *label = [[UILabel alloc] initWithFrame:
-			CGRectMake(10, 7, tableView.bounds.size.width - 20, 44)];
-	label.text = @"Cleared media is downloaded again when you open the message. "
-				 @"Nothing is deleted from Telegram.";
+			CGRectMake(1, 7, width - 2, height - 14)];
+	label.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+	label.text = [self footerText];
 	label.font = [UIFont systemFontOfSize:14];
+	label.contentMode = UIViewContentModeCenter;
 	label.textAlignment = NSTextAlignmentCenter;
+	label.lineBreakMode = NSLineBreakByWordWrapping;
 	label.numberOfLines = 0;
 	label.backgroundColor = [UIColor clearColor];
 	label.textColor = dark ? [[TGTheme shared] secondaryTextColour]
@@ -151,7 +172,8 @@ static NSString *TGHumanSize(long long bytes) {
 		label.shadowColor = TGStorageRGB(0xdae0e8);
 		label.shadowOffset = CGSizeMake(0, 1);
 	}
-	return label;
+	[container addSubview:label];
+	return container;
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -184,11 +206,15 @@ static NSString *TGHumanSize(long long bytes) {
 										  : TGStorageRGB(0x356596);
 	cell.detailTextLabel.highlightedTextColor = [UIColor whiteColor];
 
+	cell.accessoryView = nil;
+
 	if (indexPath.section == 0){
 		BOOL busy = self.working || !self.loaded;
 		cell.textLabel.text = indexPath.row == 0 ? @"Size on disk" : @"Files";
-		if (busy)
-			cell.detailTextLabel.text = @"Calculating...";
+		if (busy){
+			cell.detailTextLabel.text = @"";
+			cell.accessoryView = [self spinner];
+		}
 		else if (indexPath.row == 0)
 			cell.detailTextLabel.text = [self cacheIsEmpty] ? @"Empty" : TGHumanSize(self.bytes);
 		else
@@ -206,9 +232,21 @@ static NSString *TGHumanSize(long long bytes) {
 	} else {
 		cell.selectionStyle = UITableViewCellSelectionStyleNone;
 		cell.textLabel.textColor = dark ? [[TGTheme shared] secondaryTextColour]
-										: TGStorageRGB(0x8e8e93);
+										: TGStorageRGB(0x888888);
+		if (self.working)
+			cell.accessoryView = [self spinner];
 	}
 	return cell;
+}
+
+- (UIView *)spinner {
+	UIActivityIndicatorViewStyle style = [[TGTheme shared] isDark]
+			? UIActivityIndicatorViewStyleWhite
+			: UIActivityIndicatorViewStyleGray;
+	UIActivityIndicatorView *view = [[UIActivityIndicatorView alloc]
+			initWithActivityIndicatorStyle:style];
+	[view startAnimating];
+	return view;
 }
 
 - (UITableViewCell *)clearEverythingCellInTable:(UITableView *)tableView {
@@ -222,11 +260,14 @@ static NSString *TGHumanSize(long long bytes) {
 		cell.backgroundView = [[UIView alloc] initWithFrame:CGRectZero];
 		cell.backgroundView.backgroundColor = [UIColor clearColor];
 		cell.contentView.backgroundColor = [UIColor clearColor];
+		cell.opaque = NO;
 
 		UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
 		button.tag = 772;
 		button.frame = CGRectMake(9, 0, cell.contentView.bounds.size.width - 18, 45);
 		button.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+		button.adjustsImageWhenDisabled = NO;
+		button.exclusiveTouch = YES;
 		button.titleLabel.font = [UIFont boldSystemFontOfSize:17];
 		button.titleLabel.shadowOffset = CGSizeMake(0, -1);
 		[button setTitle:@"Clear everything" forState:UIControlStateNormal];
@@ -259,7 +300,7 @@ static NSString *TGHumanSize(long long bytes) {
 	UIButton *button = (UIButton *)[cell.contentView viewWithTag:772];
 	button.frame = CGRectMake(9, 0, cell.contentView.bounds.size.width - 18, 45);
 	button.enabled = [self canClear];
-	button.alpha = [self canClear] ? 1.0f : 0.5f;
+	button.alpha = [self canClear] ? 1.0f : 0.7f;
 	return cell;
 }
 

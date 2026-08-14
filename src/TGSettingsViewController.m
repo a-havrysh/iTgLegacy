@@ -47,6 +47,10 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 - (NSString *)initialsForName:(NSString *)name;
 - (void)refreshHeader;
 - (void)confirmClearDatabase;
+- (UIView *)disclosureAccessory;
+- (UIView *)checkAccessory;
+- (void)markDisclosure:(UITableViewCell *)cell;
+- (void)markChecked:(BOOL)checked on:(UITableViewCell *)cell;
 - (UIImage *)wallpaperSizedImage:(UIImage *)image;
 @end
 
@@ -77,14 +81,75 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		default:                          self.title = @"Settings"; break;
 	}
 
-	if (self.page == TGSettingsPageRoot)
+	if (self.page == TGSettingsPageRoot){
+		UIButton *edit = [TGIcons headerButtonWithTitle:@"Edit" bold:NO
+												 target:self action:@selector(editProfileTapped)];
+		self.navigationItem.rightBarButtonItem =
+				[[UIBarButtonItem alloc] initWithCustomView:edit];
 		[self buildHeader];
+	}
 	[self loadForPage];
+}
+
+- (void)editProfileTapped {
+	UIViewController *profile = [[TGEditProfileViewController alloc] init];
+	[self.navigationController pushViewController:profile animated:YES];
 }
 
 - (void)applyTheme {
 	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
 	self.tableView.separatorColor = [[TGTheme shared] separatorColour];
+	if (self.navigationController.navigationBar)
+		[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+}
+
+- (UIView *)disclosureAccessory {
+	UIImage *art = [[TGTheme shared] isDark]
+			? [UIImage imageNamed:@"MenuDisclosureIndicator_Light.png"]
+			: [UIImage imageNamed:@"MenuDisclosureIndicator.png"];
+	if (!art)
+		return nil;
+	UIImageView *view = [[UIImageView alloc] initWithImage:art
+										 highlightedImage:[UIImage imageNamed:
+												 @"MenuDisclosureIndicator_Highlighted.png"]];
+	view.frame = CGRectMake(0, 0, art.size.width, art.size.height);
+	return view;
+}
+
+- (UIView *)checkAccessory {
+	UIImage *art = [UIImage imageNamed:@"ListCheck.png"];
+	if (!art)
+		return nil;
+	UIImageView *view = [[UIImageView alloc] initWithImage:art
+										 highlightedImage:[UIImage imageNamed:
+												 @"ListCheck_Highlighted.png"]];
+	view.frame = CGRectMake(0, 0, art.size.width, art.size.height);
+	return view;
+}
+
+- (void)markDisclosure:(UITableViewCell *)cell {
+	UIView *chevron = [self disclosureAccessory];
+	if (chevron){
+		cell.accessoryView = chevron;
+		cell.accessoryType = UITableViewCellAccessoryNone;
+	} else {
+		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+	}
+}
+
+- (void)markChecked:(BOOL)checked on:(UITableViewCell *)cell {
+	if (!checked){
+		cell.accessoryView = nil;
+		cell.accessoryType = UITableViewCellAccessoryNone;
+		return;
+	}
+	UIView *check = [self checkAccessory];
+	if (check){
+		cell.accessoryView = check;
+		cell.accessoryType = UITableViewCellAccessoryNone;
+	} else {
+		cell.accessoryType = UITableViewCellAccessoryCheckmark;
+	}
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -457,7 +522,7 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
 		cell.imageView.image = [TGIcons menuGlyphNamed:row[1]];
 		[cell.imageView tg_setTintColor:[theme secondaryTextColour]];
-		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+		[self markDisclosure:cell];
 		return cell;
 	}
 
@@ -467,7 +532,7 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
 		cell.imageView.image = [TGIcons menuGlyphNamed:help[indexPath.row][1]];
 		[cell.imageView tg_setTintColor:[theme secondaryTextColour]];
-		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+		[self markDisclosure:cell];
 		return cell;
 	}
 
@@ -528,6 +593,8 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		button.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 		button.titleLabel.font = [UIFont boldSystemFontOfSize:17];
 		button.titleLabel.shadowOffset = CGSizeMake(0, -1);
+		button.adjustsImageWhenHighlighted = NO;
+		button.adjustsImageWhenDisabled = NO;
 		[button setTitle:@"Log out" forState:UIControlStateNormal];
 		[button setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
 		[button setTitleColor:[UIColor whiteColor] forState:UIControlStateHighlighted];
@@ -539,12 +606,11 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		UIImage *rawHighlighted = [UIImage imageNamed:@"MenuRedButton_Highlighted.png"];
 		if (raw)
 			[button setBackgroundImage:[raw stretchableImageWithLeftCapWidth:
-					(int)(raw.size.width / 2) topCapHeight:(int)(raw.size.height / 2)]
+					(int)(raw.size.width / 2) topCapHeight:0]
 							  forState:UIControlStateNormal];
 		if (rawHighlighted)
 			[button setBackgroundImage:[rawHighlighted stretchableImageWithLeftCapWidth:
-					(int)(rawHighlighted.size.width / 2)
-					topCapHeight:(int)(rawHighlighted.size.height / 2)]
+					(int)(rawHighlighted.size.width / 2) topCapHeight:0]
 							  forState:UIControlStateHighlighted];
 		if (!raw)
 			button.backgroundColor = TGSettingsRGB(0xc4362f);
@@ -586,7 +652,7 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 - (UITableViewCell *)fillPrivacyCell:(UITableViewCell *)cell at:(NSIndexPath *)path {
 	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
 	cell.detailTextLabel.textColor = [[TGTheme shared] cellDetailColour];
-	cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+	[self markDisclosure:cell];
 
 	if (path.section == 0){
 		NSString *setting = [TGSettingsViewController privacySettings][path.row];
@@ -622,9 +688,8 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 			? language[@"name"] : nil;
 	cell.textLabel.text = languageName.length ? languageName : @"Language";
 	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
-	cell.accessoryType = ([language[@"id"] isKindOfClass:[NSString class]]
-			&& [language[@"id"] isEqualToString:self.currentLanguage])
-			? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+	[self markChecked:([language[@"id"] isKindOfClass:[NSString class]]
+			&& [language[@"id"] isEqualToString:self.currentLanguage]) on:cell];
 	return cell;
 }
 
@@ -650,8 +715,7 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		static NSArray *styles = nil;
 		if (!styles) styles = @[@"Skeuomorphic", @"Flat", @"Dark"];
 		cell.textLabel.text = styles[indexPath.row];
-		cell.accessoryType = (indexPath.row == [TGTheme shared].style)
-			? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+		[self markChecked:(indexPath.row == [TGTheme shared].style) on:cell];
 		return cell;
 	}
 
@@ -664,7 +728,7 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 			cell.detailTextLabel.text = [NSString stringWithFormat:@"%.0f pt",
 					[TGTheme shared].messageFontSize];
 		}
-		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+		[self markDisclosure:cell];
 		return cell;
 	}
 
@@ -672,8 +736,7 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 	NSString *current = [TGTheme shared].importedName;
 	if (indexPath.row == 0){
 		cell.textLabel.text = @"None";
-		cell.accessoryType = current ? UITableViewCellAccessoryNone
-									 : UITableViewCellAccessoryCheckmark;
+		[self markChecked:(current == nil) on:cell];
 		return cell;
 	}
 	if ((NSUInteger)(indexPath.row - 1) >= files.count)
@@ -682,15 +745,14 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 	NSString *label = [path.lastPathComponent stringByDeletingPathExtension];
 	cell.textLabel.text = label;
 	cell.detailTextLabel.text = path.pathExtension;
-	cell.accessoryType = [current isEqualToString:label]
-			? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+	[self markChecked:[current isEqualToString:label] on:cell];
 	return cell;
 }
 
 - (UITableViewCell *)fillDataCell:(UITableViewCell *)cell at:(NSIndexPath *)indexPath {
 	if (indexPath.row == 0){
 		cell.textLabel.text = @"Storage and cache";
-		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+		[self markDisclosure:cell];
 	} else {
 		cell.textLabel.text = @"Clear local database";
 		cell.textLabel.textColor = [UIColor colorWithRed:0.8f green:0.1f blue:0.1f alpha:1.0f];

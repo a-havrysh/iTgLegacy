@@ -3,16 +3,30 @@
 
 static const CGFloat kMenuHeight = 41.0f;
 static const CGFloat kMenuTitlePadding = 34.0f;
+static const CGFloat kMenuLineInset = 10.0f;
+static const NSTimeInterval kMenuReopenSuppression = 0.4;
 
 static TGPopupMenu *sOpenMenu = nil;
+static NSTimeInterval sLastHideTime = 0;
+
+@protocol TGPopupMenuButtonDelegate <NSObject>
+
+- (void)menuButtonHighlightChanged;
+
+@end
 
 @interface TGPopupMenuButton : UIButton
+
+@property (nonatomic, weak) id<TGPopupMenuButtonDelegate> delegate;
 
 @property (nonatomic, strong) UIImageView *leftView;
 @property (nonatomic, strong) UIImageView *centerView;
 @property (nonatomic, strong) UIImageView *rightView;
-@property (nonatomic, strong) UIImageView *topLineView;
-@property (nonatomic, strong) UIImageView *bottomLineView;
+
+@property (nonatomic, strong) UIImageView *topLeftView;
+@property (nonatomic, strong) UIImageView *topRightView;
+@property (nonatomic, strong) UIImageView *bottomLeftView;
+@property (nonatomic, strong) UIImageView *bottomRightView;
 
 @end
 
@@ -28,26 +42,46 @@ static TGPopupMenu *sOpenMenu = nil;
 		_rightView = [[UIImageView alloc] init];
 		[self addSubview:_rightView];
 
-		_topLineView = [[UIImageView alloc]
-				initWithImage:[UIImage imageNamed:@"MenuButtonTopLine.png"]
-			 highlightedImage:[UIImage imageNamed:@"MenuButtonTopLine_Highlighted.png"]];
-		[self addSubview:_topLineView];
+		UIImage *topImage = [UIImage imageNamed:@"MenuButtonTopLine.png"];
+		UIImage *topHighlightedImage = [UIImage imageNamed:@"MenuButtonTopLine_Highlighted.png"];
+		UIImage *bottomImage = [UIImage imageNamed:@"MenuButtonBottomLine.png"];
+		UIImage *bottomHighlightedImage = [UIImage imageNamed:@"MenuButtonBottomLine_Highlighted.png"];
 
-		_bottomLineView = [[UIImageView alloc]
-				initWithImage:[UIImage imageNamed:@"MenuButtonBottomLine.png"]
-			 highlightedImage:[UIImage imageNamed:@"MenuButtonBottomLine_Highlighted.png"]];
-		[self addSubview:_bottomLineView];
+		_topLeftView = [[UIImageView alloc] initWithImage:topImage highlightedImage:topHighlightedImage];
+		[self addSubview:_topLeftView];
+		_topRightView = [[UIImageView alloc] initWithImage:topImage highlightedImage:topHighlightedImage];
+		[self addSubview:_topRightView];
+
+		_bottomLeftView = [[UIImageView alloc] initWithImage:bottomImage highlightedImage:bottomHighlightedImage];
+		[self addSubview:_bottomLeftView];
+		_bottomRightView = [[UIImageView alloc] initWithImage:bottomImage highlightedImage:bottomHighlightedImage];
+		[self addSubview:_bottomRightView];
 	}
 	return self;
 }
 
-- (void)setHighlighted:(BOOL)highlighted {
-	[super setHighlighted:highlighted];
+- (void)applyHighlight:(BOOL)highlighted {
 	_leftView.highlighted = highlighted;
 	_centerView.highlighted = highlighted;
 	_rightView.highlighted = highlighted;
-	_topLineView.highlighted = highlighted;
-	_bottomLineView.highlighted = highlighted;
+	_topLeftView.highlighted = highlighted;
+	_topRightView.highlighted = highlighted;
+	_bottomLeftView.highlighted = highlighted;
+	_bottomRightView.highlighted = highlighted;
+}
+
+- (void)setHighlighted:(BOOL)highlighted {
+	[super setHighlighted:highlighted];
+	[self applyHighlight:highlighted || self.selected];
+	id<TGPopupMenuButtonDelegate> delegate = _delegate;
+	[delegate menuButtonHighlightChanged];
+}
+
+- (void)setSelected:(BOOL)selected {
+	[super setSelected:selected];
+	[self applyHighlight:selected || self.highlighted];
+	id<TGPopupMenuButtonDelegate> delegate = _delegate;
+	[delegate menuButtonHighlightChanged];
 }
 
 - (void)layoutSubviews {
@@ -61,11 +95,16 @@ static TGPopupMenu *sOpenMenu = nil;
 	_rightView.frame = CGRectMake(viewSize.width - rightWidth, 0, rightWidth, viewSize.height);
 	_centerView.frame = CGRectMake(leftWidth, 0, viewSize.width - leftWidth - rightWidth, viewSize.height);
 
-	[self bringSubviewToFront:_topLineView];
-	[self bringSubviewToFront:_bottomLineView];
+	[self bringSubviewToFront:_topLeftView];
+	[self bringSubviewToFront:_topRightView];
+	[self bringSubviewToFront:_bottomLeftView];
+	[self bringSubviewToFront:_bottomRightView];
 	[self bringSubviewToFront:self.titleLabel];
 }
 
+@end
+
+@interface TGPopupMenu () <TGPopupMenuButtonDelegate>
 @end
 
 @implementation TGPopupMenu {
@@ -85,7 +124,7 @@ static TGPopupMenu *sOpenMenu = nil;
 + (void)dismiss {
 	TGPopupMenu *menu = sOpenMenu;
 	sOpenMenu = nil;
-	[menu teardown];
+	[menu teardownAnimated:YES];
 }
 
 + (void)showItems:(NSArray *)items
@@ -112,7 +151,11 @@ static TGPopupMenu *sOpenMenu = nil;
 	if (!normalized.count)
 		return;
 
+	BOOL wasOpen = (sOpenMenu != nil);
 	[self dismiss];
+
+	if (!wasOpen && [NSDate timeIntervalSinceReferenceDate] - sLastHideTime < kMenuReopenSuppression)
+		return;
 
 	CGRect hostBounds = host.bounds;
 	if (hostBounds.size.width < 20 || hostBounds.size.height < 20)
@@ -140,16 +183,32 @@ static TGPopupMenu *sOpenMenu = nil;
 - (void)externalDismiss {
 	if (sOpenMenu == self)
 		sOpenMenu = nil;
-	[self teardown];
+	[self teardownAnimated:YES];
 }
 
-- (void)teardown {
+- (void)teardownAnimated:(BOOL)animated {
 	if (_dismissed)
 		return;
 	_dismissed = YES;
 	_choice = nil;
+	sLastHideTime = [NSDate timeIntervalSinceReferenceDate];
 	[[NSNotificationCenter defaultCenter] removeObserver:self];
-	[self removeFromSuperview];
+
+	self.userInteractionEnabled = NO;
+
+	if (!animated){
+		[self removeFromSuperview];
+		return;
+	}
+
+	UIView *card = _card;
+	[UIView animateWithDuration:0.2 delay:0 options:UIViewAnimationOptionBeginFromCurrentState
+					 animations:^{
+		card.alpha = 0.0f;
+	} completion:^(BOOL finished){
+		card.transform = CGAffineTransformMakeScale(0.1f, 0.1f);
+		[self removeFromSuperview];
+	}];
 }
 
 - (void)dealloc {
@@ -162,8 +221,11 @@ static TGPopupMenu *sOpenMenu = nil;
 		return;
 	CGSize size = self.bounds.size;
 	if (_hostSize.width > 0 &&
-		(fabs(size.width - _hostSize.width) > 0.5f || fabs(size.height - _hostSize.height) > 0.5f))
-		[self externalDismiss];
+		(fabs(size.width - _hostSize.width) > 0.5f || fabs(size.height - _hostSize.height) > 0.5f)){
+		if (sOpenMenu == self)
+			sOpenMenu = nil;
+		[self teardownAnimated:NO];
+	}
 }
 
 - (void)buildWithItems:(NSArray *)items atPoint:(CGPoint)point {
@@ -232,6 +294,12 @@ static TGPopupMenu *sOpenMenu = nil;
 		}
 	}
 
+	UIColor *shadowNormal = [UIColor colorWithWhite:0.0f alpha:0.8f];
+	UIColor *shadowHighlighted = [UIColor colorWithRed:0x18 / 255.0f
+												 green:0x6b / 255.0f
+												  blue:0xcb / 255.0f
+												 alpha:0.6f];
+
 	CGFloat totalWidth = 0;
 
 	for (NSUInteger i = 0; i < items.count; i++){
@@ -240,6 +308,7 @@ static TGPopupMenu *sOpenMenu = nil;
 
 		TGPopupMenuButton *button = [[TGPopupMenuButton alloc] initWithFrame:CGRectZero];
 		button.tag = (NSInteger)i;
+		button.delegate = self;
 		button.titleLabel.font = titleFont;
 		button.titleLabel.shadowOffset = CGSizeMake(0, -1);
 		button.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
@@ -247,8 +316,10 @@ static TGPopupMenu *sOpenMenu = nil;
 		[button setTitle:title forState:UIControlStateNormal];
 		[button setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
 		[button setTitleColor:[UIColor colorWithWhite:1.0f alpha:0.5f] forState:UIControlStateDisabled];
-		[button setTitleShadowColor:[UIColor colorWithWhite:0.0f alpha:0.8f] forState:UIControlStateNormal];
-		[button setTitleShadowColor:[UIColor colorWithRed:0x18 / 255.0f green:0x6b / 255.0f blue:0xcb / 255.0f alpha:0.6f] forState:UIControlStateHighlighted];
+		[button setTitleShadowColor:shadowNormal forState:UIControlStateNormal];
+		[button setTitleShadowColor:shadowHighlighted forState:UIControlStateHighlighted];
+		[button setTitleShadowColor:shadowHighlighted forState:UIControlStateSelected];
+		[button setTitleShadowColor:shadowHighlighted forState:UIControlStateHighlighted | UIControlStateSelected];
 		[button addTarget:self action:@selector(rowTapped:) forControlEvents:UIControlEventTouchUpInside];
 
 		button.centerView.image = centerImage;
@@ -330,6 +401,31 @@ static TGPopupMenu *sOpenMenu = nil;
 	_card.frame = frame;
 }
 
+- (BOOL)buttonContainsArrow:(TGPopupMenuButton *)button atIndex:(NSUInteger)index {
+	BOOL containsArrow = _arrowLocation >= button.frame.origin.x &&
+						 _arrowLocation < button.frame.origin.x + button.frame.size.width;
+	if (index == 0 && _arrowLocation < button.frame.size.width)
+		containsArrow = YES;
+	if (index == _buttons.count - 1 && _arrowLocation >= button.frame.origin.x)
+		containsArrow = YES;
+	return containsArrow;
+}
+
+- (void)menuButtonHighlightChanged {
+	BOOL arrowHighlighted = NO;
+
+	for (NSUInteger index = 0; index < _buttons.count; index++){
+		TGPopupMenuButton *button = _buttons[index];
+		if (button.highlighted || button.selected){
+			arrowHighlighted = [self buttonContainsArrow:button atIndex:index];
+			break;
+		}
+	}
+
+	_arrowTopView.highlighted = arrowHighlighted;
+	_arrowBottomView.highlighted = arrowHighlighted;
+}
+
 - (void)layoutCard {
 	NSUInteger count = _buttons.count;
 
@@ -345,41 +441,59 @@ static TGPopupMenu *sOpenMenu = nil;
 			separator.frame = CGRectMake(button.frame.origin.x - 1, 2, separator.image.size.width, 36);
 		}
 
-		BOOL containsArrow = _arrowLocation >= button.frame.origin.x &&
-							 _arrowLocation < button.frame.origin.x + button.frame.size.width;
+		BOOL containsArrow = [self buttonContainsArrow:button atIndex:index];
 
 		if (index == 0){
-			linePosition += 10;
-			lineWidth -= 10;
-			if (_arrowLocation < button.frame.size.width)
-				containsArrow = YES;
+			linePosition += kMenuLineInset;
+			lineWidth -= kMenuLineInset;
 		}
-		if (index == count - 1){
-			lineWidth -= 10;
-			if (_arrowLocation >= button.frame.origin.x)
-				containsArrow = YES;
-		}
+		if (index == count - 1)
+			lineWidth -= kMenuLineInset;
+
+		CGFloat arrowWidth = _arrowTopView.image.size.width;
 
 		if (containsArrow){
-			CGFloat arrowWidth = _arrowTopView.image.size.width;
-			CGFloat minArrowX = button.frame.origin.x + (index == 0 ? 10 : 0);
+			CGFloat minArrowX = button.frame.origin.x + (index == 0 ? kMenuLineInset : 0);
 			CGFloat maxArrowX = button.frame.origin.x + button.frame.size.width - arrowWidth +
-								(index == count - 1 ? (-10) : 0);
+								(index == count - 1 ? (-kMenuLineInset) : 0);
 			CGFloat arrowX = floorf(_arrowLocation - arrowWidth / 2);
 			arrowX = MIN(MAX(minArrowX, arrowX), maxArrowX);
 
 			_arrowTopView.frame = CGRectMake(arrowX, -9, arrowWidth, _arrowTopView.image.size.height);
-			_arrowBottomView.frame = CGRectMake(arrowX, 37, _arrowBottomView.image.size.width,
+			_arrowBottomView.frame = CGRectMake(arrowX, kMenuHeight - 4, _arrowBottomView.image.size.width,
 												_arrowBottomView.image.size.height);
 		}
 
-		CGFloat topLineHeight = button.topLineView.image.size.height;
-		CGFloat bottomLineHeight = button.bottomLineView.image.size.height;
+		CGFloat topLineHeight = button.topLeftView.image.size.height;
+		CGFloat bottomLineHeight = button.bottomLeftView.image.size.height;
 
-		button.topLineView.frame = CGRectMake(linePosition, 0, lineWidth, topLineHeight);
-		button.bottomLineView.frame = CGRectMake(linePosition, kMenuHeight - 4, lineWidth, bottomLineHeight);
-		button.topLineView.hidden = _arrowOnTop && containsArrow;
-		button.bottomLineView.hidden = !_arrowOnTop && containsArrow;
+		if (!_arrowOnTop || !containsArrow){
+			button.topLeftView.frame = CGRectMake(linePosition, 0, lineWidth, topLineHeight);
+			button.topRightView.frame = CGRectMake(linePosition, 0, 0, topLineHeight);
+		}
+		else {
+			CGFloat firstWidth = MAX(0.0f, _arrowTopView.frame.origin.x - button.frame.origin.x - linePosition);
+			button.topLeftView.frame = CGRectMake(linePosition, 0, firstWidth, topLineHeight);
+
+			CGFloat secondLinePosition = MIN(linePosition + lineWidth, linePosition + firstWidth + arrowWidth);
+			button.topRightView.frame = CGRectMake(secondLinePosition, 0,
+												   MAX(0.0f, linePosition + lineWidth - secondLinePosition),
+												   topLineHeight);
+		}
+
+		if (_arrowOnTop || !containsArrow){
+			button.bottomLeftView.frame = CGRectMake(linePosition, kMenuHeight - 4, lineWidth, bottomLineHeight);
+			button.bottomRightView.frame = CGRectMake(linePosition, kMenuHeight - 4, 0, bottomLineHeight);
+		}
+		else {
+			CGFloat firstWidth = MAX(0.0f, _arrowBottomView.frame.origin.x - button.frame.origin.x - linePosition);
+			button.bottomLeftView.frame = CGRectMake(linePosition, kMenuHeight - 4, firstWidth, bottomLineHeight);
+
+			CGFloat secondLinePosition = MIN(linePosition + lineWidth, linePosition + firstWidth + arrowWidth);
+			button.bottomRightView.frame = CGRectMake(secondLinePosition, kMenuHeight - 4,
+													  MAX(0.0f, linePosition + lineWidth - secondLinePosition),
+													  bottomLineHeight);
+		}
 	}
 
 	_arrowTopView.hidden = !_arrowOnTop;
@@ -421,12 +535,13 @@ static TGPopupMenu *sOpenMenu = nil;
 	}];
 }
 
-- (void)rowTapped:(UIButton *)row {
+- (void)rowTapped:(TGPopupMenuButton *)row {
 	if (_dismissed)
 		return;
 	NSInteger index = row.tag;
 	if (index < 0 || (NSUInteger)index >= _items.count)
 		return;
+	row.selected = YES;
 	NSString *title = [[_items objectAtIndex:(NSUInteger)index] objectForKey:@"title"];
 	void (^choice)(NSInteger, NSString *) = _choice;
 	[self externalDismiss];

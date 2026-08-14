@@ -3,6 +3,13 @@
 #import "TGCapabilities.h"
 #import "TGTheme.h"
 
+static UIColor *TGDeviceRGB(int rgb) {
+	return [UIColor colorWithRed:((rgb >> 16) & 0xff) / 255.0f
+						   green:((rgb >> 8) & 0xff) / 255.0f
+							blue:(rgb & 0xff) / 255.0f
+						   alpha:1.0f];
+}
+
 @interface TGDeviceViewController ()
 @property (nonatomic, strong) NSArray *capabilities;
 @property (nonatomic, strong) NSIndexPath *copiedIndexPath;
@@ -75,8 +82,6 @@
 	}
 }
 
-/// Settings has its own navigation controller, and nothing was styling
-/// its bar - an imported theme stopped at the top of the screen.
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
@@ -91,11 +96,11 @@
 	return 2;
 }
 
-- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
+- (NSString *)headerTitleForSection:(NSInteger)section {
 	return section == 0 ? @"Hardware" : @"Features";
 }
 
-- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+- (NSString *)footerTextForSection:(NSInteger)section {
 	if (section == 0)
 		return @"Vintage: iPhone 3GS and 4. Legacy: 4S, 5 and 5c. "
 			   @"Modern: 5s and 6. Full: 6s and later. Tap a row to copy it.";
@@ -103,6 +108,80 @@
 		return @"Nothing to report for this device.";
 	return @"Features off here are not missing from the app - this device "
 		   @"cannot run them.";
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
+	return 46;
+}
+
+- (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
+	BOOL dark = [[TGTheme shared] isDark];
+	UIView *container = [[UIView alloc] initWithFrame:
+			CGRectMake(0, 0, tableView.bounds.size.width, 46)];
+	container.backgroundColor = [UIColor clearColor];
+
+	UILabel *label = [[UILabel alloc] init];
+	label.text = [self headerTitleForSection:section];
+	label.font = [UIFont boldSystemFontOfSize:17];
+	label.backgroundColor = [UIColor clearColor];
+	label.textColor = dark ? [[TGTheme shared] sectionHeaderColour]
+						   : TGDeviceRGB(0x697487);
+	if (!dark){
+		label.shadowColor = TGDeviceRGB(0xdae0e8);
+		label.shadowOffset = CGSizeMake(0, 1);
+	}
+	[label sizeToFit];
+	label.frame = CGRectIntegral(CGRectOffset(label.frame, 21, 16));
+	[container addSubview:label];
+	return container;
+}
+
+- (CGFloat)footerTextHeightForSection:(NSInteger)section width:(CGFloat)width {
+	NSString *text = [self footerTextForSection:section];
+	if (text.length == 0)
+		return 0;
+	CGSize bounded = [text sizeWithFont:[UIFont systemFontOfSize:14]
+					 constrainedToSize:CGSizeMake(width - 20, 400)
+						 lineBreakMode:NSLineBreakByWordWrapping];
+	return ceilf(bounded.height);
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForFooterInSection:(NSInteger)section {
+	CGFloat height = [self footerTextHeightForSection:section
+											   width:tableView.bounds.size.width];
+	if (height <= 0)
+		return 12;
+	return height + 14 + 12;
+}
+
+- (UIView *)tableView:(UITableView *)tableView viewForFooterInSection:(NSInteger)section {
+	NSString *text = [self footerTextForSection:section];
+	if (text.length == 0)
+		return nil;
+	CGFloat width = tableView.bounds.size.width;
+	CGFloat height = [self footerTextHeightForSection:section width:width];
+	BOOL dark = [[TGTheme shared] isDark];
+
+	UIView *container = [[UIView alloc] initWithFrame:
+			CGRectMake(0, 0, width, height + 14 + 12)];
+	container.backgroundColor = [UIColor clearColor];
+
+	UILabel *label = [[UILabel alloc] initWithFrame:
+			CGRectMake(10, 7, width - 20, height)];
+	label.text = text;
+	label.font = [UIFont systemFontOfSize:14];
+	label.textAlignment = NSTextAlignmentCenter;
+	label.lineBreakMode = NSLineBreakByWordWrapping;
+	label.numberOfLines = 0;
+	label.backgroundColor = [UIColor clearColor];
+	label.textColor = dark ? [[TGTheme shared] secondaryTextColour]
+						   : TGDeviceRGB(0x697487);
+	if (!dark){
+		label.shadowColor = TGDeviceRGB(0xdae0e8);
+		label.shadowOffset = CGSizeMake(0, 1);
+	}
+	[container addSubview:label];
+	return container;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
