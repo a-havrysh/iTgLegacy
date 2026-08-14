@@ -18,19 +18,25 @@
 #import "TGVoiceDecoder.h"
 #import "UIImage+WebP.h"
 #import "TGLottieView.h"
+#import "UIView+SafeTint.h"
 #import "TGCallViewController.h"
 #import "TGPopupMenu.h"
 #import "TGSnackbar.h"
 
 // Their design system is drawn for Android at 360dp; a 4S is 320pt, so
 // everything taken from it is scaled by 0.889 and rounded to a whole point.
-static const CGFloat kInputHeight = 48.0f;
+static const CGFloat kInputHeight = 43.0f;
+// Msg_In.png / Msg_Out.png carry the tail inside the artwork: their body
+// padding is 15+1 on the tail side against 9+1 on the other, so the picture
+// hangs 6pt past the content box.
+static const CGFloat kBubbleTailOverhang = 6.0f;
+static const CGFloat kBubbleMinW = 40.0f;
+static const CGFloat kBubbleMinH = 31.0f;
 static const CGFloat kBubbleMaxW  = 240.0f;
 static const CGFloat kPadH        = 10.0f;
 static const CGFloat kAvatarSide  = 28.0f;   // sender avatar in groups
 static const CGFloat kPadV        = 7.0f;
 static const CGFloat kImageMax    = 200.0f;
-static const CGFloat kSendSide    = 36.0f;   // the round send button
 // Their file block: an 80dp tile carrying a 42dp disc, 71 and 37 here.
 static const CGFloat kFileTile    = 71.0f;
 static const CGFloat kFileDisc    = 37.0f;
@@ -65,6 +71,8 @@ static const CGFloat kPollRow     = 30.0f;
 @property (nonatomic, assign) int64_t pollMessageId;
 /// "Forwarded from X" above the content, whatever the content turns out to be.
 @property (nonatomic, strong) UILabel *forwardLabel;
+/// Msg_In.png / Msg_Out.png stretched behind the content box.
+@property (nonatomic, strong) UIImageView *bubbleBg;
 @end
 
 @implementation TGBubbleCell
@@ -77,6 +85,10 @@ static const CGFloat kPollRow     = 30.0f;
 	self.backgroundColor = [UIColor clearColor];
 	self.contentView.backgroundColor = [UIColor clearColor];
 	self.selectionStyle = UITableViewCellSelectionStyleNone;
+
+	self.bubbleBg = [[UIImageView alloc] init];
+	self.bubbleBg.hidden = YES;
+	[self.contentView addSubview:self.bubbleBg];
 
 	self.bubble = [[UIView alloc] init];
 	self.bubble.layer.cornerRadius = 14;
@@ -114,7 +126,7 @@ static const CGFloat kPollRow     = 30.0f;
 	[self.contentView addSubview:self.tail];
 
 	self.senderAvatar = [[UIImageView alloc] init];
-	self.senderAvatar.layer.cornerRadius = kAvatarSide / 2;
+	self.senderAvatar.layer.cornerRadius = kAvatarSide * 0.12f;
 	self.senderAvatar.clipsToBounds = YES;
 	self.senderAvatar.hidden = YES;
 	[self.contentView addSubview:self.senderAvatar];
@@ -227,9 +239,15 @@ static const CGFloat kPollRow     = 30.0f;
 @property (nonatomic, strong) UIImageView *wallpaperView;
 @property (nonatomic, strong) UIButton *stickerButton;
 @property (nonatomic, strong) UIScrollView *stickerPanel;
+@property (nonatomic, strong) UILabel *emptyLabel;
+@property (nonatomic, strong) UIButton *scrollDownButton;
+@property (nonatomic, strong) NSDate *lastTypingSent;
+@property (nonatomic, assign) BOOL postingBlocked;
 
 - (void)clearComposeState;
 - (void)showComposeBanner:(NSString *)text;
+- (void)installMessageHandler;
+- (void)updateEmptyState;
 @end
 
 @implementation TGChatViewController
@@ -290,28 +308,64 @@ static const CGFloat kPollRow     = 30.0f;
 	[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(keyboardWillHide:)
 			name:UIKeyboardWillHideNotification object:nil];
 
-	// Live updates: append instead of waiting for the screen to be reopened.
+	[self installMessageHandler];
+
+	[self reload];
+}
+
+/// Another screen pushed on top of this one - the forward picker, a profile -
+/// may install a handler of its own on the shared client. Coming back has to
+/// take it over again or the chat stops updating live.
+- (void)viewWillAppear:(BOOL)animated {
+	[super viewWillAppear:animated];
+	[self installMessageHandler];
+}
+
+- (void)installMessageHandler {
 	__weak typeof(self) weakSelf = self;
 	[TGClient shared].onMessage = ^(int64_t chatId, NSDictionary *message, int64_t deletedId){
 		TGChatViewController *me = weakSelf;
 		if (!me || chatId != me.chatId)
 			return;
 
+		// While a search is on screen the table is showing results, not the
+		// conversation; appending to it would corrupt what gets restored.
+		if (me.chatSearchBar){
+			if (!message)
+				return;
+			NSMutableArray *behind = [(me.messagesBeforeSearch ?: @[]) mutableCopy];
+			[behind addObject:message];
+			me.messagesBeforeSearch = behind;
+			return;
+		}
+
 		if (message){
+			NSNumber *newId = [message[@"id"] isKindOfClass:NSNumber.class] ? message[@"id"] : nil;
+			// TDLib echoes a message it has already delivered when the sending
+			// state settles; the same row twice is worse than a late refresh.
+			if (newId){
+				for (NSDictionary *existing in me.messages){
+					if ([existing[@"id"] isEqual:newId]){
+						[me reload];
+						return;
+					}
+				}
+			}
 			NSMutableArray *next = [me.messages mutableCopy];
 			[next addObject:message];
 			me.messages = next;
 			[me.table reloadData];
+			[me updateEmptyState];
 			[me scrollToBottomAnimated:YES];
 			[me fetchMissingImages];
-			[[TGClient shared] markRead:@[message[@"id"]] inChat:chatId];
+			[me fetchMissingQuotes];
+			if (newId)
+				[[TGClient shared] markRead:@[newId] inChat:chatId];
 			return;
 		}
 		// deleted or edited - cheapest correct answer is to re-read
 		[me reload];
 	};
-
-	[self reload];
 }
 
 /// A two-line header: the chat name with member count or status beneath it,
@@ -366,10 +420,7 @@ static const CGFloat kPollRow     = 30.0f;
 		me.view.backgroundColor = [[TGTheme shared] chatBackgroundColour];
 		me.table.backgroundColor = [UIColor clearColor];
 		me.inputBar.backgroundColor = [[TGTheme shared] inputBarColour];
-		me.input.backgroundColor = [[TGTheme shared] listBackgroundColour];
 		me.input.textColor = [[TGTheme shared] primaryTextColour];
-		me.input.layer.borderColor = [[TGTheme shared] separatorColour].CGColor;
-		me.sendButton.backgroundColor = [[TGTheme shared] accentColour];
 		me.wallpaperView.image = [[TGTheme shared] wallpaper];
 		[[TGTheme shared] styleNavigationBar:me.navigationController.navigationBar];
 		[me.table reloadData];
@@ -410,54 +461,126 @@ static const CGFloat kPollRow     = 30.0f;
 			CGRectMake(0, b.size.height - kInputHeight, b.size.width, kInputHeight)];
 	self.inputBar.backgroundColor = [[TGTheme shared] inputBarColour];
 	self.inputBar.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin;
+	self.inputBar.clipsToBounds = NO;
 
-	UIView *hair = [[UIView alloc] initWithFrame:CGRectMake(0, 0, b.size.width, 1)];
-	hair.backgroundColor = [[TGTheme shared] separatorColour];
-	hair.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-	[self.inputBar addSubview:hair];
+	// Their panel is three pieces of artwork: a tiled strip, a shadow that sits
+	// above it, and the field frame stretched across the whole width. There is
+	// no hairline and no drawn box anywhere in it.
+	UIImage *strip = [UIImage imageNamed:@"ConversationInputPanel_Background"];
+	if (strip){
+		UIImageView *stripView = [[UIImageView alloc] initWithFrame:
+				CGRectMake(0, 0, b.size.width, kInputHeight)];
+		stripView.image = [strip stretchableImageWithLeftCapWidth:0 topCapHeight:0];
+		stripView.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+									 UIViewAutoresizingFlexibleHeight;
+		[self.inputBar addSubview:stripView];
+	}
 
-	CGFloat sendY = (kInputHeight - kSendSide) / 2;
+	UIImage *shadow = [UIImage imageNamed:@"ChatInputContainer_Shadow"];
+	if (shadow){
+		UIImageView *shadowView = [[UIImageView alloc] initWithFrame:
+				CGRectMake(0, -shadow.size.height, b.size.width, shadow.size.height)];
+		shadowView.image = [shadow stretchableImageWithLeftCapWidth:0 topCapHeight:0];
+		shadowView.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+									  UIViewAutoresizingFlexibleBottomMargin;
+		shadowView.userInteractionEnabled = NO;
+		[self.inputBar addSubview:shadowView];
+	} else {
+		UIView *hair = [[UIView alloc] initWithFrame:CGRectMake(0, 0, b.size.width, 1)];
+		hair.backgroundColor = [[TGTheme shared] separatorColour];
+		hair.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+		[self.inputBar addSubview:hair];
+	}
+
+	// The field frame is drawn on top of a white plate; the caret sits inside it.
+	UIImage *fieldArt = [UIImage imageNamed:@"ConversationInputPanel"];
+	if (fieldArt){
+		UIView *plate = [[UIView alloc] initWithFrame:
+				CGRectMake(40, 4, b.size.width - 106, 36)];
+		plate.backgroundColor = [UIColor whiteColor];
+		plate.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+		[self.inputBar addSubview:plate];
+
+		UIImageView *frameView = [[UIImageView alloc] initWithFrame:
+				CGRectMake(0, 0, b.size.width, kInputHeight)];
+		frameView.image = [fieldArt stretchableImageWithLeftCapWidth:55 topCapHeight:21];
+		frameView.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+									 UIViewAutoresizingFlexibleHeight;
+		frameView.userInteractionEnabled = NO;
+		[self.inputBar addSubview:frameView];
+	}
+
+	CGFloat sendY = 7;
 
 	UIButton *attach = [UIButton buttonWithType:UIButtonTypeCustom];
-	attach.frame = CGRectMake(4, sendY, 34, kSendSide);
-	[attach setImage:[TGIcons attach] forState:UIControlStateNormal];
-	attach.tintColor = [[TGTheme shared] accentColour];
+	attach.frame = CGRectMake(6, 7, 29, 30);
+	UIImage *attachImage = [UIImage imageNamed:@"AttachBtn"];
+	if (attachImage){
+		[attach setImage:attachImage forState:UIControlStateNormal];
+		[attach setImage:[UIImage imageNamed:@"AttachBtn_Pressed"] forState:UIControlStateHighlighted];
+		attach.adjustsImageWhenHighlighted = NO;
+	} else {
+		[attach setImage:[TGIcons attach] forState:UIControlStateNormal];
+		[attach tg_setTintColor:[[TGTheme shared] accentColour]];
+	}
 	[attach addTarget:self action:@selector(attachTapped)
 			forControlEvents:UIControlEventTouchUpInside];
 	[self.inputBar addSubview:attach];
 
-	// Their composer is a rounded field on a pale strip, not a bordered box.
+	// Their placeholder starts at 49 and the field runs to 113 from the right;
+	// the sticker button takes 30 of that off the end.
 	self.input = [[UITextField alloc] initWithFrame:
-			CGRectMake(40, 7, b.size.width - 120, kInputHeight - 14)];
+			CGRectMake(49, 5, b.size.width - 113 - 30, 34)];
 	self.input.borderStyle = UITextBorderStyleNone;
 	self.input.background = nil;
-	self.input.backgroundColor = [[TGTheme shared] listBackgroundColour];
-	self.input.layer.cornerRadius = (kInputHeight - 14) / 2;
-	self.input.layer.borderWidth = 1.0f;
-	self.input.layer.borderColor = [[TGTheme shared] separatorColour].CGColor;
-	// A rounded field with no left inset puts the caret against the curve.
-	self.input.leftView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 10, 1)];
-	self.input.leftViewMode = UITextFieldViewModeAlways;
+	self.input.backgroundColor = [UIColor clearColor];
 	self.input.placeholder = @"Message";
 	self.input.textColor = [[TGTheme shared] primaryTextColour];
-	self.input.font = [UIFont systemFontOfSize:15];
+	self.input.font = [UIFont systemFontOfSize:16];
 	self.input.returnKeyType = UIReturnKeySend;
 	self.input.keyboardAppearance = [TGTheme shared].isDark
 			? UIKeyboardAppearanceAlert : UIKeyboardAppearanceDefault;
 	self.input.delegate = self;
 	self.input.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	if ([self.input respondsToSelector:@selector(setAttributedPlaceholder:)]){
+		self.input.attributedPlaceholder = [[NSAttributedString alloc]
+				initWithString:@"Message"
+					attributes:@{NSForegroundColorAttributeName :
+							[UIColor colorWithRed:0.616f green:0.655f blue:0.702f alpha:1.0f]}];
+	}
 	[self.inputBar addSubview:self.input];
 
-	// Their send button is a blue disc with a white plane, not a word.
+	// Their send button: 62x29 of SendButton.png stretched from its middle, the
+	// word in bold 14.5 with a one-point shadow above it.
+	CGFloat sendWidth = 62;
 	self.sendButton = [UIButton buttonWithType:UIButtonTypeCustom];
-	self.sendButton.frame = CGRectMake(b.size.width - kSendSide - 6, sendY,
-									   kSendSide, kSendSide);
-	self.sendButton.backgroundColor = [[TGTheme shared] accentColour];
-	self.sendButton.layer.cornerRadius = kSendSide / 2;
-	[self.sendButton setImage:[TGIcons send] forState:UIControlStateNormal];
-	self.sendButton.tintColor = [UIColor whiteColor];
-	// The plane reads as centred only when it is nudged off centre.
-	self.sendButton.imageEdgeInsets = UIEdgeInsetsMake(0, 2, 0, 0);
+	self.sendButton.frame = CGRectMake(b.size.width - sendWidth - 5, sendY,
+									   sendWidth, 29);
+	UIImage *sendImage = [UIImage imageNamed:@"SendButton"];
+	if (sendImage){
+		[self.sendButton setBackgroundImage:
+				[sendImage stretchableImageWithLeftCapWidth:(int)(sendImage.size.width / 2)
+											   topCapHeight:0]
+									forState:UIControlStateNormal];
+		UIImage *sendPressed = [UIImage imageNamed:@"SendButton_Pressed"];
+		if (sendPressed)
+			[self.sendButton setBackgroundImage:
+					[sendPressed stretchableImageWithLeftCapWidth:(int)(sendPressed.size.width / 2)
+													topCapHeight:0]
+										forState:UIControlStateHighlighted];
+	} else {
+		self.sendButton.backgroundColor = [[TGTheme shared] accentColour];
+		self.sendButton.layer.cornerRadius = 4;
+	}
+	[self.sendButton setTitle:@"Send" forState:UIControlStateNormal];
+	[self.sendButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+	[self.sendButton setTitleShadowColor:[UIColor colorWithRed:0.047f green:0.722f
+														  blue:0.890f alpha:0.3f]
+								forState:UIControlStateNormal];
+	self.sendButton.titleLabel.font = [UIFont boldSystemFontOfSize:14.5f];
+	self.sendButton.titleLabel.shadowOffset = CGSizeMake(0, -1);
+	self.sendButton.titleEdgeInsets = UIEdgeInsetsMake(1.5f, 0, 2, 0);
+	self.sendButton.adjustsImageWhenHighlighted = NO;
 	self.sendButton.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
 	[self.sendButton addTarget:self action:@selector(sendTapped)
 			forControlEvents:UIControlEventTouchUpInside];
@@ -465,10 +588,9 @@ static const CGFloat kPollRow     = 30.0f;
 
 	// A sticker button beside the composer, as clients place it.
 	self.stickerButton = [UIButton buttonWithType:UIButtonTypeCustom];
-	self.stickerButton.frame = CGRectMake(b.size.width - kSendSide - 42, sendY,
-										  30, kSendSide);
+	self.stickerButton.frame = CGRectMake(b.size.width - 97, sendY, 30, 29);
 	[self.stickerButton setImage:[TGIcons sticker] forState:UIControlStateNormal];
-	self.stickerButton.tintColor = [[TGTheme shared] secondaryTextColour];
+	[self.stickerButton tg_setTintColor:[[TGTheme shared] secondaryTextColour]];
 	self.stickerButton.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
 	[self.stickerButton addTarget:self action:@selector(toggleStickerPanel)
 				 forControlEvents:UIControlEventTouchUpInside];
@@ -479,7 +601,7 @@ static const CGFloat kPollRow     = 30.0f;
 	self.micButton = [UIButton buttonWithType:UIButtonTypeCustom];
 	self.micButton.frame = self.sendButton.frame;
 	[self.micButton setImage:[TGIcons microphone] forState:UIControlStateNormal];
-	self.micButton.tintColor = [[TGTheme shared] secondaryTextColour];
+	[self.micButton tg_setTintColor:[[TGTheme shared] secondaryTextColour]];
 	self.micButton.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
 	[self.micButton addTarget:self action:@selector(recordStart)
 			 forControlEvents:UIControlEventTouchDown];
@@ -534,15 +656,20 @@ static const CGFloat kPollRow     = 30.0f;
 		NSLog(@"TDLIB HISTORY: %lu msgs: %@",
 				(unsigned long)messages.count, [kinds componentsJoinedByString:@", "]);
 		[me.table reloadData];
+		[me updateEmptyState];
 		[me scrollToBottomAnimated:NO];
 		[me fetchMissingImages];
 		[me resolveUnknownSenders];
 		[me fetchMissingQuotes];
 
+		// A message with no id would put NSNull, or nothing, into the array and
+		// take the app down inside markRead.
 		NSMutableArray *ids = [NSMutableArray array];
 		for (NSDictionary *m in messages)
-			[ids addObject:m[@"id"]];
-		[[TGClient shared] markRead:ids inChat:me.chatId];
+			if ([m[@"id"] isKindOfClass:NSNumber.class])
+				[ids addObject:m[@"id"]];
+		if (ids.count)
+			[[TGClient shared] markRead:ids inChat:me.chatId];
 	}];
 }
 
@@ -724,6 +851,78 @@ static const CGFloat kPollRow     = 30.0f;
 	NSIndexPath *last = [NSIndexPath indexPathForRow:self.messages.count - 1 inSection:0];
 	[self.table scrollToRowAtIndexPath:last
 					  atScrollPosition:UITableViewScrollPositionBottom animated:animated];
+	[self updateScrollDownButton];
+}
+
+/// An empty conversation is otherwise a blank wallpaper with no explanation,
+/// which reads as a screen that failed to load.
+- (void)updateEmptyState {
+	if (!self.emptyLabel){
+		CGRect b = self.view.bounds;
+		self.emptyLabel = [[UILabel alloc] initWithFrame:
+				CGRectMake(20, (b.size.height - kInputHeight) / 2 - 20,
+						   b.size.width - 40, 40)];
+		self.emptyLabel.numberOfLines = 2;
+		self.emptyLabel.textAlignment = NSTextAlignmentCenter;
+		self.emptyLabel.font = [UIFont systemFontOfSize:14];
+		self.emptyLabel.backgroundColor = [UIColor clearColor];
+		self.emptyLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+										   UIViewAutoresizingFlexibleTopMargin |
+										   UIViewAutoresizingFlexibleBottomMargin;
+		self.emptyLabel.userInteractionEnabled = NO;
+		[self.view insertSubview:self.emptyLabel aboveSubview:self.wallpaperView];
+	}
+	self.emptyLabel.textColor = [[TGTheme shared] secondaryTextColour];
+	self.emptyLabel.text = self.chatSearchBar
+			? @"No messages found"
+			: @"No messages here yet.\nWrite something to start.";
+	self.emptyLabel.hidden = (self.messages.count > 0);
+}
+
+/// Every client puts a way back to the newest message once you have scrolled
+/// away from it; without one a long history is a one-way trip.
+- (void)updateScrollDownButton {
+	CGFloat fromBottom = self.table.contentSize.height -
+			(self.table.contentOffset.y + self.table.bounds.size.height);
+	BOOL wanted = (self.messages.count > 0) && (fromBottom > 220);
+
+	if (!wanted){
+		self.scrollDownButton.hidden = YES;
+		return;
+	}
+
+	if (!self.scrollDownButton){
+		self.scrollDownButton = [UIButton buttonWithType:UIButtonTypeCustom];
+		self.scrollDownButton.frame = CGRectMake(0, 0, 34, 34);
+		self.scrollDownButton.layer.cornerRadius = 17;
+		self.scrollDownButton.clipsToBounds = YES;
+		self.scrollDownButton.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.9f];
+		self.scrollDownButton.layer.borderWidth = 1.0f;
+		self.scrollDownButton.layer.borderColor =
+				[[TGTheme shared] separatorColour].CGColor;
+		[self.scrollDownButton setTitle:@"▼" forState:UIControlStateNormal];
+		self.scrollDownButton.titleLabel.font = [UIFont systemFontOfSize:13];
+		[self.scrollDownButton setTitleColor:[[TGTheme shared] accentColour]
+									forState:UIControlStateNormal];
+		self.scrollDownButton.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin |
+												 UIViewAutoresizingFlexibleTopMargin;
+		[self.scrollDownButton addTarget:self action:@selector(scrollDownTapped)
+					   forControlEvents:UIControlEventTouchUpInside];
+		[self.view addSubview:self.scrollDownButton];
+	}
+	self.scrollDownButton.hidden = NO;
+	self.scrollDownButton.frame = CGRectMake(self.view.bounds.size.width - 44,
+			CGRectGetMinY(self.inputBar.frame) - 44, 34, 34);
+	[self.view bringSubviewToFront:self.scrollDownButton];
+}
+
+- (void)scrollDownTapped {
+	[self scrollToBottomAnimated:YES];
+}
+
+- (void)scrollViewDidScroll:(UIScrollView *)scrollView {
+	if (scrollView == self.table)
+		[self updateScrollDownButton];
 }
 
 #pragma mark - sending
@@ -733,6 +932,15 @@ static const CGFloat kPollRow     = 30.0f;
 			[NSCharacterSet whitespaceAndNewlineCharacterSet]];
 	if (!text.length)
 		return;
+	// A channel you only follow has no composer; a stale keyboard must not be
+	// able to post into it anyway.
+	if (self.postingBlocked)
+		return;
+
+	// The field has to empty on send, or the next tap sends the same line again.
+	self.input.text = @"";
+	if (self.stickerPanel)
+		[self toggleStickerPanel];
 
 	if (self.editingId != 0)
 		[[TGClient shared] editMessage:self.editingId inChat:self.chatId text:text];
@@ -808,12 +1016,19 @@ static const CGFloat kPollRow     = 30.0f;
 		TGChatViewController *me = weakSelf;
 		if (!me || canSend)
 			return;
+		// The answer can arrive before the composer has been built, and it can
+		// arrive twice; either way there must be exactly one bar at the bottom.
+		if (me.postingBlocked)
+			return;
+		me.postingBlocked = YES;
 
 		me.inputBar.hidden = YES;
+		[me.input resignFirstResponder];
 
 		CGRect b = me.view.bounds;
 		UIButton *mute = [UIButton buttonWithType:UIButtonTypeCustom];
-		mute.frame = me.inputBar.frame;
+		mute.frame = CGRectMake(0, b.size.height - kInputHeight,
+								b.size.width, kInputHeight);
 		mute.backgroundColor = [[TGTheme shared] inputBarColour];
 		mute.autoresizingMask = UIViewAutoresizingFlexibleWidth |
 								UIViewAutoresizingFlexibleTopMargin;
@@ -1043,6 +1258,7 @@ static const CGFloat kPollRow     = 30.0f;
 		[self.table reloadData];
 		[self scrollToBottomAnimated:NO];
 	}
+	[self updateEmptyState];
 }
 
 - (void)searchBarCancelButtonClicked:(UISearchBar *)searchBar {
@@ -1053,6 +1269,7 @@ static const CGFloat kPollRow     = 30.0f;
 	if (!query.length){
 		self.messages = self.messagesBeforeSearch ?: @[];
 		[self.table reloadData];
+		[self updateEmptyState];
 		return;
 	}
 
@@ -1064,6 +1281,7 @@ static const CGFloat kPollRow     = 30.0f;
 		// searchChatMessages answers newest first; the table reads oldest first.
 		me.messages = [[found reverseObjectEnumerator] allObjects];
 		[me.table reloadData];
+		[me updateEmptyState];
 	}];
 }
 
@@ -1116,6 +1334,10 @@ static const CGFloat kPollRow     = 30.0f;
 /// Back to composing a plain message: no reply, no edit, no banner. Also
 /// missing, and reached from the recorder and from the banner's own cancel.
 - (void)clearComposeState {
+	// Cancelling an edit has to take the text it prefilled with it, otherwise
+	// the draft of a message already sent is left sitting in the composer.
+	if (self.editingId != 0)
+		self.input.text = @"";
 	self.replyToId = 0;
 	self.editingId = 0;
 	self.composeBanner.hidden = YES;
@@ -1238,6 +1460,29 @@ static const CGFloat kPollRow     = 30.0f;
 	BOOL hasText = self.input.text.length > 0;
 	self.sendButton.hidden = !hasText;
 	self.micButton.hidden = hasText;
+	if (hasText)
+		[self sendTypingAction];
+}
+
+/// The other side sees "typing..." only if we say so. TDLib expects the action
+/// to be repeated while it lasts; it lapses on its own after a few seconds, so
+/// one call every four is enough and does not flood a 4S connection.
+- (void)sendTypingAction {
+	if (self.postingBlocked || self.editingId != 0)
+		return;
+	NSDate *now = [NSDate date];
+	if (self.lastTypingSent &&
+		[now timeIntervalSinceDate:self.lastTypingSent] < 4.0)
+		return;
+	self.lastTypingSent = now;
+
+	NSMutableDictionary *request = [NSMutableDictionary dictionaryWithDictionary:@{
+			@"@type" : @"sendChatAction",
+			@"chat_id" : @(self.chatId),
+			@"action" : @{@"@type" : @"chatActionTyping"}}];
+	if (self.threadId)
+		request[@"message_thread_id"] = @(self.threadId);
+	[[TGClient shared] send:request];
 }
 
 /// Their recording panel: a red dot, the running time, "Slide to cancel", and
@@ -1429,7 +1674,7 @@ static const CGFloat kPollRow     = 30.0f;
 
 		self.playerToggle = [UIButton buttonWithType:UIButtonTypeCustom];
 		self.playerToggle.frame = CGRectMake(8, 4, 28, 28);
-		self.playerToggle.tintColor = [[TGTheme shared] accentColour];
+		[self.playerToggle tg_setTintColor:[[TGTheme shared] accentColour]];
 		[self.playerToggle addTarget:self action:@selector(togglePlayback)
 					forControlEvents:UIControlEventTouchUpInside];
 		[self.playerBar addSubview:self.playerToggle];
@@ -1596,6 +1841,14 @@ static const NSInteger kMessageSheetTag = 42;
 		[self showActionsForRow:path.row];
 }
 
+/// The flattened message stores an absent value as NSNull, which answers no
+/// string selector - asking one for its length is an unrecognized selector and
+/// takes the app down.
+- (NSString *)textOf:(NSDictionary *)m {
+	NSString *text = m[@"text"];
+	return [text isKindOfClass:NSString.class] ? text : nil;
+}
+
 /// Split out from the gesture so itglegacy://holdrow/N can reach it: a long
 /// press cannot be delivered through a URL.
 - (void)showActionsForRow:(NSInteger)row {
@@ -1612,9 +1865,10 @@ static const NSInteger kMessageSheetTag = 42;
 			@{@"title" : @"Reply",   @"icon" : @"reply"},
 			@{@"title" : @"Forward", @"icon" : @"forward"},
 			@{@"title" : @"React",   @"icon" : @"react"}, nil];
-	if ([m[@"text"] length])
+	NSString *bodyText = [self textOf:m];
+	if (bodyText.length)
 		[items addObject:@{@"title" : @"Copy", @"icon" : @"copy"}];
-	if (mine && [m[@"text"] length])
+	if (mine && bodyText.length)
 		[items addObject:@{@"title" : @"Edit", @"icon" : @"edit"}];
 	if (mine)
 		[items addObject:@{@"title" : @"Delete", @"icon" : @"delete",
@@ -1637,15 +1891,18 @@ static const NSInteger kMessageSheetTag = 42;
 
 - (void)runMessageAction:(NSString *)action {
 	NSDictionary *m = self.actionMessage;
+	if (![m[@"id"] isKindOfClass:NSNumber.class])
+		return;
 	int64_t messageId = [m[@"id"] longLongValue];
 	if (!messageId)
 		return;
+	NSString *bodyText = [self textOf:m];
 
 	if ([action isEqualToString:@"Reply"]){
 		self.replyToId = messageId;
 		self.editingId = 0;
 		[self showComposeBanner:[NSString stringWithFormat:@"Reply to: %@",
-				[m[@"text"] length] ? m[@"text"] : m[@"kind"]]];
+				bodyText.length ? bodyText : (m[@"kind"] ?: @"message")]];
 		[self.input becomeFirstResponder];
 
 	} else if ([action isEqualToString:@"Forward"]){
@@ -1662,12 +1919,16 @@ static const NSInteger kMessageSheetTag = 42;
 		[[TGClient shared] reactTo:messageId inChat:self.chatId emoji:@"\U0001F44D"];
 
 	} else if ([action isEqualToString:@"Copy"]){
-		[UIPasteboard generalPasteboard].string = m[@"text"];
+		if (bodyText.length)
+			[UIPasteboard generalPasteboard].string = bodyText;
 
 	} else if ([action isEqualToString:@"Edit"]){
 		self.editingId = messageId;
 		self.replyToId = 0;
-		self.input.text = m[@"text"];
+		self.input.text = bodyText ?: @"";
+		// Setting the text in code fires no editing-changed event, so Send has
+		// to be swapped in by hand or the field looks unsendable.
+		[self inputChanged];
 		[self showComposeBanner:@"Editing"];
 		[self.input becomeFirstResponder];
 
@@ -1679,6 +1940,7 @@ static const NSInteger kMessageSheetTag = 42;
 		[without removeObject:m];
 		self.messages = without;
 		[self.table reloadData];
+		[self updateEmptyState];
 
 		__weak typeof(self) weakSelf = self;
 		[TGSnackbar showInView:self.view text:@"Message deleted" seconds:5
@@ -1836,6 +2098,39 @@ static const NSInteger kMessageSheetTag = 42;
 		return;
 	}
 
+	// Any other document: fetch it and keep a copy where it survives TDLib's
+	// cache being pruned. Doing nothing at all was the previous answer.
+	if ([kind isEqualToString:@"messageDocument"]){
+		NSNumber *docId = [m[@"docId"] isKindOfClass:NSNumber.class] ? m[@"docId"] : nil;
+		if (!docId)
+			return;
+		NSString *name = [m[@"docName"] length] ? m[@"docName"] : @"file";
+		[self beginDownloadHUDForFile:[docId integerValue]];
+		__weak typeof(self) weakSelf = self;
+		[[TGClient shared] downloadFile:[docId integerValue] completion:^(NSString *path){
+			TGChatViewController *me = weakSelf;
+			if (!me)
+				return;
+			[me endDownloadHUD];
+			if (!path){
+				[me showAlertTitle:@"" message:@"This file could not be downloaded"];
+				return;
+			}
+			NSString *documents = [NSSearchPathForDirectoriesInDomains(
+					NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+			NSString *saved = [documents stringByAppendingPathComponent:
+					name.lastPathComponent];
+			[[NSFileManager defaultManager] removeItemAtPath:saved error:nil];
+			NSError *copyError = nil;
+			[[NSFileManager defaultManager] copyItemAtPath:path toPath:saved
+													 error:&copyError];
+			[me showAlertTitle:name
+					   message:(copyError ? @"Downloaded, but it could not be saved."
+										  : @"Saved to Documents.")];
+		}];
+		return;
+	}
+
 	// A video note plays where it sits, in its own circle - handing it to the
 	// full-screen player turns a two-second glance into a modal screen.
 	if ([kind isEqualToString:@"messageVideoNote"]){
@@ -1923,10 +2218,35 @@ static const NSInteger kMessageSheetTag = 42;
 	}
 
 	if ([kind isEqualToString:@"messagePhoto"]){
-		NSNumber *fileId = m[@"photoId"];
-		UIImage *img = [fileId isKindOfClass:NSNumber.class] ? self.images[fileId] : nil;
-		if (img)
+		NSNumber *fileId = [m[@"photoId"] isKindOfClass:NSNumber.class] ? m[@"photoId"] : nil;
+		UIImage *img = fileId ? self.images[fileId] : nil;
+		if (img){
 			[self showFullScreenImage:img];
+			return;
+		}
+		// Tapping a picture that has not come down yet used to do nothing at
+		// all, which reads as a dead row; fetch it and then open it.
+		if (!fileId)
+			return;
+		[self beginDownloadHUDForFile:[fileId integerValue]];
+		__weak typeof(self) weakSelf = self;
+		[[TGClient shared] downloadFile:[fileId integerValue] completion:^(NSString *path){
+			TGChatViewController *me = weakSelf;
+			if (!me)
+				return;
+			[me endDownloadHUD];
+			if (!path)
+				return;
+			UIImage *loaded = [UIImage imageWithContentsOfFile:path];
+			if (!loaded && [path.pathExtension.lowercaseString isEqualToString:@"webp"])
+				loaded = [UIImage convertFromWebP:path compressedData:nil error:nil];
+			if (!loaded)
+				return;
+			me.images[fileId] = loaded;
+			[me.table reloadData];
+			[me showFullScreenImage:loaded];
+		}];
+		return;
 	}
 }
 
@@ -1946,6 +2266,17 @@ static const NSInteger kMessageSheetTag = 42;
 	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@""
 			message:(error ? @"Could not save" : @"Saved to Camera Roll")
 		   delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+	[alert show];
+}
+
+/// UIAlertController does not exist on this target; UIAlertView is what the
+/// rest of the file already uses.
+- (void)showAlertTitle:(NSString *)title message:(NSString *)message {
+	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:(title ?: @"")
+													message:(message ?: @"")
+												   delegate:nil
+										  cancelButtonTitle:@"OK"
+										  otherButtonTitles:nil];
 	[alert show];
 }
 
@@ -2240,6 +2571,35 @@ static UIColor *TGSenderColour(int64_t userId) {
 
 #pragma mark - table
 
+/// The 2014 client never drew a bubble: it stretched Msg_In.png / Msg_Out.png,
+/// tail and shading included, with caps 20/15 incoming and 15/15 outgoing, and
+/// a body padding of 15+1 on the tail side against 9+1 on the other. So the
+/// artwork sits behind the content box and hangs 6pt past it on the tail side.
+- (BOOL)applyBubbleArtworkTo:(TGBubbleCell *)cell outgoing:(BOOL)mine {
+	UIImage *art = [UIImage imageNamed:(mine ? @"Msg_Out" : @"Msg_In")];
+	if (!art){
+		cell.bubbleBg.hidden = YES;
+		return NO;
+	}
+
+	cell.bubbleBg.hidden = NO;
+	cell.bubbleBg.image = [art stretchableImageWithLeftCapWidth:(mine ? 15 : 20)
+												  topCapHeight:15];
+
+	CGRect box = cell.bubble.frame;
+	CGFloat w = MAX(box.size.width + kBubbleTailOverhang, kBubbleMinW);
+	CGFloat h = MAX(box.size.height, kBubbleMinH);
+	cell.bubbleBg.frame = CGRectMake(
+			mine ? box.origin.x : box.origin.x - kBubbleTailOverhang,
+			box.origin.y, w, h);
+
+	cell.bubble.backgroundColor = [UIColor clearColor];
+	cell.bubble.layer.borderWidth = 0.0f;
+	cell.bubble.layer.cornerRadius = 0.0f;
+	cell.tail.hidden = YES;
+	return YES;
+}
+
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
 	return self.messages.count;
 }
@@ -2259,6 +2619,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 					 [kind isEqualToString:@"messageAnimatedEmoji"];
 
 	cell.icon.hidden = YES;
+	cell.bubbleBg.hidden = YES;
 	cell.subtitle.hidden = YES;
 	cell.sender.hidden = YES;
 	cell.senderAvatar.hidden = YES;
@@ -2325,6 +2686,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 		cell.bubble.layer.borderWidth = [pollTheme bubbleBorderWidth];
 		cell.bubble.layer.borderColor = [pollTheme bubbleBorderColour].CGColor;
 		cell.bubble.layer.cornerRadius = [pollTheme bubbleCornerRadius];
+		[self applyBubbleArtworkTo:cell outgoing:mine];
 
 		cell.body.hidden = NO;
 		cell.body.numberOfLines = 0;
@@ -2443,6 +2805,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 		cell.bubble.layer.borderWidth = [callTheme bubbleBorderWidth];
 		cell.bubble.layer.borderColor = [callTheme bubbleBorderColour].CGColor;
 		cell.bubble.layer.cornerRadius = [callTheme bubbleCornerRadius];
+		[self applyBubbleArtworkTo:cell outgoing:mine];
 
 		cell.disc.hidden = NO;
 		cell.disc.image = [TGIcons callArrowOutgoing:mine missed:missed];
@@ -2487,6 +2850,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 		cell.bubble.layer.borderWidth = [cardTheme bubbleBorderWidth];
 		cell.bubble.layer.borderColor = [cardTheme bubbleBorderColour].CGColor;
 		cell.bubble.layer.cornerRadius = [cardTheme bubbleCornerRadius];
+		[self applyBubbleArtworkTo:cell outgoing:mine];
 
 		// A document gets the tile; a contact keeps its initials, because a
 		// sheet of paper says nothing about a person.
@@ -2626,6 +2990,8 @@ static UIColor *TGSenderColour(int64_t userId) {
 	cell.bubble.layer.borderWidth = isSticker ? 0.0f : [theme bubbleBorderWidth];
 	cell.bubble.layer.borderColor = [theme bubbleBorderColour].CGColor;
 	cell.bubble.layer.cornerRadius = [theme bubbleCornerRadius];
+	if (!isSticker)
+		[self applyBubbleArtworkTo:cell outgoing:mine];
 	// A flat outgoing bubble is a solid accent colour, so its text inverts.
 	cell.body.textColor = [theme primaryTextColour];
 
@@ -2636,6 +3002,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 		// Their video note is 200dp across; taking the thumbnail's own size
 		// filled almost the whole width of a 320pt screen.
 		CGFloat side = MIN(MIN(pic.width, pic.height), 178);
+		cell.bubbleBg.hidden = YES;
 		cell.bubble.backgroundColor = [UIColor clearColor];
 		cell.bubble.layer.borderWidth = 0;
 		cell.bubble.frame = CGRectMake(mine ? (tableView.bounds.size.width - side - 8) : 8,
@@ -2660,6 +3027,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 			? self.lottiePaths[m[@"docId"]] : nil;
 	if (tgsPath){
 		CGFloat side = 128;
+		cell.bubbleBg.hidden = YES;
 		cell.bubble.backgroundColor = [UIColor clearColor];
 		cell.bubble.layer.borderWidth = 0;
 		cell.bubble.frame = CGRectMake(mine ? (tableView.bounds.size.width - side - 8) : 8,
@@ -2876,6 +3244,21 @@ static UIColor *TGSenderColour(int64_t userId) {
 				b.size.width, kInputHeight);
 		self.table.frame = CGRectMake(0, 0, b.size.width,
 				b.size.height - kInputHeight - height);
+		// These three sit above the composer and are positioned from it, so
+		// they stayed behind the keyboard until they were moved as well.
+		CGFloat top = CGRectGetMinY(self.inputBar.frame);
+		if (self.composeBanner && !self.composeBanner.hidden){
+			CGRect banner = self.composeBanner.frame;
+			banner.origin.y = top - banner.size.height;
+			self.composeBanner.frame = banner;
+		}
+		if (self.stickerPanel){
+			CGRect panel = self.stickerPanel.frame;
+			panel.origin.y = top - panel.size.height;
+			self.stickerPanel.frame = panel;
+		}
+		if (self.scrollDownButton && !self.scrollDownButton.hidden)
+			self.scrollDownButton.frame = CGRectMake(b.size.width - 44, top - 44, 34, 34);
 	} completion:^(BOOL done){
 		[self scrollToBottomAnimated:NO];
 	}];

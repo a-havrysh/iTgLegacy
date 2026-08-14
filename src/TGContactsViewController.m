@@ -3,116 +3,688 @@
 #import "TGClient.h"
 #import "TGIcons.h"
 #import "TGTheme.h"
+#import "TGImageDecode.h"
+#import "TGNewContactViewController.h"
+#import "UIView+SafeTint.h"
 #import <QuartzCore/QuartzCore.h>
 
-// Their contact row is a 40dp avatar on a 52dp row; 36 and 56 here.
-static const CGFloat kContactAvatar = 36.0f;
+static const CGFloat kContactAvatar = 40.0f;
+static const CGFloat kContactRowHeight = 51.0f;
+static const CGFloat kContactAvatarLeft = 5.0f;
+static const CGFloat kContactAvatarTop = 5.0f;
+static const CGFloat kContactTextLeft = 54.0f;
+static const CGFloat kContactSectionHeight = 25.0f;
 
-@interface TGContactsViewController ()
+static UIColor *TGContactsRGB(int rgb) {
+	return [UIColor colorWithRed:((rgb >> 16) & 0xff) / 255.0f
+						   green:((rgb >> 8) & 0xff) / 255.0f
+							blue:(rgb & 0xff) / 255.0f
+						   alpha:1.0f];
+}
+
+static UIImage *TGContactsStretchable(NSString *name) {
+	UIImage *image = [UIImage imageNamed:name];
+	if (!image)
+		return nil;
+	if ([image respondsToSelector:@selector(resizableImageWithCapInsets:)])
+		return [image resizableImageWithCapInsets:UIEdgeInsetsZero];
+	return [image stretchableImageWithLeftCapWidth:1 topCapHeight:0];
+}
+
+@interface TGContactRowCell : UITableViewCell
+@property (nonatomic, strong) UIImageView *avatarView;
+@property (nonatomic, strong) UILabel *titleLabel;
+@property (nonatomic, strong) UILabel *subtitleLabel;
+@end
+
+@implementation TGContactRowCell
+
+- (id)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)reuseIdentifier {
+	self = [super initWithStyle:UITableViewCellStyleDefault reuseIdentifier:reuseIdentifier];
+	if (!self)
+		return nil;
+
+	BOOL flat = [[TGTheme shared] isFlat];
+	if (!flat){
+		UIImage *background = TGContactsStretchable(@"Cell102");
+		UIImage *highlighted = TGContactsStretchable(@"CellHighlighted102");
+		if (background)
+			self.backgroundView = [[UIImageView alloc] initWithImage:background];
+		if (highlighted)
+			self.selectedBackgroundView = [[UIImageView alloc] initWithImage:highlighted];
+	}
+	self.backgroundColor = [[TGTheme shared] listBackgroundColour];
+
+	self.avatarView = [[UIImageView alloc] initWithFrame:
+			CGRectMake(kContactAvatarLeft, kContactAvatarTop, kContactAvatar, kContactAvatar)];
+	self.avatarView.contentMode = UIViewContentModeScaleAspectFill;
+	self.avatarView.clipsToBounds = YES;
+	[self.contentView addSubview:self.avatarView];
+
+	self.titleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	self.titleLabel.backgroundColor = [UIColor clearColor];
+	self.titleLabel.font = [UIFont systemFontOfSize:19];
+	self.titleLabel.textColor = flat ? [[TGTheme shared] primaryTextColour] : [UIColor blackColor];
+	self.titleLabel.highlightedTextColor = [UIColor whiteColor];
+	[self.contentView addSubview:self.titleLabel];
+
+	self.subtitleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	self.subtitleLabel.backgroundColor = [UIColor clearColor];
+	self.subtitleLabel.font = [UIFont systemFontOfSize:13.5f];
+	self.subtitleLabel.textColor = [UIColor colorWithWhite:0.0f alpha:0.53f];
+	self.subtitleLabel.highlightedTextColor = [UIColor whiteColor];
+	[self.contentView addSubview:self.subtitleLabel];
+
+	return self;
+}
+
+- (void)layoutSubviews {
+	[super layoutSubviews];
+
+	CGSize viewSize = self.contentView.frame.size;
+	self.avatarView.frame = CGRectMake(kContactAvatarLeft, kContactAvatarTop,
+			kContactAvatar, kContactAvatar);
+
+	CGFloat width = viewSize.width - kContactTextLeft - 5;
+	CGFloat titleHeight = self.titleLabel.font.lineHeight;
+	CGFloat subtitleHeight = self.subtitleLabel.font.lineHeight;
+
+	if (self.subtitleLabel.text.length == 0){
+		CGFloat titleY = (CGFloat)(int)((viewSize.height - titleHeight) / 2) - 1;
+		self.titleLabel.frame = CGRectMake(kContactTextLeft, titleY, width, titleHeight);
+		self.subtitleLabel.frame = CGRectZero;
+		return;
+	}
+
+	CGFloat titleY = (CGFloat)(int)((viewSize.height - titleHeight - subtitleHeight - 1) / 2);
+	self.titleLabel.frame = CGRectMake(kContactTextLeft, titleY, width, titleHeight);
+	self.subtitleLabel.frame = CGRectMake(kContactTextLeft + 1, titleY + titleHeight + 0.5f,
+			width, subtitleHeight);
+}
+
+@end
+
+@interface TGContactsViewController () <UISearchBarDelegate, UIActionSheetDelegate>
 @property (nonatomic, strong) NSArray *users;
-@property (nonatomic, strong) NSMutableDictionary *photos;   // fileId -> UIImage
+@property (nonatomic, strong) NSArray *filteredUsers;
+@property (nonatomic, strong) NSArray *sectionTitles;
+@property (nonatomic, strong) NSArray *sections;
+@property (nonatomic, strong) NSMutableDictionary *photos;
 @property (nonatomic, strong) NSMutableSet *photosRequested;
+@property (nonatomic, strong) UISearchBar *searchBar;
+@property (nonatomic, strong) NSString *searchQuery;
+@property (nonatomic, strong) UILabel *emptyLabel;
+@property (nonatomic, assign) BOOL sortByName;
+@property (nonatomic, assign) BOOL loaded;
 @end
 
 @implementation TGContactsViewController
 
-- (void)viewDidLoad {
-	[super viewDidLoad];
+- (void)dealloc {
+	[[NSNotificationCenter defaultCenter] removeObserver:self];
+	[NSObject cancelPreviousPerformRequestsWithTarget:self];
+}
 
-	// iOS 7 lays content out under the bars; these screens position their own
-	// frames and expect the old behaviour.
-	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
-		self.edgesForExtendedLayout = UIRectEdgeNone;
+static NSString *TGContactString(NSDictionary *u, NSString *key) {
+	id value = u[key];
+	return [value isKindOfClass:NSString.class] ? value : @"";
+}
 
-	self.title = @"Contacts";
-	self.users = @[];
-	self.photos = [NSMutableDictionary dictionary];
-	self.photosRequested = [NSMutableSet set];
-	self.tableView.rowHeight = 56;
-	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
-	self.tableView.separatorColor = [[TGTheme shared] separatorColour];
+static NSString *TGContactName(NSDictionary *u) {
+	NSString *first = TGContactString(u, @"first_name");
+	NSString *last  = TGContactString(u, @"last_name");
+	NSString *name  = [[NSString stringWithFormat:@"%@ %@", first, last]
+			stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+	if (name.length)
+		return name;
+	NSString *username = TGContactString(u, @"username");
+	if (username.length)
+		return [NSString stringWithFormat:@"@%@", username];
+	return TGContactString(u, @"phone");
+}
 
+- (void)sortUsers {
+	self.users = [self.users sortedArrayUsingComparator:^NSComparisonResult(id a, id b){
+		if (self.isPickerMode || self.sortByName)
+			return [TGContactName(a) localizedCaseInsensitiveCompare:TGContactName(b)];
+		int64_t rankA = [a[@"statusRank"] longLongValue];
+		int64_t rankB = [b[@"statusRank"] longLongValue];
+		if (rankA != rankB)
+			return rankA > rankB ? NSOrderedAscending : NSOrderedDescending;
+		return [TGContactName(a) localizedCaseInsensitiveCompare:TGContactName(b)];
+	}];
+}
+
+- (void)sortTapped {
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Sort by"
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:
+			self.sortByName ? @"Last Seen" : @"Last Seen ✓",
+			self.sortByName ? @"Name ✓" : @"Name", nil];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = 1;
+	UITabBar *tabBar = [self.tabBarController isKindOfClass:UITabBarController.class]
+			? self.tabBarController.tabBar : nil;
+	if (tabBar)
+		[sheet showFromTabBar:tabBar];
+	else
+		[sheet showInView:self.navigationController.view];
+}
+
+- (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
+	if (sheet.tag != 1 || index == sheet.cancelButtonIndex)
+		return;
+	self.sortByName = (index == 1);
+	[self refreshTable];
+}
+
+- (BOOL)matchesQuery:(NSDictionary *)u query:(NSString *)query {
+	if ([TGContactName(u) rangeOfString:query options:NSCaseInsensitiveSearch].length)
+		return YES;
+	if ([TGContactString(u, @"username") rangeOfString:query
+											  options:NSCaseInsensitiveSearch].length)
+		return YES;
+	if ([TGContactString(u, @"phone") rangeOfString:query
+										   options:NSCaseInsensitiveSearch].length)
+		return YES;
+	return NO;
+}
+
+- (void)applyFilter {
+	NSString *query = [self.searchQuery
+			stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+	if (!query.length){
+		self.filteredUsers = nil;
+		return;
+	}
+	NSMutableArray *out = [NSMutableArray array];
+	for (NSDictionary *u in self.users)
+		if ([self matchesQuery:u query:query])
+			[out addObject:u];
+	self.filteredUsers = out;
+}
+
+- (void)rebuildSections {
+	if ((!self.isPickerMode && !self.sortByName) || self.filteredUsers){
+		self.sectionTitles = nil;
+		self.sections = nil;
+		return;
+	}
+	NSMutableArray *titles = [NSMutableArray array];
+	NSMutableArray *groups = [NSMutableArray array];
+	for (NSDictionary *u in self.users){
+		NSString *name = TGContactName(u);
+		NSString *letter = name.length
+				? [name substringToIndex:1].uppercaseString : @"#";
+		if (![letter rangeOfCharacterFromSet:
+				[NSCharacterSet uppercaseLetterCharacterSet]].length)
+			letter = @"#";
+		if (![titles.lastObject isEqualToString:letter]){
+			[titles addObject:letter];
+			[groups addObject:[NSMutableArray array]];
+		}
+		[groups.lastObject addObject:u];
+	}
+	self.sectionTitles = titles;
+	self.sections = groups;
+}
+
+- (void)userStatusChanged:(NSNotification *)note {
+	int64_t userId = [note.userInfo[@"userId"] longLongValue];
+	NSDictionary *status = note.userInfo[@"status"];
+	if (![status isKindOfClass:NSDictionary.class])
+		return;
+	NSMutableArray *updated = [self.users mutableCopy];
+	for (NSUInteger i = 0; i < updated.count; i++){
+		NSDictionary *u = updated[i];
+		if ([u[@"id"] longLongValue] != userId)
+			continue;
+		NSMutableDictionary *next = [u mutableCopy];
+		next[@"isOnline"]   = status[@"isOnline"] ?: @(NO);
+		next[@"statusText"] = status[@"text"] ?: @"";
+		next[@"statusRank"] = status[@"rank"] ?: @(0);
+		updated[i] = next;
+		break;
+	}
+	self.users = updated;
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+											  selector:@selector(applyPendingStatusChanges)
+												object:nil];
+	[self performSelector:@selector(applyPendingStatusChanges) withObject:nil afterDelay:0];
+}
+
+- (void)applyPendingStatusChanges {
+	[self refreshTable];
+}
+
+- (void)refreshTable {
+	[self sortUsers];
+	[self applyFilter];
+	[self rebuildSections];
+	[self.tableView reloadData];
+	[self updateEmptyState];
+}
+
+- (void)reloadTableSoon {
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+											 selector:@selector(reloadTableNow)
+											   object:nil];
+	[self performSelector:@selector(reloadTableNow) withObject:nil afterDelay:0.15f];
+}
+
+- (void)reloadTableNow {
+	[self.tableView reloadData];
+}
+
+- (void)updateEmptyState {
+	if (!self.emptyLabel)
+		return;
+	NSString *text = nil;
+	if (!self.loaded)
+		text = @"Loading...";
+	else if (self.filteredUsers && self.filteredUsers.count == 0)
+		text = @"No results";
+	else if (!self.filteredUsers && self.users.count == 0)
+		text = @"You have no contacts yet";
+	self.emptyLabel.text = text ?: @"";
+	self.emptyLabel.hidden = (text == nil);
+}
+
+- (void)reloadContacts {
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] contactsWithCompletion:^(NSArray *users){
 		TGContactsViewController *me = weakSelf;
 		if (!me)
 			return;
-		// Alphabetical, the way a contact list is expected to read.
-		me.users = [users sortedArrayUsingComparator:^NSComparisonResult(id a, id b){
-			return [a[@"first_name"] localizedCaseInsensitiveCompare:b[@"first_name"]];
-		}];
-		[me.tableView reloadData];
-		NSLog(@"TDLIB CONTACTS: %lu", (unsigned long)me.users.count);
+		me.loaded = YES;
+		me.users = [users isKindOfClass:NSArray.class] ? users : @[];
+		[me refreshTable];
 		[me fetchMissingPhotos];
+		if ([me respondsToSelector:@selector(refreshControl)])
+			[me.refreshControl endRefreshing];
 	}];
 }
 
-/// One request per picture, cached by file id: the list scrolls past the same
-/// rows repeatedly and re-downloading on every pass would never settle.
+- (void)viewDidLoad {
+	[super viewDidLoad];
+
+	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
+		self.edgesForExtendedLayout = UIRectEdgeNone;
+
+	if (!self.title.length)
+		self.title = @"Contacts";
+	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+	self.users = @[];
+	self.photos = [NSMutableDictionary dictionary];
+	self.photosRequested = [NSMutableSet set];
+	self.tableView.rowHeight = kContactRowHeight;
+	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	self.tableView.separatorColor = [[TGTheme shared] separatorColour];
+	self.tableView.separatorStyle = [[TGTheme shared] isFlat]
+			? UITableViewCellSeparatorStyleSingleLine
+			: UITableViewCellSeparatorStyleNone;
+
+	self.searchBar = [[UISearchBar alloc] initWithFrame:CGRectMake(0, 0, 320, 44)];
+	self.searchBar.delegate = self;
+	self.searchBar.placeholder = @"Search";
+	if ([self.searchBar respondsToSelector:@selector(setBarTintColor:)])
+		self.searchBar.barTintColor = [[TGTheme shared] listBackgroundColour];
+	else
+		[self.searchBar tg_setTintColor:[UIColor colorWithWhite:0.68f alpha:1.0f]];
+	self.tableView.tableHeaderView = self.searchBar;
+
+	UIView *background = [[UIView alloc] initWithFrame:self.tableView.bounds];
+	background.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	background.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+	self.emptyLabel = [[UILabel alloc] initWithFrame:
+			CGRectMake(0, 120, background.bounds.size.width, 22)];
+	self.emptyLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	self.emptyLabel.backgroundColor = [UIColor clearColor];
+	self.emptyLabel.textAlignment = NSTextAlignmentCenter;
+	self.emptyLabel.font = [UIFont systemFontOfSize:15];
+	self.emptyLabel.textColor = [[TGTheme shared] secondaryTextColour];
+	self.emptyLabel.hidden = YES;
+	[background addSubview:self.emptyLabel];
+	self.tableView.backgroundView = background;
+
+	if (!self.isPickerMode && [self respondsToSelector:@selector(setRefreshControl:)]
+			&& NSClassFromString(@"UIRefreshControl")){
+		UIRefreshControl *refresh = [[NSClassFromString(@"UIRefreshControl") alloc] init];
+		[refresh addTarget:self action:@selector(reloadContacts)
+		  forControlEvents:UIControlEventValueChanged];
+		self.refreshControl = refresh;
+	}
+
+	if (!self.isPickerMode){
+		UIButton *add = [UIButton buttonWithType:UIButtonTypeCustom];
+		[TGIcons styleHeaderButton:add];
+		[add addTarget:self action:@selector(addContactTapped) forControlEvents:UIControlEventTouchUpInside];
+		add.frame = CGRectMake(0, 0, 30, 30);
+		UILabel *plus = [[UILabel alloc] initWithFrame:CGRectOffset(add.bounds, 0, -2)];
+		plus.text = @"+";
+		plus.textColor = [UIColor whiteColor];
+		plus.textAlignment = NSTextAlignmentCenter;
+		plus.backgroundColor = [UIColor clearColor];
+		plus.font = [UIFont boldSystemFontOfSize:18];
+		plus.userInteractionEnabled = NO;
+		[add addSubview:plus];
+		self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:add];
+
+		UIButton *sort = [TGIcons headerButtonWithTitle:@"Sort" bold:NO
+												  target:self action:@selector(sortTapped)];
+		self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:sort];
+	}
+
+	[[NSNotificationCenter defaultCenter] addObserver:self
+			selector:@selector(userStatusChanged:)
+				name:TGUserStatusDidChangeNotification
+			  object:nil];
+
+	[self updateEmptyState];
+	[self reloadContacts];
+}
+
+- (void)inviteFriendsTapped {
+	NSDictionary *me = [TGClient shared].me;
+	NSDictionary *usernameBox = [me isKindOfClass:NSDictionary.class] ? me[@"usernames"] : nil;
+	NSArray *usernames = [usernameBox isKindOfClass:NSDictionary.class]
+			? usernameBox[@"active_usernames"] : nil;
+	NSString *username = ([usernames isKindOfClass:NSArray.class] && usernames.count)
+			? usernames[0] : nil;
+	if (![username isKindOfClass:NSString.class])
+		username = nil;
+	NSString *link = username.length
+			? [NSString stringWithFormat:@"https://t.me/%@", username]
+			: @"https://telegram.org";
+	NSString *text = [NSString stringWithFormat:
+			@"Hey, I'm using Telegram to chat. You can join me here: %@", link];
+
+	UIActivityViewController *sheet = [[UIActivityViewController alloc]
+			initWithActivityItems:@[text] applicationActivities:nil];
+	[self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)addContactTapped {
+	TGNewContactViewController *vc = [[TGNewContactViewController alloc] init];
+	__weak typeof(self) weakSelf = self;
+	vc.onDone = ^{
+		TGContactsViewController *me = weakSelf;
+		if (!me)
+			return;
+		[me reloadContacts];
+	};
+	UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
+	[self presentModalViewController:nav animated:YES];
+}
+
+- (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)query {
+	self.searchQuery = query;
+	[self applyFilter];
+	[self rebuildSections];
+	[self.tableView reloadData];
+	[self updateEmptyState];
+}
+
+- (void)searchBarTextDidBeginEditing:(UISearchBar *)searchBar {
+	[searchBar setShowsCancelButton:YES animated:YES];
+}
+
+- (void)searchBarTextDidEndEditing:(UISearchBar *)searchBar {
+	[searchBar setShowsCancelButton:NO animated:YES];
+}
+
+- (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {
+	[searchBar resignFirstResponder];
+}
+
+- (void)searchBarCancelButtonClicked:(UISearchBar *)searchBar {
+	searchBar.text = @"";
+	self.searchQuery = nil;
+	self.filteredUsers = nil;
+	[self rebuildSections];
+	[self.tableView reloadData];
+	[self updateEmptyState];
+	[searchBar resignFirstResponder];
+}
+
+- (NSString *)thumbCachePathForKey:(NSString *)key {
+	NSString *dir = [NSSearchPathForDirectoriesInDomains(
+			NSCachesDirectory, NSUserDomainMask, YES).firstObject
+					stringByAppendingPathComponent:@"ContactThumbs"];
+	[[NSFileManager defaultManager] createDirectoryAtPath:dir
+							 withIntermediateDirectories:YES attributes:nil error:nil];
+	return [dir stringByAppendingPathComponent:
+			[NSString stringWithFormat:@"%@.png", key]];
+}
+
+- (NSString *)thumbCacheKeyForUser:(NSDictionary *)u {
+	NSString *uniqueId = u[@"photoUniqueId"];
+	if ([uniqueId isKindOfClass:NSString.class] && uniqueId.length)
+		return uniqueId;
+	NSNumber *fileId = u[@"photoFileId"];
+	return [fileId isKindOfClass:NSNumber.class] ? fileId.stringValue : nil;
+}
+
 - (void)fetchMissingPhotos {
 	__weak typeof(self) weakSelf = self;
+	NSMutableSet *liveKeys = [NSMutableSet set];
+	for (NSDictionary *u in self.users){
+		NSString *key = [self thumbCacheKeyForUser:u];
+		if (key)
+			[liveKeys addObject:key];
+	}
+	[self pruneThumbCacheKeeping:liveKeys];
+
 	for (NSDictionary *u in self.users){
 		NSNumber *fileId = u[@"photoFileId"];
-		if (![fileId isKindOfClass:NSNumber.class])
+		NSString *cacheKey = [self thumbCacheKeyForUser:u];
+		if (![fileId isKindOfClass:NSNumber.class] || !cacheKey)
 			continue;
 		if (self.photos[fileId] || [self.photosRequested containsObject:fileId])
 			continue;
 		[self.photosRequested addObject:fileId];
 
+		NSString *cachePath = [self thumbCachePathForKey:cacheKey];
+		if ([[NSFileManager defaultManager] fileExistsAtPath:cachePath]){
+			UIImage *cached = [UIImage imageWithContentsOfFile:cachePath];
+			if (cached && fabs(cached.size.width - kContactAvatar) < 0.5f
+					   && fabs(cached.size.height - kContactAvatar) < 0.5f){
+				self.photos[fileId] = cached;
+				continue;
+			}
+			[[NSFileManager defaultManager] removeItemAtPath:cachePath error:nil];
+		}
+
 		[[TGClient shared] downloadFile:fileId.integerValue completion:^(NSString *path){
-			TGContactsViewController *me = weakSelf;
-			UIImage *photo = path ? [UIImage imageWithContentsOfFile:path] : nil;
-			if (!me || !photo)
+			if (!path){
+				TGContactsViewController *me = weakSelf;
+				[me.photosRequested removeObject:fileId];
 				return;
-			// A cell's own imageView takes the image's size, so a 160px photo
-			// would shove the name off the row. Scale once, on arrival.
-			UIGraphicsBeginImageContextWithOptions(
-					CGSizeMake(kContactAvatar, kContactAvatar), NO, 0);
-			[photo drawInRect:CGRectMake(0, 0, kContactAvatar, kContactAvatar)];
-			me.photos[fileId] = UIGraphicsGetImageFromCurrentImageContext();
-			UIGraphicsEndImageContext();
-			[me.tableView reloadData];
+			}
+			dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+				UIImage *thumb = TGDecodeSquareThumbnail(path, kContactAvatar);
+				if (thumb)
+					[UIImagePNGRepresentation(thumb) writeToFile:cachePath atomically:YES];
+				dispatch_async(dispatch_get_main_queue(), ^{
+					TGContactsViewController *me = weakSelf;
+					if (!me || !thumb)
+						return;
+					me.photos[fileId] = thumb;
+					[me reloadTableSoon];
+				});
+			});
 		}];
 	}
 }
 
-static NSString *TGContactName(NSDictionary *u) {
-	NSString *first = u[@"first_name"] ?: @"";
-	NSString *last  = u[@"last_name"] ?: @"";
-	NSString *name  = [[NSString stringWithFormat:@"%@ %@", first, last]
-			stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-	if (name.length)
-		return name;
-	if ([u[@"username"] length])
-		return [NSString stringWithFormat:@"@%@", u[@"username"]];
-	return u[@"phone"] ?: @"";
+- (void)pruneThumbCacheKeeping:(NSSet *)liveKeys {
+	NSString *dir = [NSSearchPathForDirectoriesInDomains(
+			NSCachesDirectory, NSUserDomainMask, YES).firstObject
+					stringByAppendingPathComponent:@"ContactThumbs"];
+	NSFileManager *fm = [NSFileManager defaultManager];
+	for (NSString *file in [fm contentsOfDirectoryAtPath:dir error:nil]){
+		NSString *stem = [file stringByDeletingPathExtension];
+		if (![liveKeys containsObject:stem])
+			[fm removeItemAtPath:[dir stringByAppendingPathComponent:file] error:nil];
+	}
+}
+
+- (NSArray *)rowsForSection:(NSInteger)section {
+	if (self.sections)
+		return (section >= 0 && section < (NSInteger)self.sections.count)
+				? self.sections[section] : @[];
+	return self.filteredUsers ?: self.users;
+}
+
+- (BOOL)isInviteRowAtIndexPath:(NSIndexPath *)indexPath {
+	return indexPath.section == 0 && [self showsInviteRow] && indexPath.row == 0;
+}
+
+- (NSDictionary *)userAtIndexPath:(NSIndexPath *)indexPath {
+	if ([self isInviteRowAtIndexPath:indexPath])
+		return nil;
+	NSInteger row = indexPath.row
+			- ((indexPath.section == 0 && [self showsInviteRow]) ? 1 : 0);
+	NSArray *rows = [self rowsForSection:indexPath.section];
+	if (row < 0 || row >= (NSInteger)rows.count)
+		return nil;
+	NSDictionary *u = rows[row];
+	return [u isKindOfClass:NSDictionary.class] ? u : nil;
+}
+
+- (BOOL)showsInviteRow {
+	return !self.isPickerMode && !self.filteredUsers;
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+	return self.sections ? self.sections.count : 1;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-	return self.users.count;
+	NSInteger extra = (section == 0 && [self showsInviteRow]) ? 1 : 0;
+	return [self rowsForSection:section].count + extra;
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
+	if (indexPath.section == 0 && [self showsInviteRow] && indexPath.row == 0)
+		return 44;
+	return kContactRowHeight;
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
+	return self.sections ? kContactSectionHeight : 0;
+}
+
+- (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
+	if (!self.sections || section < 0 || section >= (NSInteger)self.sectionTitles.count)
+		return nil;
+
+	CGFloat width = tableView.bounds.size.width;
+	UIView *container = [[UIView alloc] initWithFrame:
+			CGRectMake(0, 0, width, kContactSectionHeight)];
+	container.clipsToBounds = NO;
+	container.backgroundColor = [UIColor clearColor];
+
+	UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
+	label.backgroundColor = [UIColor clearColor];
+	label.font = [UIFont boldSystemFontOfSize:15];
+	label.numberOfLines = 1;
+	label.text = self.sectionTitles[section];
+
+	if ([[TGTheme shared] isFlat]){
+		container.backgroundColor = [[TGTheme shared] listBackgroundColour];
+		label.textColor = [[TGTheme shared] sectionHeaderColour];
+	} else {
+		UIImage *background = TGContactsStretchable(
+				section == 0 ? @"CategoryDividerFirst" : @"CategoryDivider");
+		if (background){
+			UIImageView *backgroundView = [[UIImageView alloc] initWithImage:background];
+			backgroundView.frame = CGRectMake(0, -1, width, kContactSectionHeight + 1);
+			backgroundView.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+			[container addSubview:backgroundView];
+		} else {
+			container.backgroundColor = TGContactsRGB(0xa8b0b8);
+		}
+		label.textColor = [UIColor whiteColor];
+		label.shadowColor = TGContactsRGB(0x88929c);
+		label.shadowOffset = CGSizeMake(0, -1);
+	}
+
+	[label sizeToFit];
+	label.frame = CGRectOffset(label.frame, 10, 1);
+	[container addSubview:label];
+	return container;
+}
+
+- (NSArray *)sectionIndexTitlesForTableView:(UITableView *)tableView {
+	return self.sectionTitles;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
 	static NSString *reuse = @"TGContactCell";
-	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
+	static NSString *inviteReuse = @"TGInviteCell";
+
+	if ([self isInviteRowAtIndexPath:indexPath]){
+		UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:inviteReuse];
+		if (!cell)
+			cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+										  reuseIdentifier:inviteReuse];
+		cell.textLabel.attributedText = nil;
+		cell.textLabel.text = @"Invite Friends";
+		cell.textLabel.textColor = [[TGTheme shared] accentColour];
+		cell.textLabel.font = [UIFont systemFontOfSize:16];
+		cell.detailTextLabel.text = @"";
+
+		cell.imageView.image = [TGIcons inviteFriendsAvatarOfSide:kContactAvatar];
+		cell.backgroundColor = [[TGTheme shared] listBackgroundColour];
+		cell.accessoryType = UITableViewCellAccessoryNone;
+		return cell;
+	}
+
+	TGContactRowCell *cell = (TGContactRowCell *)[tableView dequeueReusableCellWithIdentifier:reuse];
 	if (!cell)
-		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
-									  reuseIdentifier:reuse];
+		cell = [[TGContactRowCell alloc] initWithStyle:UITableViewCellStyleDefault
+									   reuseIdentifier:reuse];
 
-	NSDictionary *u = self.users[indexPath.row];
+	NSDictionary *u = [self userAtIndexPath:indexPath];
+	if (!u){
+		cell.titleLabel.attributedText = nil;
+		cell.titleLabel.text = @"";
+		cell.subtitleLabel.text = @"";
+		cell.avatarView.image = nil;
+		return cell;
+	}
+	NSString *first = [u[@"first_name"] isKindOfClass:NSString.class] ? u[@"first_name"] : @"";
+	NSString *last  = [u[@"last_name"] isKindOfClass:NSString.class] ? u[@"last_name"] : @"";
 	NSString *name = TGContactName(u);
-	cell.textLabel.text = name;
-	cell.textLabel.font = [UIFont systemFontOfSize:15];
-	cell.detailTextLabel.text = [u[@"phone"] length]
-		? [NSString stringWithFormat:@"+%@", u[@"phone"]] : @"";
-	cell.detailTextLabel.font = [UIFont systemFontOfSize:13];
-	cell.detailTextLabel.textColor = [[TGTheme shared] secondaryTextColour];
-	cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
-	cell.backgroundColor = [[TGTheme shared] listBackgroundColour];
-	cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+	BOOL online = [u[@"isOnline"] boolValue];
 
-	// The real picture when it has arrived, and Telegram's own initials avatar
-	// - same palette, same id-to-colour mapping - until then.
+	if (first.length && last.length){
+		NSMutableAttributedString *title = [[NSMutableAttributedString alloc]
+				initWithString:[NSString stringWithFormat:@"%@ %@", first, last]
+					attributes:@{NSFontAttributeName : [UIFont systemFontOfSize:19]}];
+		[title addAttribute:NSFontAttributeName
+					  value:[UIFont boldSystemFontOfSize:19]
+					  range:NSMakeRange(first.length + 1, last.length)];
+		cell.titleLabel.attributedText = title;
+	} else {
+		cell.titleLabel.attributedText = nil;
+		cell.titleLabel.text = name;
+		cell.titleLabel.font = [UIFont systemFontOfSize:19];
+	}
+
+	NSString *phone = TGContactString(u, @"phone");
+	cell.subtitleLabel.text = self.isPickerMode
+			? (phone.length ? [NSString stringWithFormat:@"+%@", phone] : @"")
+			: TGContactString(u, @"statusText");
+	cell.subtitleLabel.textColor = (online && !self.isPickerMode)
+			? TGContactsRGB(0x0779d0) : [UIColor colorWithWhite:0.0f alpha:0.53f];
+	cell.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	cell.accessoryType = UITableViewCellAccessoryNone;
+	[cell setNeedsLayout];
+
 	NSNumber *fileId = u[@"photoFileId"];
 	UIImage *photo = [fileId isKindOfClass:NSNumber.class] ? self.photos[fileId] : nil;
 	if (!photo)
@@ -120,31 +692,77 @@ static NSString *TGContactName(NSDictionary *u) {
 					(name.length ? [name substringToIndex:1].uppercaseString : @"?")
 									   size:kContactAvatar
 								   colourId:[u[@"id"] longLongValue]];
-	cell.imageView.image = photo;
-	cell.imageView.layer.cornerRadius = kContactAvatar / 2;
-	cell.imageView.clipsToBounds = YES;
-	cell.imageView.contentMode = UIViewContentModeScaleAspectFill;
+	cell.avatarView.image = photo;
+	cell.avatarView.layer.cornerRadius = kContactAvatar * 0.12f;
 	return cell;
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
 
-	NSDictionary *u = self.users[indexPath.row];
+	if ([self isInviteRowAtIndexPath:indexPath]){
+		[self inviteFriendsTapped];
+		return;
+	}
+	NSDictionary *u = [self userAtIndexPath:indexPath];
+	if (!u)
+		return;
 	NSString *name = TGContactName(u);
 	__weak typeof(self) weakSelf = self;
 
+	[self.searchBar resignFirstResponder];
 	[[TGClient shared] privateChatWithUser:[u[@"id"] longLongValue]
 								completion:^(int64_t chatId){
 		TGContactsViewController *me = weakSelf;
-		if (!me || chatId == 0)
+		if (!me)
 			return;
+		if (chatId == 0){
+			[[[UIAlertView alloc] initWithTitle:nil
+									   message:@"Could not open this chat."
+									  delegate:nil
+							 cancelButtonTitle:@"OK"
+							 otherButtonTitles:nil] show];
+			return;
+		}
 		TGChatViewController *vc = [[TGChatViewController alloc] init];
 		vc.chatId = chatId;
 		vc.chatTitle = name;
-		vc.hidesBottomBarWhenPushed = YES;
 		[me.navigationController pushViewController:vc animated:YES];
 	}];
+}
+
+- (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
+	if (self.isPickerMode)
+		return NO;
+	return [self userAtIndexPath:indexPath] != nil;
+}
+
+- (NSString *)tableView:(UITableView *)tableView
+		titleForDeleteConfirmationButtonForRowAtIndexPath:(NSIndexPath *)indexPath {
+	return @"Delete";
+}
+
+- (void)tableView:(UITableView *)tableView
+		commitEditingStyle:(UITableViewCellEditingStyle)editingStyle
+		 forRowAtIndexPath:(NSIndexPath *)indexPath {
+	if (editingStyle != UITableViewCellEditingStyleDelete)
+		return;
+	NSDictionary *u = [self userAtIndexPath:indexPath];
+	NSNumber *userId = [u[@"id"] isKindOfClass:NSNumber.class] ? u[@"id"] : nil;
+	if (!userId)
+		return;
+
+	[[TGClient shared] request:@{
+		@"@type"    : @"removeContacts",
+		@"user_ids" : @[userId],
+	} completion:nil];
+
+	NSMutableArray *remaining = [NSMutableArray array];
+	for (NSDictionary *other in self.users)
+		if ([other[@"id"] longLongValue] != userId.longLongValue)
+			[remaining addObject:other];
+	self.users = remaining;
+	[self refreshTable];
 }
 
 @end

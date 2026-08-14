@@ -50,6 +50,9 @@ static NSArray *TGNumbers(id v) {
 
 /// Interpolate a keyframed property at `frame`. Returns an array of numbers.
 static NSArray *TGValueAt(NSDictionary *prop, double frame) {
+	if (![prop isKindOfClass:NSDictionary.class])
+		return nil;
+
 	id k = prop[@"k"];
 	if (!k)
 		return nil;
@@ -63,6 +66,8 @@ static NSArray *TGValueAt(NSDictionary *prop, double frame) {
 	NSDictionary *before = nil, *after = nil;
 
 	for (NSDictionary *kf in keys){
+		if (![kf isKindOfClass:NSDictionary.class])
+			continue;
 		double t = [kf[@"t"] doubleValue];
 		if (t <= frame)
 			before = kf;
@@ -102,6 +107,24 @@ static double TGScalarAt(NSDictionary *prop, double frame, double fallback) {
 
 #pragma mark - view
 
+@interface TGLottieView (TGLottieTick)
+- (void)tick;
+@end
+
+@interface TGLottieTimerProxy : NSObject
+@property (nonatomic, weak) TGLottieView *target;
+@end
+
+@implementation TGLottieTimerProxy
+- (void)tick:(NSTimer *)timer {
+	TGLottieView *t = self.target;
+	if (t)
+		[t tick];
+	else
+		[timer invalidate];
+}
+@end
+
 @interface TGLottieView ()
 @property (nonatomic, strong) NSDictionary *animation;
 @property (nonatomic, strong) NSArray *layers;
@@ -112,9 +135,13 @@ static double TGScalarAt(NSDictionary *prop, double frame, double fallback) {
 @property (nonatomic, assign) double currentFrame;
 @property (nonatomic, strong) NSTimer *timer;
 @property (nonatomic, assign) BOOL loaded;
+@property (nonatomic, assign) BOOL wantsPlayback;
+@property (nonatomic, strong) NSDictionary *layersByIndex;
 @end
 
-@implementation TGLottieView
+@implementation TGLottieView {
+	double _cumulativeAlpha;
+}
 
 - (id)initWithFrame:(CGRect)frame {
 	self = [super initWithFrame:frame];
@@ -130,52 +157,122 @@ static double TGScalarAt(NSDictionary *prop, double frame, double fallback) {
 }
 
 - (BOOL)loadTGSFile:(NSString *)path {
-	NSData *gz = [NSData dataWithContentsOfFile:path];
-	NSData *json = TGGunzip(gz);
-	if (!json.length){
-		NSLog(@"TGLottie: not gzip or empty: %@", path.lastPathComponent);
+	[self stop];
+	self.wantsPlayback = NO;
+	self.loaded = NO;
+	self.animation = nil;
+	self.layers = nil;
+	self.layersByIndex = nil;
+
+	if (!path.length || ![[NSFileManager defaultManager] fileExistsAtPath:path]){
+		[self setNeedsDisplay];
 		return NO;
 	}
 
-	NSError *err = nil;
-	NSDictionary *anim = [NSJSONSerialization JSONObjectWithData:json options:0 error:&err];
-	if (![anim isKindOfClass:NSDictionary.class]){
-		NSLog(@"TGLottie: bad JSON: %@", err);
+	NSData *raw = [NSData dataWithContentsOfFile:path];
+	if (!raw.length){
+		[self setNeedsDisplay];
 		return NO;
+	}
+
+	NSData *json = TGGunzip(raw);
+	if (!json.length)
+		json = raw;
+
+	NSError *err = nil;
+	id parsed = [NSJSONSerialization JSONObjectWithData:json options:0 error:&err];
+	if (![parsed isKindOfClass:NSDictionary.class]){
+		NSLog(@"TGLottie: bad JSON: %@", err);
+		[self setNeedsDisplay];
+		return NO;
+	}
+	NSDictionary *anim = parsed;
+
+	NSArray *layers = anim[@"layers"];
+	if (![layers isKindOfClass:NSArray.class])
+		layers = nil;
+
+	double ip = [anim[@"ip"] doubleValue];
+	double op = [anim[@"op"] doubleValue];
+	double fr = [anim[@"fr"] doubleValue];
+	CGSize canvas = CGSizeMake([anim[@"w"] doubleValue], [anim[@"h"] doubleValue]);
+
+	if (layers.count == 0 || canvas.width <= 0 || canvas.height <= 0){
+		[self setNeedsDisplay];
+		return NO;
+	}
+
+	NSMutableDictionary *byIndex = [NSMutableDictionary dictionary];
+	for (NSDictionary *layer in layers){
+		if (![layer isKindOfClass:NSDictionary.class])
+			continue;
+		id ind = layer[@"ind"];
+		if ([ind isKindOfClass:NSNumber.class])
+			byIndex[ind] = layer;
 	}
 
 	self.animation = anim;
-	self.layers    = anim[@"layers"];
-	self.inPoint   = [anim[@"ip"] doubleValue];
-	self.outPoint  = [anim[@"op"] doubleValue];
-	self.frameRate = [anim[@"fr"] doubleValue] ?: 60.0;
-	self.canvas    = CGSizeMake([anim[@"w"] doubleValue], [anim[@"h"] doubleValue]);
-	self.currentFrame = self.inPoint;
-	self.loaded = (self.layers.count > 0 && self.canvas.width > 0);
+	self.layers    = layers;
+	self.layersByIndex = byIndex;
+	self.inPoint   = ip;
+	self.outPoint  = (op > ip) ? op : (ip + 1.0);
+	self.frameRate = (fr > 0.0) ? fr : 60.0;
+	self.canvas    = canvas;
+	self.currentFrame = ip;
+	self.loaded = YES;
 
 	[self setNeedsDisplay];
-	return self.loaded;
+	return YES;
 }
 
 - (void)play {
-	if (!self.loaded || self.timer)
-		return;
-	// An A5 will not hold 60fps on a vector sticker; 20 is smooth enough and
-	// leaves the main thread usable.
-	self.timer = [NSTimer scheduledTimerWithTimeInterval:1.0 / 20.0
-												  target:self
-												selector:@selector(tick)
-												userInfo:nil
-												 repeats:YES];
+	self.wantsPlayback = YES;
+	[self updatePlaybackState];
 }
 
 - (void)stop {
+	self.wantsPlayback = NO;
 	[self.timer invalidate];
 	self.timer = nil;
 }
 
+- (void)updatePlaybackState {
+	BOOL shouldPlay = self.wantsPlayback && self.loaded && self.window != nil &&
+					  !self.hidden && self.alpha > 0.01;
+
+	if (shouldPlay && !self.timer){
+		TGLottieTimerProxy *proxy = [[TGLottieTimerProxy alloc] init];
+		proxy.target = self;
+		// An A5 will not hold 60fps on a vector sticker; 20 is smooth enough and
+		// leaves the main thread usable.
+		self.timer = [NSTimer timerWithTimeInterval:1.0 / 20.0
+											 target:proxy
+										   selector:@selector(tick:)
+										   userInfo:nil
+											repeats:YES];
+		[[NSRunLoop mainRunLoop] addTimer:self.timer forMode:NSRunLoopCommonModes];
+	} else if (!shouldPlay && self.timer){
+		[self.timer invalidate];
+		self.timer = nil;
+	}
+}
+
+- (void)didMoveToWindow {
+	[super didMoveToWindow];
+	[self updatePlaybackState];
+}
+
+- (void)setHidden:(BOOL)hidden {
+	[super setHidden:hidden];
+	[self updatePlaybackState];
+}
+
 - (void)tick {
+	if (!self.loaded)
+		return;
 	double step = self.frameRate / 20.0;
+	if (step <= 0.0)
+		step = 1.0;
 	self.currentFrame += step;
 	if (self.currentFrame >= self.outPoint)
 		self.currentFrame = self.inPoint;   // stickers loop
@@ -189,7 +286,14 @@ static double TGScalarAt(NSDictionary *prop, double frame, double fallback) {
 		return;
 
 	CGContextRef ctx = UIGraphicsGetCurrentContext();
+	if (!ctx)
+		return;
+	if (self.canvas.width <= 0 || self.canvas.height <= 0 ||
+		self.bounds.size.width <= 0 || self.bounds.size.height <= 0)
+		return;
+
 	CGContextSaveGState(ctx);
+	_cumulativeAlpha = 1.0;
 
 	// Lottie's origin is top-left in canvas units; scale to fit the view.
 	CGFloat scale = MIN(self.bounds.size.width / self.canvas.width,
@@ -209,8 +313,14 @@ static double TGScalarAt(NSDictionary *prop, double frame, double fallback) {
 // NOT drawLayer:inContext: - that is UIView's CALayerDelegate method, and
 // CoreAnimation calls it with a real CALayer when the view renders.
 - (void)drawLottieLayer:(NSDictionary *)layer inContext:(CGContextRef)ctx {
+	if (![layer isKindOfClass:NSDictionary.class])
+		return;
+
 	// type 4 is a shape layer; nothing else is drawable here
 	if ([layer[@"ty"] intValue] != 4)
+		return;
+
+	if ([layer[@"hd"] boolValue] || [layer[@"td"] intValue] != 0)
 		return;
 
 	double frame = self.currentFrame;
@@ -219,14 +329,53 @@ static double TGScalarAt(NSDictionary *prop, double frame, double fallback) {
 	if (frame < ip || frame > op)
 		return;
 
+	NSArray *shapes = layer[@"shapes"];
+	if (![shapes isKindOfClass:NSArray.class] || shapes.count == 0)
+		return;
+
+	double savedAlpha = _cumulativeAlpha;
 	CGContextSaveGState(ctx);
+	NSArray *chain = [self transformChainForLayer:layer];
+	for (NSDictionary *ancestor in chain)
+		[self applyTransform:ancestor[@"ks"] atFrame:frame inContext:ctx];
 	[self applyTransform:layer[@"ks"] atFrame:frame inContext:ctx];
-	[self drawShapes:layer[@"shapes"] atFrame:frame inContext:ctx];
+	[self drawShapes:shapes atFrame:frame inContext:ctx];
 	CGContextRestoreGState(ctx);
+	_cumulativeAlpha = savedAlpha;
+}
+
+- (NSArray *)transformChainForLayer:(NSDictionary *)layer {
+	if (self.layersByIndex.count == 0)
+		return nil;
+
+	NSMutableArray *chain = nil;
+	NSMutableSet *seen = nil;
+	id parent = layer[@"parent"];
+	int depth = 0;
+
+	while ([parent isKindOfClass:NSNumber.class] && depth < 16){
+		NSDictionary *p = self.layersByIndex[parent];
+		if (![p isKindOfClass:NSDictionary.class])
+			break;
+		if (!seen)
+			seen = [NSMutableSet set];
+		if ([seen containsObject:parent])
+			break;
+		[seen addObject:parent];
+
+		if (!chain)
+			chain = [NSMutableArray array];
+		[chain insertObject:p atIndex:0];
+
+		parent = p[@"parent"];
+		depth++;
+	}
+
+	return chain;
 }
 
 - (void)applyTransform:(NSDictionary *)ks atFrame:(double)frame inContext:(CGContextRef)ctx {
-	if (!ks)
+	if (![ks isKindOfClass:NSDictionary.class])
 		return;
 
 	NSArray *pos    = TGValueAt(ks[@"p"], frame);
@@ -239,13 +388,19 @@ static double TGScalarAt(NSDictionary *prop, double frame, double fallback) {
 		CGContextTranslateCTM(ctx, [pos[0] doubleValue], [pos[1] doubleValue]);
 	if (rotation != 0)
 		CGContextRotateCTM(ctx, rotation * M_PI / 180.0);
-	if (scale.count >= 2)
-		CGContextScaleCTM(ctx, [scale[0] doubleValue] / 100.0,
-							   [scale[1] doubleValue] / 100.0);
+	if (scale.count >= 2){
+		double sx = [scale[0] doubleValue] / 100.0;
+		double sy = [scale[1] doubleValue] / 100.0;
+		if (sx != 0.0 && sy != 0.0)
+			CGContextScaleCTM(ctx, sx, sy);
+	}
 	if (anchor.count >= 2)
 		CGContextTranslateCTM(ctx, -[anchor[0] doubleValue], -[anchor[1] doubleValue]);
 
-	CGContextSetAlpha(ctx, opacity / 100.0);
+	if (opacity < 0) opacity = 0;
+	if (opacity > 100) opacity = 100;
+	_cumulativeAlpha *= opacity / 100.0;
+	CGContextSetAlpha(ctx, _cumulativeAlpha);
 }
 
 /// A shape group is a list where paths accumulate and a fill/stroke paints
@@ -257,17 +412,27 @@ static double TGScalarAt(NSDictionary *prop, double frame, double fallback) {
 	CGMutablePathRef path = CGPathCreateMutable();
 
 	for (NSDictionary *shape in shapes){
+		if (![shape isKindOfClass:NSDictionary.class] || [shape[@"hd"] boolValue])
+			continue;
+
 		NSString *ty = shape[@"ty"];
+		if (![ty isKindOfClass:NSString.class])
+			continue;
 
 		if ([ty isEqualToString:@"gr"]){
-			CGContextSaveGState(ctx);
 			NSArray *items = shape[@"it"];
+			if (![items isKindOfClass:NSArray.class])
+				continue;
+			double savedAlpha = _cumulativeAlpha;
+			CGContextSaveGState(ctx);
 			// a group carries its own transform, as the last item
 			for (NSDictionary *item in items)
-				if ([item[@"ty"] isEqualToString:@"tr"])
+				if ([item isKindOfClass:NSDictionary.class] &&
+					[item[@"ty"] isEqualToString:@"tr"])
 					[self applyTransform:item atFrame:frame inContext:ctx];
 			[self drawShapes:items atFrame:frame inContext:ctx];
 			CGContextRestoreGState(ctx);
+			_cumulativeAlpha = savedAlpha;
 
 		} else if ([ty isEqualToString:@"sh"]){
 			[self appendBezier:shape[@"ks"] atFrame:frame toPath:path];
@@ -312,6 +477,9 @@ static double TGScalarAt(NSDictionary *prop, double frame, double fallback) {
 
 /// Lottie bezier: "v" vertices, "i"/"o" tangents relative to their vertex.
 - (void)appendBezier:(NSDictionary *)ks atFrame:(double)frame toPath:(CGMutablePathRef)path {
+	if (![ks isKindOfClass:NSDictionary.class])
+		return;
+
 	NSArray *value = nil;
 	id k = ks[@"k"];
 
@@ -323,7 +491,8 @@ static double TGScalarAt(NSDictionary *prop, double frame, double fallback) {
 		// keyframed shape: take the last keyframe whose time has passed
 		NSDictionary *chosen = [k firstObject];
 		for (NSDictionary *kf in k)
-			if ([kf[@"t"] doubleValue] <= frame)
+			if ([kf isKindOfClass:NSDictionary.class] &&
+				[kf[@"t"] doubleValue] <= frame)
 				chosen = kf;
 		id s = chosen[@"s"];
 		value = [s isKindOfClass:NSArray.class] ? s : (s ? @[s] : nil);
@@ -336,7 +505,22 @@ static double TGScalarAt(NSDictionary *prop, double frame, double fallback) {
 			continue;
 
 		NSArray *v = shape[@"v"], *in = shape[@"i"], *out = shape[@"o"];
-		if (v.count < 2)
+		if (![v isKindOfClass:NSArray.class] || v.count < 2 ||
+			![in isKindOfClass:NSArray.class] || in.count < v.count ||
+			![out isKindOfClass:NSArray.class] || out.count < v.count)
+			continue;
+
+		BOOL malformed = NO;
+		for (NSUInteger i = 0; i < v.count; i++){
+			NSArray *vi = v[i], *ii = in[i], *oi = out[i];
+			if (![vi isKindOfClass:NSArray.class] || vi.count < 2 ||
+				![ii isKindOfClass:NSArray.class] || ii.count < 2 ||
+				![oi isKindOfClass:NSArray.class] || oi.count < 2){
+				malformed = YES;
+				break;
+			}
+		}
+		if (malformed)
 			continue;
 
 		CGPathMoveToPoint(path, NULL, [v[0][0] doubleValue], [v[0][1] doubleValue]);
@@ -370,11 +554,20 @@ static double TGScalarAt(NSDictionary *prop, double frame, double fallback) {
 		return;
 
 	double alpha = TGScalarAt(shape[@"o"], frame, 100) / 100.0;
+	if (alpha <= 0.0)
+		return;
+	if (alpha > 1.0)
+		alpha = 1.0;
+
 	CGContextSetRGBFillColor(ctx, [c[0] doubleValue], [c[1] doubleValue],
 								  [c[2] doubleValue], alpha);
 	CGContextAddPath(ctx, path);
+
 	// Lottie fills use even-odd, which is what makes holes work.
-	CGContextEOFillPath(ctx);
+	if ([shape[@"r"] intValue] == 1)
+		CGContextFillPath(ctx);
+	else
+		CGContextEOFillPath(ctx);
 }
 
 - (void)strokePath:(CGPathRef)path withShape:(NSDictionary *)shape
@@ -385,9 +578,28 @@ static double TGScalarAt(NSDictionary *prop, double frame, double fallback) {
 
 	double alpha = TGScalarAt(shape[@"o"], frame, 100) / 100.0;
 	double width = TGScalarAt(shape[@"w"], frame, 1);
+	if (alpha <= 0.0 || width <= 0.0)
+		return;
+	if (alpha > 1.0)
+		alpha = 1.0;
+
 	CGContextSetRGBStrokeColor(ctx, [c[0] doubleValue], [c[1] doubleValue],
 									[c[2] doubleValue], alpha);
 	CGContextSetLineWidth(ctx, width);
+
+	switch ([shape[@"lc"] intValue]){
+		case 2:  CGContextSetLineCap(ctx, kCGLineCapRound);  break;
+		case 3:  CGContextSetLineCap(ctx, kCGLineCapSquare); break;
+		default: CGContextSetLineCap(ctx, kCGLineCapButt);   break;
+	}
+	switch ([shape[@"lj"] intValue]){
+		case 2:  CGContextSetLineJoin(ctx, kCGLineJoinRound); break;
+		case 3:  CGContextSetLineJoin(ctx, kCGLineJoinBevel); break;
+		default: CGContextSetLineJoin(ctx, kCGLineJoinMiter); break;
+	}
+	double miter = TGScalarAt(shape[@"ml"], frame, 0);
+	if (miter > 0)
+		CGContextSetMiterLimit(ctx, miter);
 	CGContextAddPath(ctx, path);
 	CGContextStrokePath(ctx);
 }

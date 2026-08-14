@@ -51,6 +51,7 @@
 /// a filled archive box, and the bookmark Telegram uses for Saved Messages.
 + (UIImage *)archiveAvatarOfSide:(CGFloat)side;
 + (UIImage *)savedMessagesAvatarOfSide:(CGFloat)side;
++ (UIImage *)inviteFriendsAvatarOfSide:(CGFloat)side;
 
 /// Circular avatar with initials, for chats and contacts without a photo.
 + (UIImage *)avatarWithInitials:(NSString *)initials
@@ -67,6 +68,10 @@
 + (UIImage *)menuGlyphNamed:(NSString *)name;
 
 /// Drop the cache after a theme change.
++ (void)styleHeaderButton:(UIButton *)button;
++ (UIButton *)headerButtonWithTitle:(NSString *)title bold:(BOOL)bold
+							  target:(id)target action:(SEL)action;
+
 + (void)flush;
 
 @end

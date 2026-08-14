@@ -10,6 +10,8 @@
 #include "UIKit/UIKit.h"
 @interface RootViewController : UITabBarController
 
+- (void)updateUnreadBadge;
+
 @end
 
 

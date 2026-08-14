@@ -10,6 +10,8 @@
 //
 #import <Foundation/Foundation.h>
 
+extern NSString *const TGUserStatusDidChangeNotification;
+
 typedef NS_ENUM(NSInteger, TGAuthState) {
     TGAuthStateUnknown = 0,
     TGAuthStateWaitPhoneNumber,
@@ -297,6 +299,11 @@ typedef NS_ENUM(NSInteger, TGConnectionState) {
 /// Telegram contacts as dictionaries with "id", "first_name", "last_name",
 /// "phone", "username".
 - (void)contactsWithCompletion:(void (^)(NSArray *users))completion;
+
+- (void)addContactWithPhone:(NSString *)phone
+				   firstName:(NSString *)firstName
+					lastName:(NSString *)lastName
+				  completion:(void (^)(BOOL ok))completion;
 
 /// Chat id for a private conversation with a user, creating it if needed.
 - (void)privateChatWithUser:(int64_t)userId completion:(void (^)(int64_t chatId))completion;

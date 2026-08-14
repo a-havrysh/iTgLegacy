@@ -22,7 +22,7 @@
 }
 
 + (BOOL)canRunWebApps {
-	return [self systemVersion] >= 9.0;
+	return [self systemVersion] >= 9.0 && NSClassFromString(@"WKWebView") != nil;
 }
 
 + (BOOL)canPlayAnimatedStickers {
@@ -37,7 +37,7 @@
 }
 
 + (BOOL)canAnimateInline {
-	return [TGDevice tier] >= TGDeviceTierModern;
+	return [TGDevice tier] >= TGDeviceTierModern && [self is64Bit];
 }
 
 + (BOOL)canHoldMultipleAccounts {

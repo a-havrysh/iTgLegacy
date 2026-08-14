@@ -9,6 +9,7 @@
 @interface TGActionTableView () <UIGestureRecognizerDelegate>
 {
     bool _shouldHackHeaderSize;
+    bool _swipeActionsEnabled;
 }
 
 @property (nonatomic) bool ignoreTouches;
@@ -35,15 +36,19 @@
             if ([_actionCell conformsToProtocol:@protocol(TGActionTableViewCell)])
                 [(id<TGActionTableViewCell>)_actionCell dismissEditingControls:true];
             self.actionCell = nil;
-            
+
             _ignoreTouches = false;
+
+            id delegate = self.delegate;
+            if ([delegate conformsToProtocol:@protocol(TGActionTableViewDelegate)])
+                [(id<TGActionTableViewDelegate>)delegate dismissEditingControls];
         }
     }
     
     [super setEditing:editing animated:animated];
 }
 
-- (BOOL)touchesShouldCancelInContentView1:(UIView *)__unused view
+- (BOOL)touchesShouldCancelInContentView:(UIView *)__unused view
 {
     return true;
 }
@@ -60,7 +65,21 @@
 
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event
 {
-    if (_actionCell != nil)
+    if (self.hidden || self.alpha < 0.01f || !self.userInteractionEnabled)
+        return nil;
+
+    if (!([self pointInside:point withEvent:event]))
+        return nil;
+
+    bool isTouchEvent = (event == nil || event.type == UIEventTypeTouches);
+
+    if (_actionCell != nil && _actionCell.superview == nil)
+    {
+        _actionCell = nil;
+        self.scrollEnabled = true;
+    }
+
+    if (_actionCell != nil && isTouchEvent)
     {
         UIView *buttonHitTest = [_actionCell hitTest:CGPointMake(point.x - _actionCell.frame.origin.x, point.y - _actionCell.frame.origin.y) withEvent:event];
         if ([buttonHitTest isKindOfClass:[UIButton class]])
@@ -81,7 +100,7 @@
         
         return self;
     }
-    else if (_ignoreTouches && event.type == UIEventTypeTouches)
+    else if (_ignoreTouches && event != nil && event.type == UIEventTypeTouches)
         return self;
     
     UIView *result = [super hitTest:point withEvent:event];
@@ -100,7 +119,6 @@
 
 - (void)touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event
 {
-    NSLog(@"touches began: %@", touches);
     if (!_ignoreTouches)
         [super touchesBegan:touches withEvent:event];
 }
@@ -113,7 +131,6 @@
 
 - (void)touchesCancelled:(NSSet *)touches withEvent:(UIEvent *)event
 {
-    NSLog(@"touches cancel: %@", touches);
     if (_ignoreTouches)
         _ignoreTouches = false;
     else
@@ -122,8 +139,6 @@
 
 - (void)touchesEnded:(NSSet *)touches withEvent:(UIEvent *)event
 {
-    NSLog(@"touches ended: %@", touches);
-    
     if (_ignoreTouches)
         _ignoreTouches = false;
     else
@@ -137,57 +152,81 @@
 
 - (void)enableSwipeToLeftAction
 {
-    //if (iosMajorVersion() < 7)
-    //{
-        UISwipeGestureRecognizer *rightSwipeRecognizer = [[UISwipeGestureRecognizer alloc] 
-					initWithTarget:self action:@selector(tableViewSwipedRight:)];
-        rightSwipeRecognizer.direction =
-				 	UISwipeGestureRecognizerDirectionRight;
-        [self addGestureRecognizer:rightSwipeRecognizer];
-        rightSwipeRecognizer.delegate = self;
+    if (_swipeActionsEnabled)
+        return;
+    _swipeActionsEnabled = true;
 
-			 UISwipeGestureRecognizer *leftSwipeRecognizer =
-				 [[UISwipeGestureRecognizer alloc] 
-				 initWithTarget:self action:@selector(tableViewSwipedLeft:)];
-        leftSwipeRecognizer.direction =
-				 	UISwipeGestureRecognizerDirectionLeft;
-        [self addGestureRecognizer:leftSwipeRecognizer];
-        leftSwipeRecognizer.delegate = self;
+    UISwipeGestureRecognizer *rightSwipeRecognizer = [[UISwipeGestureRecognizer alloc] initWithTarget:self action:@selector(tableViewSwipedRight:)];
+    rightSwipeRecognizer.direction = UISwipeGestureRecognizerDirectionRight;
+    [self addGestureRecognizer:rightSwipeRecognizer];
+    rightSwipeRecognizer.delegate = self;
 
-    //}
+    UISwipeGestureRecognizer *leftSwipeRecognizer = [[UISwipeGestureRecognizer alloc] initWithTarget:self action:@selector(tableViewSwipedLeft:)];
+    leftSwipeRecognizer.direction = UISwipeGestureRecognizerDirectionLeft;
+    [self addGestureRecognizer:leftSwipeRecognizer];
+    leftSwipeRecognizer.delegate = self;
 }
 
 - (void)tableViewSwipedRight:(UISwipeGestureRecognizer *)recognizer
 {
-	//NSLog(@"TABLE VIEW SWIPED");
-    //if (recognizer.state == UIGestureRecognizerStateRecognized)
-    //{
-        //if (recognizer.direction == UISwipeGestureRecognizerDirectionLeft)
-        //{
-						NSLog(@"TABLE VIEW SWIPED DIRECTION RIGHT");
-            id delegate = self.delegate;
-            if ([delegate respondsToSelector:@selector(performSwipeToRightAction)])
-                [delegate performSwipeToRightAction];
-        //}
-			//if (recognizer.direction == UISwipeGestureRecognizerDirectionRight)
-        //{
-						//NSLog(@"TABLE VIEW SWIPED DIRECTION RIGHT");
-            //id delegate = self.delegate;
-            //if ([delegate respondsToSelector:@selector(performSwipeToRightAction)])
-                //[delegate performSwipeToRightAction];
-        //}
-
-    //}
+    if (recognizer.state == UIGestureRecognizerStateRecognized)
+    {
+        id delegate = self.delegate;
+        if ([delegate respondsToSelector:@selector(performSwipeToRightAction)])
+            [delegate performSwipeToRightAction];
+    }
 }
 
 - (void)tableViewSwipedLeft:(UISwipeGestureRecognizer *)recognizer
 {
-		NSLog(@"TABLE VIEW SWIPED DIRECTION LEFT");
-		id delegate = self.delegate;
-		if ([delegate respondsToSelector:@selector(performSwipeToLeftAction)])
-				[delegate performSwipeToLeftAction];
+    if (recognizer.state == UIGestureRecognizerStateRecognized)
+    {
+        id delegate = self.delegate;
+        if ([delegate respondsToSelector:@selector(performSwipeToLeftAction)])
+            [delegate performSwipeToLeftAction];
+    }
 }
 
+
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer
+{
+    if (![gestureRecognizer isKindOfClass:[UISwipeGestureRecognizer class]])
+    {
+        if ([[UITableView class] instancesRespondToSelector:@selector(gestureRecognizerShouldBegin:)])
+            return [super gestureRecognizerShouldBegin:gestureRecognizer];
+        return true;
+    }
+
+    if ([self isEditing] || [self isDecelerating] || [self isDragging])
+        return false;
+
+    if (_actionCell != nil)
+        return false;
+
+    return true;
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)__unused gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)__unused otherGestureRecognizer
+{
+    return false;
+}
+
+- (void)didMoveToWindow
+{
+    [super didMoveToWindow];
+
+    if (self.window == nil)
+    {
+        _ignoreTouches = false;
+
+        if (_actionCell != nil)
+        {
+            if ([_actionCell conformsToProtocol:@protocol(TGActionTableViewCell)])
+                [(id<TGActionTableViewCell>)_actionCell dismissEditingControls:false];
+            self.actionCell = nil;
+        }
+    }
+}
 
 - (void)layoutSubviews
 {

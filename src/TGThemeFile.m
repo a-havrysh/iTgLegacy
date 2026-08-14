@@ -1,14 +1,27 @@
 #import "TGThemeFile.h"
 
+@interface TGThemeFile ()
++ (NSDictionary *)paletteFromIOSTheme:(NSData *)data name:(NSString **)name;
++ (NSDictionary *)paletteFromAndroidTheme:(NSData *)data;
+@end
+
 @implementation TGThemeFile
 
 + (BOOL)handlesFile:(NSString *)path {
+	if (![path isKindOfClass:NSString.class] || !path.length)
+		return NO;
+	BOOL directory = NO;
+	if ([[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&directory] && directory)
+		return NO;
 	NSString *ext = path.pathExtension.lowercaseString;
 	return [ext isEqualToString:@"tgios-theme"] || [ext isEqualToString:@"attheme"] ||
 		   [ext isEqualToString:@"theme"];
 }
 
 + (NSDictionary *)paletteFromFile:(NSString *)path name:(NSString **)name {
+	if (![path isKindOfClass:NSString.class] || !path.length)
+		return nil;
+
 	NSData *data = [NSData dataWithContentsOfFile:path];
 	if (!data.length)
 		return nil;
@@ -24,9 +37,22 @@
 		return nil;
 	}
 
-	if ([path.pathExtension.lowercaseString isEqualToString:@"attheme"])
-		return [self paletteFromAndroidTheme:data];
-	return [self paletteFromIOSTheme:data name:name];
+	NSUInteger probe = 0;
+	while (probe < data.length && (bytes[probe] == ' ' || bytes[probe] == '\t' ||
+			bytes[probe] == '\r' || bytes[probe] == '\n' || bytes[probe] == 0xEF ||
+			bytes[probe] == 0xBB || bytes[probe] == 0xBF))
+		probe++;
+	BOOL looksLikeJSON = (probe < data.length && (bytes[probe] == '{' || bytes[probe] == '['));
+
+	NSDictionary *palette = looksLikeJSON ? [self paletteFromIOSTheme:data name:name]
+										  : [self paletteFromAndroidTheme:data];
+	if (!palette)
+		palette = looksLikeJSON ? [self paletteFromAndroidTheme:data]
+								: [self paletteFromIOSTheme:data name:name];
+	if (!palette)
+		NSLog(@"TGThemeFile: %@ has no colours this app can use",
+				path.lastPathComponent);
+	return palette;
 }
 
 #pragma mark - Telegram for iOS (.tgios-theme)
@@ -34,18 +60,38 @@
 /// "ffffff", "#ffffff", "ffffffcc" with alpha, or a gradient "aabbcc-ddeeff",
 /// of which the first stop is taken - nothing here paints gradients.
 static UIColor *TGColourFromHex(id value) {
+	if ([value isKindOfClass:NSNumber.class]){
+		uint32_t packed = (uint32_t)[(NSNumber *)value longLongValue];
+		CGFloat alpha = ((packed >> 24) & 0xFF) / 255.0f;
+		return [UIColor colorWithRed:((packed >> 16) & 0xFF) / 255.0f
+							   green:((packed >> 8) & 0xFF) / 255.0f
+								blue:(packed & 0xFF) / 255.0f
+							   alpha:(alpha == 0 ? 1.0f : alpha)];
+	}
 	if (![value isKindOfClass:NSString.class])
 		return nil;
 
-	NSString *hex = [(NSString *)value stringByReplacingOccurrencesOfString:@"#" withString:@""];
+	NSString *hex = [[(NSString *)value stringByTrimmingCharactersInSet:
+			[NSCharacterSet whitespaceAndNewlineCharacterSet]]
+			stringByReplacingOccurrencesOfString:@"#" withString:@""];
 	NSRange dash = [hex rangeOfString:@"-"];
 	if (dash.location != NSNotFound)
 		hex = [hex substringToIndex:dash.location];
+	if (hex.length == 3){
+		NSMutableString *expanded = [NSMutableString stringWithCapacity:6];
+		for (NSUInteger i = 0; i < 3; i++){
+			NSString *digit = [hex substringWithRange:NSMakeRange(i, 1)];
+			[expanded appendString:digit];
+			[expanded appendString:digit];
+		}
+		hex = expanded;
+	}
 	if (hex.length != 6 && hex.length != 8)
 		return nil;
 
+	NSScanner *scanner = [NSScanner scannerWithString:[hex substringToIndex:6]];
 	unsigned int rgb = 0;
-	if (![[NSScanner scannerWithString:[hex substringToIndex:6]] scanHexInt:&rgb])
+	if (![scanner scanHexInt:&rgb] || ![scanner isAtEnd])
 		return nil;
 
 	CGFloat alpha = 1.0f;
@@ -58,6 +104,24 @@ static UIColor *TGColourFromHex(id value) {
 						   green:((rgb >> 8) & 0xFF) / 255.0f
 							blue:(rgb & 0xFF) / 255.0f
 						   alpha:alpha];
+}
+
+static BOOL TGPaletteLooksDark(NSDictionary *palette) {
+	NSArray *order = [NSArray arrayWithObjects:@"listBackground", @"chatBackground",
+			@"bar", nil];
+	for (NSString *key in order){
+		UIColor *colour = [palette objectForKey:key];
+		if (![colour isKindOfClass:UIColor.class])
+			continue;
+		CGFloat r = 0, g = 0, b = 0, a = 0;
+		if ([colour respondsToSelector:@selector(getRed:green:blue:alpha:)] &&
+				[colour getRed:&r green:&g blue:&b alpha:&a])
+			return (0.299f * r + 0.587f * g + 0.114f * b) < 0.5f;
+		CGFloat white = 0;
+		if ([colour getWhite:&white alpha:&a])
+			return white < 0.5f;
+	}
+	return NO;
 }
 
 /// Follow a dotted key path, tolerating a missing branch.
@@ -107,15 +171,33 @@ static id TGDig(NSDictionary *root, NSString *path) {
 		}
 	}
 
-	palette[@"isDark"] = @([root[@"dark"] boolValue]);
-	return palette.count > 2 ? palette : nil;
+	if (palette.count < 2)
+		return nil;
+
+	if ([root[@"dark"] respondsToSelector:@selector(boolValue)])
+		palette[@"isDark"] = @([root[@"dark"] boolValue]);
+	else
+		palette[@"isDark"] = @(TGPaletteLooksDark(palette));
+	return palette;
 }
 
 #pragma mark - Telegram for Android (.attheme)
 
 /// Android writes signed decimal ARGB, so -14606047 is a colour.
 static UIColor *TGColourFromSignedARGB(NSString *value) {
-	long long v = [value longLongValue];
+	value = [value stringByTrimmingCharactersInSet:
+			[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+	if (!value.length)
+		return nil;
+
+	if ([value hasPrefix:@"#"])
+		return TGColourFromHex(value);
+
+	NSScanner *scanner = [NSScanner scannerWithString:value];
+	long long v = 0;
+	if (![scanner scanLongLong:&v] || ![scanner isAtEnd])
+		return nil;
+
 	uint32_t argb = (uint32_t)v;
 	CGFloat alpha = ((argb >> 24) & 0xFF) / 255.0f;
 	return [UIColor colorWithRed:((argb >> 16) & 0xFF) / 255.0f
@@ -125,9 +207,23 @@ static UIColor *TGColourFromSignedARGB(NSString *value) {
 }
 
 + (NSDictionary *)paletteFromAndroidTheme:(NSData *)data {
+	NSData *marker = [@"WPS" dataUsingEncoding:NSUTF8StringEncoding];
+	NSRange wallpaper = [data rangeOfData:marker
+								  options:0
+									range:NSMakeRange(0, data.length)];
+	if (wallpaper.location != NSNotFound)
+		data = [data subdataWithRange:NSMakeRange(0, wallpaper.location)];
+	if (!data.length)
+		return nil;
+
 	NSString *text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
 	if (!text.length)
+		text = [[NSString alloc] initWithData:data encoding:NSISOLatin1StringEncoding];
+	if (!text.length)
 		return nil;
+
+	text = [text stringByReplacingOccurrencesOfString:@"\r\n" withString:@"\n"];
+	text = [text stringByReplacingOccurrencesOfString:@"\r" withString:@"\n"];
 
 	NSMutableDictionary *raw = [NSMutableDictionary dictionary];
 	for (NSString *line in [text componentsSeparatedByString:@"\n"]){
@@ -136,7 +232,9 @@ static UIColor *TGColourFromSignedARGB(NSString *value) {
 			continue;
 		NSString *key = [[line substringToIndex:eq.location]
 				stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-		NSString *value = [line substringFromIndex:eq.location + 1];
+		NSString *value = [[line substringFromIndex:eq.location + 1]
+				stringByTrimmingCharactersInSet:
+						[NSCharacterSet whitespaceAndNewlineCharacterSet]];
 		if (key.length && value.length)
 			raw[key] = value;
 	}
@@ -145,27 +243,31 @@ static UIColor *TGColourFromSignedARGB(NSString *value) {
 
 	NSMutableDictionary *palette = [NSMutableDictionary dictionary];
 	struct { NSString *key; NSString *names; } map[] = {
-		{@"bar",           @"actionBarDefault"},
+		{@"bar",           @"actionBarDefault|actionBarActionModeDefault"},
 		{@"barTitle",      @"actionBarDefaultTitle"},
-		{@"accent",        @"windowBackgroundWhiteBlueText|actionBarDefaultSubtitle"},
-		{@"chatBackground",@"chat_wallpaper|windowBackgroundWhite"},
+		{@"accent",        @"windowBackgroundWhiteBlueText|windowBackgroundWhiteBlueHeader|actionBarDefaultSubtitle"},
+		{@"chatBackground",@"chat_wallpaper|windowBackgroundGray|windowBackgroundWhite"},
 		{@"bubbleMine",    @"chat_outBubble"},
 		{@"bubbleTheirs",  @"chat_inBubble"},
 		{@"listBackground",@"windowBackgroundWhite"},
 		{@"primaryText",   @"windowBackgroundWhiteBlackText"},
-		{@"secondaryText", @"windowBackgroundWhiteGrayText"},
+		{@"secondaryText", @"windowBackgroundWhiteGrayText|windowBackgroundWhiteGrayText2"},
 	};
 
 	for (unsigned i = 0; i < sizeof(map) / sizeof(map[0]); i++){
 		for (NSString *candidate in [map[i].names componentsSeparatedByString:@"|"]){
-			NSString *value = raw[candidate];
-			if (value){
-				palette[map[i].key] = TGColourFromSignedARGB(value);
+			UIColor *colour = TGColourFromSignedARGB(raw[candidate]);
+			if (colour){
+				palette[map[i].key] = colour;
 				break;
 			}
 		}
 	}
-	return palette.count ? palette : nil;
+	if (palette.count < 2)
+		return nil;
+
+	palette[@"isDark"] = @(TGPaletteLooksDark(palette));
+	return palette;
 }
 
 @end

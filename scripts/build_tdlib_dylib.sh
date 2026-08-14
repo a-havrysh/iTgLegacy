@@ -24,7 +24,7 @@ TDLIB_SRC="${ROOT_DIR}/tdlib/td"
 BUILD_DIR="${ROOT_DIR}/build/tdlib-dylib-armv7"
 OUT_DIR="${ROOT_DIR}/build/armv7/tdlib/lib"
 
-XCODE_DEV="/Applications/Xcode-beta.app/Contents/Developer"
+XCODE_DEV="$(xcode-select -p)"
 SDK_PATH="${ROOT_DIR}/build/sdks/iPhoneOS12.4.sdk"
 [ -d "${SDK_PATH}" ] || SDK_PATH="${XCODE_DEV}/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
 TOOLCHAIN="${XCODE_DEV}/Toolchains/XcodeDefault.xctoolchain/usr/bin"
@@ -65,7 +65,7 @@ echo "[+] ios7 compat shims: ${COMPAT_O}"
 cd "${BUILD_DIR}"
 
 cmake "${TDLIB_SRC}" \
-	-DCMAKE_BUILD_TYPE=MinSizeRel \
+	-DCMAKE_BUILD_TYPE=RelWithDebInfo \
 	-DCMAKE_C_COMPILER_LAUNCHER=ccache \
 	-DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
 	-DCMAKE_C_COMPILER="${TOOLCHAIN}/clang" \
@@ -77,8 +77,8 @@ cmake "${TDLIB_SRC}" \
 	-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
 	-DATOMICS_FOUND=TRUE \
 	-DATOMICS_LIBRARIES="" \
-	-DCMAKE_C_FLAGS="-Wno-error -mthumb -Os" \
-	-DCMAKE_CXX_FLAGS="-Wno-error -mthumb -Os ${CXX_STDLIB_INC}" \
+	-DCMAKE_C_FLAGS="-Wno-error -mthumb -Os -g -I${ROOT_DIR}" \
+	-DCMAKE_CXX_FLAGS="-Wno-error -mthumb -Os -g -I${ROOT_DIR} ${CXX_STDLIB_INC}" \
 	-DCMAKE_SHARED_LINKER_FLAGS="-install_name @executable_path/libtdjson.dylib ${COMPAT_O}" \
 	-DOPENSSL_INCLUDE_DIR="${ROOT_DIR}/include" \
 	-DOPENSSL_CRYPTO_LIBRARY="${ROOT_DIR}/build/armv7/libs/libcrypto.a" \
@@ -93,7 +93,8 @@ DYLIB="$(find "${BUILD_DIR}" -name 'libtdjson*.dylib' | head -1)"
 [ -n "${DYLIB}" ] || { echo "[-] no dylib produced"; exit 1; }
 
 cp -f "${DYLIB}" "${OUT_DIR}/libtdjson.dylib"
-"${TOOLCHAIN}/strip" -x "${OUT_DIR}/libtdjson.dylib" 2>/dev/null || true
+"${TOOLCHAIN}/dsymutil" "${OUT_DIR}/libtdjson.dylib" -o "${OUT_DIR}/libtdjson.dylib.dSYM" 2>&1 | tail -5 || true
+# Debug build: keep full symbol table (no strip) so crash addresses resolve.
 
 # CMake overrides -install_name with its own @rpath value; the app carries the
 # dylib next to its binary, and iOS 7 has no @rpath support worth relying on.

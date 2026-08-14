@@ -453,8 +453,16 @@ static UIColor *rgb(int r, int g, int b) {
 		bar.tintColor = self.isFlat ? [self accentColour] : [UIColor whiteColor];
 		bar.titleTextAttributes = @{ NSForegroundColorAttributeName : [self barTitleColour] };
 	} else {
-		bar.tintColor = [self barColour];
+		bar.tintColor = self.isFlat ? [self accentColour] : [UIColor whiteColor];
 		bar.titleTextAttributes = @{ UITextAttributeTextColor : [self barTitleColour] };
+	}
+
+	if (!self.isFlat && _imported == nil){
+		UIImage *background = [UIImage imageNamed:@"NavBarBackground"];
+		if ([background respondsToSelector:@selector(resizableImageWithCapInsets:)])
+			background = [background resizableImageWithCapInsets:UIEdgeInsetsMake(0, 8, 0, 8)];
+		if (background && [bar respondsToSelector:@selector(setBackgroundImage:forBarMetrics:)])
+			[bar setBackgroundImage:background forBarMetrics:UIBarMetricsDefault];
 	}
 }
 

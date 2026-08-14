@@ -21,7 +21,7 @@ TDLIB_BUILD="${ROOT_DIR}/build/tdlib/build"
 TDLIB_INSTALL="${ROOT_DIR}/build/tdlib"
 
 # Prefer Xcode SDK over theos SDK (Xcode provides full C++ stdlib headers)
-XCODE_DEV="/Applications/Xcode-beta.app/Contents/Developer"
+XCODE_DEV="$(xcode-select -p)"
 if [ -d "${XCODE_DEV}/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk" ]; then
   SDK_PATH="${XCODE_DEV}/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
   XCODE_TOOLCHAIN="${XCODE_DEV}/Toolchains/XcodeDefault.xctoolchain/usr/bin"

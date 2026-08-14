@@ -2,35 +2,65 @@
 #import "TGTheme.h"
 #import "TGIcons.h"
 #import <QuartzCore/QuartzCore.h>
+#import "UIView+SafeTint.h"
 
 // Their snackbar at 360dp: a 48 tall plate inset 8, a 24 countdown ring at 16
 // from the left, the wording at 15, UNDO on the right in blue.
-static const CGFloat kBarHeight = 44.0f;
-static const CGFloat kBarInset  = 7.0f;
+static const CGFloat kBarHeight = 53.0f;
+static const CGFloat kBarInset  = 0.0f;
 static const CGFloat kRingSide  = 22.0f;
+static const CGFloat kButtonWidth  = 96.0f;
+static const CGFloat kButtonHeight = 32.0f;
 
 static TGSnackbar *sOpenBar = nil;
 
+@interface TGSnackbar () <UIGestureRecognizerDelegate>
+@end
+
 @implementation TGSnackbar {
 	NSTimer *_tick;
-	NSInteger _left;
-	NSInteger _total;
+	CGFloat _left;
+	CGFloat _total;
+	NSInteger _shown;
 	void (^_commit)(void);
 	UILabel *_count;
 	CAShapeLayer *_ring;
+	UIButton *_undo;
+	BOOL _finished;
+	BOOL _wasInWindow;
+	CGFloat _dragOffset;
 }
 
 + (void)commitNow {
 	TGSnackbar *bar = sOpenBar;
 	if (!bar)
 		return;
-	sOpenBar = nil;
-	[bar->_tick invalidate];
-	bar->_tick = nil;
-	void (^commit)(void) = bar->_commit;
-	bar->_commit = nil;
-	[bar removeFromSuperview];
-	if (commit)
+	[bar finishCommitting:YES animated:YES];
+}
+
+- (void)finishCommitting:(BOOL)runCommit animated:(BOOL)animated {
+	if (_finished)
+		return;
+	_finished = YES;
+	if (sOpenBar == self)
+		sOpenBar = nil;
+	[_tick invalidate];
+	_tick = nil;
+	[[NSNotificationCenter defaultCenter] removeObserver:self];
+	self.userInteractionEnabled = NO;
+	void (^commit)(void) = _commit;
+	_commit = nil;
+
+	if (animated && self.superview) {
+		UIView *me = self;
+		[UIView animateWithDuration:0.2
+						 animations:^{ me.alpha = 0.0f; }
+						 completion:^(BOOL done){ [me removeFromSuperview]; }];
+	} else {
+		[self removeFromSuperview];
+	}
+
+	if (runCommit && commit)
 		commit();
 }
 
@@ -48,8 +78,9 @@ static TGSnackbar *sOpenBar = nil;
 	TGSnackbar *bar = [[TGSnackbar alloc] initWithFrame:CGRectMake(
 			kBarInset, b.size.height - kBarHeight - kBarInset,
 			b.size.width - 2 * kBarInset, kBarHeight)];
-	bar->_total = MAX((NSInteger)1, seconds);
+	bar->_total = (CGFloat)MAX((NSInteger)1, seconds);
 	bar->_left = bar->_total;
+	bar->_shown = (NSInteger)bar->_total;
 	bar->_commit = [commit copy];
 	bar.autoresizingMask = UIViewAutoresizingFlexibleWidth |
 						   UIViewAutoresizingFlexibleTopMargin;
@@ -62,20 +93,61 @@ static TGSnackbar *sOpenBar = nil;
 	bar.frame = CGRectOffset(resting, 0, kBarHeight + kBarInset);
 	[UIView animateWithDuration:0.2 animations:^{ bar.frame = resting; }];
 
-	bar->_tick = [NSTimer scheduledTimerWithTimeInterval:1.0
-												  target:bar
-												selector:@selector(second)
-												userInfo:nil
-												 repeats:YES];
+	bar->_tick = [NSTimer timerWithTimeInterval:0.5
+										 target:bar
+									   selector:@selector(second)
+									   userInfo:nil
+										repeats:YES];
+	[[NSRunLoop mainRunLoop] addTimer:bar->_tick forMode:NSRunLoopCommonModes];
+
+	[[NSNotificationCenter defaultCenter] addObserver:bar
+											 selector:@selector(appLeaving)
+												 name:UIApplicationDidEnterBackgroundNotification
+											   object:nil];
+	[[NSNotificationCenter defaultCenter] addObserver:bar
+											 selector:@selector(appLeaving)
+												 name:UIApplicationWillTerminateNotification
+											   object:nil];
+}
+
+- (void)appLeaving {
+	[self finishCommitting:YES animated:NO];
+}
+
+- (void)didMoveToWindow {
+	[super didMoveToWindow];
+	if (self.window)
+		_wasInWindow = YES;
+}
+
+- (void)willMoveToWindow:(UIWindow *)window {
+	[super willMoveToWindow:window];
+	if (!window && _wasInWindow && !_finished)
+		[self finishCommitting:YES animated:NO];
+}
+
+- (void)dealloc {
+	[_tick invalidate];
+	[[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 - (void)buildWithText:(NSString *)text {
 	// steel-gray_dark, which is what their plate is - it has to read over both
 	// a light and a dark chat.
-	self.backgroundColor = [UIColor colorWithRed:0.24f green:0.28f blue:0.33f alpha:0.97f];
-	self.layer.cornerRadius = 5;
+	self.backgroundColor = [UIColor colorWithRed:0.20f green:0.22f blue:0.24f alpha:1.0f];
+	self.clipsToBounds = YES;
 
-	CGRect ring = CGRectMake(14, (kBarHeight - kRingSide) / 2, kRingSide, kRingSide);
+	UIImage *plate = [UIImage imageNamed:@"ConversationActionBar.png"];
+	if (plate) {
+		UIImageView *plateView = [[UIImageView alloc] initWithFrame:self.bounds];
+		plateView.image = [plate stretchableImageWithLeftCapWidth:(int)(plate.size.width / 2)
+													topCapHeight:0];
+		plateView.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+									 UIViewAutoresizingFlexibleHeight;
+		[self addSubview:plateView];
+	}
+
+	CGRect ring = CGRectMake(12, (kBarHeight - kRingSide) / 2, kRingSide, kRingSide);
 	_ring = [CAShapeLayer layer];
 	_ring.frame = ring;
 	_ring.path = [UIBezierPath bezierPathWithOvalInRect:
@@ -91,61 +163,124 @@ static TGSnackbar *sOpenBar = nil;
 
 	_count = [[UILabel alloc] initWithFrame:ring];
 	_count.textAlignment = NSTextAlignmentCenter;
-	_count.font = [UIFont systemFontOfSize:12];
+	_count.font = [UIFont boldSystemFontOfSize:12];
 	_count.textColor = [UIColor whiteColor];
+	_count.shadowColor = [UIColor colorWithWhite:0.0f alpha:0.4f];
+	_count.shadowOffset = CGSizeMake(0, -1);
 	_count.backgroundColor = [UIColor clearColor];
-	_count.text = [NSString stringWithFormat:@"%ld", (long)_left];
+	_count.text = [NSString stringWithFormat:@"%ld", (long)_shown];
 	[self addSubview:_count];
 
 	UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(
-			46, 0, self.bounds.size.width - 46 - 76, kBarHeight)];
-	label.text = text;
-	label.font = [UIFont systemFontOfSize:15];
+			42, 0, self.bounds.size.width - 42 - kButtonWidth - 16, kBarHeight)];
+	label.text = ([text isKindOfClass:[NSString class]] && text.length > 0) ? text : @"Done";
+	label.numberOfLines = 1;
+	label.lineBreakMode = NSLineBreakByTruncatingTail;
+	label.font = [UIFont systemFontOfSize:13];
 	label.textColor = [UIColor whiteColor];
+	label.shadowColor = [UIColor colorWithWhite:0.0f alpha:0.4f];
+	label.shadowOffset = CGSizeMake(0, -1);
 	label.backgroundColor = [UIColor clearColor];
 	label.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	[self addSubview:label];
 
 	UIButton *undo = [UIButton buttonWithType:UIButtonTypeCustom];
-	undo.frame = CGRectMake(self.bounds.size.width - 76, 0, 70, kBarHeight);
+	undo.frame = CGRectMake(self.bounds.size.width - kButtonWidth - 8,
+			(int)((kBarHeight - kButtonHeight) / 2), kButtonWidth, kButtonHeight);
 	undo.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
-	[undo setTitle:@"UNDO" forState:UIControlStateNormal];
-	[undo setTitleColor:[UIColor colorWithRed:0.30f green:0.70f blue:0.96f alpha:1.0f]
-			   forState:UIControlStateNormal];
-	undo.titleLabel.font = [UIFont boldSystemFontOfSize:14];
-	undo.titleEdgeInsets = UIEdgeInsetsMake(0, 14, 0, 0);
+	undo.exclusiveTouch = YES;
+	undo.adjustsImageWhenHighlighted = NO;
+	undo.adjustsImageWhenDisabled = NO;
+
+	UIImage *normal = [UIImage imageNamed:@"ActionForward_Button.png"];
+	UIImage *pressed = [UIImage imageNamed:@"ActionForward_Button_Pressed.png"];
+	if (normal)
+		[undo setBackgroundImage:[normal stretchableImageWithLeftCapWidth:(int)(normal.size.width / 2)
+															topCapHeight:0]
+						forState:UIControlStateNormal];
+	if (pressed)
+		[undo setBackgroundImage:[pressed stretchableImageWithLeftCapWidth:(int)(pressed.size.width / 2)
+															 topCapHeight:0]
+						forState:UIControlStateHighlighted];
+
+	[undo setTitle:@"Undo" forState:UIControlStateNormal];
+	[undo setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+	undo.titleLabel.font = [UIFont boldSystemFontOfSize:13];
+	undo.titleLabel.shadowColor = [UIColor colorWithRed:0x3c / 255.0f
+												  green:0x66 / 255.0f
+												   blue:0x96 / 255.0f
+												  alpha:0.5f];
+	undo.titleLabel.shadowOffset = CGSizeMake(0, -1);
 	[undo addTarget:self action:@selector(undoTapped)
    forControlEvents:UIControlEventTouchUpInside];
 	[self addSubview:undo];
+	_undo = undo;
 
-	UIImageView *arrow = [[UIImageView alloc] initWithFrame:CGRectMake(
-			self.bounds.size.width - 74, (kBarHeight - 18) / 2, 18, 18)];
-	arrow.image = [TGIcons menuGlyphNamed:@"undo"];
-	arrow.contentMode = UIViewContentModeScaleAspectFit;
-	arrow.tintColor = [UIColor colorWithRed:0.30f green:0.70f blue:0.96f alpha:1.0f];
-	arrow.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
-	[self insertSubview:arrow belowSubview:undo];
+	UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc]
+			initWithTarget:self action:@selector(plateTapped)];
+	tap.delegate = self;
+	[self addGestureRecognizer:tap];
+
+	UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc]
+			initWithTarget:self action:@selector(plateDragged:)];
+	[self addGestureRecognizer:pan];
 }
 
 - (void)second {
-	_left--;
-	if (_left <= 0){
-		[TGSnackbar commitNow];
+	if (_finished)
+		return;
+	_left -= 0.5f;
+	if (_left <= 0.0f) {
+		[self finishCommitting:YES animated:YES];
 		return;
 	}
-	_count.text = [NSString stringWithFormat:@"%ld", (long)_left];
-	_ring.strokeEnd = (CGFloat)_left / (CGFloat)_total;
+	NSInteger whole = (NSInteger)ceilf(_left);
+	if (whole != _shown) {
+		_shown = whole;
+		_count.text = [NSString stringWithFormat:@"%ld", (long)_shown];
+	}
+	_ring.strokeEnd = MAX(0.02f, _left / _total);
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)recognizer
+	   shouldReceiveTouch:(UITouch *)touch
+{
+	if (_undo && touch.view && [touch.view isDescendantOfView:_undo])
+		return NO;
+	return YES;
+}
+
+- (void)plateTapped {
+	[self finishCommitting:YES animated:YES];
+}
+
+- (void)plateDragged:(UIPanGestureRecognizer *)pan {
+	if (_finished)
+		return;
+	CGPoint t = [pan translationInView:self];
+	if (pan.state == UIGestureRecognizerStateChanged) {
+		CGFloat dy = MAX(0.0f, t.y);
+		self.transform = CGAffineTransformMakeTranslation(0.0f, dy);
+		_dragOffset = dy;
+	} else if (pan.state == UIGestureRecognizerStateEnded ||
+			   pan.state == UIGestureRecognizerStateCancelled) {
+		CGFloat v = [pan velocityInView:self].y;
+		if (_dragOffset > kBarHeight / 3.0f || v > 300.0f) {
+			[self finishCommitting:YES animated:YES];
+		} else {
+			_dragOffset = 0.0f;
+			UIView *me = self;
+			[UIView animateWithDuration:0.15
+							 animations:^{ me.transform = CGAffineTransformIdentity; }];
+		}
+	}
 }
 
 - (void)undoTapped {
-	sOpenBar = nil;
-	[_tick invalidate];
-	_tick = nil;
-	_commit = nil;             // the action never happens
-	UIView *me = self;
-	[UIView animateWithDuration:0.2
-					 animations:^{ me.alpha = 0; }
-					 completion:^(BOOL done){ [me removeFromSuperview]; }];
+	if (_finished)
+		return;
+	_undo.enabled = NO;
+	[self finishCommitting:NO animated:YES];
 }
 
 @end

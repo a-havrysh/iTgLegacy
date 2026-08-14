@@ -2,10 +2,13 @@
 #import <AVFoundation/AVFoundation.h>
 #include "opusenc/opusenc.h"
 
-@interface TGVoiceRecorder ()
+static const NSTimeInterval TGVoiceRecorderMaxDuration = 60.0 * 60.0;
+
+@interface TGVoiceRecorder () <AVAudioRecorderDelegate>
 @property (nonatomic, strong) AVAudioRecorder *recorder;
 @property (nonatomic, strong) NSString *pcmPath;
 @property (nonatomic, strong) NSDate *startedAt;
+@property (nonatomic, assign) NSTimeInterval capturedDuration;
 @end
 
 @implementation TGVoiceRecorder
@@ -18,27 +21,53 @@
 }
 
 - (BOOL)recording {
-	return self.recorder.isRecording;
+	return self.recorder != nil && self.recorder.isRecording;
 }
 
 - (NSTimeInterval)duration {
-	return self.startedAt ? -[self.startedAt timeIntervalSinceNow] : 0;
+	if (self.startedAt)
+		return self.capturedDuration - [self.startedAt timeIntervalSinceNow];
+	return self.capturedDuration;
+}
+
+- (NSString *)temporaryPathWithExtension:(NSString *)ext {
+	NSString *name = [NSString stringWithFormat:@"voice-%.0f-%u.%@",
+			[[NSDate date] timeIntervalSince1970] * 1000.0, arc4random() % 100000, ext];
+	return [NSTemporaryDirectory() stringByAppendingPathComponent:name];
+}
+
+- (void)deactivateSession {
+	AVAudioSession *session = [AVAudioSession sharedInstance];
+	NSError *err = nil;
+	[session setCategory:AVAudioSessionCategoryPlayback error:&err];
+	[session setActive:YES error:&err];
 }
 
 - (BOOL)start {
 	if (self.recording)
 		return YES;
 
+	[self teardownRecorderKeepingFile:NO];
+
 	NSError *err = nil;
 	AVAudioSession *session = [AVAudioSession sharedInstance];
-	[session setCategory:AVAudioSessionCategoryPlayAndRecord error:&err];
-	[session setActive:YES error:&err];
-	if (err){
-		NSLog(@"TGVoiceRecorder: audio session: %@", err);
+	if (![session setCategory:AVAudioSessionCategoryPlayAndRecord error:&err]){
+		NSLog(@"TGVoiceRecorder: audio session category: %@", err);
+		return NO;
+	}
+	err = nil;
+	if (![session setActive:YES error:&err]){
+		NSLog(@"TGVoiceRecorder: audio session activate: %@", err);
 		return NO;
 	}
 
-	self.pcmPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"voice.caf"];
+	if ([session respondsToSelector:@selector(inputIsAvailable)] && !session.inputIsAvailable){
+		NSLog(@"TGVoiceRecorder: no audio input available");
+		[self deactivateSession];
+		return NO;
+	}
+
+	self.pcmPath = [self temporaryPathWithExtension:@"caf"];
 	[[NSFileManager defaultManager] removeItemAtPath:self.pcmPath error:nil];
 
 	// 48kHz mono 16-bit: what libopusenc wants, so nothing has to be resampled.
@@ -51,44 +80,126 @@
 		AVLinearPCMIsBigEndianKey: @NO,
 	};
 
+	err = nil;
 	self.recorder = [[AVAudioRecorder alloc] initWithURL:[NSURL fileURLWithPath:self.pcmPath]
 												settings:settings
 												   error:&err];
 	if (!self.recorder || err){
 		NSLog(@"TGVoiceRecorder: %@", err);
+		self.recorder = nil;
+		self.pcmPath = nil;
+		[self deactivateSession];
 		return NO;
 	}
 
+	self.recorder.delegate = self;
+	if (![self.recorder prepareToRecord]){
+		NSLog(@"TGVoiceRecorder: prepareToRecord failed");
+		[self teardownRecorderKeepingFile:NO];
+		[self deactivateSession];
+		return NO;
+	}
+
+	self.capturedDuration = 0;
 	self.startedAt = [NSDate date];
-	return [self.recorder record];
+
+	BOOL started = [self.recorder recordForDuration:TGVoiceRecorderMaxDuration];
+	if (!started){
+		NSLog(@"TGVoiceRecorder: record failed to start");
+		[self teardownRecorderKeepingFile:NO];
+		[self deactivateSession];
+		return NO;
+	}
+
+	if ([session respondsToSelector:@selector(requestRecordPermission:)]){
+		__weak typeof(self) weakSelf = self;
+		[session requestRecordPermission:^(BOOL granted){
+			if (granted)
+				return;
+			dispatch_async(dispatch_get_main_queue(), ^{
+				TGVoiceRecorder *me = weakSelf;
+				NSLog(@"TGVoiceRecorder: microphone permission denied");
+				[me cancel];
+			});
+		}];
+	}
+
+	return YES;
+}
+
+- (void)teardownRecorderKeepingFile:(BOOL)keepFile {
+	AVAudioRecorder *recorder = self.recorder;
+	self.recorder = nil;
+	recorder.delegate = nil;
+	if (recorder.isRecording)
+		[recorder stop];
+
+	self.startedAt = nil;
+	if (!keepFile){
+		if (self.pcmPath)
+			[[NSFileManager defaultManager] removeItemAtPath:self.pcmPath error:nil];
+		self.pcmPath = nil;
+		self.capturedDuration = 0;
+	}
 }
 
 - (void)cancel {
-	[self.recorder stop];
-	self.recorder = nil;
-	self.startedAt = nil;
-	[[NSFileManager defaultManager] removeItemAtPath:self.pcmPath error:nil];
+	[self teardownRecorderKeepingFile:NO];
+	[self deactivateSession];
 }
 
 - (void)stopWithCompletion:(void (^)(NSString *, NSTimeInterval))completion {
 	NSTimeInterval seconds = self.duration;
-	[self.recorder stop];
-	self.recorder = nil;
-	self.startedAt = nil;
+	self.capturedDuration = seconds;
 
 	NSString *pcmPath = self.pcmPath;
+	[self teardownRecorderKeepingFile:YES];
+	self.pcmPath = nil;
+	self.capturedDuration = 0;
+	[self deactivateSession];
+
+	if (!pcmPath || seconds < 0.3){
+		if (pcmPath)
+			[[NSFileManager defaultManager] removeItemAtPath:pcmPath error:nil];
+		if (completion) completion(nil, 0);
+		return;
+	}
+
 	dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-		NSString *oga = [self encodePCMAtPath:pcmPath];
+		NSString *oga = nil;
+		@try {
+			oga = [self encodePCMAtPath:pcmPath];
+		} @catch (NSException *exception){
+			NSLog(@"TGVoiceRecorder: encode exception %@", exception);
+			oga = nil;
+		}
+		[[NSFileManager defaultManager] removeItemAtPath:pcmPath error:nil];
 		dispatch_async(dispatch_get_main_queue(), ^{
 			if (completion) completion(oga, seconds);
 		});
 	});
 }
 
+- (void)audioRecorderEncodeErrorDidOccur:(AVAudioRecorder *)recorder error:(NSError *)error {
+	NSLog(@"TGVoiceRecorder: encode error %@", error);
+	if (recorder == self.recorder)
+		[self cancel];
+}
+
+- (void)audioRecorderBeginInterruption:(AVAudioRecorder *)recorder {
+	if (recorder == self.recorder)
+		[self cancel];
+}
+
 /// CAF from AVAudioRecorder is a header followed by raw samples; find the data
 /// chunk, then feed it to libopusenc.
 - (NSString *)encodePCMAtPath:(NSString *)path {
-	NSData *caf = [NSData dataWithContentsOfFile:path];
+	if (!path)
+		return nil;
+
+	NSData *caf = [NSData dataWithContentsOfFile:path
+										 options:NSDataReadingMappedIfSafe
+										   error:nil];
 	if (caf.length < 64){
 		NSLog(@"TGVoiceRecorder: nothing recorded");
 		return nil;
@@ -109,10 +220,19 @@
 
 		if (!strcmp(type, "data")){
 			offset = p + 12 + 4;
-			dataLength = (size == (uint64_t)-1 || p + 12 + size > caf.length)
-					? caf.length - offset : (NSUInteger)size - 4;
+			if (offset >= caf.length)
+				break;
+			if (size == (uint64_t)-1 || size < 4 || p + 12 + size > caf.length)
+				dataLength = caf.length - offset;
+			else
+				dataLength = (NSUInteger)size - 4;
+			if (dataLength > caf.length - offset)
+				dataLength = caf.length - offset;
 			break;
 		}
+
+		if (size == 0 || size > caf.length)
+			break;
 		p += 12 + (NSUInteger)size;
 	}
 
@@ -121,7 +241,7 @@
 		return nil;
 	}
 
-	NSString *out = [NSTemporaryDirectory() stringByAppendingPathComponent:@"voice.oga"];
+	NSString *out = [self temporaryPathWithExtension:@"oga"];
 	[[NSFileManager defaultManager] removeItemAtPath:out error:nil];
 
 	int error = 0;
@@ -150,8 +270,13 @@
 	ope_comments_destroy(comments);
 
 	NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:out error:nil];
-	NSLog(@"TGVoiceRecorder: encoded %llu bytes", [attrs fileSize]);
-	return [attrs fileSize] > 0 ? out : nil;
+	unsigned long long size = attrs ? [attrs fileSize] : 0;
+	NSLog(@"TGVoiceRecorder: encoded %llu bytes", size);
+	if (size == 0){
+		[[NSFileManager defaultManager] removeItemAtPath:out error:nil];
+		return nil;
+	}
+	return out;
 }
 
 @end

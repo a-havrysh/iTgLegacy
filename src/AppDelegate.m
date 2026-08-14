@@ -16,6 +16,7 @@
 #import "TGCallViewController.h"
 #import "TGChatViewController.h"
 #import "TGTopicsViewController.h"
+#import "TGHacks.h"
 #import <QuartzCore/QuartzCore.h>
 #include <stdio.h>
 
@@ -36,6 +37,8 @@ static void TGWatchForIncomingCalls(void) {
 - (BOOL)application:(UIApplication *)application
 		didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
 {
+	[TGHacks hackSetAnimationDuration];
+
 	NSString *cache = [NSSearchPathForDirectoriesInDomains(
 			NSCachesDirectory, NSUserDomainMask, YES) objectAtIndex:0];
 
@@ -302,7 +305,6 @@ static void TGWatchForIncomingCalls(void) {
 				TGTopicsViewController *topics = [[TGTopicsViewController alloc] init];
 				topics.chatId = [c[@"id"] longLongValue];
 				topics.chatTitle = c[@"title"];
-				topics.hidesBottomBarWhenPushed = YES;
 				[nc pushViewController:topics animated:NO];
 				NSLog(@"open forum index %ld", (long)idx);
 				return;
@@ -312,7 +314,6 @@ static void TGWatchForIncomingCalls(void) {
 			vc.chatId = [c[@"id"] longLongValue];
 			vc.chatTitle = c[@"title"];
 			vc.isGroup = [c[@"isGroup"] boolValue];   // same as the list does
-			vc.hidesBottomBarWhenPushed = YES;
 			[nc pushViewController:vc animated:NO];
 			NSLog(@"open chat index %ld", (long)idx);
 		});
@@ -352,6 +353,28 @@ static void TGWatchForIncomingCalls(void) {
 					control = (UIControl *)view;
 					break;
 				}
+
+			// TGTabBar reads raw touches itself rather than being a UIControl,
+			// so touch/ needs to drive it directly rather than through actions.
+			Class tabBarClass = NSClassFromString(@"TGTabBar");
+			for (UIView *view = hit; view; view = view.superview){
+				if (tabBarClass && [view isKindOfClass:tabBarClass]){
+					int index = MAX(0, MIN((int)3 - 1, (int)(point.x / (view.frame.size.width / 3))));
+					if ([view respondsToSelector:@selector(setSelectedIndex:)])
+						[view setValue:@(index) forKey:@"selectedIndex"];
+					id delegate = [view valueForKey:@"tabDelegate"];
+					SEL selector = @selector(tabBarSelectedItem:);
+					if ([delegate respondsToSelector:selector]){
+						NSMethodSignature *sig = [delegate methodSignatureForSelector:selector];
+						NSInvocation *invocation = [NSInvocation invocationWithMethodSignature:sig];
+						invocation.selector = selector;
+						[invocation setArgument:&index atIndex:2];
+						[invocation invokeWithTarget:delegate];
+					}
+					NSLog(@"touch: TGTabBar -> index %d", index);
+					return;
+				}
+			}
 
 			// A switch changes its value from its own gesture handling, not
 			// from TouchUpInside, so sending that alone leaves it where it was
@@ -641,11 +664,24 @@ static void TGWatchForIncomingCalls(void) {
 
 	if ([host isEqualToString:@"tap"]){
 		dispatch_async(dispatch_get_main_queue(), ^{
-			UITabBarController *tabs = (UITabBarController *)self.rootViewController;
-			if (![tabs isKindOfClass:UITabBarController.class])
-				return;
-			UINavigationController *nc = tabs.viewControllers[tabs.selectedIndex];
-			UIViewController *top = nc.topViewController;
+			// A modally-presented screen (like New Contact) sits outside the tab
+			// bar's own navigation stack, so its rows would otherwise be
+			// unreachable from a script.
+			UIViewController *presented = self.rootViewController.presentedViewController;
+			while (presented.presentedViewController)
+				presented = presented.presentedViewController;
+			UIViewController *top;
+			if ([presented isKindOfClass:UINavigationController.class])
+				top = ((UINavigationController *)presented).topViewController;
+			else if (presented)
+				top = presented;
+			else {
+				UITabBarController *tabs = (UITabBarController *)self.rootViewController;
+				if (![tabs isKindOfClass:UITabBarController.class])
+					return;
+				UINavigationController *nc = tabs.viewControllers[tabs.selectedIndex];
+				top = nc.topViewController;
+			}
 			// Any table screen can answer this, not only a chat: rows are not
 			// controls, so touch/ cannot reach them and every list would
 			// otherwise be unreachable without a finger.

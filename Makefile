@@ -30,7 +30,7 @@ IPA_ARMV7  := $(IPA_DIR)/iTgLegacy-armv7.ipa
 IPA_ARM64  := $(IPA_DIR)/iTgLegacy-arm64.ipa
 
 # Compiler & Toolchain
-XCODE_DEV   := /Applications/Xcode-beta.app/Contents/Developer
+XCODE_DEV   := $(shell xcode-select -p)
 XCODE_CLANG := $(XCODE_DEV)/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang
 XCODE_CXX   := $(XCODE_DEV)/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++
 XCODE_SDK   := $(XCODE_DEV)/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk
@@ -46,6 +46,13 @@ endif
 ifeq ($(wildcard $(SDK_PATH)),)
   SDK_PATH  := $(XCODE_SDK)
 endif
+
+# armv7 needs an old SDK: modern Xcode's iPhoneOS SDK ships no armv7 slice in
+# libSystem.tbd at all, so armv7 binaries fail to link against it (undefined
+# libc symbols). The theos SDK above still carries that slice. arm64 keeps
+# using the current Xcode SDK, which builds fine.
+SDK_PATH_ARMV7 := $(SDK_PATH)
+SDK_PATH_ARM64 := $(XCODE_SDK)
 
 CC  := $(shell command -v ccache 2>/dev/null) $(XCODE_CLANG)
 CXX := $(shell command -v ccache 2>/dev/null) $(XCODE_CXX)
@@ -78,7 +85,7 @@ FRAMEWORKS := -framework UIKit -framework Foundation -framework QuickLook \
               -framework CoreMedia -framework AddressBook \
               -framework AddressBookUI -framework MobileCoreServices \
               -framework CoreLocation -framework MapKit \
-              -framework CoreTelephony \
+              -framework CoreTelephony -framework ImageIO \
 
 
 # TDLib is loaded at runtime from libtdjson.dylib, never linked.
@@ -122,7 +129,8 @@ VOIP_SRC_CXX := \
 
 VOIP_SRC_MM := \
 	src/libtgvoip/os/darwin/DarwinSpecific.mm \
-	src/TGCall.mm
+	src/TGCall.mm \
+	src/TGDateUtils.mm
 
 VOIP_FLAGS := -DTGVOIP_NO_DSP -DWEBRTC_POSIX -DTGVOIP_USE_CUSTOM_CRYPTO \
               -I$(ROOT_DIR)/src/libtgvoip -Wno-everything
@@ -166,7 +174,22 @@ APP_SRC_M := \
 	src/TGVoiceRecorder.m \
 	src/opusenc/opusenc.m \
 	src/UIImage+WebP.m \
-	src/TGLottieView.m
+	src/TGLottieView.m \
+	src/UIView+SafeTint.m \
+	src/TGImageDecode.m \
+	src/TGNewContactViewController.m \
+	src/TGCountryPickerViewController.m \
+	src/TGHighlightTriggerLabel.m \
+	src/TGHighlightImageView.m \
+	src/TGReusableView.m \
+	src/TGViewRecycler.m \
+	src/TGLabel.m \
+	src/TGDateLabel.m \
+	src/TGSwipeGestureRecognizer.m \
+	src/TGRemoteImageView.m \
+	src/TGTabBar.m \
+	src/TGHacks.m \
+	src/TGTabsContainerViewDelegate.m
 
 APP_SRC_C := \
 	src/tlv_polyfill.c \
@@ -196,17 +219,20 @@ ARMV7_ALL_OBJS   := $(ARMV7_LIBTG_OBJS) $(ARMV7_APP_OBJS)
 ARM64_OBJ_DIR := $(BUILD_DIR)/arm64/obj
 ARM64_LIBTG_OBJS := $(patsubst %.c,$(ARM64_OBJ_DIR)/%.o,$(LIBTG_SRC_C)) \
                     $(patsubst %.cpp,$(ARM64_OBJ_DIR)/%.o,$(LIBTG_SRC_CXX))
+ARM64_VOIP_OBJS  := $(patsubst %.cpp,$(ARM64_OBJ_DIR)/%.o,$(VOIP_SRC_CXX)) \
+                    $(patsubst %.mm,$(ARM64_OBJ_DIR)/%.o,$(VOIP_SRC_MM))
 ARM64_APP_OBJS   := $(patsubst %.m,$(ARM64_OBJ_DIR)/%.o,$(APP_SRC_M)) \
-                    $(patsubst %.c,$(ARM64_OBJ_DIR)/%.o,$(APP_SRC_C))
+                    $(patsubst %.c,$(ARM64_OBJ_DIR)/%.o,$(APP_SRC_C)) \
+                    $(ARM64_VOIP_OBJS)
 ARM64_ALL_OBJS   := $(ARM64_LIBTG_OBJS) $(ARM64_APP_OBJS)
 
 # Compiler Flags per Architecture
-CFLAGS_ARMV7    := -arch armv7 -mthumb -O2 -isysroot $(SDK_PATH) $(MIN_IOS) $(INCLUDES) $(DEFINES) -fPIC \
+CFLAGS_ARMV7    := -arch armv7 -mthumb -O2 -isysroot $(SDK_PATH_ARMV7) $(MIN_IOS) $(INCLUDES) $(DEFINES) -fPIC \
                    -Wno-macro-redefined -Wno-implicit-function-declaration -Wno-incompatible-pointer-types -Wno-deprecated-declarations
 OBJCFLAGS_ARMV7 := $(CFLAGS_ARMV7) -fobjc-arc
 CXXFLAGS_ARMV7  := $(CFLAGS_ARMV7) $(CXX_STDLIB_INC) -std=c++11 -fno-use-cxa-atexit -fno-threadsafe-statics -Wno-error
 
-CFLAGS_ARM64    := -arch arm64 -O2 -isysroot $(SDK_PATH) $(MIN_IOS) $(INCLUDES) $(DEFINES) -fPIC \
+CFLAGS_ARM64    := -arch arm64 -O2 -isysroot $(SDK_PATH_ARM64) $(MIN_IOS) $(INCLUDES) $(DEFINES) -fPIC \
                    -Wno-macro-redefined -Wno-implicit-function-declaration -Wno-incompatible-pointer-types -Wno-deprecated-declarations
 OBJCFLAGS_ARM64 := $(CFLAGS_ARM64) -fobjc-arc
 CXXFLAGS_ARM64  := $(CFLAGS_ARM64) $(CXX_STDLIB_INC) -std=c++11 -fno-use-cxa-atexit -fno-threadsafe-statics -Wno-error
@@ -244,7 +270,7 @@ $(MACHOFIX): tools/machofix.c
 ipa-armv7: $(MACHOFIX) $(ARMV7_ALL_OBJS)
 	@echo "[+] Building 32-bit armv7 app bundle..."
 	@mkdir -p "$(IPA_DIR)" "$(BUILD_DIR)/armv7/app/iTgLegacy.app"
-	$(CC) -arch armv7 -isysroot $(SDK_PATH) $(MIN_IOS) -Wl,-dead_strip -ObjC -Wl,-pagezero_size,0x1000 \
+	$(CC) -arch armv7 -isysroot $(SDK_PATH_ARMV7) $(MIN_IOS) -Wl,-dead_strip -ObjC -Wl,-pagezero_size,0x1000 \
 		-L$(BUILD_DIR)/armv7/libs -L$(BUILD_DIR)/armv7/tdlib/lib -L$(ROOT_DIR)/src/opus/lib \
 		$(ARMV7_ALL_OBJS) $(FRAMEWORKS) $(WEBP_ARMV7) $(TDLIB_LIBS) $(DEPS_LIBS) -o "$(BUILD_DIR)/armv7/app/iTgLegacy.app/iTgLegacy"
 	@cp -f "$(ROOT_DIR)/src/Info.plist" "$(BUILD_DIR)/armv7/app/iTgLegacy.app/Info.plist" 2>/dev/null || true
@@ -264,7 +290,7 @@ ipa-armv7: $(MACHOFIX) $(ARMV7_ALL_OBJS)
 ipa-arm64: $(ARM64_ALL_OBJS)
 	@echo "[+] Building 64-bit arm64 app bundle..."
 	@mkdir -p "$(IPA_DIR)" "$(BUILD_DIR)/arm64/app/iTgLegacy.app"
-	$(CC) -arch arm64 -isysroot $(SDK_PATH) $(MIN_IOS) -Wl,-dead_strip \
+	$(CC) -arch arm64 -isysroot $(SDK_PATH_ARM64) $(MIN_IOS) -Wl,-dead_strip \
 		-L$(BUILD_DIR)/arm64/libs -L$(BUILD_DIR)/arm64/tdlib/lib -L$(ROOT_DIR)/src/opus/lib \
 		$(ARM64_ALL_OBJS) $(FRAMEWORKS) $(WEBP_ARM64) $(TDLIB_LIBS) $(DEPS_LIBS) -o "$(BUILD_DIR)/arm64/app/iTgLegacy.app/iTgLegacy"
 	@cp -f "$(ROOT_DIR)/src/Info.plist" "$(BUILD_DIR)/arm64/app/iTgLegacy.app/Info.plist" 2>/dev/null || true
@@ -309,6 +335,14 @@ $(ARM64_OBJ_DIR)/%.o: %.c
 $(ARM64_OBJ_DIR)/%.o: %.m
 	@mkdir -p $(dir $@)
 	$(CC) $(OBJCFLAGS_ARM64) -c $< -o $@
+
+$(ARM64_OBJ_DIR)/src/libtgvoip/%.o: src/libtgvoip/%.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(subst -std=c++11,-std=c++14,$(CXXFLAGS_ARM64)) $(VOIP_FLAGS) -c $< -o $@
+
+$(ARM64_OBJ_DIR)/%.o: %.mm
+	@mkdir -p $(dir $@)
+	$(CXX) $(subst -std=c++11,-std=c++14,$(CXXFLAGS_ARM64)) $(VOIP_FLAGS) -fobjc-arc -c $< -o $@
 
 $(ARM64_OBJ_DIR)/%.o: %.cpp
 	@mkdir -p $(dir $@)

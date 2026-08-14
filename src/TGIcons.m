@@ -9,6 +9,40 @@ static NSMutableDictionary *sCache = nil;
 	[sCache removeAllObjects];
 }
 
++ (void)styleHeaderButton:(UIButton *)button {
+	static UIImage *bg = nil;
+	static UIImage *bgPressed = nil;
+	static dispatch_once_t onceToken;
+	dispatch_once(&onceToken, ^{
+		bg = [[UIImage imageNamed:@"HeaderButton"] resizableImageWithCapInsets:UIEdgeInsetsMake(0, 6, 0, 6)];
+		bgPressed = [[UIImage imageNamed:@"HeaderButton_Pressed"] resizableImageWithCapInsets:UIEdgeInsetsMake(0, 6, 0, 6)];
+	});
+	[button setBackgroundImage:bg forState:UIControlStateNormal];
+	[button setBackgroundImage:bgPressed forState:UIControlStateHighlighted];
+}
+
++ (UIButton *)headerButtonWithTitle:(NSString *)title bold:(BOOL)bold
+							  target:(id)target action:(SEL)action {
+	UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+	[self styleHeaderButton:button];
+	[button addTarget:target action:action forControlEvents:UIControlEventTouchUpInside];
+
+	UIFont *font = bold ? [UIFont boldSystemFontOfSize:12] : [UIFont systemFontOfSize:12];
+	CGSize size = [title sizeWithFont:font];
+	button.frame = CGRectMake(0, 0, size.width + 16, 30);
+
+	UILabel *label = [[UILabel alloc] initWithFrame:button.bounds];
+	label.text = title;
+	label.textColor = [UIColor whiteColor];
+	label.textAlignment = NSTextAlignmentCenter;
+	label.backgroundColor = [UIColor clearColor];
+	label.font = font;
+	label.userInteractionEnabled = NO;
+	[button addSubview:label];
+
+	return button;
+}
+
 /// Every icon goes through here: same size, same cache, same styling rules.
 + (UIImage *)iconNamed:(NSString *)name draw:(void (^)(CGContextRef ctx, CGFloat s))draw {
 	if (!sCache)
@@ -54,12 +88,13 @@ static NSMutableDictionary *sCache = nil;
 
 + (UIImage *)chats {
 	return [self iconNamed:@"chats" draw:^(CGContextRef ctx, CGFloat s){
-		// a speech bubble with a tail
-		CGRect body = CGRectMake(3, 5, s - 6, s - 13);
-		UIBezierPath *p = [UIBezierPath bezierPathWithRoundedRect:body cornerRadius:5];
-		[p moveToPoint:CGPointMake(8, CGRectGetMaxY(body) - 1)];
-		[p addLineToPoint:CGPointMake(8, CGRectGetMaxY(body) + 5)];
-		[p addLineToPoint:CGPointMake(14, CGRectGetMaxY(body) - 1)];
+		// a speech bubble with a tail, sized to match the other tab glyphs
+		CGRect body = CGRectMake(2, 3, s - 4, s - 9);
+		UIBezierPath *p = [UIBezierPath bezierPathWithRoundedRect:body cornerRadius:6];
+		[p moveToPoint:CGPointMake(8, CGRectGetMaxY(body) - 2)];
+		[p addLineToPoint:CGPointMake(7, CGRectGetMaxY(body) + 6)];
+		[p addLineToPoint:CGPointMake(15, CGRectGetMaxY(body) - 2)];
+		[p closePath];
 		CGContextAddPath(ctx, p.CGPath);
 		CGContextFillPath(ctx);
 	}];
@@ -78,16 +113,30 @@ static NSMutableDictionary *sCache = nil;
 
 + (UIImage *)settings {
 	return [self iconNamed:@"settings" draw:^(CGContextRef ctx, CGFloat s){
-		// three sliders
-		CGContextSetLineWidth(ctx, 2);
-		for (int i = 0; i < 3; i++){
-			CGFloat y = 8 + i * 6;
-			CGContextMoveToPoint(ctx, 4, y);
-			CGContextAddLineToPoint(ctx, s - 4, y);
-			CGContextStrokePath(ctx);
-			CGContextFillEllipseInRect(ctx,
-					CGRectMake(6 + (i == 1 ? 12 : (i == 0 ? 4 : 8)), y - 3, 6, 6));
+		CGPoint center = CGPointMake(s / 2, s / 2);
+		CGFloat outerRadius = s * 0.46f;
+		CGFloat innerRadius = s * 0.30f;
+		CGFloat toothDepth = s * 0.12f;
+		NSInteger toothCount = 8;
+
+		UIBezierPath *gear = [UIBezierPath bezierPath];
+		for (NSInteger i = 0; i < toothCount * 2; i++){
+			CGFloat angle = (CGFloat)i / (toothCount * 2) * 2 * M_PI;
+			CGFloat radius = (i % 2 == 0) ? outerRadius + toothDepth : outerRadius;
+			CGPoint p = CGPointMake(center.x + radius * cosf(angle),
+									 center.y + radius * sinf(angle));
+			if (i == 0) [gear moveToPoint:p];
+			else [gear addLineToPoint:p];
 		}
+		[gear closePath];
+
+		UIBezierPath *hole = [UIBezierPath bezierPathWithArcCenter:center
+				radius:innerRadius startAngle:0 endAngle:2 * M_PI clockwise:YES];
+		[gear appendPath:hole];
+		gear.usesEvenOddFillRule = YES;
+
+		CGContextAddPath(ctx, gear.CGPath);
+		CGContextEOFillPath(ctx);
 	}];
 }
 
@@ -727,14 +776,28 @@ static NSMutableDictionary *sCache = nil;
 
 #pragma mark - avatars
 
-/// Both rows are a flat disc in their steel blue with a white glyph, which is
-/// what Telegram puts there - a letter in a coloured circle reads as a person.
+/// Both rows use the same blue gradient as the navigation bar, with a white
+/// glyph on top - a letter in a coloured circle reads as a person.
 static UIImage *TGGlyphAvatar(CGFloat side, void (^draw)(CGContextRef ctx, CGFloat s)) {
 	UIGraphicsBeginImageContextWithOptions(CGSizeMake(side, side), NO, 0);
 	CGContextRef ctx = UIGraphicsGetCurrentContext();
 
-	CGContextSetRGBFillColor(ctx, 0.427f, 0.588f, 0.706f, 1.0f);   // steel blue
-	CGContextFillEllipseInRect(ctx, CGRectMake(0, 0, side, side));
+	UIBezierPath *shape = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, side, side)
+													  cornerRadius:side * 0.12f];
+	CGContextSaveGState(ctx);
+	CGContextAddPath(ctx, shape.CGPath);
+	CGContextClip(ctx);
+
+	CGFloat components[] = {
+		0x76 / 255.0f, 0x9a / 255.0f, 0xc0 / 255.0f, 1.0f,
+		0x43 / 255.0f, 0x68 / 255.0f, 0x90 / 255.0f, 1.0f
+	};
+	CGColorSpaceRef colourSpace = CGColorSpaceCreateDeviceRGB();
+	CGGradientRef gradient = CGGradientCreateWithColorComponents(colourSpace, components, NULL, 2);
+	CGContextDrawLinearGradient(ctx, gradient, CGPointMake(0, 0), CGPointMake(0, side), 0);
+	CGGradientRelease(gradient);
+	CGColorSpaceRelease(colourSpace);
+	CGContextRestoreGState(ctx);
 
 	CGContextSetRGBFillColor(ctx, 1, 1, 1, 1);
 	CGContextSetRGBStrokeColor(ctx, 1, 1, 1, 1);
@@ -752,8 +815,9 @@ static UIImage *TGGlyphAvatar(CGFloat side, void (^draw)(CGContextRef ctx, CGFlo
 		CGContextFillRect(ctx, CGRectMake(x, s * 0.32f, w, s * 0.10f));
 		CGContextFillRect(ctx, CGRectMake(x + s * 0.03f, s * 0.44f,
 										  w - s * 0.06f, s * 0.24f));
-		// The slot is punched back out in the disc's own blue.
-		CGContextSetRGBFillColor(ctx, 0.427f, 0.588f, 0.706f, 1.0f);
+		// The slot is a soft shadow rather than a background punch-out, since
+		// the disc behind it is a gradient now, not a flat colour to match.
+		CGContextSetRGBFillColor(ctx, 0, 0, 0, 0.25f);
 		CGContextFillRect(ctx, CGRectMake(s * 0.44f, s * 0.50f, s * 0.12f, s * 0.05f));
 	});
 }
@@ -767,6 +831,17 @@ static UIImage *TGGlyphAvatar(CGFloat side, void (^draw)(CGContextRef ctx, CGFlo
 		CGContextAddLineToPoint(ctx, s * 0.50f, s * 0.58f);
 		CGContextAddLineToPoint(ctx, s * 0.36f, s * 0.70f);
 		CGContextClosePath(ctx);
+		CGContextFillPath(ctx);
+	});
+}
+
++ (UIImage *)inviteFriendsAvatarOfSide:(CGFloat)side {
+	return TGGlyphAvatar(side, ^(CGContextRef ctx, CGFloat s){
+		// A person - the same head-and-shoulders mark as a plain contact.
+		CGContextFillEllipseInRect(ctx, CGRectMake(s/2 - s * 0.18f, s * 0.16f, s * 0.36f, s * 0.36f));
+		CGRect shoulders = CGRectMake(s/2 - s * 0.32f, s * 0.56f, s * 0.64f, s * 0.4f);
+		UIBezierPath *p = [UIBezierPath bezierPathWithRoundedRect:shoulders cornerRadius:s * 0.32f];
+		CGContextAddPath(ctx, p.CGPath);
 		CGContextFillPath(ctx);
 	});
 }
@@ -794,14 +869,17 @@ static UIImage *TGGlyphAvatar(CGFloat side, void (^draw)(CGContextRef ctx, CGFlo
 	UIGraphicsBeginImageContextWithOptions(CGSizeMake(size, size), NO, 0);
 	CGContextRef ctx = UIGraphicsGetCurrentContext();
 
+	UIBezierPath *shape = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, size, size)
+													  cornerRadius:size * 0.12f];
 	CGContextSetRGBFillColor(ctx, [c[0] floatValue], [c[1] floatValue],
 								  [c[2] floatValue], 1.0f);
-	CGContextFillEllipseInRect(ctx, CGRectMake(0, 0, size, size));
+	CGContextAddPath(ctx, shape.CGPath);
+	CGContextFillPath(ctx);
 
 	if (![TGTheme shared].isFlat){
 		// a glassy highlight across the top half
 		CGContextSaveGState(ctx);
-		CGContextAddEllipseInRect(ctx, CGRectMake(0, 0, size, size));
+		CGContextAddPath(ctx, shape.CGPath);
 		CGContextClip(ctx);
 		CGContextSetRGBFillColor(ctx, 1, 1, 1, 0.20f);
 		CGContextFillEllipseInRect(ctx,

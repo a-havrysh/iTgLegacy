@@ -6,7 +6,18 @@
 @property (nonatomic, assign) long long bytes;
 @property (nonatomic, assign) NSInteger files;
 @property (nonatomic, assign) BOOL working;
+@property (nonatomic, assign) BOOL loaded;
+@property (nonatomic, assign) BOOL refreshing;
+@property (nonatomic, strong) NSArray *pendingKinds;
+@property (nonatomic, copy) NSString *pendingTitle;
 @end
+
+static UIColor *TGStorageRGB(int rgb) {
+	return [UIColor colorWithRed:((rgb >> 16) & 0xff) / 255.0f
+						   green:((rgb >> 8) & 0xff) / 255.0f
+							blue:(rgb & 0xff) / 255.0f
+						   alpha:1.0f];
+}
 
 @implementation TGStorageViewController
 
@@ -25,12 +36,46 @@
 }
 
 - (void)refresh {
+	if (self.refreshing)
+		return;
+	self.refreshing = YES;
+
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] storageStatsWithCompletion:^(long long bytes, NSInteger files){
-		weakSelf.bytes = bytes;
-		weakSelf.files = files;
-		[weakSelf.tableView reloadData];
+		typeof(self) strongSelf = weakSelf;
+		if (!strongSelf || !strongSelf.refreshing)
+			return;
+		[NSObject cancelPreviousPerformRequestsWithTarget:strongSelf
+												 selector:@selector(statsTimedOut)
+												   object:nil];
+		strongSelf.refreshing = NO;
+		strongSelf.loaded = YES;
+		strongSelf.bytes = bytes < 0 ? 0 : bytes;
+		strongSelf.files = files < 0 ? 0 : files;
+		[strongSelf.tableView reloadData];
 	}];
+
+	[self performSelector:@selector(statsTimedOut) withObject:nil afterDelay:20.0];
+}
+
+- (void)statsTimedOut {
+	if (!self.refreshing)
+		return;
+	self.refreshing = NO;
+	self.working = NO;
+	[self.tableView reloadData];
+}
+
+- (BOOL)cacheIsEmpty {
+	return self.loaded && self.bytes <= 0 && self.files <= 0;
+}
+
+- (BOOL)canClear {
+	return self.loaded && !self.working && ![self cacheIsEmpty];
+}
+
+- (void)dealloc {
+	[NSObject cancelPreviousPerformRequestsWithTarget:self];
 }
 
 static NSString *TGHumanSize(long long bytes) {
@@ -48,6 +93,8 @@ static NSString *TGHumanSize(long long bytes) {
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+	if (self.loaded && !self.working)
+		[self refresh];
 }
 
 #pragma mark - table
@@ -56,15 +103,61 @@ static NSString *TGHumanSize(long long bytes) {
 	return 2;
 }
 
-- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
-	return section == 0 ? @"Cache" : @"Clear";
+- (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
+	return 46;
 }
 
-- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+- (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
+	BOOL dark = [[TGTheme shared] isDark];
+	UIView *container = [[UIView alloc] initWithFrame:
+			CGRectMake(0, 0, tableView.bounds.size.width, 46)];
+	container.backgroundColor = [UIColor clearColor];
+
+	UILabel *label = [[UILabel alloc] init];
+	label.text = section == 0 ? @"Cache" : @"Clear";
+	label.font = [UIFont boldSystemFontOfSize:17];
+	label.backgroundColor = [UIColor clearColor];
+	label.textColor = dark ? [[TGTheme shared] sectionHeaderColour]
+						   : TGStorageRGB(0x697487);
+	if (!dark){
+		label.shadowColor = TGStorageRGB(0xdae0e8);
+		label.shadowOffset = CGSizeMake(0, 1);
+	}
+	[label sizeToFit];
+	label.frame = CGRectOffset(label.frame, 21, 16);
+	[container addSubview:label];
+	return container;
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForFooterInSection:(NSInteger)section {
+	return section == 1 ? 58 : 1;
+}
+
+- (UIView *)tableView:(UITableView *)tableView viewForFooterInSection:(NSInteger)section {
 	if (section != 1)
 		return nil;
-	return @"Cleared media is downloaded again when you open the message. "
-		   @"Nothing is deleted from Telegram.";
+	BOOL dark = [[TGTheme shared] isDark];
+	UILabel *label = [[UILabel alloc] initWithFrame:
+			CGRectMake(10, 7, tableView.bounds.size.width - 20, 44)];
+	label.text = @"Cleared media is downloaded again when you open the message. "
+				 @"Nothing is deleted from Telegram.";
+	label.font = [UIFont systemFontOfSize:14];
+	label.textAlignment = NSTextAlignmentCenter;
+	label.numberOfLines = 0;
+	label.backgroundColor = [UIColor clearColor];
+	label.textColor = dark ? [[TGTheme shared] secondaryTextColour]
+						   : TGStorageRGB(0x697487);
+	if (!dark){
+		label.shadowColor = TGStorageRGB(0xdae0e8);
+		label.shadowOffset = CGSizeMake(0, 1);
+	}
+	return label;
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
+	if (indexPath.section == 1 && indexPath.row == 3)
+		return 45;
+	return 44;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
@@ -72,36 +165,111 @@ static NSString *TGHumanSize(long long bytes) {
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	if (indexPath.section == 1 && indexPath.row == 3)
+		return [self clearEverythingCellInTable:tableView];
+
 	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"row"];
 	if (!cell)
 		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
 									  reuseIdentifier:@"row"];
 	cell.selectionStyle = UITableViewCellSelectionStyleNone;
 	[[TGTheme shared] styleCell:cell];
-	cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
+	BOOL dark = [[TGTheme shared] isDark];
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+	cell.textLabel.textColor = dark ? [[TGTheme shared] primaryTextColour]
+									: [UIColor blackColor];
+	cell.textLabel.highlightedTextColor = [UIColor whiteColor];
+	cell.detailTextLabel.font = [UIFont systemFontOfSize:16];
+	cell.detailTextLabel.textColor = dark ? [[TGTheme shared] cellDetailColour]
+										  : TGStorageRGB(0x356596);
+	cell.detailTextLabel.highlightedTextColor = [UIColor whiteColor];
 
 	if (indexPath.section == 0){
+		BOOL busy = self.working || !self.loaded;
 		cell.textLabel.text = indexPath.row == 0 ? @"Size on disk" : @"Files";
-		cell.detailTextLabel.text = indexPath.row == 0
-				? (self.working ? @"..." : TGHumanSize(self.bytes))
-				: [NSString stringWithFormat:@"%ld", (long)self.files];
+		if (busy)
+			cell.detailTextLabel.text = @"Calculating...";
+		else if (indexPath.row == 0)
+			cell.detailTextLabel.text = [self cacheIsEmpty] ? @"Empty" : TGHumanSize(self.bytes);
+		else
+			cell.detailTextLabel.text = [NSString stringWithFormat:@"%ld", (long)self.files];
 		return cell;
 	}
 
 	static NSArray *labels = nil;
 	if (!labels)
-		labels = @[@"Clear photos", @"Clear videos", @"Clear other files", @"Clear everything"];
+		labels = @[@"Clear photos", @"Clear videos", @"Clear other files"];
 	cell.textLabel.text = labels[indexPath.row];
 	cell.detailTextLabel.text = @"";
-	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
-	if (indexPath.row == 3)
-		cell.textLabel.textColor = [UIColor colorWithRed:0.8f green:0.1f blue:0.1f alpha:1];
+	if ([self canClear]){
+		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+	} else {
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		cell.textLabel.textColor = dark ? [[TGTheme shared] secondaryTextColour]
+										: TGStorageRGB(0x8e8e93);
+	}
 	return cell;
+}
+
+- (UITableViewCell *)clearEverythingCellInTable:(UITableView *)tableView {
+	static NSString *reuse = @"TGStorageClearAllCell";
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
+	if (!cell){
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+									  reuseIdentifier:reuse];
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		cell.backgroundColor = [UIColor clearColor];
+		cell.backgroundView = [[UIView alloc] initWithFrame:CGRectZero];
+		cell.backgroundView.backgroundColor = [UIColor clearColor];
+		cell.contentView.backgroundColor = [UIColor clearColor];
+
+		UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+		button.tag = 772;
+		button.frame = CGRectMake(9, 0, cell.contentView.bounds.size.width - 18, 45);
+		button.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+		button.titleLabel.font = [UIFont boldSystemFontOfSize:17];
+		button.titleLabel.shadowOffset = CGSizeMake(0, -1);
+		[button setTitle:@"Clear everything" forState:UIControlStateNormal];
+		[button setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+		[button setTitleColor:[UIColor whiteColor] forState:UIControlStateHighlighted];
+		[button setTitleShadowColor:[UIColor colorWithRed:0xa1 / 255.0f green:0x06 / 255.0f
+													 blue:0x03 / 255.0f alpha:0.5f]
+						   forState:UIControlStateNormal];
+		[button setTitleShadowColor:[UIColor colorWithRed:0xa1 / 255.0f green:0x06 / 255.0f
+													 blue:0x03 / 255.0f alpha:0.5f]
+						   forState:UIControlStateHighlighted];
+
+		UIImage *raw = [UIImage imageNamed:@"MenuRedButton.png"];
+		UIImage *rawHighlighted = [UIImage imageNamed:@"MenuRedButton_Highlighted.png"];
+		if (raw)
+			[button setBackgroundImage:[raw stretchableImageWithLeftCapWidth:
+					(int)(raw.size.width / 2) topCapHeight:(int)(raw.size.height / 2)]
+							  forState:UIControlStateNormal];
+		if (rawHighlighted)
+			[button setBackgroundImage:[rawHighlighted stretchableImageWithLeftCapWidth:
+					(int)(rawHighlighted.size.width / 2)
+					topCapHeight:(int)(rawHighlighted.size.height / 2)]
+							  forState:UIControlStateHighlighted];
+		if (!raw)
+			button.backgroundColor = TGStorageRGB(0xc4362f);
+		[button addTarget:self action:@selector(clearEverythingPressed)
+		 forControlEvents:UIControlEventTouchUpInside];
+		[cell.contentView addSubview:button];
+	}
+	UIButton *button = (UIButton *)[cell.contentView viewWithTag:772];
+	button.frame = CGRectMake(9, 0, cell.contentView.bounds.size.width - 18, 45);
+	button.enabled = [self canClear];
+	button.alpha = [self canClear] ? 1.0f : 0.5f;
+	return cell;
+}
+
+- (void)clearEverythingPressed {
+	[self confirmClearKinds:@[] title:@"Clear everything"];
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
-	if (indexPath.section != 1 || self.working)
+	if (indexPath.section != 1 || indexPath.row == 3 || ![self canClear])
 		return;
 
 	// TDLib names each kind; "everything" is the empty list, which means no
@@ -113,19 +281,80 @@ static NSString *TGHumanSize(long long bytes) {
 		case 2: kinds = @[@"fileTypeDocument", @"fileTypeAudio", @"fileTypeVoiceNote"]; break;
 		default: kinds = @[]; break;
 	}
+	[self confirmClearKinds:kinds title:[[tableView cellForRowAtIndexPath:indexPath] textLabel].text];
+}
+
+- (void)confirmClearKinds:(NSArray *)kinds title:(NSString *)title {
+	if (![self canClear])
+		return;
+	self.pendingKinds = kinds ? kinds : @[];
+	self.pendingTitle = title.length ? title : @"Clear";
+
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
+													  delegate:self
+											 cancelButtonTitle:nil
+										destructiveButtonTitle:nil
+											 otherButtonTitles:nil];
+	[sheet addButtonWithTitle:self.pendingTitle];
+	sheet.destructiveButtonIndex = 0;
+	[sheet addButtonWithTitle:@"Cancel"];
+	sheet.cancelButtonIndex = 1;
+	if (self.tabBarController.tabBar)
+		[sheet showFromTabBar:self.tabBarController.tabBar];
+	else
+		[sheet showInView:self.view];
+}
+
+- (void)actionSheet:(UIActionSheet *)actionSheet
+		clickedButtonAtIndex:(NSInteger)buttonIndex {
+	if (buttonIndex != actionSheet.destructiveButtonIndex)
+		return;
+	NSArray *kinds = self.pendingKinds;
+	self.pendingKinds = nil;
+	self.pendingTitle = nil;
+	[self clearKinds:kinds];
+}
+
+- (void)clearKinds:(NSArray *)kinds {
+	if (self.working || !kinds)
+		return;
 
 	self.working = YES;
 	[self.tableView reloadData];
 
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] clearCacheOfTypes:kinds completion:^(long long freed){
-		weakSelf.working = NO;
-		[weakSelf refresh];
+		typeof(self) strongSelf = weakSelf;
+		if (!strongSelf || !strongSelf.working)
+			return;
+		[NSObject cancelPreviousPerformRequestsWithTarget:strongSelf
+												 selector:@selector(clearTimedOut)
+												   object:nil];
+		strongSelf.working = NO;
+		[strongSelf refresh];
+		[strongSelf.tableView reloadData];
+
+		NSString *message = freed > 0
+				? [NSString stringWithFormat:@"Freed %@.", TGHumanSize(freed)]
+				: @"There was nothing to clear.";
 		UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Storage"
-				message:[NSString stringWithFormat:@"Freed %@.", TGHumanSize(freed)]
+				message:message
 			   delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
 		[alert show];
 	}];
+
+	[self performSelector:@selector(clearTimedOut) withObject:nil afterDelay:60.0];
+}
+
+- (void)clearTimedOut {
+	if (!self.working)
+		return;
+	self.working = NO;
+	[self.tableView reloadData];
+	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Storage"
+			message:@"Clearing the cache is taking too long. Please try again."
+		   delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+	[alert show];
 }
 
 @end

@@ -7,4 +7,5 @@
 #import <UIKit/UIKit.h>
 
 @interface TGContactsViewController : UITableViewController
+@property (nonatomic, assign) BOOL isPickerMode;
 @end

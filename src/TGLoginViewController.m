@@ -1,4 +1,7 @@
 #import "TGLoginViewController.h"
+#import "TGTheme.h"
+#import "TGClient.h"
+#import "TGCountryPickerViewController.h"
 #import <QuartzCore/QuartzCore.h>
 
 typedef NS_ENUM(NSInteger, TGLoginStep) {
@@ -10,34 +13,53 @@ typedef NS_ENUM(NSInteger, TGLoginStep) {
 @interface TGLoginViewController ()
 
 @property (nonatomic, assign) TGLoginStep currentStep;
-@property (nonatomic, strong) UIScrollView *scrollView;
-@property (nonatomic, strong) UILabel *headerLabel;
-@property (nonatomic, strong) UILabel *subtitleLabel;
-@property (nonatomic, strong) UIView *inputContainer;
-@property (nonatomic, strong) UITextField *phonePrefixField;
-@property (nonatomic, strong) UIView *prefixSeparator;
+@property (nonatomic, strong) UILabel *noticeLabel;
+@property (nonatomic, strong) UIButton *countryButton;
+@property (nonatomic, strong) UIImageView *inputBackgroundView;
+@property (nonatomic, strong) UIImageView *inputDivider;
+@property (nonatomic, strong) UITextField *countryCodeField;
 @property (nonatomic, strong) UITextField *inputField;
-@property (nonatomic, strong) UIButton *actionButton;
+@property (nonatomic, strong) UIButton *nextButton;
+@property (nonatomic, strong) UIButton *resendButton;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
-@property (nonatomic, strong) UIBarButtonItem *nextItem;
 @property (nonatomic, copy) NSString *savedPhoneNumber;
+@property (nonatomic, assign) BOOL busy;
+@property (nonatomic, strong) NSTimer *resendTimer;
+@property (nonatomic, assign) NSInteger resendSeconds;
 
 @end
 
 @implementation TGLoginViewController
 
-/* ---- skeuomorphic helpers -------------------------------------------- */
-
-static UIColor *tgRGB(int r, int g, int b) {
-    return [UIColor colorWithRed:r/255.0f green:g/255.0f blue:b/255.0f alpha:1.0f];
+static UIColor *tgRGB(int rgb) {
+    return [UIColor colorWithRed:((rgb >> 16) & 0xff) / 255.0f
+                           green:((rgb >> 8) & 0xff) / 255.0f
+                            blue:(rgb & 0xff) / 255.0f
+                           alpha:1.0f];
 }
 
-/* Vertical gloss gradient, the iOS 6 era look. */
-static CAGradientLayer *tgGloss(CGRect frame, UIColor *top, UIColor *bottom) {
-    CAGradientLayer *g = [CAGradientLayer layer];
-    g.frame = frame;
-    g.colors = @[(id)top.CGColor, (id)bottom.CGColor];
-    return g;
+static NSDictionary *tgDialCodes(void) {
+    static NSDictionary *codes = nil;
+    if (codes == nil) {
+        codes = @{ @"US" : @"+1", @"CA" : @"+1", @"GB" : @"+44", @"UA" : @"+380",
+                   @"PL" : @"+48", @"DE" : @"+49", @"FR" : @"+33", @"IT" : @"+39",
+                   @"ES" : @"+34", @"NL" : @"+31", @"BE" : @"+32", @"CH" : @"+41",
+                   @"AT" : @"+43", @"SE" : @"+46", @"NO" : @"+47", @"DK" : @"+45",
+                   @"FI" : @"+358", @"PT" : @"+351", @"GR" : @"+30", @"IE" : @"+353",
+                   @"CZ" : @"+420", @"SK" : @"+421", @"HU" : @"+36", @"RO" : @"+40",
+                   @"BG" : @"+359", @"RS" : @"+381", @"HR" : @"+385", @"SI" : @"+386",
+                   @"LT" : @"+370", @"LV" : @"+371", @"EE" : @"+372", @"MD" : @"+373",
+                   @"RU" : @"+7", @"KZ" : @"+7", @"BY" : @"+375", @"GE" : @"+995",
+                   @"AM" : @"+374", @"AZ" : @"+994", @"TR" : @"+90", @"IL" : @"+972",
+                   @"AE" : @"+971", @"SA" : @"+966", @"EG" : @"+20", @"ZA" : @"+27",
+                   @"NG" : @"+234", @"KE" : @"+254", @"IN" : @"+91", @"PK" : @"+92",
+                   @"BD" : @"+880", @"CN" : @"+86", @"JP" : @"+81", @"KR" : @"+82",
+                   @"HK" : @"+852", @"SG" : @"+65", @"MY" : @"+60", @"TH" : @"+66",
+                   @"VN" : @"+84", @"ID" : @"+62", @"PH" : @"+63", @"AU" : @"+61",
+                   @"NZ" : @"+64", @"BR" : @"+55", @"AR" : @"+54", @"CL" : @"+56",
+                   @"CO" : @"+57", @"PE" : @"+51", @"MX" : @"+52", @"VE" : @"+58" };
+    }
+    return codes;
 }
 
 - (void)viewDidLoad {
@@ -45,197 +67,374 @@ static CAGradientLayer *tgGloss(CGRect frame, UIColor *top, UIColor *bottom) {
 
     self.title = @"Your Phone";
 
-    self.nextItem = [[UIBarButtonItem alloc] initWithTitle:@"Next"
-                                                     style:UIBarButtonItemStyleDone
-                                                    target:self
-                                                    action:@selector(actionButtonTapped)];
-    self.navigationItem.rightBarButtonItem = self.nextItem;
-
-    /* Brushed-metal-ish bar rather than iOS 7 flat white.
-     * barTintColor and NSForegroundColorAttributeName are iOS 7; on iOS 6 the
-     * bar colour IS tintColor and the title key is UITextAttributeTextColor. */
-    UINavigationBar *bar = self.navigationController.navigationBar;
-    if ([bar respondsToSelector:@selector(setBarTintColor:)]){
-        bar.tintColor = tgRGB(38, 92, 140);
-        bar.barTintColor = tgRGB(64, 122, 173);
-        bar.titleTextAttributes = @{ NSForegroundColorAttributeName : [UIColor whiteColor] };
-    } else {
-        bar.tintColor = tgRGB(64, 122, 173);
-        bar.titleTextAttributes = @{ UITextAttributeTextColor : [UIColor whiteColor] };
-    }
-
+    [self setupNavigationBar];
     [self setupUI];
-
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(keyboardWillShow:) name:UIKeyboardWillShowNotification object:nil];
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(keyboardWillHide:) name:UIKeyboardWillHideNotification object:nil];
 }
 
-- (void)dealloc {
-    [[NSNotificationCenter defaultCenter] removeObserver:self];
+- (void)setupNavigationBar {
+    UINavigationBar *bar = self.navigationController.navigationBar;
+    if (bar == nil)
+        return;
+
+    bar.barStyle = UIBarStyleBlackOpaque;
+
+    UIImage *header = [UIImage imageNamed:@"LoginHeader.png"];
+    if (header != nil && [bar respondsToSelector:@selector(setBackgroundImage:forBarMetrics:)])
+        [bar setBackgroundImage:header forBarMetrics:UIBarMetricsDefault];
+
+    if ([bar respondsToSelector:@selector(setTitleTextAttributes:)]) {
+        if ([bar respondsToSelector:@selector(setBarTintColor:)])
+            bar.titleTextAttributes = @{ NSForegroundColorAttributeName : [UIColor whiteColor] };
+        else
+            bar.titleTextAttributes = @{ UITextAttributeTextColor : [UIColor whiteColor],
+                                         UITextAttributeTextShadowColor : tgRGB(0x25272b),
+                                         UITextAttributeTextShadowOffset : [NSValue valueWithUIOffset:UIOffsetMake(0, 1)] };
+    }
+
+    UIImage *rawNext = [UIImage imageNamed:@"HeaderButton_Login_Blue.png"];
+    UIImage *rawNextPressed = [UIImage imageNamed:@"HeaderButton_Login_Blue_Pressed.png"];
+
+    self.nextButton = [UIButton buttonWithType:UIButtonTypeCustom];
+    self.nextButton.frame = CGRectMake(0, 0, 52, 30);
+    if (rawNext != nil)
+        [self.nextButton setBackgroundImage:[rawNext stretchableImageWithLeftCapWidth:(int)(rawNext.size.width / 2) topCapHeight:0] forState:UIControlStateNormal];
+    if (rawNextPressed != nil)
+        [self.nextButton setBackgroundImage:[rawNextPressed stretchableImageWithLeftCapWidth:(int)(rawNextPressed.size.width / 2) topCapHeight:0] forState:UIControlStateHighlighted];
+    [self.nextButton setTitle:@"Next" forState:UIControlStateNormal];
+    [self.nextButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    [self.nextButton setTitleShadowColor:[UIColor colorWithRed:0x04 / 255.0f green:0x26 / 255.0f blue:0x51 / 255.0f alpha:0.3f] forState:UIControlStateNormal];
+    self.nextButton.titleLabel.font = [UIFont boldSystemFontOfSize:12];
+    self.nextButton.titleLabel.shadowOffset = CGSizeMake(0, -1);
+    [self.nextButton addTarget:self action:@selector(actionButtonTapped) forControlEvents:UIControlEventTouchUpInside];
+
+    self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhite];
+    self.spinner.frame = CGRectMake(floorf((52 - self.spinner.frame.size.width) / 2), floorf((30 - self.spinner.frame.size.height) / 2), self.spinner.frame.size.width, self.spinner.frame.size.height);
+    self.spinner.hidesWhenStopped = YES;
+    [self.nextButton addSubview:self.spinner];
+
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:self.nextButton];
 }
 
 - (void)setupUI {
-    CGFloat width = self.view.bounds.size.width;
-    CGFloat height = self.view.bounds.size.height;
+    UIImage *linen = [UIImage imageNamed:@"DarkLinen.png"];
+    if (linen != nil)
+        self.view.backgroundColor = [UIColor colorWithPatternImage:linen];
+    else
+        self.view.backgroundColor = tgRGB(0x1c1e22);
 
-    /* Paper-ish backdrop with a soft vertical shade. */
-    self.view.backgroundColor = tgRGB(203, 209, 216);
-    CAGradientLayer *bg = tgGloss(self.view.bounds, tgRGB(222, 226, 232), tgRGB(186, 193, 203));
-    [self.view.layer insertSublayer:bg atIndex:0];
+    UIImage *shadow = [UIImage imageNamed:@"LoginShadow.png"];
+    if (shadow != nil) {
+        UIImageView *shadowView = [[UIImageView alloc] initWithFrame:self.view.bounds];
+        shadowView.image = shadow;
+        shadowView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [self.view addSubview:shadowView];
+    }
 
-    self.scrollView = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 0, width, height)];
-    self.scrollView.backgroundColor = [UIColor clearColor];
-    self.scrollView.alwaysBounceVertical = YES;
-    // keyboardDismissMode is iOS 7; harmless to skip on iOS 6.
-    if ([self.scrollView respondsToSelector:@selector(setKeyboardDismissMode:)])
-        self.scrollView.keyboardDismissMode = UIScrollViewKeyboardDismissModeInteractive;
-    [self.view addSubview:self.scrollView];
+    self.noticeLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+    self.noticeLabel.font = [UIFont systemFontOfSize:14];
+    self.noticeLabel.textColor = tgRGB(0xc0c5cc);
+    self.noticeLabel.shadowColor = tgRGB(0x323c4a);
+    self.noticeLabel.shadowOffset = CGSizeMake(0, 1);
+    self.noticeLabel.backgroundColor = [UIColor clearColor];
+    self.noticeLabel.textAlignment = NSTextAlignmentCenter;
+    self.noticeLabel.contentMode = UIViewContentModeCenter;
+    self.noticeLabel.numberOfLines = 0;
+    self.noticeLabel.text = @"Please confirm your country code and enter your phone number.";
+    [self.view addSubview:self.noticeLabel];
 
-    /* Embossed title: dark text with a white highlight underneath. */
-    self.headerLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 22, width - 40, 36)];
-    self.headerLabel.text = @"Telegram";
-    self.headerLabel.backgroundColor = [UIColor clearColor];
-    self.headerLabel.textColor = tgRGB(52, 74, 96);
-    self.headerLabel.shadowColor = [UIColor colorWithWhite:1.0f alpha:0.8f];
-    self.headerLabel.shadowOffset = CGSizeMake(0, 1);
-    self.headerLabel.font = [UIFont boldSystemFontOfSize:28];
-    self.headerLabel.textAlignment = NSTextAlignmentCenter;
-    [self.scrollView addSubview:self.headerLabel];
+    UIImage *rawCountryImage = [UIImage imageNamed:@"LoginCountry.png"];
+    UIImage *rawCountryImageHighlighted = [UIImage imageNamed:@"LoginCountry_Highlighted.png"];
 
-    self.subtitleLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 62, width - 40, 40)];
-    self.subtitleLabel.text = @"Please confirm your country code\nand enter your phone number.";
-    self.subtitleLabel.backgroundColor = [UIColor clearColor];
-    self.subtitleLabel.textColor = tgRGB(90, 103, 117);
-    self.subtitleLabel.shadowColor = [UIColor colorWithWhite:1.0f alpha:0.7f];
-    self.subtitleLabel.shadowOffset = CGSizeMake(0, 1);
-    self.subtitleLabel.font = [UIFont systemFontOfSize:14];
-    self.subtitleLabel.textAlignment = NSTextAlignmentCenter;
-    self.subtitleLabel.numberOfLines = 2;
-    [self.scrollView addSubview:self.subtitleLabel];
+    CGFloat countryHeight = rawCountryImage != nil ? rawCountryImage.size.height : 55;
+    self.countryButton = [UIButton buttonWithType:UIButtonTypeCustom];
+    self.countryButton.frame = CGRectMake(0, 0, 290, countryHeight);
+    self.countryButton.exclusiveTouch = YES;
+    if (rawCountryImage != nil)
+        [self.countryButton setBackgroundImage:[rawCountryImage stretchableImageWithLeftCapWidth:(int)(rawCountryImage.size.width - 16) topCapHeight:0] forState:UIControlStateNormal];
+    if (rawCountryImageHighlighted != nil)
+        [self.countryButton setBackgroundImage:[rawCountryImageHighlighted stretchableImageWithLeftCapWidth:(int)(rawCountryImageHighlighted.size.width - 16) topCapHeight:0] forState:UIControlStateHighlighted];
+    self.countryButton.titleLabel.font = [UIFont boldSystemFontOfSize:16.5f];
+    self.countryButton.titleLabel.textAlignment = NSTextAlignmentLeft;
+    self.countryButton.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
+    [self.countryButton setTitleColor:tgRGB(0xf0f0f0) forState:UIControlStateNormal];
+    [self.countryButton setTitleShadowColor:tgRGB(0x17191d) forState:UIControlStateNormal];
+    [self.countryButton setTitleColor:[UIColor whiteColor] forState:UIControlStateHighlighted];
+    [self.countryButton setTitleShadowColor:[UIColor clearColor] forState:UIControlStateHighlighted];
+    self.countryButton.titleLabel.shadowOffset = CGSizeMake(0, 1);
+    self.countryButton.titleEdgeInsets = UIEdgeInsetsMake(0, 14, 9, 14);
+    [self.countryButton setTitle:[self currentCountryName] forState:UIControlStateNormal];
+    [self.countryButton addTarget:self action:@selector(countryButtonTapped) forControlEvents:UIControlEventTouchUpInside];
 
-    /* Recessed input well: bevelled border plus an inner top shadow. */
-    self.inputContainer = [[UIView alloc] initWithFrame:CGRectMake(15, 112, width - 30, 50)];
-    self.inputContainer.backgroundColor = [UIColor whiteColor];
-    self.inputContainer.layer.cornerRadius = 10.0f;
-    self.inputContainer.layer.borderWidth = 1.0f;
-    self.inputContainer.layer.borderColor = tgRGB(140, 149, 160).CGColor;
-    self.inputContainer.clipsToBounds = YES;
-    [self.scrollView addSubview:self.inputContainer];
+    UIImage *arrowImage = [UIImage imageNamed:@"LoginCountryArrow.png"];
+    if (arrowImage != nil) {
+        UIImageView *arrowView = [[UIImageView alloc] initWithImage:arrowImage highlightedImage:[UIImage imageNamed:@"LoginCountryArrow_Highlighted.png"]];
+        arrowView.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+        arrowView.frame = CGRectMake(290 - arrowImage.size.width - 15, 16, arrowImage.size.width, arrowImage.size.height);
+        [self.countryButton addSubview:arrowView];
+    }
+    [self.view addSubview:self.countryButton];
 
-    UIView *inner = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width - 30, 3)];
-    inner.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.10f];
-    [self.inputContainer addSubview:inner];
+    UIImage *rawInputImage = [UIImage imageNamed:@"LoginInput.png"];
+    self.inputBackgroundView = [[UIImageView alloc] initWithFrame:CGRectZero];
+    if (rawInputImage != nil)
+        self.inputBackgroundView.image = [rawInputImage stretchableImageWithLeftCapWidth:(int)(rawInputImage.size.width / 2) topCapHeight:(int)(rawInputImage.size.height / 2)];
+    [self.view addSubview:self.inputBackgroundView];
 
-    /* Country code prefix - Ukraine by default. */
-    self.phonePrefixField = [[UITextField alloc] initWithFrame:CGRectMake(12, 1, 62, 48)];
-    self.phonePrefixField.text = @"+380";
-    self.phonePrefixField.font = [UIFont boldSystemFontOfSize:17];
-    self.phonePrefixField.keyboardType = UIKeyboardTypePhonePad;
-    self.phonePrefixField.returnKeyType = UIReturnKeyNext;
-    self.phonePrefixField.textColor = tgRGB(38, 92, 140);
-    [self.inputContainer addSubview:self.phonePrefixField];
+    UIImage *rawDivider = [UIImage imageNamed:@"LoginInputDivider.png"];
+    self.inputDivider = [[UIImageView alloc] initWithFrame:CGRectMake(60, 1, 1, 48)];
+    if (rawDivider != nil)
+        self.inputDivider.image = [rawDivider stretchableImageWithLeftCapWidth:0 topCapHeight:4];
+    [self.inputBackgroundView addSubview:self.inputDivider];
 
-    self.prefixSeparator = [[UIView alloc] initWithFrame:CGRectMake(78, 9, 1, 32)];
-    self.prefixSeparator.backgroundColor = tgRGB(190, 196, 204);
-    [self.inputContainer addSubview:self.prefixSeparator];
+    self.inputBackgroundView.userInteractionEnabled = YES;
+    [self.inputBackgroundView addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(inputBackgroundTapped)]];
 
-    self.inputField = [[UITextField alloc] initWithFrame:CGRectMake(90, 1, width - 132, 48)];
+    self.countryCodeField = [[UITextField alloc] initWithFrame:CGRectZero];
+    self.countryCodeField.font = [UIFont boldSystemFontOfSize:18];
+    self.countryCodeField.backgroundColor = tgRGB(0xf5f5f5);
+    self.countryCodeField.text = [self defaultDialCode];
+    self.countryCodeField.textAlignment = NSTextAlignmentCenter;
+    self.countryCodeField.keyboardType = UIKeyboardTypeNumberPad;
+    self.countryCodeField.delegate = self;
+    [self.countryCodeField addTarget:self action:@selector(countryCodeChanged) forControlEvents:UIControlEventEditingChanged];
+    [self.view addSubview:self.countryCodeField];
+
+    self.inputField = [[UITextField alloc] initWithFrame:CGRectZero];
+    self.inputField.font = [UIFont boldSystemFontOfSize:18];
+    self.inputField.backgroundColor = tgRGB(0xf5f5f5);
     self.inputField.placeholder = @"Phone number";
-    self.inputField.font = [UIFont systemFontOfSize:17];
-    self.inputField.textColor = tgRGB(40, 46, 54);
-    self.inputField.keyboardType = UIKeyboardTypePhonePad;
-    self.inputField.returnKeyType = UIReturnKeyGo;
-    self.inputField.clearButtonMode = UITextFieldViewModeWhileEditing;
+    self.inputField.keyboardType = UIKeyboardTypeNumberPad;
     self.inputField.delegate = self;
-    [self.inputContainer addSubview:self.inputField];
+    self.inputField.returnKeyType = UIReturnKeyDone;
+    self.inputField.autocorrectionType = UITextAutocorrectionTypeNo;
+    self.inputField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    [self.inputField addTarget:self action:@selector(inputChanged) forControlEvents:UIControlEventEditingChanged];
+    [self.view addSubview:self.inputField];
 
-    /* Glossy raised button: gradient body, dark rim, highlight on the top half. */
-    self.actionButton = [UIButton buttonWithType:UIButtonTypeCustom];
-    self.actionButton.frame = CGRectMake(15, 176, width - 30, 46);
-    self.actionButton.layer.cornerRadius = 9.0f;
-    self.actionButton.layer.borderWidth = 1.0f;
-    self.actionButton.layer.borderColor = tgRGB(26, 66, 102).CGColor;
-    self.actionButton.clipsToBounds = YES;
-    self.actionButton.layer.shadowColor = [UIColor blackColor].CGColor;
-    self.actionButton.layer.shadowOffset = CGSizeMake(0, 1);
-    self.actionButton.layer.shadowOpacity = 0.35f;
-    self.actionButton.layer.shadowRadius = 1.0f;
+    self.resendButton = [UIButton buttonWithType:UIButtonTypeCustom];
+    self.resendButton.titleLabel.font = [UIFont systemFontOfSize:14];
+    self.resendButton.titleLabel.shadowOffset = CGSizeMake(0, 1);
+    [self.resendButton setTitleColor:tgRGB(0xc0c5cc) forState:UIControlStateNormal];
+    [self.resendButton setTitleShadowColor:tgRGB(0x323c4a) forState:UIControlStateNormal];
+    [self.resendButton setTitleColor:[UIColor whiteColor] forState:UIControlStateHighlighted];
+    [self.resendButton addTarget:self action:@selector(resendTapped) forControlEvents:UIControlEventTouchUpInside];
+    self.resendButton.hidden = YES;
+    [self.view addSubview:self.resendButton];
 
-    CAGradientLayer *btn = tgGloss(CGRectMake(0, 0, width - 30, 46),
-                                   tgRGB(92, 156, 210), tgRGB(38, 92, 148));
-    [self.actionButton.layer insertSublayer:btn atIndex:0];
-
-    UIView *shine = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width - 30, 22)];
-    shine.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.18f];
-    shine.userInteractionEnabled = NO;
-    [self.actionButton addSubview:shine];
-
-    [self.actionButton setTitle:@"Next" forState:UIControlStateNormal];
-    [self.actionButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    [self.actionButton setTitleColor:[UIColor colorWithWhite:1.0f alpha:0.5f] forState:UIControlStateDisabled];
-    self.actionButton.titleLabel.font = [UIFont boldSystemFontOfSize:17];
-    self.actionButton.titleLabel.shadowColor = [UIColor colorWithWhite:0.0f alpha:0.4f];
-    self.actionButton.titleLabel.shadowOffset = CGSizeMake(0, -1);
-    [self.actionButton addTarget:self action:@selector(actionButtonTapped) forControlEvents:UIControlEventTouchUpInside];
-    [self.scrollView addSubview:self.actionButton];
-
-    self.spinner = [[UIActivityIndicatorView alloc]
-                    initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhite];
-    self.spinner.center = CGPointMake((width - 30) / 2, 23);
-    self.spinner.hidesWhenStopped = YES;
-    [self.actionButton addSubview:self.spinner];
-
-    self.scrollView.contentSize = CGSizeMake(width, 250);
     self.currentStep = TGLoginStepPhone;
+    [self updateCountryNameForDialCode];
+    [self layoutInterface];
+    [self updateNextEnabled];
 
     dispatch_async(dispatch_get_main_queue(), ^{
         [self.inputField becomeFirstResponder];
     });
 }
 
-/* Code and password steps have no country prefix, so the prefix field AND the
- * separator have to go - otherwise the divider line stays sitting in the
- * middle of the field. The field then takes the whole well, centred. */
-- (void)useSingleFieldLayout {
-    CGFloat width = self.view.bounds.size.width;
-    self.phonePrefixField.hidden = YES;
-    self.prefixSeparator.hidden = YES;
-    self.inputField.frame = CGRectMake(14, 1, width - 58, 48);
-    self.inputField.textAlignment = NSTextAlignmentCenter;
-    self.inputField.font = [UIFont boldSystemFontOfSize:20];
-    self.inputField.text = @"";
-    self.inputField.returnKeyType = UIReturnKeyGo;
+- (NSString *)currentCountryId {
+    NSString *countryId = [[NSLocale currentLocale] objectForKey:NSLocaleCountryCode];
+    return countryId != nil ? [countryId uppercaseString] : nil;
+}
+
+- (NSString *)countryNameForId:(NSString *)countryId {
+    if (countryId.length == 0)
+        return @"Country";
+    NSString *name = [[NSLocale currentLocale] displayNameForKey:NSLocaleCountryCode value:countryId];
+    return name.length > 0 ? name : countryId;
+}
+
+- (NSString *)currentCountryName {
+    return [self countryNameForId:[self currentCountryId]];
+}
+
+- (NSString *)defaultDialCode {
+    NSString *countryId = [self currentCountryId];
+    NSString *dial = countryId != nil ? [tgDialCodes() objectForKey:countryId] : nil;
+    return dial != nil ? dial : @"+1";
+}
+
+- (void)updateCountryNameForDialCode {
+    NSString *dial = self.countryCodeField.text;
+    if (dial.length < 2) {
+        [self.countryButton setTitle:@"Country" forState:UIControlStateNormal];
+        return;
+    }
+
+    NSString *currentId = [self currentCountryId];
+    if (currentId != nil && [[tgDialCodes() objectForKey:currentId] isEqualToString:dial]) {
+        [self.countryButton setTitle:[self countryNameForId:currentId] forState:UIControlStateNormal];
+        return;
+    }
+
+    NSDictionary *codes = tgDialCodes();
+    for (NSString *countryId in codes) {
+        if ([[codes objectForKey:countryId] isEqualToString:dial]) {
+            [self.countryButton setTitle:[self countryNameForId:countryId] forState:UIControlStateNormal];
+            return;
+        }
+    }
+    [self.countryButton setTitle:@"Country" forState:UIControlStateNormal];
+}
+
+- (void)countryButtonTapped {
+    if (self.currentStep != TGLoginStepPhone)
+        return;
+
+    TGCountryPickerViewController *picker = [[TGCountryPickerViewController alloc] init];
+    picker.title = @"Country";
+    __weak TGLoginViewController *weakSelf = self;
+    picker.onPick = ^(NSString *name, NSString *flag, NSString *dialCode) {
+        TGLoginViewController *me = weakSelf;
+        if (me == nil)
+            return;
+        if (name.length > 0)
+            [me.countryButton setTitle:name forState:UIControlStateNormal];
+        if (dialCode.length > 0)
+            me.countryCodeField.text = dialCode;
+        [me updateNextEnabled];
+    };
+
+    if (self.navigationController != nil)
+        [self.navigationController pushViewController:picker animated:YES];
+}
+
+- (void)layoutInterface {
+    CGSize screenSize = [UIScreen mainScreen].bounds.size;
+    CGSize viewSize = CGSizeMake(screenSize.width, screenSize.height - 20 - 44 - 216);
+
+    if (self.currentStep == TGLoginStepPhone) {
+        CGFloat width = 290;
+        self.countryButton.hidden = NO;
+        self.countryCodeField.hidden = NO;
+        self.inputDivider.hidden = NO;
+
+        self.countryButton.frame = CGRectMake((int)((viewSize.width - width) / 2),
+                                              (int)((viewSize.height - 68) / 2) + 4.5f,
+                                              width, self.countryButton.frame.size.height);
+        self.inputBackgroundView.frame = CGRectIntegral(CGRectMake((viewSize.width - width) / 2,
+                                                                   self.countryButton.frame.origin.y + self.countryButton.frame.size.height + 7.5f,
+                                                                   width, 47));
+        self.inputDivider.frame = CGRectMake(60, 1, 1, self.inputBackgroundView.frame.size.height + 1);
+        self.countryCodeField.frame = CGRectMake(self.inputBackgroundView.frame.origin.x + 4, self.inputBackgroundView.frame.origin.y + 12, 54, 22);
+        self.inputField.frame = CGRectMake(self.inputBackgroundView.frame.origin.x + 74, self.inputBackgroundView.frame.origin.y + 2,
+                                           self.inputBackgroundView.frame.size.width - 74 - 14, 32);
+        self.inputField.textAlignment = NSTextAlignmentLeft;
+    } else {
+        CGFloat width = self.currentStep == TGLoginStepCode ? 80 : 200;
+        self.countryButton.hidden = YES;
+        self.countryCodeField.hidden = YES;
+        self.inputDivider.hidden = YES;
+
+        self.inputBackgroundView.frame = CGRectIntegral(CGRectMake((viewSize.width - width) / 2,
+                                                                   (viewSize.height - 26) / 2,
+                                                                   width, 43));
+        self.inputField.frame = CGRectMake(self.inputBackgroundView.frame.origin.x + 9,
+                                           self.inputBackgroundView.frame.origin.y + 10,
+                                           self.inputBackgroundView.frame.size.width - 20, 22);
+        self.inputField.textAlignment = NSTextAlignmentCenter;
+    }
+
+    CGSize noticeSize = [self.noticeLabel sizeThatFits:CGSizeMake(self.currentStep == TGLoginStepPhone ? 270 : 300, 1024)];
+    CGFloat anchorY = self.currentStep == TGLoginStepPhone ? self.countryButton.frame.origin.y : self.inputBackgroundView.frame.origin.y;
+    CGFloat spacing = self.currentStep == TGLoginStepPhone ? 16 : 14;
+    self.noticeLabel.frame = CGRectIntegral(CGRectMake((viewSize.width - noticeSize.width) / 2,
+                                                       anchorY - spacing - noticeSize.height,
+                                                       noticeSize.width, noticeSize.height));
+    self.noticeLabel.alpha = self.noticeLabel.frame.origin.y < 0 ? 0.0f : 1.0f;
+
+    self.resendButton.frame = CGRectIntegral(CGRectMake(10,
+                                                        self.inputBackgroundView.frame.origin.y + self.inputBackgroundView.frame.size.height + 14,
+                                                        viewSize.width - 20, 20));
+    self.resendButton.hidden = self.currentStep != TGLoginStepCode;
+}
+
+- (void)inputBackgroundTapped {
+    [self.inputField becomeFirstResponder];
 }
 
 - (void)setBusy:(BOOL)busy {
-    self.actionButton.enabled = !busy;
-    self.nextItem.enabled = !busy;
+    _busy = busy;
+    [self updateNextEnabled];
     if (busy) {
-        self.actionButton.titleLabel.alpha = 0.0f;
+        self.nextButton.titleLabel.alpha = 0.0f;
         [self.spinner startAnimating];
     } else {
-        self.actionButton.titleLabel.alpha = 1.0f;
+        self.nextButton.titleLabel.alpha = 1.0f;
         [self.spinner stopAnimating];
     }
 }
 
+- (NSString *)trimmedInput {
+    return [self.inputField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+
+- (NSString *)digitsOnly:(NSString *)string {
+    if (string.length == 0)
+        return @"";
+    NSMutableString *result = [NSMutableString stringWithCapacity:string.length];
+    for (NSUInteger i = 0; i < string.length; i++) {
+        unichar c = [string characterAtIndex:i];
+        if (c >= '0' && c <= '9')
+            [result appendFormat:@"%C", c];
+    }
+    return result;
+}
+
+- (BOOL)hasSubmittableInput {
+    NSString *text = [self trimmedInput];
+    if (self.currentStep == TGLoginStepPhone)
+        return [self digitsOnly:text].length >= 4 && [self digitsOnly:self.countryCodeField.text].length >= 1;
+    if (self.currentStep == TGLoginStepCode)
+        return [self digitsOnly:text].length >= 4;
+    return text.length > 0;
+}
+
+- (void)updateNextEnabled {
+    BOOL enabled = !self.busy && [self hasSubmittableInput];
+    self.nextButton.enabled = enabled;
+    self.nextButton.alpha = (enabled || self.busy) ? 1.0f : 0.6f;
+}
+
+- (void)inputChanged {
+    [self updateNextEnabled];
+
+    if (self.currentStep == TGLoginStepCode && !self.busy) {
+        if ([self digitsOnly:[self trimmedInput]].length >= 5)
+            [self actionButtonTapped];
+    }
+}
+
+- (void)countryCodeChanged {
+    NSString *digits = [self digitsOnly:self.countryCodeField.text];
+    if (digits.length > 4)
+        digits = [digits substringToIndex:4];
+    self.countryCodeField.text = [@"+" stringByAppendingString:digits];
+    [self updateCountryNameForDialCode];
+    [self updateNextEnabled];
+}
+
 - (void)actionButtonTapped {
-    NSString *text = [self.inputField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if (text.length == 0) {
+    if (self.busy)
+        return;
+
+    NSString *text = [self trimmedInput];
+    if (![self hasSubmittableInput]) {
+        [self.inputField becomeFirstResponder];
         return;
     }
 
     [self setBusy:YES];
 
     if (self.currentStep == TGLoginStepPhone) {
-        NSString *fullPhone = [NSString stringWithFormat:@"%@%@", self.phonePrefixField.text, text];
+        NSString *code = [self digitsOnly:self.countryCodeField.text];
+        NSString *fullPhone = [NSString stringWithFormat:@"+%@%@", code, [self digitsOnly:text]];
         self.savedPhoneNumber = fullPhone;
         if (self.onPhoneSubmitted) {
             self.onPhoneSubmitted(fullPhone);
         }
     } else if (self.currentStep == TGLoginStepCode) {
         if (self.onCodeSubmitted) {
-            self.onCodeSubmitted(text);
+            self.onCodeSubmitted([self digitsOnly:text]);
         }
     } else if (self.currentStep == TGLoginStepPassword) {
         if (self.onPasswordSubmitted) {
@@ -245,55 +444,178 @@ static CAGradientLayer *tgGloss(CGRect frame, UIColor *top, UIColor *bottom) {
 }
 
 - (void)showCodeStepWithPhoneNumber:(NSString *)phoneNumber {
+    (void)self.view;
     [self setBusy:NO];
     self.currentStep = TGLoginStepCode;
-    self.title = @"Enter Code";
-    self.headerLabel.text = @"Enter Code";
-    self.subtitleLabel.text = [NSString stringWithFormat:@"We've sent an SMS with an activation code to your phone\n%@", phoneNumber ?: @""];
+    self.title = phoneNumber.length > 0 ? phoneNumber : (self.savedPhoneNumber.length > 0 ? self.savedPhoneNumber : @"Enter Code");
+    self.noticeLabel.text = @"We have sent you an SMS with the code";
 
-    [self useSingleFieldLayout];
+    self.inputField.text = @"";
+    self.inputField.secureTextEntry = NO;
     self.inputField.placeholder = @"Code";
     self.inputField.keyboardType = UIKeyboardTypeNumberPad;
-    [self.actionButton setTitle:@"Submit Code" forState:UIControlStateNormal];
-    self.nextItem.title = @"Done";
+
+    [self installBackButton];
+    [self startResendCountdown];
+    [self layoutInterface];
+    [self updateNextEnabled];
     [self.inputField becomeFirstResponder];
 }
 
 - (void)showPasswordStep {
+    (void)self.view;
     [self setBusy:NO];
     self.currentStep = TGLoginStepPassword;
     self.title = @"Password";
-    self.headerLabel.text = @"Two-Step Verification";
-    self.subtitleLabel.text = @"Your account is protected with a password.\nEnter your password below.";
+    self.noticeLabel.text = @"Your account is protected with a password. Please enter it below.";
 
-    [self useSingleFieldLayout];
+    self.inputField.text = @"";
     self.inputField.placeholder = @"Password";
     self.inputField.secureTextEntry = YES;
     self.inputField.keyboardType = UIKeyboardTypeDefault;
-    [self.actionButton setTitle:@"Submit Password" forState:UIControlStateNormal];
-    self.nextItem.title = @"Done";
+
+    [self stopResendCountdown];
+    [self installBackButton];
+    [self layoutInterface];
+    [self updateNextEnabled];
     [self.inputField becomeFirstResponder];
 }
 
+- (void)showPhoneStep {
+    (void)self.view;
+    [self setBusy:NO];
+    self.currentStep = TGLoginStepPhone;
+    self.title = @"Your Phone";
+    self.noticeLabel.text = @"Please confirm your country code and enter your phone number.";
+
+    self.inputField.text = @"";
+    self.inputField.secureTextEntry = NO;
+    self.inputField.placeholder = @"Phone number";
+    self.inputField.keyboardType = UIKeyboardTypeNumberPad;
+
+    [self stopResendCountdown];
+    self.navigationItem.leftBarButtonItem = nil;
+    [self layoutInterface];
+    [self updateNextEnabled];
+    [self.inputField becomeFirstResponder];
+}
+
+- (void)installBackButton {
+    if (self.navigationItem.leftBarButtonItem != nil)
+        return;
+
+    UIButton *backButton = [UIButton buttonWithType:UIButtonTypeCustom];
+    backButton.frame = CGRectMake(0, 0, 52, 30);
+    UIImage *raw = [UIImage imageNamed:@"HeaderButton_Login_Blue.png"];
+    UIImage *rawPressed = [UIImage imageNamed:@"HeaderButton_Login_Blue_Pressed.png"];
+    if (raw != nil)
+        [backButton setBackgroundImage:[raw stretchableImageWithLeftCapWidth:(int)(raw.size.width / 2) topCapHeight:0] forState:UIControlStateNormal];
+    if (rawPressed != nil)
+        [backButton setBackgroundImage:[rawPressed stretchableImageWithLeftCapWidth:(int)(rawPressed.size.width / 2) topCapHeight:0] forState:UIControlStateHighlighted];
+    [backButton setTitle:@"Back" forState:UIControlStateNormal];
+    [backButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    backButton.titleLabel.font = [UIFont boldSystemFontOfSize:12];
+    backButton.titleLabel.shadowOffset = CGSizeMake(0, -1);
+    [backButton addTarget:self action:@selector(backTapped) forControlEvents:UIControlEventTouchUpInside];
+
+    self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:backButton];
+}
+
+- (void)backTapped {
+    if (self.busy)
+        return;
+
+    [[TGClient shared] logOut];
+    [self showPhoneStep];
+}
+
+- (void)startResendCountdown {
+    [self stopResendCountdown];
+    self.resendSeconds = 60;
+    [self updateResendTitle];
+    self.resendTimer = [NSTimer scheduledTimerWithTimeInterval:1.0
+                                                        target:self
+                                                      selector:@selector(resendTick)
+                                                      userInfo:nil
+                                                       repeats:YES];
+}
+
+- (void)stopResendCountdown {
+    [self.resendTimer invalidate];
+    self.resendTimer = nil;
+    self.resendSeconds = 0;
+}
+
+- (void)resendTick {
+    if (self.resendSeconds > 0)
+        self.resendSeconds--;
+    [self updateResendTitle];
+    if (self.resendSeconds <= 0) {
+        [self.resendTimer invalidate];
+        self.resendTimer = nil;
+    }
+}
+
+- (void)updateResendTitle {
+    if (self.resendSeconds > 0) {
+        [self.resendButton setTitle:[NSString stringWithFormat:@"Haven't received the code? (%d)", (int)self.resendSeconds]
+                           forState:UIControlStateNormal];
+        self.resendButton.enabled = NO;
+        self.resendButton.alpha = 0.6f;
+    } else {
+        [self.resendButton setTitle:@"Send the code again" forState:UIControlStateNormal];
+        self.resendButton.enabled = YES;
+        self.resendButton.alpha = 1.0f;
+    }
+}
+
+- (void)resendTapped {
+    if (self.busy || self.resendSeconds > 0 || self.currentStep != TGLoginStepCode)
+        return;
+
+    [[TGClient shared] send:@{ @"@type" : @"resendAuthenticationCode" }];
+    [self startResendCountdown];
+}
+
+- (BOOL)textField:(UITextField *)textField shouldChangeCharactersInRange:(NSRange)range replacementString:(NSString *)string {
+    if (textField == self.countryCodeField) {
+        NSString *result = [textField.text stringByReplacingCharactersInRange:range withString:string];
+        return [self digitsOnly:result].length <= 4;
+    }
+
+    if (self.currentStep == TGLoginStepCode) {
+        NSString *result = [textField.text stringByReplacingCharactersInRange:range withString:string];
+        return [self digitsOnly:result].length <= 8 && [[self digitsOnly:string] length] == string.length;
+    }
+
+    if (self.currentStep == TGLoginStepPhone) {
+        NSString *result = [textField.text stringByReplacingCharactersInRange:range withString:string];
+        return [self digitsOnly:result].length <= 15;
+    }
+
+    return YES;
+}
+
 - (BOOL)textFieldShouldReturn:(UITextField *)textField {
+    if (textField == self.countryCodeField) {
+        [self.inputField becomeFirstResponder];
+        return NO;
+    }
     [self actionButtonTapped];
     return YES;
 }
 
-- (void)keyboardWillShow:(NSNotification *)notification {
-    NSDictionary *info = [notification userInfo];
-    CGRect kbFrame = [[info objectForKey:UIKeyboardFrameEndUserInfoKey] CGRectValue];
-    CGFloat kbHeight = kbFrame.size.height;
-
-    UIEdgeInsets contentInsets = UIEdgeInsetsMake(0, 0, kbHeight + 20, 0);
-    self.scrollView.contentInset = contentInsets;
-    self.scrollView.scrollIndicatorInsets = contentInsets;
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    if (!self.busy && ![self.inputField isFirstResponder] && ![self.countryCodeField isFirstResponder])
+        [self.inputField becomeFirstResponder];
 }
 
-- (void)keyboardWillHide:(NSNotification *)notification {
-    UIEdgeInsets contentInsets = UIEdgeInsetsZero;
-    self.scrollView.contentInset = contentInsets;
-    self.scrollView.scrollIndicatorInsets = contentInsets;
+- (void)dealloc {
+    [_resendTimer invalidate];
+    _resendTimer = nil;
+    _inputField.delegate = nil;
+    _countryCodeField.delegate = nil;
 }
 
 @end

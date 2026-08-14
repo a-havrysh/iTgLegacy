@@ -381,10 +381,16 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m);
 	// A private chat's id is the user's id, so presence lands straight on the
 	// chat the list is drawing.
 	if ([type isEqualToString:@"updateUserStatus"]){
+		NSDictionary *status = TGUserStatusInfo(obj[@"status"]);
+		[[NSNotificationCenter defaultCenter]
+				postNotificationName:TGUserStatusDidChangeNotification
+							  object:self
+							userInfo:@{@"userId" : obj[@"user_id"] ?: @(0), @"status" : status}];
+
 		NSMutableDictionary *chat = self.chatsById[obj[@"user_id"]];
 		if (!chat)
 			return;
-		BOOL online = [obj[@"status"][@"@type"] isEqualToString:@"userStatusOnline"];
+		BOOL online = [status[@"isOnline"] boolValue];
 		if ([chat[@"isOnline"] boolValue] == online)
 			return;
 		chat[@"isOnline"] = @(online);
@@ -394,9 +400,13 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m);
 
 	if ([type isEqualToString:@"updateChatFolders"]){
 		NSMutableArray *out = [NSMutableArray array];
-		for (NSDictionary *f in obj[@"chat_folders"])
+		for (NSDictionary *f in obj[@"chat_folders"]){
+			// chatFolderInfo.name is chatFolderName{text:formattedText}, so the
+			// plain string sits two levels down: name.text.text.
+			id nameText = f[@"name"][@"text"][@"text"];
 			[out addObject:@{@"id"    : f[@"id"] ?: @(0),
-							 @"title" : f[@"title"][@"text"] ?: f[@"name"][@"text"] ?: f[@"title"] ?: @""}];
+							 @"title" : [nameText isKindOfClass:[NSString class]] ? nameText : @""}];
+		}
 		self.folders = out;
 		NSLog(@"TGClient: %lu folders", (unsigned long)out.count);
 		return;
@@ -573,6 +583,59 @@ static NSString *TGReactionSummary(NSDictionary *m) {
 /// already the sentence, written in camel case, and turning them back is a
 /// better answer for a content type nobody has written a branch for than
 /// either an empty bubble or the word "unsupported".
+NSString *const TGUserStatusDidChangeNotification = @"TGUserStatusDidChangeNotification";
+
+static NSDictionary *TGUserStatusInfo(NSDictionary *status) {
+	NSString *type = status[@"@type"];
+	if ([type isEqualToString:@"userStatusOnline"])
+		return @{@"isOnline" : @YES, @"text" : @"online", @"rank" : @(4000000000LL)};
+	if ([type isEqualToString:@"userStatusOffline"]){
+		int64_t wasOnline = [status[@"was_online"] longLongValue];
+		NSDate *date = [NSDate dateWithTimeIntervalSince1970:wasOnline];
+		NSDate *now = [NSDate date];
+		NSCalendar *cal = [NSCalendar currentCalendar];
+
+		NSDateFormatter *timeFmt = [NSDateFormatter new];
+		timeFmt.dateFormat = @"HH:mm";
+		NSString *time = [timeFmt stringFromDate:date];
+
+		NSUInteger dayUnits = NSCalendarUnitYear | NSCalendarUnitMonth | NSCalendarUnitDay;
+		NSDate *dateOnly = [cal dateFromComponents:[cal components:dayUnits fromDate:date]];
+		NSDate *nowOnly  = [cal dateFromComponents:[cal components:dayUnits fromDate:now]];
+		NSInteger dayDelta = [cal components:NSCalendarUnitDay
+									 fromDate:dateOnly
+									   toDate:nowOnly
+									  options:0].day;
+
+		NSString *when;
+		if (dayDelta == 0){
+			when = [NSString stringWithFormat:@"today at %@", time];
+		} else if (dayDelta == 1){
+			when = [NSString stringWithFormat:@"yesterday at %@", time];
+		} else if (dayDelta > 1 && dayDelta < 7){
+			NSDateFormatter *dayFmt = [NSDateFormatter new];
+			dayFmt.dateFormat = @"EEEE";
+			when = [NSString stringWithFormat:@"on %@ at %@",
+					[dayFmt stringFromDate:date], time];
+		} else {
+			NSDateFormatter *dateFmt = [NSDateFormatter new];
+			dateFmt.dateFormat = @"dd.MM.yyyy";
+			when = [NSString stringWithFormat:@"%@ at %@",
+					[dateFmt stringFromDate:date], time];
+		}
+		return @{@"isOnline" : @NO,
+				 @"text" : [NSString stringWithFormat:@"last seen %@", when],
+				 @"rank" : @(wasOnline)};
+	}
+	if ([type isEqualToString:@"userStatusRecently"])
+		return @{@"isOnline" : @NO, @"text" : @"last seen recently", @"rank" : @(3)};
+	if ([type isEqualToString:@"userStatusLastWeek"])
+		return @{@"isOnline" : @NO, @"text" : @"last seen within a week", @"rank" : @(2)};
+	if ([type isEqualToString:@"userStatusLastMonth"])
+		return @{@"isOnline" : @NO, @"text" : @"last seen within a month", @"rank" : @(1)};
+	return @{@"isOnline" : @NO, @"text" : @"last seen a long time ago", @"rank" : @(0)};
+}
+
 static NSString *TGPhraseFromTypeName(NSString *ctype) {
 	NSString *rest = [ctype hasPrefix:@"message"] ? [ctype substringFromIndex:7] : ctype;
 	if (!rest.length)
@@ -1326,6 +1389,7 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 					// The photo id travels with the row, so the list can show a
 					// face rather than a letter for everyone who has one.
 					[weakSelf cacheProfilePhoto:u];
+					NSDictionary *status = TGUserStatusInfo(u[@"status"]);
 					[users addObject:@{
 						@"id"          : u[@"id"] ?: @(0),
 						@"first_name"  : u[@"first_name"] ?: @"",
@@ -1333,12 +1397,35 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 						@"phone"       : u[@"phone_number"] ?: @"",
 						@"username"    : u[@"usernames"][@"active_usernames"][0] ?: @"",
 						@"photoFileId" : u[@"profile_photo"][@"small"][@"id"] ?: [NSNull null],
+						@"photoUniqueId" : u[@"profile_photo"][@"small"][@"remote"][@"unique_id"] ?: [NSNull null],
+						@"isOnline"    : status[@"isOnline"],
+						@"statusText"  : status[@"text"],
+						@"statusRank"  : status[@"rank"],
 					}];
 				}
 				if (--left == 0 && completion)
 					completion(users);
 			}];
 		}
+	}];
+}
+
+- (void)addContactWithPhone:(NSString *)phone
+				   firstName:(NSString *)firstName
+					lastName:(NSString *)lastName
+				  completion:(void (^)(BOOL))completion {
+	[self request:@{
+		@"@type" : @"importContacts",
+		@"contacts" : @[@{
+			@"@type"     : @"contact",
+			@"phone_number" : phone ?: @"",
+			@"first_name"   : firstName ?: @"",
+			@"last_name"    : lastName ?: @"",
+			@"user_id"      : @(0),
+		}],
+	} completion:^(NSDictionary *result){
+		BOOL ok = [result[@"@type"] isEqualToString:@"importedContacts"];
+		if (completion) completion(ok);
 	}];
 }
 
@@ -2356,11 +2443,14 @@ static NSArray *TGPacksFrom(NSDictionary *target) {
 	NSDictionary *position = update[@"position"];
 	if ([position isKindOfClass:NSDictionary.class]){
 		NSString *listType = position[@"list"][@"@type"];
-		if ([listType isEqualToString:@"chatListArchive"])
+		if ([listType isEqualToString:@"chatListArchive"]){
 			info[@"archiveOrder"] = @(TGArchiveOrder(@[position]));
-		else
+			info[@"order"] = @(0);
+		} else if ([listType isEqualToString:@"chatListMain"]){
 			info[@"order"] = @(TGMainListOrder(@[position]));
+			info[@"archiveOrder"] = @(0);
 			info[@"isPinned"] = @(TGPinnedInMain(@[position]));
+		}
 	}
 
 	[self rebuildChats];
