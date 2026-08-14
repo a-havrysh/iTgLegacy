@@ -1,0 +1,616 @@
+#import "TGClient+Storage.h"
+#import "TGClient+Private.h"
+
+static NSArray *TGStorageUserMediaTypes(void) {
+	return [NSArray arrayWithObjects:
+			@"fileTypePhoto", @"fileTypeVideo", @"fileTypeDocument",
+			@"fileTypeAudio", @"fileTypeVoiceNote", @"fileTypeVideoNote",
+			@"fileTypeAnimation", nil];
+}
+
+static NSArray *TGStorageAllTypes(void) {
+	NSMutableArray *all = [TGStorageUserMediaTypes() mutableCopy];
+	[all addObject:@"fileTypeSticker"];
+	[all addObject:@"fileTypeWallpaper"];
+	[all addObject:@"fileTypeThumbnail"];
+	[all addObject:@"fileTypeProfilePhoto"];
+	return all;
+}
+
+static NSString *TGStorageNetworkTypeName(NSString *type) {
+	NSString *lower = [(type ?: @"") lowercaseString];
+	if ([lower isEqualToString:@"wifi"])
+		return @"networkTypeWiFi";
+	if ([lower isEqualToString:@"mobile"] || [lower isEqualToString:@"cellular"])
+		return @"networkTypeMobile";
+	if ([lower isEqualToString:@"roaming"])
+		return @"networkTypeMobileRoaming";
+	if ([lower isEqualToString:@"none"])
+		return @"networkTypeNone";
+	return @"networkTypeOther";
+}
+
+static NSString *TGStorageNetworkShortName(NSString *tdName) {
+	if ([tdName isEqualToString:@"networkTypeWiFi"])
+		return @"wifi";
+	if ([tdName isEqualToString:@"networkTypeMobile"])
+		return @"mobile";
+	if ([tdName isEqualToString:@"networkTypeMobileRoaming"])
+		return @"roaming";
+	if ([tdName isEqualToString:@"networkTypeNone"])
+		return @"none";
+	return @"other";
+}
+
+static NSDictionary *TGStorageDictionary(id value) {
+	return [value isKindOfClass:[NSDictionary class]] ? value : nil;
+}
+
+static NSArray *TGStorageArray(id value) {
+	return [value isKindOfClass:[NSArray class]] ? value : [NSArray array];
+}
+
+static BOOL TGStorageFailed(NSDictionary *result) {
+	return !TGStorageDictionary(result) ||
+			[result[@"@type"] isEqualToString:@"error"];
+}
+
+static long long TGStorageFreedBytes(NSDictionary *stats) {
+	long long freed = 0;
+	for (id chatEntry in TGStorageArray(stats[@"by_chat"])) {
+		NSDictionary *byChat = TGStorageDictionary(chatEntry);
+		if (!byChat)
+			continue;
+		for (id typeEntry in TGStorageArray(byChat[@"by_file_type"])) {
+			NSDictionary *byType = TGStorageDictionary(typeEntry);
+			if (byType)
+				freed += [byType[@"size"] longLongValue];
+		}
+	}
+	return freed;
+}
+
+@interface TGClient (StorageInternal)
+- (void)optimizeStorageToSize:(long long)maxBytes
+				   ttlSeconds:(NSInteger)ttlSeconds
+		 immunityDelaySeconds:(NSInteger)immunityDelaySeconds
+					fileTypes:(NSArray *)kinds
+					  chatIds:(NSArray *)chatIds
+			  excludedChatIds:(NSArray *)excludedChatIds
+				   completion:(void (^)(long long freed))completion;
+- (NSString *)nameOfDownloadedFileInMessage:(NSDictionary *)message fileId:(NSInteger)fileId;
+- (NSDictionary *)fileInMessage:(NSDictionary *)message withId:(NSInteger)fileId;
+- (NSDictionary *)flattenAutosave:(id)value;
+@end
+
+@implementation TGClient (Storage)
+
+#pragma mark - statistics
+
+- (void)storageOverviewWithCompletion:(void (^)(NSDictionary *))completion {
+	[self request:@{@"@type" : @"getStorageStatisticsFast"}
+	   completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		if (TGStorageFailed(result)) {
+			completion(nil);
+			return;
+		}
+		long long files = [result[@"files_size"] longLongValue];
+		long long database = [result[@"database_size"] longLongValue];
+		long long pack = [result[@"language_pack_database_size"] longLongValue];
+		long long log = [result[@"log_size"] longLongValue];
+		completion(@{
+			@"files"        : @(files),
+			@"fileCount"    : @([result[@"file_count"] integerValue]),
+			@"database"     : @(database),
+			@"languagePack" : @(pack),
+			@"log"          : @(log),
+			@"total"        : @(files + database + pack + log),
+		});
+	}];
+}
+
+- (void)storageUsageByFileTypeWithCompletion:
+		(void (^)(NSDictionary *, long long))completion {
+	[self request:@{@"@type" : @"getStorageStatistics", @"chat_limit" : @(0)}
+	   completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		if (TGStorageFailed(result)) {
+			completion([NSDictionary dictionary], 0);
+			return;
+		}
+		NSMutableDictionary *sizes = [NSMutableDictionary dictionary];
+		for (id chatEntry in TGStorageArray(result[@"by_chat"])) {
+			NSDictionary *byChat = TGStorageDictionary(chatEntry);
+			if (!byChat)
+				continue;
+			for (id typeEntry in TGStorageArray(byChat[@"by_file_type"])) {
+				NSDictionary *byType = TGStorageDictionary(typeEntry);
+				NSDictionary *kind = TGStorageDictionary(byType[@"file_type"]);
+				NSString *name = kind[@"@type"];
+				if (![name isKindOfClass:[NSString class]])
+					continue;
+				NSDictionary *have = sizes[name];
+				long long size = [have[@"size"] longLongValue] +
+						[byType[@"size"] longLongValue];
+				NSInteger count = [have[@"count"] integerValue] +
+						[byType[@"count"] integerValue];
+				sizes[name] = @{@"size" : @(size), @"count" : @(count)};
+			}
+		}
+		completion(sizes, [result[@"size"] longLongValue]);
+	}];
+}
+
+- (void)storageUsageByChatWithLimit:(NSInteger)limit
+						 completion:(void (^)(NSArray *))completion {
+	[self request:@{@"@type" : @"getStorageStatistics", @"chat_limit" : @(limit)}
+	   completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		if (TGStorageFailed(result)) {
+			completion([NSArray array]);
+			return;
+		}
+		NSMutableArray *out = [NSMutableArray array];
+		for (id chatEntry in TGStorageArray(result[@"by_chat"])) {
+			NSDictionary *byChat = TGStorageDictionary(chatEntry);
+			if (!byChat)
+				continue;
+			NSNumber *chatId = [byChat[@"chat_id"] isKindOfClass:[NSNumber class]]
+					? byChat[@"chat_id"] : @0;
+			NSDictionary *known = TGStorageDictionary(
+					self.chatsById[chatId]);
+			NSString *title = known[@"title"];
+			if (![title isKindOfClass:[NSString class]])
+				title = @"";
+			[out addObject:@{
+				@"chatId" : chatId,
+				@"title"  : title,
+				@"size"   : @([byChat[@"size"] longLongValue]),
+				@"count"  : @([byChat[@"count"] integerValue]),
+			}];
+		}
+		[out sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b){
+			long long sa = [a[@"size"] longLongValue];
+			long long sb = [b[@"size"] longLongValue];
+			if (sa == sb)
+				return NSOrderedSame;
+			return sa > sb ? NSOrderedAscending : NSOrderedDescending;
+		}];
+		completion(out);
+	}];
+}
+
+- (void)storageUsageForChat:(int64_t)chatId
+				 completion:(void (^)(long long, NSInteger))completion {
+	[self storageUsageByChatWithLimit:256 completion:^(NSArray *chats){
+		if (!completion)
+			return;
+		for (NSDictionary *entry in chats) {
+			if ([entry[@"chatId"] longLongValue] == chatId) {
+				completion([entry[@"size"] longLongValue],
+						   [entry[@"count"] integerValue]);
+				return;
+			}
+		}
+		completion(0, 0);
+	}];
+}
+
+- (void)databaseStatisticsWithCompletion:(void (^)(NSString *))completion {
+	[self request:@{@"@type" : @"getDatabaseStatistics"}
+	   completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		NSString *text = TGStorageFailed(result) ? nil : result[@"statistics"];
+		completion([text isKindOfClass:[NSString class]] ? text : nil);
+	}];
+}
+
+#pragma mark - clearing
+
+- (void)optimizeStorageToSize:(long long)maxBytes
+				   ttlSeconds:(NSInteger)ttlSeconds
+		 immunityDelaySeconds:(NSInteger)immunityDelaySeconds
+					fileTypes:(NSArray *)kinds
+			  excludedChatIds:(NSArray *)excludedChatIds
+				   completion:(void (^)(long long))completion {
+	[self optimizeStorageToSize:maxBytes
+					 ttlSeconds:ttlSeconds
+		   immunityDelaySeconds:immunityDelaySeconds
+					  fileTypes:kinds
+						chatIds:nil
+				excludedChatIds:excludedChatIds
+					 completion:completion];
+}
+
+- (void)optimizeStorageToSize:(long long)maxBytes
+				   ttlSeconds:(NSInteger)ttlSeconds
+		 immunityDelaySeconds:(NSInteger)immunityDelaySeconds
+					fileTypes:(NSArray *)kinds
+					  chatIds:(NSArray *)chatIds
+			  excludedChatIds:(NSArray *)excludedChatIds
+				   completion:(void (^)(long long))completion {
+	NSMutableArray *types = [NSMutableArray array];
+	for (NSString *kind in TGStorageArray(kinds)) {
+		if ([kind isKindOfClass:[NSString class]])
+			[types addObject:@{@"@type" : kind}];
+	}
+	[self request:@{
+		@"@type"                          : @"optimizeStorage",
+		@"size"                           : @(maxBytes),
+		@"ttl"                            : @(ttlSeconds),
+		@"count"                          : @(-1),
+		@"immunity_delay"                 : @(immunityDelaySeconds),
+		@"file_types"                     : types,
+		@"chat_ids"                       : TGStorageArray(chatIds),
+		@"exclude_chat_ids"               : TGStorageArray(excludedChatIds),
+		@"return_deleted_file_statistics" : @YES,
+		@"chat_limit"                     : @(0),
+	} completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		completion(TGStorageFailed(result) ? 0 : TGStorageFreedBytes(result));
+	}];
+}
+
+- (void)clearCacheCategories:(NSArray *)kinds
+				  completion:(void (^)(long long))completion {
+	NSArray *types = TGStorageArray(kinds).count ? kinds : TGStorageUserMediaTypes();
+	[self optimizeStorageToSize:-1
+					 ttlSeconds:-1
+		   immunityDelaySeconds:0
+					  fileTypes:types
+				excludedChatIds:nil
+					 completion:completion];
+}
+
+- (void)clearAllCacheWithCompletion:(void (^)(long long))completion {
+	[self optimizeStorageToSize:-1
+					 ttlSeconds:-1
+		   immunityDelaySeconds:0
+					  fileTypes:TGStorageAllTypes()
+				excludedChatIds:nil
+					 completion:completion];
+}
+
+- (void)clearCacheForChat:(int64_t)chatId
+			   completion:(void (^)(long long))completion {
+	[self optimizeStorageToSize:-1
+					 ttlSeconds:-1
+		   immunityDelaySeconds:0
+					  fileTypes:TGStorageAllTypes()
+						chatIds:@[@(chatId)]
+				excludedChatIds:nil
+					 completion:completion];
+}
+
+- (void)applyCachePolicyMaxBytes:(long long)maxBytes
+					  ttlSeconds:(NSInteger)ttlSeconds
+				 excludedChatIds:(NSArray *)excludedChatIds
+					  completion:(void (^)(long long))completion {
+	if (maxBytes < 0 && ttlSeconds < 0) {
+		if (completion)
+			completion(0);
+		return;
+	}
+	[self optimizeStorageToSize:maxBytes
+					 ttlSeconds:ttlSeconds
+		   immunityDelaySeconds:60 * 60
+					  fileTypes:TGStorageUserMediaTypes()
+				excludedChatIds:excludedChatIds
+					 completion:completion];
+}
+
+- (void)deleteCachedFile:(NSInteger)fileId {
+	[self send:@{@"@type" : @"deleteFile", @"file_id" : @(fileId)}];
+}
+
+#pragma mark - downloads
+
+- (void)cancelDownloadFile:(NSInteger)fileId onlyIfPending:(BOOL)onlyIfPending {
+	[self send:@{
+		@"@type"           : @"cancelDownloadFile",
+		@"file_id"         : @(fileId),
+		@"only_if_pending" : @(onlyIfPending),
+	}];
+}
+
+- (void)addFileToDownloads:(NSInteger)fileId
+					inChat:(int64_t)chatId
+				   message:(int64_t)messageId
+				completion:(void (^)(BOOL))completion {
+	[self request:@{
+		@"@type"      : @"addFileToDownloads",
+		@"file_id"    : @(fileId),
+		@"chat_id"    : @(chatId),
+		@"message_id" : @(messageId),
+		@"priority"   : @(1),
+	} completion:^(NSDictionary *result){
+		if (completion)
+			completion(!TGStorageFailed(result));
+	}];
+}
+
+- (void)clearDownloadsOnlyActive:(BOOL)onlyActive
+				   onlyCompleted:(BOOL)onlyCompleted
+				 deleteFromCache:(BOOL)deleteFromCache {
+	[self send:@{
+		@"@type"             : @"removeAllFilesFromDownloads",
+		@"only_active"       : @(onlyActive),
+		@"only_completed"    : @(onlyCompleted),
+		@"delete_from_cache" : @(deleteFromCache),
+	}];
+}
+
+- (void)setDownloadPaused:(BOOL)paused forFile:(NSInteger)fileId {
+	[self send:@{
+		@"@type"     : @"toggleDownloadIsPaused",
+		@"file_id"   : @(fileId),
+		@"is_paused" : @(paused),
+	}];
+}
+
+- (NSString *)nameOfDownloadedFileInMessage:(NSDictionary *)message fileId:(NSInteger)fileId {
+	NSDictionary *content = TGStorageDictionary(message[@"content"]);
+	NSArray *holders = [NSArray arrayWithObjects:@"document", @"audio", @"video",
+			@"animation", @"voice_note", @"video_note", nil];
+	for (NSString *key in holders) {
+		NSDictionary *holder = TGStorageDictionary(content[key]);
+		if (!holder)
+			continue;
+		NSString *name = holder[@"file_name"];
+		if ([name isKindOfClass:[NSString class]] && name.length)
+			return name;
+		NSString *title = holder[@"title"];
+		if ([title isKindOfClass:[NSString class]] && title.length)
+			return title;
+	}
+	NSString *caption = TGStorageDictionary(content[@"caption"])[@"text"];
+	if ([caption isKindOfClass:[NSString class]] && caption.length)
+		return caption;
+	return [NSString stringWithFormat:@"File %ld", (long)fileId];
+}
+
+- (NSDictionary *)fileInMessage:(NSDictionary *)message withId:(NSInteger)fileId {
+	NSDictionary *content = TGStorageDictionary(message[@"content"]);
+	NSArray *holders = [NSArray arrayWithObjects:@"document", @"audio", @"video",
+			@"animation", @"voice_note", @"video_note", @"sticker", nil];
+	for (NSString *key in holders) {
+		NSDictionary *holder = TGStorageDictionary(content[key]);
+		NSDictionary *file = TGStorageDictionary(holder[key]) ?:
+				TGStorageDictionary(holder[@"document"]) ?:
+				TGStorageDictionary(holder[@"video"]) ?:
+				TGStorageDictionary(holder[@"audio"]) ?:
+				TGStorageDictionary(holder[@"voice"]) ?:
+				TGStorageDictionary(holder[@"animation"]) ?:
+				TGStorageDictionary(holder[@"sticker"]);
+		if (file && [file[@"id"] integerValue] == fileId)
+			return file;
+	}
+	for (id size in TGStorageArray(TGStorageDictionary(content[@"photo"])[@"sizes"])) {
+		NSDictionary *file = TGStorageDictionary(TGStorageDictionary(size)[@"photo"]);
+		if (file && [file[@"id"] integerValue] == fileId)
+			return file;
+	}
+	return nil;
+}
+
+- (void)downloadsWithQuery:(NSString *)query
+				onlyActive:(BOOL)onlyActive
+			 onlyCompleted:(BOOL)onlyCompleted
+					offset:(NSString *)offset
+					 limit:(NSInteger)limit
+				completion:(void (^)(NSArray *, NSDictionary *, NSString *))completion {
+	[self request:@{
+		@"@type"          : @"searchFileDownloads",
+		@"query"          : query ?: @"",
+		@"only_active"    : @(onlyActive),
+		@"only_completed" : @(onlyCompleted),
+		@"offset"         : offset ?: @"",
+		@"limit"          : @(limit > 0 ? limit : 20),
+	} completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		if (TGStorageFailed(result)) {
+			completion([NSArray array],
+					   @{@"active" : @0, @"paused" : @0, @"completed" : @0}, @"");
+			return;
+		}
+		NSMutableArray *out = [NSMutableArray array];
+		for (id entry in TGStorageArray(result[@"files"])) {
+			NSDictionary *download = TGStorageDictionary(entry);
+			if (!download)
+				continue;
+			NSInteger fileId = [download[@"file_id"] integerValue];
+			NSDictionary *message = TGStorageDictionary(download[@"message"]);
+			NSDictionary *file = [self fileInMessage:message withId:fileId];
+			NSDictionary *local = TGStorageDictionary(file[@"local"]);
+			NSInteger complete = [download[@"complete_date"] integerValue];
+			[out addObject:@{
+				@"fileId"     : @(fileId),
+				@"chatId"     : message[@"chat_id"] ?: @0,
+				@"messageId"  : message[@"id"] ?: @0,
+				@"name"       : [self nameOfDownloadedFileInMessage:message fileId:fileId],
+				@"size"       : file[@"size"] ?: @0,
+				@"downloaded" : local[@"downloaded_size"] ?: @0,
+				@"isPaused"   : download[@"is_paused"] ?: @NO,
+				@"isComplete" : @(complete != 0),
+				@"date"       : download[@"add_date"] ?: @0,
+			}];
+		}
+		NSDictionary *totals = TGStorageDictionary(result[@"total_counts"]);
+		NSDictionary *counts = @{
+			@"active"    : totals[@"active_count"] ?: @0,
+			@"paused"    : totals[@"paused_count"] ?: @0,
+			@"completed" : totals[@"completed_count"] ?: @0,
+		};
+		NSString *next = result[@"next_offset"];
+		completion(out, counts,
+				   [next isKindOfClass:[NSString class]] ? next : @"");
+	}];
+}
+
+#pragma mark - network usage
+
+- (void)networkStatsOnlyCurrent:(BOOL)onlyCurrent
+					 completion:(void (^)(NSArray *, NSInteger))completion {
+	[self request:@{@"@type" : @"getNetworkStatistics", @"only_current" : @(onlyCurrent)}
+	   completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		if (TGStorageFailed(result)) {
+			completion([NSArray array], 0);
+			return;
+		}
+		NSMutableArray *out = [NSMutableArray array];
+		for (id item in TGStorageArray(result[@"entries"])) {
+			NSDictionary *entry = TGStorageDictionary(item);
+			if (!entry)
+				continue;
+			BOOL isCall = [entry[@"@type"] isEqualToString:@"networkStatisticsEntryCall"];
+			NSString *kind = @"calls";
+			if (!isCall) {
+				NSString *name = TGStorageDictionary(entry[@"file_type"])[@"@type"];
+				kind = [name isKindOfClass:[NSString class]] ? name : @"fileTypeUnknown";
+			}
+			NSString *network = TGStorageDictionary(entry[@"network_type"])[@"@type"];
+			[out addObject:@{
+				@"kind"     : kind,
+				@"network"  : TGStorageNetworkShortName(
+						[network isKindOfClass:[NSString class]] ? network : @""),
+				@"sent"     : entry[@"sent_bytes"] ?: @0,
+				@"received" : entry[@"received_bytes"] ?: @0,
+				@"duration" : entry[@"duration"] ?: @0,
+			}];
+		}
+		completion(out, [result[@"since_date"] integerValue]);
+	}];
+}
+
+- (void)networkTotalsOnlyCurrent:(BOOL)onlyCurrent
+					  completion:(void (^)(long long, long long, NSDictionary *))completion {
+	[self networkStatsOnlyCurrent:onlyCurrent
+					   completion:^(NSArray *entries, NSInteger sinceDate){
+		if (!completion)
+			return;
+		long long sent = 0;
+		long long received = 0;
+		NSMutableDictionary *byNetwork = [NSMutableDictionary dictionary];
+		for (NSDictionary *entry in entries) {
+			long long entrySent = [entry[@"sent"] longLongValue];
+			long long entryReceived = [entry[@"received"] longLongValue];
+			sent += entrySent;
+			received += entryReceived;
+			NSString *network = entry[@"network"] ?: @"other";
+			NSDictionary *have = byNetwork[network];
+			byNetwork[network] = @{
+				@"sent"     : @([have[@"sent"] longLongValue] + entrySent),
+				@"received" : @([have[@"received"] longLongValue] + entryReceived),
+			};
+		}
+		completion(sent, received, byNetwork);
+	}];
+}
+
+- (void)resetNetworkStats {
+	[self send:@{@"@type" : @"resetNetworkStatistics"}];
+}
+
+#pragma mark - auto-download
+
+- (void)setAutoDownloadSettings:(NSDictionary *)settings forNetworkType:(NSString *)type {
+	NSDictionary *values = TGStorageDictionary(settings) ?: [NSDictionary dictionary];
+	[self send:@{
+		@"@type"    : @"setAutoDownloadSettings",
+		@"settings" : @{
+			@"@type"                    : @"autoDownloadSettings",
+			@"is_auto_download_enabled" : values[@"enabled"] ?: @NO,
+			@"max_photo_file_size"      : values[@"maxPhoto"] ?: @(1024 * 1024),
+			@"max_video_file_size"      : values[@"maxVideo"] ?: @(0),
+			@"max_other_file_size"      : values[@"maxOther"] ?: @(0),
+			@"video_upload_bitrate"     : values[@"videoUploadBitrate"] ?: @(0),
+			@"preload_large_videos"     : values[@"preloadLargeVideos"] ?: @NO,
+			@"preload_next_audio"       : values[@"preloadNextAudio"] ?: @NO,
+			@"preload_stories"          : @NO,
+			@"use_less_data_for_calls"  : values[@"useLessDataForCalls"] ?: @YES,
+		},
+		@"type"     : @{@"@type" : TGStorageNetworkTypeName(type)},
+	}];
+}
+
+#pragma mark - autosave
+
+- (NSDictionary *)flattenAutosave:(id)value {
+	NSDictionary *scope = TGStorageDictionary(value);
+	if (!scope)
+		return nil;
+	return @{
+		@"photos"        : scope[@"autosave_photos"] ?: @NO,
+		@"videos"        : scope[@"autosave_videos"] ?: @NO,
+		@"maxVideoBytes" : scope[@"max_video_file_size"] ?: @0,
+	};
+}
+
+- (void)autosaveSettingsWithCompletion:
+		(void (^)(NSDictionary *, NSDictionary *, NSDictionary *))completion {
+	[self request:@{@"@type" : @"getAutosaveSettings"}
+	   completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		if (TGStorageFailed(result)) {
+			completion(nil, nil, nil);
+			return;
+		}
+		completion([self flattenAutosave:result[@"private_chat_settings"]],
+				   [self flattenAutosave:result[@"group_settings"]],
+				   [self flattenAutosave:result[@"channel_settings"]]);
+	}];
+}
+
+- (void)setAutosavePhotos:(BOOL)photos
+				   videos:(BOOL)videos
+			maxVideoBytes:(long long)maxVideoBytes
+				 forScope:(NSString *)scope {
+	NSString *scopeType = @"autosaveSettingsScopePrivateChats";
+	if ([scope isEqualToString:@"groups"])
+		scopeType = @"autosaveSettingsScopeGroupChats";
+	else if ([scope isEqualToString:@"channels"])
+		scopeType = @"autosaveSettingsScopeChannelChats";
+	[self send:@{
+		@"@type"    : @"setAutosaveSettings",
+		@"scope"    : @{@"@type" : scopeType},
+		@"settings" : @{
+			@"@type"               : @"scopeAutosaveSettings",
+			@"autosave_photos"     : @(photos),
+			@"autosave_videos"     : @(videos),
+			@"max_video_file_size" : @(maxVideoBytes > 0 ? maxVideoBytes : 512 * 1024),
+		},
+	}];
+}
+
+- (void)clearAutosaveExceptions {
+	[self send:@{@"@type" : @"clearAutosaveSettingsExceptions"}];
+}
+
+#pragma mark - file name helpers
+
+- (void)suggestedFileNameForFile:(NSInteger)fileId
+					 inDirectory:(NSString *)directory
+					  completion:(void (^)(NSString *))completion {
+	[self request:@{
+		@"@type"     : @"getSuggestedFileName",
+		@"file_id"   : @(fileId),
+		@"directory" : directory ?: @"",
+	} completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		NSString *text = TGStorageFailed(result) ? nil : result[@"text"];
+		completion([text isKindOfClass:[NSString class]] ? text : nil);
+	}];
+}
+
+@end

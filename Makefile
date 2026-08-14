@@ -144,6 +144,34 @@ APP_SRC_M := \
 	src/RootViewController.m \
 	src/main.m \
 	src/TGClient.m \
+	src/TGClient+Account.m \
+	src/TGClient+AppSettings.m \
+	src/TGClient+Bots.m \
+	src/TGClient+Calls.m \
+	src/TGClient+Channels.m \
+	src/TGClient+ChatList.m \
+	src/TGClient+ChatManagement.m \
+	src/TGClient+Contacts.m \
+	src/TGClient+Files.m \
+	src/TGClient+Forums.m \
+	src/TGClient+Groups.m \
+	src/TGClient+MessageContent.m \
+	src/TGClient+Messages.m \
+	src/TGClient+Network.m \
+	src/TGClient+Notifications.m \
+	src/TGClient+Payments.m \
+	src/TGClient+Premium.m \
+	src/TGClient+Privacy.m \
+	src/TGClient+Reactions.m \
+	src/TGClient+SavedMessages.m \
+	src/TGClient+Search.m \
+	src/TGClient+SecretChats.m \
+	src/TGClient+Stickers.m \
+	src/TGClient+Storage.m \
+	src/TGClient+Stories.m \
+	src/TGClient+Translation.m \
+	src/TGClient+UserStatus.m \
+	src/TGClient+WebLinks.m \
 	src/TGDevice.m \
 	src/TGCapabilities.m \
 	src/TGTheme.m \
