@@ -464,6 +464,43 @@ static UIColor *rgb(int r, int g, int b) {
 		if (background && [bar respondsToSelector:@selector(setBackgroundImage:forBarMetrics:)])
 			[bar setBackgroundImage:background forBarMetrics:UIBarMetricsDefault];
 	}
+
+	[self styleBackButton];
+}
+
+/// The back button is created by UINavigationController itself, so it can only
+/// be reached through the appearance proxy rather than per screen.
+- (void)styleBackButton {
+	// The appearance proxy forwards selectors instead of implementing them, so
+	// respondsToSelector: answers NO for every one of them and must not gate
+	// these calls. They have all existed since iOS 5.
+	UIBarButtonItem *proxy = [UIBarButtonItem appearance];
+
+	if (self.isFlat || _imported != nil){
+		[proxy setBackButtonBackgroundImage:nil forState:UIControlStateNormal
+								 barMetrics:UIBarMetricsDefault];
+		[proxy setBackButtonBackgroundImage:nil forState:UIControlStateHighlighted
+								 barMetrics:UIBarMetricsDefault];
+		return;
+	}
+
+	UIImage *normal = [[UIImage imageNamed:@"BackButton"]
+			stretchableImageWithLeftCapWidth:15 topCapHeight:0];
+	UIImage *pressed = [[UIImage imageNamed:@"BackButton_Pressed"]
+			stretchableImageWithLeftCapWidth:15 topCapHeight:0];
+	if (normal)
+		[proxy setBackButtonBackgroundImage:normal forState:UIControlStateNormal
+								 barMetrics:UIBarMetricsDefault];
+	if (pressed)
+		[proxy setBackButtonBackgroundImage:pressed forState:UIControlStateHighlighted
+								 barMetrics:UIBarMetricsDefault];
+
+	NSDictionary *titleAttributes = nil;
+	if (NSFoundationVersionNumber > 993.00)
+		titleAttributes = @{ NSForegroundColorAttributeName : [UIColor whiteColor] };
+	else
+		titleAttributes = @{ UITextAttributeTextColor : [UIColor whiteColor] };
+	[proxy setTitleTextAttributes:titleAttributes forState:UIControlStateNormal];
 }
 
 @end

@@ -150,6 +150,8 @@ APP_SRC_M := \
 	src/TGThemeFile.m \
 	src/TGIcons.m \
 	src/TGPopupMenu.m \
+	src/TGAlertView.m \
+	src/TGActionSheet.m \
 	src/TGSnackbar.m \
 	src/TGSearchViewController.m \
 	src/TGQRViewController.m \

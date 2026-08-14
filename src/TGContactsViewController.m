@@ -568,8 +568,6 @@ static NSString *TGContactName(NSDictionary *u) {
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
-	if (indexPath.section == 0 && [self showsInviteRow] && indexPath.row == 0)
-		return 44;
 	return kContactRowHeight;
 }
 
@@ -627,18 +625,15 @@ static NSString *TGContactName(NSDictionary *u) {
 	static NSString *inviteReuse = @"TGInviteCell";
 
 	if ([self isInviteRowAtIndexPath:indexPath]){
-		UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:inviteReuse];
+		TGContactRowCell *cell = (TGContactRowCell *)
+				[tableView dequeueReusableCellWithIdentifier:inviteReuse];
 		if (!cell)
-			cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
-										  reuseIdentifier:inviteReuse];
-		cell.textLabel.attributedText = nil;
-		cell.textLabel.text = @"Invite Friends";
-		cell.textLabel.textColor = [[TGTheme shared] accentColour];
-		cell.textLabel.font = [UIFont systemFontOfSize:16];
-		cell.detailTextLabel.text = @"";
-
-		cell.imageView.image = [TGIcons inviteFriendsAvatarOfSide:kContactAvatar];
-		cell.backgroundColor = [[TGTheme shared] listBackgroundColour];
+			cell = [[TGContactRowCell alloc] initWithStyle:UITableViewCellStyleDefault
+										   reuseIdentifier:inviteReuse];
+		cell.titleLabel.text = @"Invite Friends";
+		cell.titleLabel.textColor = [[TGTheme shared] accentColour];
+		cell.subtitleLabel.text = @"";
+		cell.avatarView.image = [TGIcons inviteFriendsAvatarOfSide:kContactAvatar];
 		cell.accessoryType = UITableViewCellAccessoryNone;
 		return cell;
 	}
