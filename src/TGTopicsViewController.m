@@ -1,8 +1,11 @@
 #import "TGTopicsViewController.h"
 #import "TGChatViewController.h"
 #import "TGClient.h"
+#import "TGClient+Forums.h"
 #import "TGTheme.h"
 #import "TGIcons.h"
+#import "TGActionSheet.h"
+#import "TGPopupMenu.h"
 #import <QuartzCore/QuartzCore.h>
 
 static const CGFloat kTopicRowHeight = 73.0f;
@@ -47,6 +50,7 @@ static NSString *TGTopicDate(NSTimeInterval unix) {
 @property (nonatomic, strong) UIImageView *badgeBackground;
 @property (nonatomic, strong) UILabel *badge;
 @property (nonatomic, strong) UIImageView *arrow;
+@property (nonatomic, strong) UIImageView *pinIcon;
 @end
 
 @implementation TGTopicCell
@@ -103,6 +107,10 @@ static NSString *TGTopicDate(NSTimeInterval unix) {
 	self.arrow = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"DialogListArrow.png"]];
 	[self.contentView addSubview:self.arrow];
 
+	self.pinIcon = [[UIImageView alloc] initWithImage:[TGIcons menuGlyphNamed:@"pin"]];
+	self.pinIcon.hidden = YES;
+	[self.contentView addSubview:self.pinIcon];
+
 	UIImage *plate = [[UIImage imageNamed:@"DialogListCell.png"]
 			stretchableImageWithLeftCapWidth:1 topCapHeight:0];
 	UIImage *platePressed = [[UIImage imageNamed:@"DialogListCellHighlighted.png"]
@@ -135,6 +143,13 @@ static NSString *TGTopicDate(NSTimeInterval unix) {
 	CGFloat dateX = w - dateWidth - 9;
 	self.dateLabel.frame = CGRectMake(dateX - (75 - dateWidth), 9, 75, 15);
 
+	CGSize pinSize = self.pinIcon.image ? self.pinIcon.image.size : CGSizeZero;
+	if (!self.pinIcon.hidden && pinSize.width > 0){
+		self.pinIcon.frame = CGRectMake(dateX - pinSize.width - 5,
+				9 + (15 - pinSize.height) / 2.0f, pinSize.width, pinSize.height);
+		dateX -= pinSize.width + 5;
+	}
+
 	CGFloat titleWidth = (int)(dateX - 4 - left - 18);
 	titleWidth = MIN(titleWidth, [self.titleLabel.text sizeWithFont:self.titleLabel.font].width);
 	if (titleWidth < 0)
@@ -149,12 +164,18 @@ static NSString *TGTopicDate(NSTimeInterval unix) {
 
 @end
 
-@interface TGTopicsViewController ()
+static const NSInteger kTopicNameAlertCreate = 91;
+static const NSInteger kTopicNameAlertEdit = 92;
+
+@interface TGTopicsViewController () <UIAlertViewDelegate>
 @property (nonatomic, strong) NSArray *topics;
 @property (nonatomic, strong) UILabel *emptyLabel;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @property (nonatomic, assign) BOOL loading;
 @property (nonatomic, assign) BOOL loadedOnce;
+@property (nonatomic, strong) NSArray *iconChoices;
+@property (nonatomic, strong) NSDictionary *actionTopic;
+@property (nonatomic, strong) TGActionSheet *currentActionSheet;
 @end
 
 @implementation TGTopicsViewController
@@ -210,6 +231,20 @@ static NSString *TGTopicDate(NSTimeInterval unix) {
 		self.refreshControl = refresh;
 	}
 
+	UIButton *create = [TGIcons headerButtonWithTitle:@"New" bold:NO
+											   target:self action:@selector(newTopicPressed)];
+	self.navigationItem.rightBarButtonItem =
+			[[UIBarButtonItem alloc] initWithCustomView:create];
+
+	UILongPressGestureRecognizer *hold = [[UILongPressGestureRecognizer alloc]
+			initWithTarget:self action:@selector(topicHeld:)];
+	[self.tableView addGestureRecognizer:hold];
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] forumTopicDefaultIconsWithCompletion:^(NSArray *icons){
+		weakSelf.iconChoices = [icons isKindOfClass:NSArray.class] ? icons : @[];
+	}];
+
 	[[NSNotificationCenter defaultCenter] addObserver:self
 											 selector:@selector(themeChanged)
 												 name:TGThemeChangedNotification
@@ -226,6 +261,14 @@ static NSString *TGTopicDate(NSTimeInterval unix) {
 	[super viewWillAppear:animated];
 	if (self.loadedOnce)
 		[self reloadTopics];
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+	[super viewWillDisappear:animated];
+	[self.currentActionSheet dismissWithClickedButtonIndex:self.currentActionSheet.cancelButtonIndex
+												  animated:NO];
+	self.currentActionSheet = nil;
+	[TGPopupMenu dismiss];
 }
 
 - (void)themeChanged {
@@ -253,7 +296,7 @@ static NSString *TGTopicDate(NSTimeInterval unix) {
 	}
 
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] forumTopicsForChat:self.chatId completion:^(NSArray *topics){
+	[[TGClient shared] forumTopicRowsForChat:self.chatId completion:^(NSArray *topics){
 		TGTopicsViewController *me = weakSelf;
 		if (!me)
 			return;
@@ -303,6 +346,7 @@ static NSString *TGTopicDate(NSTimeInterval unix) {
 	cell.badge.text = @"";
 	cell.badge.hidden = YES;
 	cell.badgeBackground.hidden = YES;
+	cell.pinIcon.hidden = YES;
 
 	if (indexPath.row >= (NSInteger)self.topics.count)
 		return cell;
@@ -314,15 +358,29 @@ static NSString *TGTopicDate(NSTimeInterval unix) {
 	NSString *name = [t[@"name"] isKindOfClass:NSString.class] ? t[@"name"] : @"";
 	NSString *preview = [t[@"text"] isKindOfClass:NSString.class] ? t[@"text"] : @"";
 	NSString *title = name.length ? name : @"Topic";
-	cell.titleLabel.text = title;
-	cell.previewLabel.text = preview;
-	cell.dateLabel.text = TGTopicDate([t[@"date"] doubleValue]);
+	BOOL closed = [t[@"isClosed"] boolValue];
+	BOOL hidden = [t[@"isHidden"] boolValue];
 
-	long long threadId = [t[@"threadId"] respondsToSelector:@selector(longLongValue)]
-			? [t[@"threadId"] longLongValue] : 0;
+	cell.titleLabel.text = title;
+	if (closed)
+		cell.previewLabel.text = preview.length
+				? [NSString stringWithFormat:@"Closed · %@", preview]
+				: @"Closed";
+	else if (hidden)
+		cell.previewLabel.text = preview.length
+				? [NSString stringWithFormat:@"Hidden · %@", preview]
+				: @"Hidden";
+	else
+		cell.previewLabel.text = preview;
+	cell.dateLabel.text = TGTopicDate([t[@"date"] doubleValue]);
+	cell.pinIcon.hidden = ![t[@"isPinned"] boolValue];
+
+	long long colourId = [self topicIdOf:t];
+	if ([t[@"iconColor"] respondsToSelector:@selector(longLongValue)])
+		colourId = [t[@"iconColor"] longLongValue];
 	cell.avatar.image = [TGIcons avatarWithInitials:[title substringToIndex:1].uppercaseString
 											   size:kTopicAvatar
-										   colourId:threadId];
+										   colourId:colourId];
 
 	if (unread > 0){
 		cell.badge.text = unread < 1000
@@ -355,6 +413,275 @@ static NSString *TGTopicDate(NSTimeInterval unix) {
 	vc.chatTitle = name.length ? name : @"Topic";
 	vc.isGroup = YES;
 	[self.navigationController pushViewController:vc animated:YES];
+
+	int32_t topicId = [self topicIdOf:t];
+	if (topicId != 0 && [t[@"unread"] integerValue] > 0)
+		[[TGClient shared] markForumTopicReadInChat:self.chatId topic:topicId completion:nil];
+}
+
+#pragma mark - topic actions
+
+- (int32_t)topicIdOf:(NSDictionary *)topic {
+	id value = topic[@"topicId"];
+	if (![value respondsToSelector:@selector(intValue)])
+		value = topic[@"threadId"];
+	return [value respondsToSelector:@selector(intValue)] ? (int32_t)[value intValue] : 0;
+}
+
+- (void)showError:(NSString *)message {
+	[[[UIAlertView alloc] initWithTitle:nil message:message delegate:nil
+					  cancelButtonTitle:@"OK" otherButtonTitles:nil] show];
+}
+
+- (void)topicHeld:(UILongPressGestureRecognizer *)hold {
+	if (hold.state != UIGestureRecognizerStateBegan)
+		return;
+
+	NSIndexPath *path = [self.tableView indexPathForRowAtPoint:
+			[hold locationInView:self.tableView]];
+	if (!path || path.row >= (NSInteger)self.topics.count)
+		return;
+
+	NSDictionary *t = self.topics[path.row];
+	self.actionTopic = t;
+
+	BOOL general = [t[@"isGeneral"] boolValue];
+	BOOL closed = [t[@"isClosed"] boolValue];
+	BOOL pinned = [t[@"isPinned"] boolValue];
+	BOOL hidden = [t[@"isHidden"] boolValue];
+
+	NSMutableArray *items = [NSMutableArray array];
+	NSMutableArray *keys = [NSMutableArray array];
+
+	if (!general){
+		[items addObject:@{@"title" : @"Edit", @"icon" : @"edit"}];
+		[keys addObject:@"edit"];
+	}
+	[items addObject:@{@"title" : (pinned ? @"Unpin" : @"Pin"),
+					   @"icon"  : (pinned ? @"unpin" : @"pin")}];
+	[keys addObject:@"pin"];
+
+	if (!general){
+		[items addObject:@{@"title" : (closed ? @"Reopen" : @"Close"),
+						   @"icon"  : (closed ? @"unmute" : @"mute")}];
+		[keys addObject:@"close"];
+	}
+	if (general){
+		[items addObject:@{@"title" : (hidden ? @"Show" : @"Hide"),
+						   @"icon"  : (hidden ? @"unmute" : @"mute")}];
+		[keys addObject:@"hide"];
+	}
+
+	CGRect rect = [self.tableView rectForRowAtIndexPath:path];
+	CGPoint where = [self.tableView convertPoint:
+			CGPointMake(120, CGRectGetMaxY(rect) - 10) toView:self.navigationController.view];
+
+	__weak typeof(self) weakSelf = self;
+	[TGPopupMenu showItems:items atPoint:where inView:self.navigationController.view
+				  onChoice:^(NSInteger choice, NSString *title){
+		if (choice < 0 || choice >= (NSInteger)keys.count)
+			return;
+		[weakSelf runTopicAction:keys[choice]];
+	}];
+}
+
+- (void)runTopicAction:(NSString *)key {
+	NSDictionary *t = self.actionTopic;
+	if (!t)
+		return;
+
+	int32_t topicId = [self topicIdOf:t];
+	__weak typeof(self) weakSelf = self;
+
+	if ([key isEqualToString:@"edit"]){
+		[self askTopicNameForEdit:t];
+		return;
+	}
+
+	if ([key isEqualToString:@"pin"]){
+		BOOL pin = ![t[@"isPinned"] boolValue];
+		[[TGClient shared] setForumTopicInChat:self.chatId topic:topicId pinned:pin
+									completion:^(BOOL success){
+			if (!success)
+				[weakSelf showError:pin ? @"Could not pin the topic."
+									   : @"Could not unpin the topic."];
+			[weakSelf reloadTopics];
+		}];
+	} else if ([key isEqualToString:@"close"]){
+		BOOL close = ![t[@"isClosed"] boolValue];
+		[[TGClient shared] setForumTopicInChat:self.chatId topic:topicId closed:close
+									completion:^(BOOL success){
+			if (!success)
+				[weakSelf showError:close ? @"Could not close the topic."
+										 : @"Could not reopen the topic."];
+			[weakSelf reloadTopics];
+		}];
+	} else if ([key isEqualToString:@"hide"]){
+		BOOL hide = ![t[@"isHidden"] boolValue];
+		[[TGClient shared] setGeneralForumTopicInChat:self.chatId hidden:hide
+										   completion:^(BOOL success){
+			if (!success)
+				[weakSelf showError:hide ? @"Could not hide the General topic."
+										: @"Could not show the General topic."];
+			[weakSelf reloadTopics];
+		}];
+	}
+
+	self.actionTopic = nil;
+}
+
+#pragma mark - create and rename
+
+- (void)newTopicPressed {
+	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"New Topic"
+													message:@"Name the topic."
+												   delegate:self
+										  cancelButtonTitle:@"Cancel"
+										  otherButtonTitles:@"Create", nil];
+	alert.tag = kTopicNameAlertCreate;
+	if ([alert respondsToSelector:@selector(setAlertViewStyle:)])
+		alert.alertViewStyle = UIAlertViewStylePlainTextInput;
+	[alert show];
+}
+
+- (void)askTopicNameForEdit:(NSDictionary *)topic {
+	self.actionTopic = topic;
+	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Edit Topic"
+													message:@"Name the topic."
+												   delegate:self
+										  cancelButtonTitle:@"Cancel"
+										  otherButtonTitles:@"Save", nil];
+	alert.tag = kTopicNameAlertEdit;
+	if ([alert respondsToSelector:@selector(setAlertViewStyle:)]){
+		alert.alertViewStyle = UIAlertViewStylePlainTextInput;
+		NSString *name = [topic[@"name"] isKindOfClass:NSString.class] ? topic[@"name"] : @"";
+		[alert textFieldAtIndex:0].text = name;
+	}
+	[alert show];
+}
+
+- (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {
+	if (buttonIndex == alertView.cancelButtonIndex)
+		return;
+	if (![alertView respondsToSelector:@selector(textFieldAtIndex:)])
+		return;
+
+	NSString *name = [[alertView textFieldAtIndex:0].text
+			stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+	if (name.length == 0){
+		[self showError:@"The topic needs a name."];
+		return;
+	}
+
+	if (alertView.tag == kTopicNameAlertCreate)
+		[self chooseIconForName:name editing:NO];
+	else if (alertView.tag == kTopicNameAlertEdit)
+		[self chooseIconForName:name editing:YES];
+}
+
+- (NSArray *)availableIconChoices {
+	NSMutableArray *clean = [NSMutableArray array];
+	for (id icon in self.iconChoices){
+		if (![icon isKindOfClass:NSDictionary.class])
+			continue;
+		NSString *emoji = [icon[@"emoji"] isKindOfClass:NSString.class] ? icon[@"emoji"] : nil;
+		if (!emoji.length)
+			continue;
+		[clean addObject:icon];
+		if (clean.count >= 8)
+			break;
+	}
+	return clean;
+}
+
+- (void)chooseIconForName:(NSString *)name editing:(BOOL)editing {
+	NSArray *icons = [self availableIconChoices];
+	NSMutableArray *actions = [NSMutableArray array];
+
+	[actions addObject:[[TGActionSheetAction alloc]
+			initWithTitle:(editing ? @"Keep Icon" : @"No Icon") action:@"none"]];
+
+	for (NSUInteger i = 0; i < icons.count; i++){
+		NSDictionary *icon = icons[i];
+		[actions addObject:[[TGActionSheetAction alloc]
+				initWithTitle:icon[@"emoji"]
+					   action:[NSString stringWithFormat:@"icon%lu", (unsigned long)i]]];
+	}
+
+	if (editing)
+		[actions addObject:[[TGActionSheetAction alloc]
+				initWithTitle:@"Colour Only" action:@"clear"]];
+
+	[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Cancel" action:@"cancel"
+															type:TGActionSheetActionTypeCancel]];
+
+	__weak typeof(self) weakSelf = self;
+	self.currentActionSheet = [[TGActionSheet alloc] initWithTitle:nil actions:actions
+													  actionBlock:^(id target, NSString *action){
+		TGTopicsViewController *me = weakSelf;
+		me.currentActionSheet = nil;
+		if (!me || [action isEqualToString:@"cancel"])
+			return;
+
+		int64_t emojiId = 0;
+		BOOL changeIcon = YES;
+		if ([action isEqualToString:@"none"])
+			changeIcon = !editing;
+		else if (![action isEqualToString:@"clear"]){
+			NSInteger index = [[action substringFromIndex:4] integerValue];
+			if (index >= 0 && index < (NSInteger)icons.count)
+				emojiId = [icons[(NSUInteger)index][@"emojiId"] longLongValue];
+		}
+
+		if (editing)
+			[me commitEditWithName:name changeIcon:changeIcon iconEmojiId:emojiId];
+		else
+			[me commitCreateWithName:name iconEmojiId:emojiId];
+	} target:self];
+
+	[self.currentActionSheet showInView:self.navigationController.view];
+}
+
+- (NSInteger)iconColourForName:(NSString *)name {
+	NSArray *colours = [[TGClient shared] forumTopicIconColors];
+	if (colours.count == 0)
+		return 0;
+	NSUInteger index = (NSUInteger)labs((long)name.hash) % colours.count;
+	return [colours[index] integerValue];
+}
+
+- (void)commitCreateWithName:(NSString *)name iconEmojiId:(int64_t)emojiId {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] createForumTopicInChat:self.chatId
+										 name:name
+									iconColor:[self iconColourForName:name]
+								  iconEmojiId:emojiId
+								   completion:^(NSDictionary *topic){
+		if (!topic)
+			[weakSelf showError:@"Could not create the topic."];
+		[weakSelf reloadTopics];
+	}];
+}
+
+- (void)commitEditWithName:(NSString *)name changeIcon:(BOOL)changeIcon iconEmojiId:(int64_t)emojiId {
+	NSDictionary *t = self.actionTopic;
+	if (!t)
+		return;
+
+	int32_t topicId = [self topicIdOf:t];
+	self.actionTopic = nil;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] editForumTopicInChat:self.chatId
+									  topic:topicId
+									   name:name
+								 changeIcon:changeIcon
+								iconEmojiId:emojiId
+								 completion:^(BOOL success){
+		if (!success)
+			[weakSelf showError:@"Could not edit the topic."];
+		[weakSelf reloadTopics];
+	}];
 }
 
 @end

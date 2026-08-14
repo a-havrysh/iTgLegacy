@@ -196,6 +196,18 @@ APP_SRC_M := \
 	src/TGStorageViewController.m \
 	src/TGSessionsViewController.m \
 	src/TGSettingsViewController.m \
+	src/TGStickersViewController.m \
+	src/TGStickerPanelView.m \
+	src/TGReactionPickerView.m \
+	src/TGMessageActionsSheet.m \
+	src/TGFoldersViewController.m \
+	src/TGGroupMembersViewController.m \
+	src/TGInviteLinksViewController.m \
+	src/TGChatEventsViewController.m \
+	src/TGProxyViewController.m \
+	src/TGPremiumViewController.m \
+	src/TGStarsViewController.m \
+	src/TGSavedMessagesTagsViewController.m \
 	src/TGVoiceDecoder.m \
 	src/TGCallIce.m \
 	src/TGCallStun.m \

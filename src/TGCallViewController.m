@@ -1,10 +1,11 @@
 #import "TGCallViewController.h"
 #import "TGCall.h"
 #import "TGClient.h"
+#import "TGClient+Calls.h"
 #import "TGTheme.h"
 #import "TGIcons.h"
 
-@interface TGCallViewController ()
+@interface TGCallViewController () <UITextFieldDelegate>
 @property (nonatomic, assign) int64_t userId;
 @property (nonatomic, strong) NSString *peerName;
 @property (nonatomic, assign) BOOL outgoing;
@@ -18,6 +19,20 @@
 @property (nonatomic, assign) BOOL dismissing;
 @property (nonatomic, assign) BOOL proximityWasEnabled;
 @property (nonatomic, assign) BOOL idleTimerWasDisabled;
+@property (nonatomic, assign) int32_t lastCallId;
+@property (nonatomic, assign) BOOL wasEstablished;
+@property (nonatomic, assign) NSInteger lastDuration;
+@property (nonatomic, assign) BOOL rating;
+@property (nonatomic, assign) NSInteger stars;
+@property (nonatomic, strong) UIView *ratingPanel;
+@property (nonatomic, strong) NSMutableArray *starButtons;
+@property (nonatomic, strong) NSMutableArray *problemButtons;
+@property (nonatomic, strong) NSArray *problemKeys;
+@property (nonatomic, strong) UITextField *commentField;
+@property (nonatomic, strong) UILabel *ratingTitleLabel;
+@property (nonatomic, strong) UIButton *sendButton;
+@property (nonatomic, strong) UIButton *laterButton;
+@property (nonatomic, assign) CGFloat keyboardShift;
 @end
 
 @implementation TGCallViewController
@@ -245,9 +260,12 @@
 	if (self.dismissing)
 		return;
 
+	if ([TGCall shared].callId != 0)
+		self.lastCallId = [TGCall shared].callId;
+
 	switch (state){
 		case TGCallStateNone:
-			self.statusLabel.text = self.outgoing ? @"Calling..." : @"Incoming call";
+			self.statusLabel.text = self.outgoing ? @"Waiting..." : @"Incoming call";
 			break;
 		case TGCallStatePending:
 			self.statusLabel.text = self.outgoing ? @"Calling..." : @"Incoming call";
@@ -267,6 +285,7 @@
 		case TGCallStateEstablished:
 			self.acceptButton.hidden = YES;
 			self.muteButton.hidden = NO;
+			self.wasEstablished = YES;
 			[self setProximityEnabled:YES];
 			[self tick];
 			break;
@@ -307,6 +326,7 @@
 	if (elapsed < 0)
 		elapsed = 0;
 	NSInteger seconds = (NSInteger)elapsed;
+	self.lastDuration = seconds;
 	if (seconds >= 3600)
 		self.statusLabel.text = [NSString stringWithFormat:@"%ld:%02ld:%02ld",
 				(long)(seconds / 3600), (long)((seconds % 3600) / 60), (long)(seconds % 60)];
@@ -350,7 +370,259 @@
 	self.ticker = nil;
 	[self setProximityEnabled:NO];
 	[TGCall shared].onStateChanged = nil;
+
+	if (self.wasEstablished && self.lastDuration > 0 && self.lastCallId != 0){
+		[self presentRating];
+		return;
+	}
 	[self performSelector:@selector(dismissNow) withObject:nil afterDelay:1.0];
+}
+
+#pragma mark - post-call rating
+
+- (void)presentRating {
+	self.rating = YES;
+	self.muteButton.hidden = YES;
+	self.acceptButton.hidden = YES;
+	self.endButton.hidden = YES;
+
+	CGRect b = self.view.bounds;
+	self.problemKeys = [NSArray arrayWithObjects:@"echo", @"noise", @"interruptions",
+			@"distortedSpeech", @"silentRemote", @"dropped", nil];
+
+	CGRect nameFrame = self.nameLabel.frame;
+	nameFrame.origin.y = 26;
+	CGRect statusFrame = self.statusLabel.frame;
+	statusFrame.origin.y = CGRectGetMaxY(nameFrame) + 2;
+	[UIView animateWithDuration:0.2 animations:^{
+		self.avatarView.alpha = 0.0f;
+		self.nameLabel.frame = nameFrame;
+		self.statusLabel.frame = statusFrame;
+	}];
+
+	CGFloat top = CGRectGetMaxY(statusFrame) + 12;
+	self.ratingPanel = [[UIView alloc] initWithFrame:
+			CGRectMake(0, top, b.size.width, b.size.height - top)];
+	self.ratingPanel.backgroundColor = [UIColor clearColor];
+	self.ratingPanel.alpha = 0.0f;
+	[self.view addSubview:self.ratingPanel];
+
+	UIColor *chromeShadow = [UIColor colorWithRed:0x0e / 255.0f green:0x28 / 255.0f
+											 blue:0x4d / 255.0f alpha:0.4f];
+
+	self.ratingTitleLabel = [[UILabel alloc] initWithFrame:CGRectMake(9, 0, b.size.width - 18, 22)];
+	self.ratingTitleLabel.text = @"Rate this call";
+	self.ratingTitleLabel.font = [UIFont boldSystemFontOfSize:17];
+	self.ratingTitleLabel.textColor = [UIColor whiteColor];
+	self.ratingTitleLabel.shadowColor = chromeShadow;
+	self.ratingTitleLabel.shadowOffset = CGSizeMake(0, -1);
+	self.ratingTitleLabel.textAlignment = NSTextAlignmentCenter;
+	self.ratingTitleLabel.backgroundColor = [UIColor clearColor];
+	[self.ratingPanel addSubview:self.ratingTitleLabel];
+
+	self.starButtons = [NSMutableArray array];
+	CGFloat starSide = 44;
+	CGFloat starsWidth = starSide * 5;
+	CGFloat starsX = (CGFloat)(int)((b.size.width - starsWidth) / 2);
+	for (NSInteger i = 0; i < 5; i++){
+		UIButton *star = [UIButton buttonWithType:UIButtonTypeCustom];
+		star.frame = CGRectMake(starsX + starSide * i, 26, starSide, starSide);
+		star.tag = i + 1;
+		star.exclusiveTouch = YES;
+		star.backgroundColor = [UIColor clearColor];
+		star.titleLabel.font = [UIFont systemFontOfSize:30];
+		[star setTitle:@"☆" forState:UIControlStateNormal];
+		[star setTitleColor:[UIColor colorWithWhite:1.0f alpha:0.6f] forState:UIControlStateNormal];
+		[star addTarget:self action:@selector(starPressed:)
+				forControlEvents:UIControlEventTouchUpInside];
+		[self.ratingPanel addSubview:star];
+		[self.starButtons addObject:star];
+	}
+
+	CGFloat y = 26 + starSide + 8;
+	self.problemButtons = [NSMutableArray array];
+	NSArray *titles = [NSArray arrayWithObjects:@"Echo", @"Noise", @"Interruptions",
+			@"Distorted speech", @"Silent remote", @"Dropped", nil];
+	CGFloat cellWidth = (CGFloat)(int)((b.size.width - 9 * 2 - 8) / 2);
+	for (NSUInteger i = 0; i < [titles count]; i++){
+		CGFloat px = (i % 2 == 0) ? 9 : (b.size.width - 9 - cellWidth);
+		CGFloat py = y + (CGFloat)(int)(i / 2) * 34;
+		UIButton *chip = [UIButton buttonWithType:UIButtonTypeCustom];
+		chip.frame = CGRectMake(px, py, cellWidth, 30);
+		chip.tag = (NSInteger)i;
+		chip.exclusiveTouch = YES;
+		chip.titleLabel.font = [UIFont boldSystemFontOfSize:13];
+		chip.titleLabel.shadowOffset = CGSizeMake(0, -1);
+		chip.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.12f];
+		chip.layer.cornerRadius = 4;
+		chip.layer.borderWidth = 1;
+		chip.layer.borderColor = [UIColor colorWithWhite:1.0f alpha:0.25f].CGColor;
+		[chip setTitle:[titles objectAtIndex:i] forState:UIControlStateNormal];
+		[chip setTitleColor:[UIColor colorWithWhite:1.0f alpha:0.75f]
+				   forState:UIControlStateNormal];
+		[chip setTitleShadowColor:chromeShadow forState:UIControlStateNormal];
+		[chip addTarget:self action:@selector(problemPressed:)
+				forControlEvents:UIControlEventTouchUpInside];
+		chip.hidden = YES;
+		[self.ratingPanel addSubview:chip];
+		[self.problemButtons addObject:chip];
+	}
+
+	self.commentField = [[UITextField alloc] initWithFrame:
+			CGRectMake(9, y + 3 * 34 + 4, b.size.width - 18, 31)];
+	self.commentField.borderStyle = UITextBorderStyleRoundedRect;
+	self.commentField.font = [UIFont systemFontOfSize:14];
+	self.commentField.placeholder = @"Comment (optional)";
+	self.commentField.returnKeyType = UIReturnKeyDone;
+	self.commentField.autocorrectionType = UITextAutocorrectionTypeDefault;
+	self.commentField.clearButtonMode = UITextFieldViewModeWhileEditing;
+	self.commentField.delegate = self;
+	self.commentField.hidden = YES;
+	[self.ratingPanel addSubview:self.commentField];
+
+	CGFloat baseline = b.size.height - 20 - self.ratingPanel.frame.origin.y;
+	CGFloat buttonWidth = (CGFloat)(int)((b.size.width - 9 * 2 - 8) / 2);
+	self.laterButton = [self ratingButtonWithTitle:@"Not Now"
+											 asset:@"GroupedActionButton"
+											 frame:CGRectMake(9, baseline - 43, buttonWidth, 43)
+											action:@selector(skipRating)];
+	self.sendButton = [self ratingButtonWithTitle:@"Send"
+											asset:@"GroupedActionButtonGreen"
+											frame:CGRectMake(b.size.width - 9 - buttonWidth,
+													baseline - 45, buttonWidth, 45)
+										   action:@selector(submitRating)];
+	self.sendButton.enabled = NO;
+	self.sendButton.alpha = 0.5f;
+
+	[UIView animateWithDuration:0.2 animations:^{
+		self.ratingPanel.alpha = 1.0f;
+	}];
+}
+
+- (UIButton *)ratingButtonWithTitle:(NSString *)title asset:(NSString *)asset
+							  frame:(CGRect)frame action:(SEL)action {
+	UIButton *button = [self buttonWithTitle:title asset:asset frame:frame action:action];
+	[button removeFromSuperview];
+	[self.ratingPanel addSubview:button];
+	return button;
+}
+
+- (void)starPressed:(UIButton *)sender {
+	self.stars = sender.tag;
+	for (UIButton *star in self.starButtons){
+		BOOL on = star.tag <= self.stars;
+		[star setTitle:(on ? @"★" : @"☆") forState:UIControlStateNormal];
+		[star setTitleColor:(on ? [UIColor whiteColor] : [UIColor colorWithWhite:1.0f alpha:0.6f])
+				   forState:UIControlStateNormal];
+	}
+
+	BOOL detail = (self.stars > 0 && self.stars < 5);
+	if (!detail){
+		[self.commentField resignFirstResponder];
+		for (UIButton *chip in self.problemButtons)
+			[self setChip:chip selected:NO];
+	}
+	for (UIButton *chip in self.problemButtons)
+		chip.hidden = !detail;
+	self.commentField.hidden = !detail;
+
+	self.sendButton.enabled = (self.stars > 0);
+	self.sendButton.alpha = (self.stars > 0) ? 1.0f : 0.5f;
+}
+
+- (void)setChip:(UIButton *)chip selected:(BOOL)selected {
+	chip.selected = selected;
+	chip.backgroundColor = selected
+			? [UIColor colorWithRed:0x36 / 255.0f green:0x8a / 255.0f blue:0x2e / 255.0f alpha:0.9f]
+			: [UIColor colorWithWhite:1.0f alpha:0.12f];
+	[chip setTitleColor:(selected ? [UIColor whiteColor] : [UIColor colorWithWhite:1.0f alpha:0.75f])
+			   forState:UIControlStateNormal];
+}
+
+- (void)problemPressed:(UIButton *)sender {
+	[self setChip:sender selected:!sender.selected];
+}
+
+- (NSArray *)selectedProblems {
+	NSMutableArray *problems = [NSMutableArray array];
+	for (UIButton *chip in self.problemButtons){
+		if (chip.selected && (NSUInteger)chip.tag < [self.problemKeys count])
+			[problems addObject:[self.problemKeys objectAtIndex:(NSUInteger)chip.tag]];
+	}
+	return problems;
+}
+
+- (void)submitRating {
+	if (self.stars <= 0)
+		return;
+	[self.commentField resignFirstResponder];
+
+	NSString *comment = [self.commentField.text stringByTrimmingCharactersInSet:
+			[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+	self.sendButton.enabled = NO;
+	self.laterButton.enabled = NO;
+	self.statusLabel.text = @"Sending...";
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] rateCallId:self.lastCallId
+						   rating:self.stars
+						  comment:(comment.length ? comment : nil)
+						 problems:[self selectedProblems]
+					   completion:^(BOOL ok){
+		TGCallViewController *strongSelf = weakSelf;
+		if (strongSelf == nil)
+			return;
+		strongSelf.statusLabel.text = ok ? @"Thank you" : @"Could not send rating";
+		[strongSelf closeRating];
+	}];
+}
+
+- (void)skipRating {
+	[self.commentField resignFirstResponder];
+	[self closeRating];
+}
+
+- (void)closeRating {
+	if (!self.rating)
+		return;
+	self.rating = NO;
+	[UIView animateWithDuration:0.2 animations:^{
+		self.ratingPanel.alpha = 0.0f;
+	} completion:^(BOOL finished){
+		[self.ratingPanel removeFromSuperview];
+		self.ratingPanel = nil;
+	}];
+	[self performSelector:@selector(dismissNow) withObject:nil afterDelay:0.8];
+}
+
+- (BOOL)textFieldShouldReturn:(UITextField *)textField {
+	[textField resignFirstResponder];
+	return NO;
+}
+
+- (void)textFieldDidBeginEditing:(UITextField *)textField {
+	if (self.keyboardShift > 0)
+		return;
+	CGFloat needed = CGRectGetMaxY(self.view.bounds) - 216
+			- (self.ratingPanel.frame.origin.y + CGRectGetMaxY(self.commentField.frame) + 8);
+	if (needed >= 0)
+		return;
+	self.keyboardShift = -needed;
+	CGRect frame = self.view.frame;
+	frame.origin.y -= self.keyboardShift;
+	[UIView animateWithDuration:0.25 animations:^{
+		self.view.frame = frame;
+	}];
+}
+
+- (void)textFieldDidEndEditing:(UITextField *)textField {
+	if (self.keyboardShift <= 0)
+		return;
+	CGRect frame = self.view.frame;
+	frame.origin.y += self.keyboardShift;
+	self.keyboardShift = 0;
+	[UIView animateWithDuration:0.25 animations:^{
+		self.view.frame = frame;
+	}];
 }
 
 - (void)dismissNow {

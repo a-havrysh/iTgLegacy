@@ -2,6 +2,10 @@
 #import "RootViewController.h"
 #import "TGChatViewController.h"
 #import "TGClient.h"
+#import "TGClient+ChatList.h"
+#import "TGClient+Notifications.h"
+#import "TGClient+Messages.h"
+#import "TGFoldersViewController.h"
 #import "TGTheme.h"
 #import "TGIcons.h"
 #import "TGContactsViewController.h"
@@ -210,6 +214,9 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 @property (nonatomic, assign) CGFloat headerHeight;
 @property (nonatomic, strong) UILabel *emptyLabel;
 @property (nonatomic, strong) id themeObserver;
+@property (nonatomic, strong) NSArray *sheetItems;
+@property (nonatomic, strong) NSDictionary *archiveSettings;
+@property (nonatomic, assign) CGPoint menuPoint;
 @end
 
 @implementation TGChatListViewController
@@ -222,6 +229,10 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 		UIButton *folders = [TGIcons headerButtonWithTitle:@"Folders" bold:NO
 													 target:self action:@selector(foldersTapped)];
 		self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:folders];
+	} else {
+		UIButton *options = [TGIcons headerButtonWithTitle:@"Edit" bold:NO
+													target:self action:@selector(archiveOptionsTapped)];
+		self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:options];
 	}
 	self.chats = @[];
 	self.avatars = [NSMutableDictionary dictionary];
@@ -505,9 +516,11 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 
 	if (self.folderId != 0){
 		__weak typeof(self) weakSelf = self;
-		[[TGClient shared] chatsInFolder:self.folderId completion:^(NSArray *chats){
+		[[TGClient shared] chatsInList:(TGChatListId)self.folderId limit:200
+							completion:^(NSArray *chats){
 			weakSelf.chats = chats ?: @[];
 			[weakSelf.tableView reloadData];
+			[weakSelf rebuildTableHeader];
 			[weakSelf fetchMissingAvatars];
 		}];
 		return;
@@ -537,28 +550,16 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 	[self.navigationController pushViewController:archive animated:YES];
 }
 
-/// Folders are a filter over the same chats, offered as a choice.
-- (void)foldersTapped {
-	NSArray *folders = [TGClient shared].folders;
-	// Tapping and getting nothing back reads as a broken button; an account
-	// with no folders has to say so.
-	if (!folders.count){
-		UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Folders"
-				message:@"This account has no chat folders. They are set up in "
-						@"Telegram on a desktop or a newer phone, and appear here."
-			   delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
-		[alert show];
-		return;
-	}
+/// Which chat list this screen is showing, in the terms TGClient+ChatList uses.
+- (TGChatListId)currentListId {
+	if (self.showsArchive)
+		return TGChatListArchive;
+	if (self.folderId != 0)
+		return (TGChatListId)self.folderId;
+	return TGChatListMain;
+}
 
-	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Show"
-													   delegate:self
-											  cancelButtonTitle:nil
-										 destructiveButtonTitle:nil
-											  otherButtonTitles:@"All chats", nil];
-	for (NSDictionary *f in folders)
-		[sheet addButtonWithTitle:f[@"title"]];
-	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+- (void)presentSheet:(UIActionSheet *)sheet {
 	UITabBar *tabBar = [self.tabBarController isKindOfClass:UITabBarController.class]
 			? self.tabBarController.tabBar : nil;
 	if (tabBar)
@@ -567,23 +568,127 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 		[sheet showInView:self.view];
 }
 
+/// Folders are a filter over the same chats, offered as a choice, with the way
+/// into managing them at the end of the same list.
+- (void)foldersTapped {
+	NSArray *folders = [TGClient shared].folders;
+
+	NSMutableArray *items = [NSMutableArray array];
+	[items addObject:@{@"kind" : @"list", @"title" : @"All Chats", @"folder" : @0}];
+	for (NSDictionary *f in folders)
+		[items addObject:@{@"kind"   : @"list",
+						   @"title"  : f[@"title"] ?: @"Folder",
+						   @"folder" : f[@"id"] ?: @0}];
+	[items addObject:@{@"kind" : @"markAllRead", @"title" : @"Mark All as Read"}];
+	[items addObject:@{@"kind" : @"editFolders",
+					   @"title" : folders.count ? @"Edit Folders" : @"Create a Folder"}];
+	self.sheetItems = items;
+
+	UIActionSheet *sheet = [[UIActionSheet alloc]
+			initWithTitle:(folders.count ? @"Show" : @"This account has no chat folders yet")
+				 delegate:self
+		cancelButtonTitle:nil
+   destructiveButtonTitle:nil
+		otherButtonTitles:nil];
+	sheet.tag = 1;
+	for (NSDictionary *item in items)
+		[sheet addButtonWithTitle:item[@"title"]];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	[self presentSheet:sheet];
+}
+
+- (void)openFolderManagement {
+	TGFoldersViewController *folders = [[TGFoldersViewController alloc] init];
+	folders.page = TGFoldersPageList;
+	[self.navigationController pushViewController:folders animated:YES];
+}
+
+- (void)markCurrentListAsRead {
+	[[TGClient shared] markListAsRead:[self currentListId]];
+	[self reload];
+}
+
+/// The archive's own actions: read it all at once, and the three settings that
+/// decide what lands in here on its own.
+- (void)archiveOptionsTapped {
+	self.sheetItems = @[
+		@{@"kind" : @"markAllRead", @"title" : @"Mark All as Read"},
+		@{@"kind" : @"archiveSettings", @"title" : @"Archive Settings"},
+	];
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Archived Chats"
+													  delegate:self
+											 cancelButtonTitle:nil
+										destructiveButtonTitle:nil
+											 otherButtonTitles:nil];
+	sheet.tag = 1;
+	for (NSDictionary *item in self.sheetItems)
+		[sheet addButtonWithTitle:item[@"title"]];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	[self presentSheet:sheet];
+}
+
+- (void)showArchiveSettings {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] archiveSettingsWithCompletion:^(NSDictionary *settings){
+		TGChatListViewController *me = weakSelf;
+		if (!me)
+			return;
+		me.archiveSettings = settings ?: @{};
+
+		NSArray *keys = @[@"archiveUnknownSenders", @"keepUnmutedArchived", @"keepFoldersArchived"];
+		NSArray *names = @[@"Archive new chats from unknown senders",
+						   @"Keep unmuted chats archived",
+						   @"Keep chats from folders archived"];
+		NSMutableArray *items = [NSMutableArray array];
+		for (NSUInteger i = 0; i < keys.count; i++){
+			BOOL on = [me.archiveSettings[keys[i]] boolValue];
+			[items addObject:@{@"kind"  : @"toggleArchive",
+							   @"key"   : keys[i],
+							   @"title" : [NSString stringWithFormat:@"%@%@",
+											   (on ? @"✓ " : @""), names[i]]}];
+		}
+		me.sheetItems = items;
+
+		UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Archive Settings"
+														  delegate:me
+												 cancelButtonTitle:nil
+											destructiveButtonTitle:nil
+												 otherButtonTitles:nil];
+		sheet.tag = 1;
+		for (NSDictionary *item in items)
+			[sheet addButtonWithTitle:item[@"title"]];
+		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Done"];
+		[me presentSheet:sheet];
+	}];
+}
+
 - (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
 	if (index == sheet.cancelButtonIndex)
 		return;
-
-	// Saved Messages has its own row now, so this sheet is All chats followed
-	// by the folders themselves.
-	NSArray *folders = [TGClient shared].folders;
-	if (index == 0){
-		self.folderId = 0;
-	} else if (index - 1 < (NSInteger)folders.count){
-		NSDictionary *f = folders[index - 1];
-		self.folderId = [f[@"id"] integerValue];
-	} else {
+	if (index < 0 || index >= (NSInteger)self.sheetItems.count)
 		return;
+
+	NSDictionary *item = self.sheetItems[index];
+	NSString *kind = item[@"kind"];
+
+	if ([kind isEqualToString:@"list"]){
+		self.folderId = [item[@"folder"] integerValue];
+		self.title = [self defaultTitle];
+		[self reload];
+	} else if ([kind isEqualToString:@"markAllRead"]){
+		[self markCurrentListAsRead];
+	} else if ([kind isEqualToString:@"editFolders"]){
+		[self openFolderManagement];
+	} else if ([kind isEqualToString:@"archiveSettings"]){
+		[self showArchiveSettings];
+	} else if ([kind isEqualToString:@"toggleArchive"]){
+		NSString *key = item[@"key"];
+		NSMutableDictionary *next = [(self.archiveSettings ?: @{}) mutableCopy];
+		next[key] = @(![next[key] boolValue]);
+		[[TGClient shared] setArchiveSettings:next];
+		self.archiveSettings = next;
+		[self showArchiveSettings];
 	}
-	self.title = [self defaultTitle];
-	[self reload];
 }
 
 /// Avatars are fetched once each and cached by file id.
@@ -658,9 +763,13 @@ static const NSInteger kChatActionsTag = 77;
 
 	BOOL pinned = [self.actionChat[@"isPinned"] boolValue];
 	BOOL muted  = [self.actionChat[@"isMuted"] boolValue];
+	BOOL unread = ([self.actionChat[@"unread"] integerValue] > 0) ||
+				  [self.actionChat[@"markedUnread"] boolValue];
 	NSArray *items = @[
 		@{@"title" : (pinned ? @"Unpin" : @"Pin"),
 		  @"icon"  : (pinned ? @"unpin" : @"pin")},
+		@{@"title" : (unread ? @"Mark as Read" : @"Mark as Unread"),
+		  @"icon"  : @"chat"},
 		@{@"title" : (muted ? @"Unmute" : @"Mute"),
 		  @"icon"  : (muted ? @"unmute" : @"mute")},
 		@{@"title" : (self.showsArchive ? @"Unarchive" : @"Archive"),
@@ -673,6 +782,7 @@ static const NSInteger kChatActionsTag = 77;
 	CGPoint where = [self.tableView convertPoint:
 			CGPointMake(120, CGRectGetMaxY(rect) - 10) toView:self.navigationController.view];
 
+	self.menuPoint = where;
 	__weak typeof(self) weakSelf = self;
 	[TGPopupMenu showItems:items atPoint:where inView:self.navigationController.view
 				  onChoice:^(NSInteger choice, NSString *title){
@@ -681,16 +791,85 @@ static const NSInteger kChatActionsTag = 77;
 }
 
 - (void)runChatAction:(NSInteger)choice {
-	int64_t chatId = [self.actionChat[@"id"] longLongValue];
-	if (choice == 0)
-		[[TGClient shared] setChat:chatId pinned:![self.actionChat[@"isPinned"] boolValue]];
-	else if (choice == 1)
-		[[TGClient shared] setChat:chatId muted:![self.actionChat[@"isMuted"] boolValue]];
-	else if (choice == 2)
-		[[TGClient shared] setChat:chatId archived:!self.showsArchive];
-	else
+	NSDictionary *chat = self.actionChat;
+	int64_t chatId = [chat[@"id"] longLongValue];
+	BOOL unread = ([chat[@"unread"] integerValue] > 0) || [chat[@"markedUnread"] boolValue];
+
+	if (choice == 0){
+		[[TGClient shared] setChat:chatId
+							pinned:![chat[@"isPinned"] boolValue]
+							inList:[self currentListId]];
+	} else if (choice == 1){
+		[self setChat:chatId read:unread];
+	} else if (choice == 2){
+		if ([chat[@"isMuted"] boolValue])
+			[[TGClient shared] setChat:chatId muteForSeconds:0];
+		else
+			[self showMuteDurationsForChat:chatId];
+		return;
+	} else if (choice == 3){
+		[self setChat:chatId archived:!self.showsArchive];
+	} else {
 		[self confirmDeleteChat:chatId];
+	}
 	self.actionChat = nil;
+}
+
+/// TDLib has no single "mark this chat read" call in the API layer here, so
+/// the flag the list draws is set by hand and the mention and reaction badges
+/// are cleared alongside it.
+- (void)setChat:(int64_t)chatId read:(BOOL)read {
+	[[TGClient shared] setChat:chatId markedAsUnread:!read];
+	if (read){
+		[[TGClient shared] readAllMentionsInChat:chatId];
+		[[TGClient shared] readAllReactionsInChat:chatId];
+	}
+	[self reload];
+}
+
+/// Muting is a choice of how long, the way every client asks it, rather than
+/// an on/off that always means forever.
+- (void)showMuteDurationsForChat:(int64_t)chatId {
+	NSArray *items = @[
+		@{@"title" : @"Mute for 1 hour",  @"icon" : @"mute"},
+		@{@"title" : @"Mute for 8 hours", @"icon" : @"mute"},
+		@{@"title" : @"Mute for 2 days",  @"icon" : @"mute"},
+		@{@"title" : @"Mute forever",     @"icon" : @"mute"},
+	];
+	NSArray *seconds = @[@(3600), @(8 * 3600), @(2 * 24 * 3600), @(TGNotificationMuteForever)];
+
+	__weak typeof(self) weakSelf = self;
+	[TGPopupMenu showItems:items atPoint:self.menuPoint inView:self.navigationController.view
+				  onChoice:^(NSInteger choice, NSString *title){
+		TGChatListViewController *me = weakSelf;
+		if (!me || choice < 0 || choice >= (NSInteger)seconds.count)
+			return;
+		[[TGClient shared] setChat:chatId muteForSeconds:[seconds[choice] integerValue]];
+		me.actionChat = nil;
+		[me reload];
+	}];
+}
+
+/// Archiving is a move between two chat lists, which is what TDLib calls it.
+- (void)setChat:(int64_t)chatId archived:(BOOL)archived {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] addChat:chatId
+						toList:(archived ? TGChatListArchive : TGChatListMain)
+					completion:^(BOOL ok){
+		TGChatListViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (!ok){
+			UIAlertView *alert = [[UIAlertView alloc]
+					initWithTitle:(archived ? @"Archive" : @"Unarchive")
+						  message:@"Telegram would not move this chat."
+						 delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+			[alert show];
+			return;
+		}
+		[me reload];
+		[me rebuildTableHeader];
+	}];
 }
 
 /// Leaving cannot be taken back once it has happened, so it does not happen at

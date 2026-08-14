@@ -1,6 +1,8 @@
 #import "TGContactsViewController.h"
 #import "TGChatViewController.h"
 #import "TGClient.h"
+#import "TGClient+Contacts.h"
+#import "TGClient+UserStatus.h"
 #import "TGIcons.h"
 #import "TGTheme.h"
 #import "TGImageDecode.h"
@@ -14,6 +16,9 @@ static const CGFloat kContactAvatarLeft = 5.0f;
 static const CGFloat kContactAvatarTop = 5.0f;
 static const CGFloat kContactTextLeft = 54.0f;
 static const CGFloat kContactSectionHeight = 25.0f;
+static const CGFloat kContactBadgeSide = 14.0f;
+static const CGFloat kContactBadgeGap = 3.0f;
+static const CGFloat kContactFooterHeight = 58.0f;
 
 static UIColor *TGContactsRGB(int rgb) {
 	return [UIColor colorWithRed:((rgb >> 16) & 0xff) / 255.0f
@@ -31,10 +36,33 @@ static UIImage *TGContactsStretchable(NSString *name) {
 	return [image stretchableImageWithLeftCapWidth:1 topCapHeight:0];
 }
 
+static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
+	static NSMutableDictionary *cache = nil;
+	if (!cache)
+		cache = [NSMutableDictionary dictionary];
+	NSString *key = [NSString stringWithFormat:@"%@-%d", name, (int)side];
+	UIImage *cached = cache[key];
+	if (cached)
+		return cached;
+	UIImage *source = [UIImage imageNamed:name];
+	if (!source)
+		return nil;
+	UIGraphicsBeginImageContextWithOptions(CGSizeMake(side, side), NO, 0.0f);
+	[source drawInRect:CGRectMake(0, 0, side, side)];
+	UIImage *scaled = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	if (scaled)
+		cache[key] = scaled;
+	return scaled;
+}
+
 @interface TGContactRowCell : UITableViewCell
 @property (nonatomic, strong) UIImageView *avatarView;
 @property (nonatomic, strong) UILabel *titleLabel;
 @property (nonatomic, strong) UILabel *subtitleLabel;
+@property (nonatomic, strong) UIImageView *premiumView;
+@property (nonatomic, strong) UILabel *verifiedLabel;
+@property (nonatomic, strong) UILabel *closeFriendLabel;
 @end
 
 @implementation TGContactRowCell
@@ -75,7 +103,60 @@ static UIImage *TGContactsStretchable(NSString *name) {
 	self.subtitleLabel.highlightedTextColor = [UIColor whiteColor];
 	[self.contentView addSubview:self.subtitleLabel];
 
+	self.premiumView = [[UIImageView alloc] initWithFrame:CGRectZero];
+	self.premiumView.contentMode = UIViewContentModeScaleAspectFit;
+	self.premiumView.hidden = YES;
+	[self.contentView addSubview:self.premiumView];
+
+	self.verifiedLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	self.verifiedLabel.backgroundColor = [UIColor clearColor];
+	self.verifiedLabel.font = [UIFont boldSystemFontOfSize:13];
+	self.verifiedLabel.textColor = TGContactsRGB(0x3aa3e3);
+	self.verifiedLabel.highlightedTextColor = [UIColor whiteColor];
+	self.verifiedLabel.textAlignment = NSTextAlignmentCenter;
+	self.verifiedLabel.text = @"✓";
+	self.verifiedLabel.hidden = YES;
+	[self.contentView addSubview:self.verifiedLabel];
+
+	self.closeFriendLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	self.closeFriendLabel.backgroundColor = [UIColor clearColor];
+	self.closeFriendLabel.font = [UIFont systemFontOfSize:13];
+	self.closeFriendLabel.textColor = TGContactsRGB(0x3ac13a);
+	self.closeFriendLabel.highlightedTextColor = [UIColor whiteColor];
+	self.closeFriendLabel.textAlignment = NSTextAlignmentCenter;
+	self.closeFriendLabel.text = @"★";
+	self.closeFriendLabel.hidden = YES;
+	[self.contentView addSubview:self.closeFriendLabel];
+
 	return self;
+}
+
+- (CGFloat)badgeWidth {
+	CGFloat width = 0;
+	if (!self.closeFriendLabel.hidden)
+		width += kContactBadgeSide + kContactBadgeGap;
+	if (!self.premiumView.hidden)
+		width += kContactBadgeSide + kContactBadgeGap;
+	if (!self.verifiedLabel.hidden)
+		width += kContactBadgeSide + kContactBadgeGap;
+	return width;
+}
+
+- (void)layoutBadgesAfterTitleWidth:(CGFloat)titleWidth titleY:(CGFloat)titleY
+					   titleHeight:(CGFloat)titleHeight {
+	CGSize fit = [self.titleLabel sizeThatFits:CGSizeMake(titleWidth, titleHeight)];
+	CGFloat x = kContactTextLeft + MIN(fit.width, titleWidth) + kContactBadgeGap;
+	CGFloat y = (CGFloat)(int)(titleY + (titleHeight - kContactBadgeSide) / 2);
+	if (!self.closeFriendLabel.hidden){
+		self.closeFriendLabel.frame = CGRectMake(x, y, kContactBadgeSide, kContactBadgeSide);
+		x += kContactBadgeSide + kContactBadgeGap;
+	}
+	if (!self.premiumView.hidden){
+		self.premiumView.frame = CGRectMake(x, y, kContactBadgeSide, kContactBadgeSide);
+		x += kContactBadgeSide + kContactBadgeGap;
+	}
+	if (!self.verifiedLabel.hidden)
+		self.verifiedLabel.frame = CGRectMake(x, y, kContactBadgeSide, kContactBadgeSide);
 }
 
 - (void)layoutSubviews {
@@ -88,16 +169,19 @@ static UIImage *TGContactsStretchable(NSString *name) {
 	CGFloat width = viewSize.width - kContactTextLeft - 5;
 	CGFloat titleHeight = self.titleLabel.font.lineHeight;
 	CGFloat subtitleHeight = self.subtitleLabel.font.lineHeight;
+	CGFloat titleWidth = MAX(20.0f, width - [self badgeWidth]);
 
 	if (self.subtitleLabel.text.length == 0){
 		CGFloat titleY = (CGFloat)(int)((viewSize.height - titleHeight) / 2) - 1;
-		self.titleLabel.frame = CGRectMake(kContactTextLeft, titleY, width, titleHeight);
+		self.titleLabel.frame = CGRectMake(kContactTextLeft, titleY, titleWidth, titleHeight);
 		self.subtitleLabel.frame = CGRectZero;
+		[self layoutBadgesAfterTitleWidth:titleWidth titleY:titleY titleHeight:titleHeight];
 		return;
 	}
 
 	CGFloat titleY = (CGFloat)(int)((viewSize.height - titleHeight - subtitleHeight - 1) / 2);
-	self.titleLabel.frame = CGRectMake(kContactTextLeft, titleY, width, titleHeight);
+	self.titleLabel.frame = CGRectMake(kContactTextLeft, titleY, titleWidth, titleHeight);
+	[self layoutBadgesAfterTitleWidth:titleWidth titleY:titleY titleHeight:titleHeight];
 	self.subtitleLabel.frame = CGRectMake(kContactTextLeft + 1, titleY + titleHeight + 0.5f,
 			width, subtitleHeight);
 }
@@ -116,6 +200,15 @@ static UIImage *TGContactsStretchable(NSString *name) {
 @property (nonatomic, strong) UILabel *emptyLabel;
 @property (nonatomic, assign) BOOL sortByName;
 @property (nonatomic, assign) BOOL loaded;
+@property (nonatomic, strong) NSMutableSet *closeFriendIds;
+@property (nonatomic, strong) NSMutableDictionary *badges;
+@property (nonatomic, strong) NSMutableSet *badgesRequested;
+@property (nonatomic, strong) UILabel *importLabel;
+@property (nonatomic, assign) NSInteger importedCount;
+@property (nonatomic, assign) BOOL importedCountKnown;
+@property (nonatomic, strong) NSDictionary *actionUser;
+@property (nonatomic, strong) NSString *actionBirthdate;
+@property (nonatomic, assign) BOOL actionSheetShown;
 @end
 
 @implementation TGContactsViewController
@@ -173,11 +266,217 @@ static NSString *TGContactName(NSDictionary *u) {
 		[sheet showInView:self.navigationController.view];
 }
 
-- (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
-	if (sheet.tag != 1 || index == sheet.cancelButtonIndex)
+- (BOOL)isCloseFriend:(NSDictionary *)u {
+	NSNumber *userId = [u[@"id"] isKindOfClass:NSNumber.class] ? u[@"id"] : nil;
+	return userId && [self.closeFriendIds containsObject:@(userId.longLongValue)];
+}
+
+- (void)reloadCloseFriends {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] contactCloseFriendsWithCompletion:^(NSArray *users){
+		TGContactsViewController *me = weakSelf;
+		if (!me)
+			return;
+		NSMutableSet *ids = [NSMutableSet set];
+		if ([users isKindOfClass:NSArray.class]){
+			for (NSDictionary *u in users){
+				if (![u isKindOfClass:NSDictionary.class])
+					continue;
+				NSNumber *userId = [u[@"id"] isKindOfClass:NSNumber.class] ? u[@"id"] : nil;
+				if (userId)
+					[ids addObject:@(userId.longLongValue)];
+			}
+		}
+		me.closeFriendIds = ids;
+		[me reloadTableSoon];
+	}];
+}
+
+- (void)reloadImportedCount {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] importedContactCountWithCompletion:^(NSInteger count){
+		TGContactsViewController *me = weakSelf;
+		if (!me)
+			return;
+		me.importedCount = count;
+		me.importedCountKnown = YES;
+		[me updateImportFooter];
+	}];
+}
+
+- (void)updateImportFooter {
+	if (!self.importLabel)
 		return;
-	self.sortByName = (index == 1);
-	[self refreshTable];
+	if (!self.importedCountKnown){
+		self.importLabel.text = @"";
+		return;
+	}
+	if (self.importedCount <= 0)
+		self.importLabel.text = @"No address book contacts synced";
+	else if (self.importedCount == 1)
+		self.importLabel.text = @"1 contact synced from your address book";
+	else
+		self.importLabel.text = [NSString stringWithFormat:
+				@"%d contacts synced from your address book", (int)self.importedCount];
+}
+
+- (void)importFooterTapped {
+	if (!self.importedCountKnown || self.importedCount <= 0)
+		return;
+	UIActionSheet *sheet = [[UIActionSheet alloc]
+			initWithTitle:@"Imported address book contacts stay on Telegram until you delete them."
+				 delegate:self
+		cancelButtonTitle:nil
+   destructiveButtonTitle:@"Delete Synced Contacts"
+		otherButtonTitles:nil];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = 3;
+	UITabBar *tabBar = [self.tabBarController isKindOfClass:UITabBarController.class]
+			? self.tabBarController.tabBar : nil;
+	if (tabBar)
+		[sheet showFromTabBar:tabBar];
+	else
+		[sheet showInView:self.navigationController.view];
+}
+
+- (void)longPressed:(UILongPressGestureRecognizer *)gesture {
+	if (gesture.state != UIGestureRecognizerStateBegan || self.isPickerMode)
+		return;
+	CGPoint point = [gesture locationInView:self.tableView];
+	NSIndexPath *indexPath = [self.tableView indexPathForRowAtPoint:point];
+	if (!indexPath || [self isInviteRowAtIndexPath:indexPath])
+		return;
+	NSDictionary *u = [self userAtIndexPath:indexPath];
+	if (!u)
+		return;
+	self.actionUser = u;
+	self.actionBirthdate = nil;
+	self.actionSheetShown = NO;
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+											 selector:@selector(showContactActions)
+											   object:nil];
+	[self performSelector:@selector(showContactActions) withObject:nil afterDelay:0.4f];
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] birthdateForUser:[u[@"id"] longLongValue]
+							 completion:^(NSDictionary *birthdate){
+		TGContactsViewController *me = weakSelf;
+		if (!me || me.actionUser != u)
+			return;
+		NSString *text = [birthdate isKindOfClass:NSDictionary.class] ? birthdate[@"text"] : nil;
+		if ([text isKindOfClass:NSString.class] && text.length)
+			me.actionBirthdate = text;
+		[me showContactActions];
+	}];
+}
+
+- (void)showContactActions {
+	NSDictionary *u = self.actionUser;
+	if (!u || self.actionSheetShown)
+		return;
+	self.actionSheetShown = YES;
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+											 selector:@selector(showContactActions)
+											   object:nil];
+	BOOL close = [self isCloseFriend:u];
+	NSMutableString *title = [NSMutableString stringWithString:TGContactName(u)];
+	NSString *username = TGContactString(u, @"username");
+	if (username.length)
+		[title appendFormat:@"\n@%@", username];
+	NSString *phone = TGContactString(u, @"phone");
+	if (phone.length)
+		[title appendFormat:@"\n+%@", phone];
+	if (self.actionBirthdate.length)
+		[title appendFormat:@"\nBirthday %@", self.actionBirthdate];
+
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:title
+													  delegate:self
+											 cancelButtonTitle:nil
+										destructiveButtonTitle:nil
+											 otherButtonTitles:
+			close ? @"Remove from Close Friends" : @"Add to Close Friends",
+			@"Send Message", nil];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = 2;
+	UITabBar *tabBar = [self.tabBarController isKindOfClass:UITabBarController.class]
+			? self.tabBarController.tabBar : nil;
+	if (tabBar)
+		[sheet showFromTabBar:tabBar];
+	else
+		[sheet showInView:self.navigationController.view];
+}
+
+- (void)toggleCloseFriendForUser:(NSDictionary *)u {
+	NSNumber *userId = [u[@"id"] isKindOfClass:NSNumber.class] ? u[@"id"] : nil;
+	if (!userId)
+		return;
+	BOOL close = ![self isCloseFriend:u];
+	if (close)
+		[self.closeFriendIds addObject:@(userId.longLongValue)];
+	else
+		[self.closeFriendIds removeObject:@(userId.longLongValue)];
+	[self.tableView reloadData];
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] setUser:userId.longLongValue closeFriend:close completion:^(BOOL ok){
+		TGContactsViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (!ok){
+			[[[UIAlertView alloc] initWithTitle:nil
+									   message:@"Could not update Close Friends."
+									  delegate:nil
+							 cancelButtonTitle:@"OK"
+							 otherButtonTitles:nil] show];
+		}
+		[me reloadCloseFriends];
+	}];
+}
+
+- (void)openChatWithUser:(NSDictionary *)u {
+	NSString *name = TGContactName(u);
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] privateChatWithUser:[u[@"id"] longLongValue]
+								completion:^(int64_t chatId){
+		TGContactsViewController *me = weakSelf;
+		if (!me || chatId == 0)
+			return;
+		TGChatViewController *vc = [[TGChatViewController alloc] init];
+		vc.chatId = chatId;
+		vc.chatTitle = name;
+		[me.navigationController pushViewController:vc animated:YES];
+	}];
+}
+
+- (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
+	if (index == sheet.cancelButtonIndex)
+		return;
+	if (sheet.tag == 1){
+		self.sortByName = (index == 1);
+		[self refreshTable];
+		return;
+	}
+	if (sheet.tag == 2){
+		NSDictionary *u = self.actionUser;
+		self.actionUser = nil;
+		if (!u)
+			return;
+		if (index == 0)
+			[self toggleCloseFriendForUser:u];
+		else if (index == 1)
+			[self openChatWithUser:u];
+		return;
+	}
+	if (sheet.tag == 3 && index == sheet.destructiveButtonIndex){
+		__weak typeof(self) weakSelf = self;
+		[[TGClient shared] clearImportedContactsWithCompletion:^(BOOL ok){
+			TGContactsViewController *me = weakSelf;
+			if (!me)
+				return;
+			[me reloadImportedCount];
+			if (ok)
+				[me reloadContacts];
+		}];
+	}
 }
 
 - (BOOL)matchesQuery:(NSDictionary *)u query:(NSString *)query {
@@ -302,6 +601,10 @@ static NSString *TGContactName(NSDictionary *u) {
 		me.users = [users isKindOfClass:NSArray.class] ? users : @[];
 		[me refreshTable];
 		[me fetchMissingPhotos];
+		if (!me.isPickerMode){
+			[me reloadCloseFriends];
+			[me reloadImportedCount];
+		}
 		if ([me respondsToSelector:@selector(refreshControl)])
 			[me.refreshControl endRefreshing];
 	}];
@@ -319,6 +622,9 @@ static NSString *TGContactName(NSDictionary *u) {
 	self.users = @[];
 	self.photos = [NSMutableDictionary dictionary];
 	self.photosRequested = [NSMutableSet set];
+	self.closeFriendIds = [NSMutableSet set];
+	self.badges = [NSMutableDictionary dictionary];
+	self.badgesRequested = [NSMutableSet set];
 	self.tableView.rowHeight = kContactRowHeight;
 	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
 	self.tableView.separatorColor = [[TGTheme shared] separatorColour];
@@ -377,6 +683,32 @@ static NSString *TGContactName(NSDictionary *u) {
 		self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:sort];
 	}
 
+	if (!self.isPickerMode){
+		UIView *footer = [[UIView alloc] initWithFrame:
+				CGRectMake(0, 0, self.tableView.bounds.size.width, kContactFooterHeight)];
+		footer.backgroundColor = [UIColor clearColor];
+		footer.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+		self.importLabel = [[UILabel alloc] initWithFrame:
+				CGRectMake(10, 14, footer.bounds.size.width - 20, 34)];
+		self.importLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+		self.importLabel.backgroundColor = [UIColor clearColor];
+		self.importLabel.textAlignment = NSTextAlignmentCenter;
+		self.importLabel.numberOfLines = 2;
+		self.importLabel.font = [UIFont systemFontOfSize:14];
+		self.importLabel.textColor = [[TGTheme shared] secondaryTextColour];
+		[footer addSubview:self.importLabel];
+		UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc]
+				initWithTarget:self action:@selector(importFooterTapped)];
+		[footer addGestureRecognizer:tap];
+		self.tableView.tableFooterView = footer;
+		[self updateImportFooter];
+
+		UILongPressGestureRecognizer *press = [[UILongPressGestureRecognizer alloc]
+				initWithTarget:self action:@selector(longPressed:)];
+		press.minimumPressDuration = 0.5f;
+		[self.tableView addGestureRecognizer:press];
+	}
+
 	[[NSNotificationCenter defaultCenter] addObserver:self
 			selector:@selector(userStatusChanged:)
 				name:TGUserStatusDidChangeNotification
@@ -384,6 +716,10 @@ static NSString *TGContactName(NSDictionary *u) {
 
 	[self updateEmptyState];
 	[self reloadContacts];
+	if (!self.isPickerMode){
+		[self reloadCloseFriends];
+		[self reloadImportedCount];
+	}
 }
 
 - (void)inviteFriendsTapped {
@@ -531,6 +867,29 @@ static NSString *TGContactName(NSDictionary *u) {
 	}
 }
 
+- (NSDictionary *)badgesForUser:(NSDictionary *)u {
+	NSNumber *userId = [u[@"id"] isKindOfClass:NSNumber.class] ? u[@"id"] : nil;
+	if (!userId)
+		return nil;
+	NSDictionary *cached = self.badges[userId];
+	if (cached)
+		return cached;
+	if ([self.badgesRequested containsObject:userId])
+		return nil;
+	[self.badgesRequested addObject:userId];
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] badgesForUser:userId.longLongValue
+						  completion:^(NSDictionary *badges){
+		TGContactsViewController *me = weakSelf;
+		if (!me)
+			return;
+		me.badges[userId] = [badges isKindOfClass:NSDictionary.class] ? badges : @{};
+		[me reloadTableSoon];
+	}];
+	return nil;
+}
+
 - (NSArray *)rowsForSection:(NSInteger)section {
 	if (self.sections)
 		return (section >= 0 && section < (NSInteger)self.sections.count)
@@ -635,6 +994,9 @@ static NSString *TGContactName(NSDictionary *u) {
 		cell.subtitleLabel.text = @"";
 		cell.avatarView.image = [TGIcons inviteFriendsAvatarOfSide:kContactAvatar];
 		cell.accessoryType = UITableViewCellAccessoryNone;
+		cell.premiumView.hidden = YES;
+		cell.verifiedLabel.hidden = YES;
+		cell.closeFriendLabel.hidden = YES;
 		return cell;
 	}
 
@@ -649,6 +1011,9 @@ static NSString *TGContactName(NSDictionary *u) {
 		cell.titleLabel.text = @"";
 		cell.subtitleLabel.text = @"";
 		cell.avatarView.image = nil;
+		cell.premiumView.hidden = YES;
+		cell.verifiedLabel.hidden = YES;
+		cell.closeFriendLabel.hidden = YES;
 		return cell;
 	}
 	NSString *first = [u[@"first_name"] isKindOfClass:NSString.class] ? u[@"first_name"] : @"";
@@ -678,6 +1043,24 @@ static NSString *TGContactName(NSDictionary *u) {
 			? TGContactsRGB(0x0779d0) : [UIColor colorWithWhite:0.0f alpha:0.53f];
 	cell.backgroundColor = [[TGTheme shared] listBackgroundColour];
 	cell.accessoryType = UITableViewCellAccessoryNone;
+
+	NSDictionary *badges = [self badgesForUser:u];
+	BOOL premium = [badges[@"isPremium"] boolValue];
+	BOOL verified = [badges[@"isVerified"] boolValue];
+	BOOL flagged = [badges[@"isScam"] boolValue] || [badges[@"isFake"] boolValue];
+	UIImage *premiumIcon = premium
+			? TGContactsScaledImage(@"tgpremiumicon.png", kContactBadgeSide) : nil;
+	cell.premiumView.image = premiumIcon;
+	cell.premiumView.hidden = (premiumIcon == nil);
+	cell.verifiedLabel.hidden = !verified;
+	cell.closeFriendLabel.hidden = self.isPickerMode || ![self isCloseFriend:u];
+	if (flagged && !self.isPickerMode){
+		cell.subtitleLabel.textColor = TGContactsRGB(0xcc3333);
+		NSString *mark = [badges[@"isScam"] boolValue] ? @"SCAM" : @"FAKE";
+		cell.subtitleLabel.text = cell.subtitleLabel.text.length
+				? [NSString stringWithFormat:@"%@ · %@", mark, cell.subtitleLabel.text]
+				: mark;
+	}
 	[cell setNeedsLayout];
 
 	NSNumber *fileId = u[@"photoFileId"];

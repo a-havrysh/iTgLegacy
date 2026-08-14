@@ -8,6 +8,17 @@
 #import "TGDevice.h"
 #import "TGEditProfileViewController.h"
 #import "TGQRViewController.h"
+#import "TGStickersViewController.h"
+#import "TGFoldersViewController.h"
+#import "TGProxyViewController.h"
+#import "TGPremiumViewController.h"
+#import "TGStarsViewController.h"
+#import "TGSavedMessagesTagsViewController.h"
+#import "TGGroupMembersViewController.h"
+#import "TGInviteLinksViewController.h"
+#import "TGChatEventsViewController.h"
+#import "TGClient+ChatList.h"
+#import "TGClient+Network.h"
 #import "TGIcons.h"
 #import <QuartzCore/QuartzCore.h>
 #import "UIView+SafeTint.h"
@@ -39,7 +50,12 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 @property (nonatomic, assign) BOOL languagesLoaded;
 @property (nonatomic, strong) UILabel *headerNameLabel;
 @property (nonatomic, strong) UILabel *headerStatusLabel;
+@property (nonatomic, strong) NSMutableDictionary *archive;
+@property (nonatomic, strong) NSArray *groupPicks;
+@property (nonatomic, assign) BOOL dataSaver;
 + (NSArray *)rootSettingsRows;
++ (NSArray *)telegramRows;
++ (NSArray *)groupToolRows;
 + (NSArray *)helpRows;
 + (NSArray *)privacySettings;
 + (NSArray *)privacyTitles;
@@ -70,6 +86,8 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 
 	self.privacy = [NSMutableDictionary dictionary];
 	self.muted = [NSMutableDictionary dictionary];
+	self.archive = [NSMutableDictionary dictionary];
+	self.dataSaver = [[NSUserDefaults standardUserDefaults] boolForKey:@"TGDataSaver"];
 
 	switch (self.page){
 		case TGSettingsPageAppearance:    self.title = @"Chat Settings"; break;
@@ -284,7 +302,7 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 
 /// The version, the way their page ends with one.
 - (UIView *)tableView:(UITableView *)tableView viewForFooterInSection:(NSInteger)section {
-	if (self.page != TGSettingsPageRoot || section != 3)
+	if (self.page != TGSettingsPageRoot || section != 5)
 		return nil;
 	NSDictionary *info = [NSBundle mainBundle].infoDictionary;
 	UILabel *label = [[UILabel alloc] initWithFrame:
@@ -304,7 +322,7 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForFooterInSection:(NSInteger)section {
-	if (self.page == TGSettingsPageRoot && section == 3)
+	if (self.page == TGSettingsPageRoot && section == 5)
 		return 44;
 	return UITableViewAutomaticDimension;
 }
@@ -349,6 +367,15 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		return;
 	}
 
+	if (self.page == TGSettingsPageData){
+		[[TGClient shared] archiveSettingsWithCompletion:^(NSDictionary *settings){
+			if ([settings isKindOfClass:[NSDictionary class]])
+				[weakSelf.archive addEntriesFromDictionary:settings];
+			[weakSelf.tableView reloadData];
+		}];
+		return;
+	}
+
 	if (self.page == TGSettingsPageBlocked){
 		[[TGClient shared] blockedUsersWithCompletion:^(NSArray *users){
 			weakSelf.blocked = [users isKindOfClass:[NSArray class]] ? users : @[];
@@ -381,12 +408,12 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
 	switch (self.page){
 		case TGSettingsPageAppearance:    return 3;
-		case TGSettingsPageData:          return 1;
+		case TGSettingsPageData:          return 3;
 		case TGSettingsPageNotifications: return 1;
 		case TGSettingsPagePrivacy:       return 3;
 		case TGSettingsPageLanguage:      return 1;
 		case TGSettingsPageBlocked:       return 1;
-		default:                          return 4;
+		default:                          return 6;
 	}
 }
 
@@ -396,7 +423,10 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 			if (section == 0) return 3;                          // styles
 			if (section == 1) return 2;                          // wallpaper, size
 			return [TGTheme availableThemeFiles].count + 1;      // + "None"
-		case TGSettingsPageData:          return 2;
+		case TGSettingsPageData:
+			if (section == 0) return 2;
+			if (section == 1) return 3;
+			return 1;
 		case TGSettingsPageNotifications: return 3;
 		case TGSettingsPagePrivacy:
 			if (section == 0) return [[TGSettingsViewController privacySettings] count];
@@ -411,7 +441,9 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 
 	if (section == 0) return 3;    // phone, username, bio
 	if (section == 1) return (NSInteger)[TGSettingsViewController rootSettingsRows].count;
-	if (section == 2) return (NSInteger)[TGSettingsViewController helpRows].count;
+	if (section == 2) return (NSInteger)[TGSettingsViewController telegramRows].count;
+	if (section == 3) return (NSInteger)[TGSettingsViewController groupToolRows].count;
+	if (section == 4) return (NSInteger)[TGSettingsViewController helpRows].count;
 	return 1;                      // log out
 }
 
@@ -425,13 +457,17 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 			return section == 0 ? @"Who can see" : nil;
 		case TGSettingsPageNotifications:
 			return @"Show notifications for";
+		case TGSettingsPageData:
+			return section == 1 ? @"Archive" : nil;
 		default: break;
 	}
 	if (self.page != TGSettingsPageRoot)
 		return nil;
 	if (section == 0) return @"Account";
 	if (section == 1) return @"Settings";
-	if (section == 2) return @"Help";
+	if (section == 2) return @"Telegram";
+	if (section == 3) return @"Group tools";
+	if (section == 4) return @"Help";
 	return nil;
 }
 
@@ -447,6 +483,11 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 	if (self.page == TGSettingsPagePrivacy && section == 2)
 		return @"If you do not come online at least once within this period, "
 			   @"the account is deleted along with everything in it.";
+	if (self.page == TGSettingsPageData && section == 0)
+		return @"Data Saver applies Telegram's low preset to Wi-Fi, mobile and "
+			   @"roaming at once, which is all this hardware wants anyway.";
+	if (self.page == TGSettingsPageRoot && section == 3)
+		return @"Pick a group or channel when you tap one of these.";
 	if (self.page == TGSettingsPageLanguage)
 		return @"This app's own text is English throughout. The language is "
 			   @"what Telegram itself writes in, and it follows the account "
@@ -461,7 +502,7 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 {
 	if (self.page == TGSettingsPageRoot && indexPath.section == 0)
 		return [self accountCellInTable:tableView at:indexPath];
-	if (self.page == TGSettingsPageRoot && indexPath.section == 3)
+	if (self.page == TGSettingsPageRoot && indexPath.section == 5)
 		return [self logoutCellInTable:tableView];
 
 	static NSString *reuse = @"TGSettingsCell";
@@ -498,9 +539,29 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 				 @[@"Privacy and Security",     @"privacy"],
 				 @[@"Data and Storage",         @"data"],
 				 @[@"Chat Settings",            @"chat"],
+				 @[@"Stickers",                 @"react"],
 				 @[@"Folders",                  @"folder"],
+				 @[@"Proxy",                    @"data"],
 				 @[@"Devices",                  @"devices"],
 				 @[@"Language",                 @"language"]];
+	return rows;
+}
+
++ (NSArray *)telegramRows {
+	static NSArray *rows = nil;
+	if (!rows)
+		rows = @[@[@"Telegram Premium", @"more"],
+				 @[@"Telegram Stars",   @"react"],
+				 @[@"Saved Message Tags", @"pin"]];
+	return rows;
+}
+
++ (NSArray *)groupToolRows {
+	static NSArray *rows = nil;
+	if (!rows)
+		rows = @[@[@"Members and Admins", @"devices"],
+				 @[@"Invite Links",       @"forward"],
+				 @[@"Recent Actions",     @"search"]];
 	return rows;
 }
 
@@ -516,8 +577,12 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 - (UITableViewCell *)fillRootCell:(UITableViewCell *)cell at:(NSIndexPath *)indexPath {
 	TGTheme *theme = [TGTheme shared];
 
-	if (indexPath.section == 1){
-		NSArray *row = [TGSettingsViewController rootSettingsRows][indexPath.row];
+	if (indexPath.section == 1 || indexPath.section == 2 || indexPath.section == 3){
+		NSArray *table = (indexPath.section == 1)
+				? [TGSettingsViewController rootSettingsRows]
+				: (indexPath.section == 2 ? [TGSettingsViewController telegramRows]
+										  : [TGSettingsViewController groupToolRows]);
+		NSArray *row = table[indexPath.row];
 		cell.textLabel.text = row[0];
 		cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
 		cell.imageView.image = [TGIcons menuGlyphNamed:row[1]];
@@ -526,7 +591,7 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		return cell;
 	}
 
-	if (indexPath.section == 2){
+	if (indexPath.section == 4){
 		NSArray *help = [TGSettingsViewController helpRows];
 		cell.textLabel.text = help[indexPath.row][0];
 		cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
@@ -624,7 +689,7 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
-	if (self.page == TGSettingsPageRoot && indexPath.section == 3)
+	if (self.page == TGSettingsPageRoot && indexPath.section == 5)
 		return 45;
 	return 44;
 }
@@ -749,15 +814,74 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 	return cell;
 }
 
++ (NSArray *)archiveKeys {
+	static NSArray *keys = nil;
+	if (!keys)
+		keys = @[@"archiveUnknownSenders", @"keepUnmutedArchived",
+				 @"keepFoldersArchived"];
+	return keys;
+}
+
++ (NSArray *)archiveTitles {
+	static NSArray *titles = nil;
+	if (!titles)
+		titles = @[@"Archive new unknown chats", @"Keep unmuted chats archived",
+				   @"Keep folder chats archived"];
+	return titles;
+}
+
 - (UITableViewCell *)fillDataCell:(UITableViewCell *)cell at:(NSIndexPath *)indexPath {
-	if (indexPath.row == 0){
-		cell.textLabel.text = @"Storage and cache";
-		[self markDisclosure:cell];
-	} else {
-		cell.textLabel.text = @"Clear local database";
-		cell.textLabel.textColor = [UIColor colorWithRed:0.8f green:0.1f blue:0.1f alpha:1.0f];
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+
+	if (indexPath.section == 0){
+		if (indexPath.row == 0){
+			cell.textLabel.text = @"Storage and cache";
+			[self markDisclosure:cell];
+			return cell;
+		}
+		cell.textLabel.text = @"Data Saver";
+		UISwitch *toggle = [[UISwitch alloc] init];
+		toggle.on = self.dataSaver;
+		[toggle addTarget:self action:@selector(dataSaverToggled:)
+		 forControlEvents:UIControlEventValueChanged];
+		cell.accessoryView = toggle;
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		return cell;
 	}
+
+	if (indexPath.section == 1){
+		NSString *key = [TGSettingsViewController archiveKeys][indexPath.row];
+		cell.textLabel.text = [TGSettingsViewController archiveTitles][indexPath.row];
+		cell.textLabel.font = [UIFont boldSystemFontOfSize:15];
+		UISwitch *toggle = [[UISwitch alloc] init];
+		toggle.on = [self.archive[key] boolValue];
+		toggle.tag = indexPath.row;
+		[toggle addTarget:self action:@selector(archiveToggled:)
+		 forControlEvents:UIControlEventValueChanged];
+		cell.accessoryView = toggle;
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		return cell;
+	}
+
+	cell.textLabel.text = @"Clear local database";
+	cell.textLabel.textColor = [UIColor colorWithRed:0.8f green:0.1f blue:0.1f alpha:1.0f];
 	return cell;
+}
+
+- (void)dataSaverToggled:(UISwitch *)toggle {
+	self.dataSaver = toggle.on;
+	[[NSUserDefaults standardUserDefaults] setBool:toggle.on forKey:@"TGDataSaver"];
+	[[NSUserDefaults standardUserDefaults] synchronize];
+	[[TGClient shared] setDataSaverEnabled:toggle.on completion:nil];
+}
+
+- (void)archiveToggled:(UISwitch *)toggle {
+	NSString *key = [TGSettingsViewController archiveKeys][toggle.tag];
+	self.archive[key] = @(toggle.on);
+	NSMutableDictionary *settings = [NSMutableDictionary dictionary];
+	for (NSString *name in [TGSettingsViewController archiveKeys])
+		settings[name] = @([self.archive[name] boolValue]);
+	[[TGClient shared] setArchiveSettings:settings];
 }
 
 #pragma mark - taps
@@ -780,10 +904,10 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		case TGSettingsPageLanguage:   [self tapLanguage:indexPath];   return;
 		case TGSettingsPageBlocked:    [self tapBlocked:indexPath];    return;
 		case TGSettingsPageData:
-			if (indexPath.row == 0){
+			if (indexPath.section == 0 && indexPath.row == 0){
 				TGStorageViewController *storage = [[TGStorageViewController alloc] init];
 				[self.navigationController pushViewController:storage animated:YES];
-			} else {
+			} else if (indexPath.section == 2){
 				[self confirmClearDatabase];
 			}
 			return;
@@ -802,8 +926,26 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 			case 1: [self openPage:TGSettingsPagePrivacy]; break;
 			case 2: [self openPage:TGSettingsPageData]; break;
 			case 3: [self openPage:TGSettingsPageAppearance]; break;
-			case 4: [self showFolders]; break;
+			case 4: {
+				TGStickersViewController *stickers =
+						[[TGStickersViewController alloc] init];
+				stickers.page = TGStickersPageRoot;
+				[self.navigationController pushViewController:stickers animated:YES];
+				break;
+			}
 			case 5: {
+				TGFoldersViewController *folders =
+						[[TGFoldersViewController alloc] init];
+				folders.page = TGFoldersPageList;
+				[self.navigationController pushViewController:folders animated:YES];
+				break;
+			}
+			case 6: {
+				TGProxyViewController *proxy = [[TGProxyViewController alloc] init];
+				[self.navigationController pushViewController:proxy animated:YES];
+				break;
+			}
+			case 7: {
 				UIViewController *sessions = [[TGSessionsViewController alloc] init];
 				[self.navigationController pushViewController:sessions animated:YES];
 				break;
@@ -814,6 +956,16 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 	}
 
 	if (indexPath.section == 2){
+		[self tapTelegramRow:indexPath.row];
+		return;
+	}
+
+	if (indexPath.section == 3){
+		[self pickGroupForTool:indexPath.row];
+		return;
+	}
+
+	if (indexPath.section == 4){
 		[self openHelp:indexPath.row];
 		return;
 	}
@@ -845,18 +997,78 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 	[confirm show];
 }
 
-/// Folders are a filter over the chat list, so this says where they are rather
-/// than building a second copy of the same sheet.
-- (void)showFolders {
-	NSArray *folders = [TGClient shared].folders;
-	NSString *message = folders.count
-			? [NSString stringWithFormat:@"%lu folders. Pick one from Folders "
-					@"above the chat list.", (unsigned long)folders.count]
-			: @"This account has no chat folders. They are set up in Telegram "
-			  @"on a desktop or a newer phone, and appear here.";
-	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Folders"
-			message:message delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
-	[alert show];
+- (void)tapTelegramRow:(NSInteger)row {
+	UIViewController *next = nil;
+	if (row == 0)
+		next = [[TGPremiumViewController alloc] init];
+	else if (row == 1)
+		next = [[TGStarsViewController alloc] init];
+	else
+		next = [[TGSavedMessagesTagsViewController alloc] initWithTopicId:0];
+	if (next)
+		[self.navigationController pushViewController:next animated:YES];
+}
+
+/// The three group screens all want a chat, and settings has none, so the row
+/// asks for one first. Ten is as many buttons as a 3.5-inch sheet can carry.
+- (void)pickGroupForTool:(NSInteger)tool {
+	NSMutableArray *groups = [NSMutableArray array];
+	for (NSDictionary *chat in [TGClient shared].chats){
+		if (![chat isKindOfClass:[NSDictionary class]])
+			continue;
+		if (![chat[@"isGroup"] boolValue])
+			continue;
+		[groups addObject:chat];
+		if (groups.count >= 10)
+			break;
+	}
+	if (!groups.count){
+		UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Group tools"
+				message:@"No group or channel is loaded on this device yet."
+			   delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+		[alert show];
+		return;
+	}
+	self.groupPicks = groups;
+
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Choose a chat"
+													  delegate:self
+											 cancelButtonTitle:nil
+										destructiveButtonTitle:nil
+											 otherButtonTitles:nil];
+	for (NSDictionary *chat in groups){
+		NSString *title = [chat[@"title"] isKindOfClass:[NSString class]]
+				? chat[@"title"] : @"Chat";
+		[sheet addButtonWithTitle:title];
+	}
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = 120 + tool;
+	[sheet showInView:self.view];
+}
+
+- (void)openGroupTool:(NSInteger)tool forChat:(NSDictionary *)chat {
+	int64_t chatId = [chat[@"id"] longLongValue];
+	NSString *title = [chat[@"title"] isKindOfClass:[NSString class]]
+			? chat[@"title"] : nil;
+	if (!chatId)
+		return;
+
+	UIViewController *next = nil;
+	if (tool == 0){
+		TGGroupMembersViewController *members =
+				[[TGGroupMembersViewController alloc] init];
+		members.chatId = chatId;
+		members.initialMode = 0;
+		next = members;
+	} else if (tool == 1){
+		next = [[TGInviteLinksViewController alloc] initWithChatId:chatId];
+	} else {
+		TGChatEventsViewController *events =
+				[[TGChatEventsViewController alloc] initWithChatId:chatId];
+		events.chatTitle = title;
+		next = events;
+	}
+	[self.navigationController pushViewController:next animated:YES];
 }
 
 - (void)openHelp:(NSInteger)row {
@@ -1037,6 +1249,13 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		[[TGClient shared] setAccountTtlDays:months[index] * 30];
 		self.accountTtl = months[index] * 30;
 		[self.tableView reloadData];
+		return;
+	}
+
+	if (sheet.tag >= 120 && sheet.tag <= 122){
+		if ((NSUInteger)index >= self.groupPicks.count)
+			return;
+		[self openGroupTool:sheet.tag - 120 forChat:self.groupPicks[index]];
 		return;
 	}
 

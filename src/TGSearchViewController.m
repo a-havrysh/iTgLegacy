@@ -1,6 +1,7 @@
 #import "TGSearchViewController.h"
 #import "TGChatViewController.h"
 #import "TGClient.h"
+#import "TGClient+Search.h"
 #import "TGTheme.h"
 #import "TGIcons.h"
 #import <QuartzCore/QuartzCore.h>
@@ -18,6 +19,7 @@ static const CGFloat kSearchSectionHeight = 25.0f;
 @property (nonatomic, strong) UIImageView *avatarView;
 @property (nonatomic, strong) UILabel *titleLabel;
 @property (nonatomic, strong) UILabel *subtitleLabel;
+@property (nonatomic, strong) UILabel *dateLabel;
 @end
 
 @implementation TGSearchResultCell
@@ -54,6 +56,17 @@ static const CGFloat kSearchSectionHeight = 25.0f;
 		_subtitleLabel.highlightedTextColor = [UIColor whiteColor];
 		[self.contentView addSubview:_subtitleLabel];
 
+		_dateLabel = [[UILabel alloc] init];
+		_dateLabel.backgroundColor = [UIColor clearColor];
+		_dateLabel.font = [UIFont systemFontOfSize:13];
+		_dateLabel.textAlignment = NSTextAlignmentRight;
+		_dateLabel.textColor = [TGTheme shared].isFlat
+				? [[TGTheme shared] accentColour]
+				: [UIColor colorWithRed:0x33 / 255.0f green:0x7a / 255.0f
+									blue:0xcc / 255.0f alpha:1.0f];
+		_dateLabel.highlightedTextColor = [UIColor whiteColor];
+		[self.contentView addSubview:_dateLabel];
+
 		_avatarView = [[UIImageView alloc] initWithFrame:
 				CGRectMake(kSearchAvatarLeft, kSearchAvatarTop, kSearchAvatar, kSearchAvatar)];
 		_avatarView.layer.cornerRadius = 4;
@@ -78,6 +91,14 @@ static const CGFloat kSearchSectionHeight = 25.0f;
 								   kSearchAvatar, kSearchAvatar);
 
 	CGFloat textWidth = viewSize.width - kSearchTextLeft - kSearchTextRight;
+	CGFloat dateWidth = 0;
+	if (_dateLabel.text.length){
+		CGSize dateSize = [_dateLabel.text sizeWithFont:_dateLabel.font];
+		dateWidth = (CGFloat)(int)dateSize.width + 4;
+		textWidth -= dateWidth + 4;
+	}
+	_dateLabel.hidden = dateWidth == 0;
+
 	CGFloat titleHeight = (CGFloat)(int)(_titleLabel.font.lineHeight);
 	CGFloat subtitleHeight = (CGFloat)(int)(_subtitleLabel.font.lineHeight);
 	BOOL hasSubtitle = _subtitleLabel.text.length != 0;
@@ -88,10 +109,14 @@ static const CGFloat kSearchSectionHeight = 25.0f;
 	} else {
 		y = (CGFloat)(int)((viewSize.height - titleHeight - subtitleHeight - 1) / 2);
 		_subtitleLabel.frame = CGRectMake(kSearchTextLeft + 1, y + titleHeight,
-										  textWidth, subtitleHeight);
+				viewSize.width - kSearchTextLeft - kSearchTextRight - 1, subtitleHeight);
 	}
 	_subtitleLabel.hidden = !hasSubtitle;
 	_titleLabel.frame = CGRectMake(kSearchTextLeft, y, textWidth, titleHeight);
+	if (dateWidth > 0){
+		_dateLabel.frame = CGRectMake(viewSize.width - kSearchTextRight - dateWidth,
+									  y + 1, dateWidth, titleHeight);
+	}
 }
 
 @end
@@ -99,7 +124,7 @@ static const CGFloat kSearchSectionHeight = 25.0f;
 static NSString *const kSearchRecentsKey = @"TGSearchRecentPeers";
 static const NSUInteger kSearchRecentsLimit = 12;
 
-@interface TGSearchViewController () <UISearchBarDelegate>
+@interface TGSearchViewController () <UISearchBarDelegate, UIActionSheetDelegate>
 @property (nonatomic, strong) UISearchBar *bar;
 @property (nonatomic, strong) NSArray *chatHits;      // chats whose title matches
 @property (nonatomic, strong) NSArray *contactHits;
@@ -111,6 +136,12 @@ static const NSUInteger kSearchRecentsLimit = 12;
 @property (nonatomic, strong) NSMutableDictionary *avatars;
 @property (nonatomic, strong) NSMutableSet *avatarsRequested;
 @property (nonatomic, strong) UILabel *statusLabel;
+@property (nonatomic, strong) NSArray *hashtagHits;
+@property (nonatomic, strong) NSArray *recentTags;
+@property (nonatomic, strong) NSArray *remoteRecents;
+@property (nonatomic, strong) NSMutableArray *scopeButtons;
+@property (nonatomic, strong) UIView *scopeBar;
+@property (nonatomic, strong) UIButton *scopeChatButton;
 @end
 
 @implementation TGSearchViewController {
@@ -118,6 +149,34 @@ static const NSUInteger kSearchRecentsLimit = 12;
 	NSString *_query;
 	NSUInteger _generation;
 	NSInteger _pending;
+	NSInteger _scope;
+	NSString *_messagesOffset;
+	int64_t _messagesFromId;
+	BOOL _loadingMore;
+	int64_t _scopedChatId;
+	NSString *_scopedChatTitle;
+	int64_t _sheetChatId;
+	NSString *_sheetChatTitle;
+	BOOL _sheetIsGroup;
+}
+
++ (NSArray *)scopeTitles {
+	return @[@"All", @"Media", @"Links", @"Files", @"Voice"];
+}
+
++ (NSString *)filterForScope:(NSInteger)scope {
+	switch (scope){
+		case 1: return @"searchMessagesFilterPhotoAndVideo";
+		case 2: return @"searchMessagesFilterUrl";
+		case 3: return @"searchMessagesFilterDocument";
+		case 4: return @"searchMessagesFilterVoiceNote";
+		default: return nil;
+	}
+}
+
++ (BOOL)isTagQuery:(NSString *)query {
+	return query.length > 1 &&
+			([query hasPrefix:@"#"] || [query hasPrefix:@"$"]);
 }
 
 + (UIImage *)transparentBarBackground {
@@ -142,7 +201,13 @@ static const NSUInteger kSearchRecentsLimit = 12;
 	self.messageHits = @[];
 	self.contacts = @[];
 	self.sections = @[];
+	self.hashtagHits = @[];
+	self.recentTags = @[];
+	self.remoteRecents = @[];
 	_query = @"";
+	_scope = 0;
+	_messagesOffset = @"";
+	_messagesFromId = 0;
 	[self loadRecents];
 	self.avatars = [NSMutableDictionary dictionary];
 	self.avatarsRequested = [NSMutableSet set];
@@ -180,6 +245,13 @@ static const NSUInteger kSearchRecentsLimit = 12;
 	_statusLabel.hidden = YES;
 	[self.view addSubview:_statusLabel];
 
+	[self buildScopeBar];
+
+	UILongPressGestureRecognizer *press = [[UILongPressGestureRecognizer alloc]
+			initWithTarget:self action:@selector(handleLongPress:)];
+	press.minimumPressDuration = 0.5;
+	[self.tableView addGestureRecognizer:press];
+
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] contactsWithCompletion:^(NSArray *users){
 		TGSearchViewController *me = weakSelf;
@@ -189,14 +261,197 @@ static const NSUInteger kSearchRecentsLimit = 12;
 		[me runLocalSearch];
 	}];
 
+	[[TGClient shared] recentlyFoundChatsWithQuery:@"" limit:12 completion:^(NSArray *chats){
+		TGSearchViewController *me = weakSelf;
+		if (!me)
+			return;
+		me.remoteRecents = chats ?: @[];
+		if (!me->_query.length)
+			[me rebuildSections];
+	}];
+
+	[self reloadRecentTags];
+
 	[self rebuildSections];
 	[self.bar becomeFirstResponder];
+}
+
+- (void)reloadRecentTags {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] searchedForTagsWithPrefix:@"" limit:12 completion:^(NSArray *tags){
+		TGSearchViewController *me = weakSelf;
+		if (!me)
+			return;
+		me.recentTags = tags ?: @[];
+		if (!me->_query.length)
+			[me rebuildSections];
+	}];
 }
 
 - (void)viewDidLayoutSubviews {
 	[super viewDidLayoutSubviews];
 	CGSize size = self.view.bounds.size;
 	_statusLabel.frame = CGRectMake(0, (CGFloat)(int)(size.height / 3), size.width, 40);
+	[self layoutScopeBar];
+}
+
+#pragma mark - scope bar
+
+- (void)buildScopeBar {
+	CGFloat width = self.view.bounds.size.width;
+	if (width < 1)
+		width = 320;
+
+	_scopeBar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, 36)];
+	_scopeBar.backgroundColor = [TGTheme shared].isFlat
+			? [[TGTheme shared] listBackgroundColour]
+			: [UIColor colorWithRed:0xc3 / 255.0f green:0xcb / 255.0f
+								blue:0xd4 / 255.0f alpha:1.0f];
+
+	UIImage *background = [UIImage imageNamed:@"SearchBarBackground.png"];
+	if (background && ![TGTheme shared].isFlat){
+		UIImageView *backgroundView = [[UIImageView alloc] initWithImage:background];
+		backgroundView.frame = CGRectMake(0, 0, width, 36);
+		backgroundView.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+		[_scopeBar addSubview:backgroundView];
+	}
+
+	_scopeButtons = [NSMutableArray array];
+	NSArray *titles = [[self class] scopeTitles];
+	for (NSUInteger i = 0; i < titles.count; i++){
+		UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+		button.tag = (NSInteger)i;
+		button.titleLabel.font = [UIFont boldSystemFontOfSize:12];
+		[button setTitle:titles[i] forState:UIControlStateNormal];
+		[self styleScopeButton:button selected:(i == 0)];
+		[button addTarget:self action:@selector(scopeTapped:)
+			 forControlEvents:UIControlEventTouchDown];
+		[_scopeBar addSubview:button];
+		[_scopeButtons addObject:button];
+	}
+
+	_scopeChatButton = [UIButton buttonWithType:UIButtonTypeCustom];
+	_scopeChatButton.titleLabel.font = [UIFont boldSystemFontOfSize:12];
+	_scopeChatButton.hidden = YES;
+	[self styleScopeButton:_scopeChatButton selected:YES];
+	[_scopeChatButton addTarget:self action:@selector(leaveChatScope)
+			   forControlEvents:UIControlEventTouchDown];
+	[_scopeBar addSubview:_scopeChatButton];
+
+	[self layoutScopeBar];
+	self.tableView.tableHeaderView = _scopeBar;
+}
+
+- (void)styleScopeButton:(UIButton *)button selected:(BOOL)selected {
+	UIImage *plate = [UIImage imageNamed:selected
+			? @"SearchBarScopeButton_Highlighted.png" : @"SearchBarScopeButton.png"];
+	if (plate){
+		plate = [plate stretchableImageWithLeftCapWidth:(int)(plate.size.width / 2)
+										   topCapHeight:0];
+		[button setBackgroundImage:plate forState:UIControlStateNormal];
+		button.backgroundColor = [UIColor clearColor];
+	} else {
+		button.backgroundColor = selected
+				? [[TGTheme shared] accentColour]
+				: [UIColor clearColor];
+	}
+
+	if (selected){
+		[button setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+		[button setTitleShadowColor:[UIColor colorWithRed:0x11 / 255.0f green:0x2e / 255.0f
+													 blue:0x5c / 255.0f alpha:0.2f]
+						   forState:UIControlStateNormal];
+	} else {
+		[button setTitleColor:([TGTheme shared].isFlat
+				? [[TGTheme shared] secondaryTextColour]
+				: [UIColor colorWithRed:0x5c / 255.0f green:0x70 / 255.0f
+									blue:0x8b / 255.0f alpha:1.0f])
+					 forState:UIControlStateNormal];
+		[button setTitleShadowColor:[UIColor colorWithWhite:1.0f alpha:0.25f]
+						   forState:UIControlStateNormal];
+	}
+	button.titleLabel.shadowOffset = CGSizeMake(0, -1);
+}
+
+- (void)layoutScopeBar {
+	if (!_scopeBar)
+		return;
+	CGFloat width = self.view.bounds.size.width;
+	if (width < 1)
+		return;
+
+	CGRect barFrame = _scopeBar.frame;
+	if ((int)barFrame.size.width != (int)width){
+		barFrame.size.width = width;
+		_scopeBar.frame = barFrame;
+		self.tableView.tableHeaderView = _scopeBar;
+	}
+
+	if (_scopedChatId){
+		for (UIButton *button in _scopeButtons)
+			button.hidden = YES;
+		_scopeChatButton.hidden = NO;
+		_scopeChatButton.frame = CGRectMake(6, 3, width - 12, 30);
+		return;
+	}
+
+	_scopeChatButton.hidden = YES;
+	NSUInteger count = _scopeButtons.count;
+	if (!count)
+		return;
+	CGFloat available = width - 12;
+	CGFloat each = (CGFloat)(int)(available / count);
+	for (NSUInteger i = 0; i < count; i++){
+		UIButton *button = _scopeButtons[i];
+		button.hidden = NO;
+		CGFloat buttonWidth = (i == count - 1) ? (available - each * (count - 1)) : each;
+		button.frame = CGRectMake(6 + each * i, 3, buttonWidth, 30);
+	}
+}
+
+- (void)scopeTapped:(UIButton *)button {
+	if (button.tag == _scope)
+		return;
+	_scope = button.tag;
+	for (UIButton *other in _scopeButtons)
+		[self styleScopeButton:other selected:(other.tag == _scope)];
+	[self restartSearch];
+}
+
+- (void)enterChatScope:(int64_t)chatId title:(NSString *)title {
+	_scopedChatId = chatId;
+	_scopedChatTitle = title.length ? title : @"Chat";
+	[_scopeChatButton setTitle:[@"In: " stringByAppendingString:_scopedChatTitle]
+					  forState:UIControlStateNormal];
+	self.bar.placeholder = [@"Search in " stringByAppendingString:_scopedChatTitle];
+	[self layoutScopeBar];
+	[self.bar becomeFirstResponder];
+	[self restartSearch];
+}
+
+- (void)leaveChatScope {
+	if (!_scopedChatId)
+		return;
+	_scopedChatId = 0;
+	_scopedChatTitle = nil;
+	self.bar.placeholder = @"Search";
+	[self layoutScopeBar];
+	[self restartSearch];
+}
+
+- (void)restartSearch {
+	_generation++;
+	_pending = 0;
+	_loadingMore = NO;
+	_messagesOffset = @"";
+	_messagesFromId = 0;
+	self.messageHits = @[];
+	self.globalHits = @[];
+	self.hashtagHits = @[];
+	[self runLocalSearch];
+	if (!_query.length)
+		return;
+	[self runServerSearch:_query generation:_generation];
 }
 
 #pragma mark - recents
@@ -234,6 +489,13 @@ static const NSUInteger kSearchRecentsLimit = 12;
 	self.recents = updated;
 	[[NSUserDefaults standardUserDefaults] setObject:updated forKey:kSearchRecentsKey];
 	[[NSUserDefaults standardUserDefaults] synchronize];
+}
+
+- (void)clearRecentTags {
+	[[TGClient shared] clearSearchedForTagsIncludingCashtags:NO];
+	[[TGClient shared] clearSearchedForTagsIncludingCashtags:YES];
+	self.recentTags = @[];
+	[self rebuildSections];
 }
 
 - (void)clearRecents {
@@ -333,9 +595,13 @@ static const NSUInteger kSearchRecentsLimit = 12;
 	_query = trimmed;
 	_generation++;
 	_pending = 0;
+	_loadingMore = NO;
+	_messagesOffset = @"";
+	_messagesFromId = 0;
 
 	self.messageHits = @[];
 	self.globalHits = @[];
+	self.hashtagHits = @[];
 	[self runLocalSearch];
 
 	if (!_query.length)
@@ -354,7 +620,8 @@ static const NSUInteger kSearchRecentsLimit = 12;
 }
 
 - (void)runLocalSearch {
-	if (!_query.length){
+	if (!_query.length || _scope != 0 || _scopedChatId ||
+		[[self class] isTagQuery:_query]){
 		self.chatHits = @[];
 		self.contactHits = @[];
 		[self rebuildSections];
@@ -411,40 +678,210 @@ static const NSUInteger kSearchRecentsLimit = 12;
 	[self rebuildSections];
 }
 
+- (NSString *)shortDateFor:(NSNumber *)stamp {
+	if (![stamp isKindOfClass:NSNumber.class] || [stamp doubleValue] < 1)
+		return @"";
+	static NSDateFormatter *timeFormatter = nil;
+	static NSDateFormatter *dayFormatter = nil;
+	if (!timeFormatter){
+		timeFormatter = [[NSDateFormatter alloc] init];
+		timeFormatter.dateFormat = @"HH:mm";
+		dayFormatter = [[NSDateFormatter alloc] init];
+		dayFormatter.dateFormat = @"d MMM";
+	}
+	NSDate *date = [NSDate dateWithTimeIntervalSince1970:[stamp doubleValue]];
+	BOOL today = fabs([date timeIntervalSinceNow]) < 12 * 3600;
+	return [(today ? timeFormatter : dayFormatter) stringFromDate:date];
+}
+
+- (NSArray *)rowsForMessages:(NSArray *)messages inChat:(BOOL)inChat {
+	NSMutableArray *rows = [NSMutableArray array];
+	for (NSDictionary *m in messages){
+		if (![m isKindOfClass:NSDictionary.class])
+			continue;
+		int64_t chatId = [m[@"chatId"] longLongValue];
+		if (!chatId)
+			continue;
+		NSString *chatTitle = [m[@"chatTitle"] isKindOfClass:NSString.class] ? m[@"chatTitle"] : @"";
+		NSString *sender = [m[@"senderName"] isKindOfClass:NSString.class] ? m[@"senderName"] : @"";
+		NSString *text = [m[@"text"] isKindOfClass:NSString.class] ? m[@"text"] : @"";
+		NSString *title = inChat
+				? (sender.length ? sender : (chatTitle.length ? chatTitle : @"Message"))
+				: (chatTitle.length ? chatTitle : (sender.length ? sender : @"Chat"));
+		NSString *subtitle = text;
+		if (!inChat && sender.length && text.length)
+			subtitle = [NSString stringWithFormat:@"%@: %@", sender, text];
+		[rows addObject:@{@"title": title,
+						  @"subtitle": subtitle,
+						  @"date": [self shortDateFor:m[@"date"]],
+						  @"chatId": @(chatId),
+						  @"isGroup": @([m[@"isGroup"] boolValue]),
+						  @"fileId": ([[TGClient shared] photoFileIdForChat:chatId] ?: [NSNull null])}];
+	}
+	return rows;
+}
+
+- (void)appendMessageRows:(NSArray *)rows {
+	if (!rows.count)
+		return;
+	NSMutableArray *all = [NSMutableArray arrayWithArray:self.messageHits];
+	[all addObjectsFromArray:rows];
+	self.messageHits = all;
+}
+
 - (void)runServerSearch:(NSString *)query generation:(NSUInteger)generation {
 	if (generation != _generation || !query.length)
 		return;
 
+	if (_scopedChatId){
+		_pending = 1;
+		[self rebuildSections];
+		[self loadChatMessagesPage:query generation:generation];
+		return;
+	}
+
+	if ([[self class] isTagQuery:query]){
+		_pending = 2;
+		[self rebuildSections];
+		[self loadTagMessagesPage:query generation:generation];
+		[self loadHashtagSuggestions:query generation:generation];
+		return;
+	}
+
+	if (_scope != 0){
+		_pending = 1;
+		[self rebuildSections];
+		[self loadGlobalMessagesPage:query generation:generation];
+		return;
+	}
+
 	_pending = 2;
 	[self rebuildSections];
+	[self loadGlobalMessagesPage:query generation:generation];
+	[self searchPublicChats:query generation:generation];
+}
 
+- (void)loadGlobalMessagesPage:(NSString *)query generation:(NSUInteger)generation {
+	NSString *offset = _messagesOffset ?: @"";
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] searchMessages:query completion:^(NSArray *messages){
+	[[TGClient shared] searchMessagesWithQuery:query
+										filter:[[self class] filterForScope:_scope]
+										offset:offset
+									completion:^(NSArray *messages, NSString *nextOffset)
+	{
 		TGSearchViewController *me = weakSelf;
-		// A slower answer to an older query must not replace a newer one.
 		if (!me || generation != me->_generation)
 			return;
-		NSMutableArray *rows = [NSMutableArray array];
-		for (NSDictionary *m in messages){
-			if (![m isKindOfClass:NSDictionary.class])
-				continue;
-			NSString *title = [m[@"chatTitle"] isKindOfClass:NSString.class] ? m[@"chatTitle"] : @"";
-			NSString *text = [m[@"text"] isKindOfClass:NSString.class] ? m[@"text"] : @"";
-			if ([m[@"chatId"] longLongValue] == 0)
-				continue;
-			[rows addObject:@{@"title": (title.length ? title : @"Chat"),
-							  @"subtitle": text,
-							  @"chatId": m[@"chatId"],
-							  @"isGroup": @([m[@"isGroup"] boolValue]),
-							  @"fileId": [NSNull null]}];
-		}
-		me.messageHits = rows;
+		[me appendMessageRows:[me rowsForMessages:messages inChat:NO]];
+		me->_messagesOffset = [nextOffset isKindOfClass:NSString.class] ? nextOffset : @"";
+		me->_loadingMore = NO;
 		if (me->_pending > 0)
 			me->_pending--;
 		[me rebuildSections];
 	}];
+}
 
-	[self searchPublicChats:query generation:generation];
+- (void)loadChatMessagesPage:(NSString *)query generation:(NSUInteger)generation {
+	int64_t chatId = _scopedChatId;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] searchMessagesInChat:chatId
+									  query:query
+							   senderUserId:0
+									 filter:[[self class] filterForScope:_scope]
+							  fromMessageId:_messagesFromId
+									  limit:40
+								 completion:^(NSArray *messages, int64_t nextFromMessageId,
+											  NSInteger totalCount)
+	{
+		TGSearchViewController *me = weakSelf;
+		if (!me || generation != me->_generation)
+			return;
+		[me appendMessageRows:[me rowsForMessages:messages inChat:YES]];
+		me->_messagesFromId = nextFromMessageId;
+		me->_loadingMore = NO;
+		if (me->_pending > 0)
+			me->_pending--;
+		[me rebuildSections];
+	}];
+}
+
+- (void)loadTagMessagesPage:(NSString *)tag generation:(NSUInteger)generation {
+	NSString *offset = _messagesOffset ?: @"";
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] searchPublicMessagesWithTag:tag
+											offset:offset
+											 limit:40
+										completion:^(NSArray *messages, NSString *nextOffset)
+	{
+		TGSearchViewController *me = weakSelf;
+		if (!me || generation != me->_generation)
+			return;
+		[me appendMessageRows:[me rowsForMessages:messages inChat:NO]];
+		me->_messagesOffset = [nextOffset isKindOfClass:NSString.class] ? nextOffset : @"";
+		me->_loadingMore = NO;
+		if (me->_pending > 0)
+			me->_pending--;
+		[me rebuildSections];
+	}];
+}
+
+- (void)loadHashtagSuggestions:(NSString *)tag generation:(NSUInteger)generation {
+	NSString *prefix = [tag substringFromIndex:1];
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] searchHashtagsWithPrefix:prefix limit:10 completion:^(NSArray *hashtags){
+		TGSearchViewController *me = weakSelf;
+		if (!me || generation != me->_generation)
+			return;
+		NSMutableArray *rows = [NSMutableArray array];
+		for (id entry in hashtags){
+			NSString *entryString = [entry isKindOfClass:NSString.class] ? entry : nil;
+			if (!entryString.length)
+				continue;
+			[rows addObject:@{@"title": [@"#" stringByAppendingString:entryString],
+							  @"subtitle": @"",
+							  @"hashtag": [@"#" stringByAppendingString:entryString],
+							  @"chatId": @0,
+							  @"isGroup": @NO,
+							  @"fileId": [NSNull null]}];
+		}
+		me.hashtagHits = rows;
+		if (me->_pending > 0)
+			me->_pending--;
+		[me rebuildSections];
+	}];
+}
+
+- (void)loadMoreIfPossible {
+	if (_loadingMore || _pending > 0 || !_query.length)
+		return;
+	NSUInteger generation = _generation;
+	if (_scopedChatId){
+		if (!_messagesFromId)
+			return;
+		_loadingMore = YES;
+		[self loadChatMessagesPage:_query generation:generation];
+		return;
+	}
+	if (!_messagesOffset.length)
+		return;
+	_loadingMore = YES;
+	if ([[self class] isTagQuery:_query])
+		[self loadTagMessagesPage:_query generation:generation];
+	else
+		[self loadGlobalMessagesPage:_query generation:generation];
+}
+
+- (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell
+	forRowAtIndexPath:(NSIndexPath *)indexPath
+{
+	if (indexPath.section != (NSInteger)self.sections.count - 1)
+		return;
+	NSDictionary *info = self.sections[indexPath.section];
+	if (![info[@"paged"] boolValue])
+		return;
+	NSArray *rows = info[@"rows"];
+	if (indexPath.row >= (NSInteger)rows.count - 3)
+		[self loadMoreIfPossible];
 }
 
 - (void)searchPublicChats:(NSString *)query generation:(NSUInteger)generation {
@@ -523,17 +960,56 @@ static const NSUInteger kSearchRecentsLimit = 12;
 - (void)rebuildSections {
 	NSMutableArray *built = [NSMutableArray array];
 	if (!_query.length){
-		if (self.recents.count){
-			NSMutableArray *rows = [NSMutableArray array];
-			for (NSDictionary *r in self.recents)
-				[rows addObject:@{@"title": (r[@"title"] ?: @""),
-								  @"subtitle": @"",
-								  @"chatId": (r[@"chatId"] ?: @0),
-								  @"isGroup": @([r[@"isGroup"] boolValue]),
-								  @"fileId": ([[TGClient shared] photoFileIdForChat:
-										  [r[@"chatId"] longLongValue]] ?: [NSNull null])}];
-			[built addObject:@{@"title": @"Recent", @"rows": rows, @"recent": @YES}];
+		NSMutableArray *rows = [NSMutableArray array];
+		NSMutableSet *seen = [NSMutableSet set];
+		for (NSDictionary *r in self.recents){
+			int64_t chatId = [r[@"chatId"] longLongValue];
+			if (!chatId || [seen containsObject:@(chatId)])
+				continue;
+			[seen addObject:@(chatId)];
+			[rows addObject:@{@"title": (r[@"title"] ?: @""),
+							  @"subtitle": @"",
+							  @"chatId": (r[@"chatId"] ?: @0),
+							  @"isGroup": @([r[@"isGroup"] boolValue]),
+							  @"fileId": ([[TGClient shared] photoFileIdForChat:chatId]
+									  ?: [NSNull null])}];
 		}
+		for (NSDictionary *r in self.remoteRecents){
+			if (![r isKindOfClass:NSDictionary.class])
+				continue;
+			int64_t chatId = [r[@"id"] longLongValue];
+			NSString *title = [r[@"title"] isKindOfClass:NSString.class] ? r[@"title"] : @"";
+			if (!chatId || !title.length || [seen containsObject:@(chatId)])
+				continue;
+			[seen addObject:@(chatId)];
+			[rows addObject:@{@"title": title,
+							  @"subtitle": @"",
+							  @"chatId": @(chatId),
+							  @"isGroup": @NO,
+							  @"fileId": ([r[@"photoFileId"] isKindOfClass:NSNumber.class]
+									  ? r[@"photoFileId"]
+									  : ([[TGClient shared] photoFileIdForChat:chatId]
+											  ?: [NSNull null]))}];
+		}
+		if (rows.count)
+			[built addObject:@{@"title": @"Recent", @"rows": rows, @"recent": @YES}];
+
+		NSMutableArray *tagRows = [NSMutableArray array];
+		for (id entry in self.recentTags){
+			NSString *entryString = [entry isKindOfClass:NSString.class] ? entry : nil;
+			if (!entryString.length)
+				continue;
+			NSString *tag = ([entryString hasPrefix:@"#"] || [entryString hasPrefix:@"$"])
+					? entryString : [@"#" stringByAppendingString:entryString];
+			[tagRows addObject:@{@"title": tag,
+								 @"subtitle": @"",
+								 @"hashtag": tag,
+								 @"chatId": @0,
+								 @"isGroup": @NO,
+								 @"fileId": [NSNull null]}];
+		}
+		if (tagRows.count)
+			[built addObject:@{@"title": @"Recent Hashtags", @"rows": tagRows, @"tags": @YES}];
 	} else {
 		if (self.chatHits.count)
 			[built addObject:@{@"title": @"Conversations", @"rows": self.chatHits}];
@@ -541,8 +1017,18 @@ static const NSUInteger kSearchRecentsLimit = 12;
 			[built addObject:@{@"title": @"Contacts", @"rows": self.contactHits}];
 		if (self.globalHits.count)
 			[built addObject:@{@"title": @"Global Search", @"rows": self.globalHits}];
-		if (self.messageHits.count)
-			[built addObject:@{@"title": @"Messages", @"rows": self.messageHits}];
+		if (self.hashtagHits.count)
+			[built addObject:@{@"title": @"Hashtags", @"rows": self.hashtagHits}];
+		if (self.messageHits.count){
+			NSString *title = @"Messages";
+			if (_scopedChatId)
+				title = [@"In " stringByAppendingString:(_scopedChatTitle ?: @"Chat")];
+			else if ([[self class] isTagQuery:_query])
+				title = @"Public Posts";
+			else if (_scope != 0)
+				title = [[self class] scopeTitles][_scope];
+			[built addObject:@{@"title": title, @"rows": self.messageHits, @"paged": @YES}];
+		}
 	}
 	self.sections = built;
 	[self.tableView reloadData];
@@ -555,7 +1041,9 @@ static const NSUInteger kSearchRecentsLimit = 12;
 		return;
 	}
 	if (!_query.length){
-		_statusLabel.text = @"Search for messages or users";
+		_statusLabel.text = _scopedChatId
+				? [@"Search in " stringByAppendingString:(_scopedChatTitle ?: @"this chat")]
+				: @"Search for messages or users";
 		_statusLabel.hidden = NO;
 		return;
 	}
@@ -596,6 +1084,7 @@ static const NSUInteger kSearchRecentsLimit = 12;
 	NSDictionary *info = self.sections[section];
 	NSString *title = [info[@"title"] isKindOfClass:NSString.class] ? info[@"title"] : @"";
 	BOOL isRecent = [info[@"recent"] boolValue];
+	BOOL isTags = [info[@"tags"] boolValue];
 
 	CGFloat width = tableView.bounds.size.width;
 	UIView *header = [[UIView alloc] initWithFrame:
@@ -637,7 +1126,7 @@ static const NSUInteger kSearchRecentsLimit = 12;
 	label.frame = CGRectOffset(label.frame, 10, 1);
 	[header addSubview:label];
 
-	if (isRecent){
+	if (isRecent || isTags){
 		UIButton *clear = [UIButton buttonWithType:UIButtonTypeCustom];
 		clear.frame = CGRectMake(width - 90, 0, 80, kSearchSectionHeight);
 		clear.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
@@ -652,7 +1141,8 @@ static const NSUInteger kSearchRecentsLimit = 12;
 							  forState:UIControlStateNormal];
 			clear.titleLabel.shadowOffset = CGSizeMake(0, -1);
 		}
-		[clear addTarget:self action:@selector(clearRecents)
+		[clear addTarget:self
+				  action:(isTags ? @selector(clearRecentTags) : @selector(clearRecents))
 				forControlEvents:UIControlEventTouchUpInside];
 		[header addSubview:clear];
 	}
@@ -716,6 +1206,14 @@ static const NSUInteger kSearchRecentsLimit = 12;
 
 	cell.titleLabel.text = title;
 	cell.subtitleLabel.text = subtitle;
+	cell.dateLabel.text = [row[@"date"] isKindOfClass:NSString.class] ? row[@"date"] : @"";
+
+	if ([row[@"hashtag"] isKindOfClass:NSString.class]){
+		cell.avatarView.image = nil;
+		[cell setNeedsLayout];
+		return cell;
+	}
+
 	cell.avatarView.image = [self avatarForChat:colourId
 										  title:title
 										 fileId:[row[@"fileId"] isKindOfClass:NSNumber.class]
@@ -743,6 +1241,14 @@ static const NSUInteger kSearchRecentsLimit = 12;
 	if (!row)
 		return;
 
+	NSString *hashtag = [row[@"hashtag"] isKindOfClass:NSString.class] ? row[@"hashtag"] : nil;
+	if (hashtag.length){
+		self.bar.text = hashtag;
+		[self searchBar:self.bar textDidChange:hashtag];
+		[self.bar becomeFirstResponder];
+		return;
+	}
+
 	NSString *title = [row[@"title"] isKindOfClass:NSString.class] ? row[@"title"] : @"";
 	BOOL isGroup = [row[@"isGroup"] boolValue];
 	int64_t chatId = [row[@"chatId"] longLongValue];
@@ -764,6 +1270,92 @@ static const NSUInteger kSearchRecentsLimit = 12;
 		[me rememberRecent:@{@"chatId": @(createdChatId), @"title": title, @"isGroup": @NO}];
 		[me openChat:createdChatId title:title isGroup:NO];
 	}];
+}
+
+#pragma mark - per-row actions
+
+- (void)handleLongPress:(UILongPressGestureRecognizer *)press {
+	if (press.state != UIGestureRecognizerStateBegan)
+		return;
+	NSIndexPath *indexPath = [self.tableView indexPathForRowAtPoint:
+			[press locationInView:self.tableView]];
+	if (!indexPath)
+		return;
+	NSDictionary *row = [self rowAtIndexPath:indexPath];
+	int64_t chatId = [row[@"chatId"] longLongValue];
+	if (!chatId)
+		return;
+
+	_sheetChatId = chatId;
+	_sheetChatTitle = [row[@"title"] isKindOfClass:NSString.class] ? row[@"title"] : @"";
+	_sheetIsGroup = [row[@"isGroup"] boolValue];
+
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:_sheetChatTitle
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:nil];
+	[sheet addButtonWithTitle:@"Open Chat"];
+	[sheet addButtonWithTitle:@"Search in This Chat"];
+	[sheet addButtonWithTitle:@"Cancel"];
+	sheet.cancelButtonIndex = 2;
+	[self.bar resignFirstResponder];
+	[sheet showInView:self.view.window ?: self.view];
+}
+
+- (void)actionSheet:(UIActionSheet *)actionSheet clickedButtonAtIndex:(NSInteger)buttonIndex {
+	int64_t chatId = _sheetChatId;
+	NSString *title = _sheetChatTitle;
+	BOOL isGroup = _sheetIsGroup;
+	_sheetChatId = 0;
+	if (!chatId)
+		return;
+	if (buttonIndex == 0){
+		[self rememberRecent:@{@"chatId": @(chatId), @"title": (title ?: @""),
+							   @"isGroup": @(isGroup)}];
+		[self openChat:chatId title:title isGroup:isGroup];
+		return;
+	}
+	if (buttonIndex == 1)
+		[self enterChatScope:chatId title:title];
+}
+
+- (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
+	if (indexPath.section >= (NSInteger)self.sections.count)
+		return NO;
+	return [((NSDictionary *)self.sections[indexPath.section])[@"tags"] boolValue];
+}
+
+- (NSString *)tableView:(UITableView *)tableView
+		titleForDeleteConfirmationButtonForRowAtIndexPath:(NSIndexPath *)indexPath
+{
+	return @"Remove";
+}
+
+- (void)tableView:(UITableView *)tableView
+		commitEditingStyle:(UITableViewCellEditingStyle)editingStyle
+		 forRowAtIndexPath:(NSIndexPath *)indexPath
+{
+	if (editingStyle != UITableViewCellEditingStyleDelete)
+		return;
+	NSDictionary *row = [self rowAtIndexPath:indexPath];
+	NSString *tag = [row[@"hashtag"] isKindOfClass:NSString.class] ? row[@"hashtag"] : nil;
+	if (!tag.length)
+		return;
+	[[TGClient shared] removeSearchedForTag:tag];
+	NSMutableArray *kept = [NSMutableArray array];
+	for (id entry in self.recentTags){
+		NSString *entryString = [entry isKindOfClass:NSString.class] ? entry : nil;
+		if (!entryString.length)
+			continue;
+		NSString *candidate = ([entryString hasPrefix:@"#"] || [entryString hasPrefix:@"$"])
+				? entryString : [@"#" stringByAppendingString:entryString];
+		if ([candidate isEqualToString:tag])
+			continue;
+		[kept addObject:entry];
+	}
+	self.recentTags = kept;
+	[self rebuildSections];
 }
 
 @end

@@ -1,5 +1,6 @@
 #import "TGSessionsViewController.h"
 #import "TGClient.h"
+#import "TGClient+Privacy.h"
 #import "TGTheme.h"
 #import "TGActionSheet.h"
 
@@ -19,6 +20,7 @@ static CGFloat TGSessionsRetinaPixel(void) {
 @property (nonatomic, assign) long long pendingTermination;
 @property (nonatomic, assign) BOOL loaded;
 @property (nonatomic, assign) BOOL refreshing;
+@property (nonatomic, assign) NSInteger ttlDays;
 @end
 
 @implementation TGSessionsViewController
@@ -64,12 +66,13 @@ static CGFloat TGSessionsRetinaPixel(void) {
 		return;
 	self.refreshing = YES;
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] sessionsWithCompletion:^(NSArray *sessions){
+	[[TGClient shared] activeSessionsWithCompletion:^(NSArray *sessions, NSInteger inactiveTtlDays){
 		__strong typeof(weakSelf) strongSelf = weakSelf;
 		if (!strongSelf)
 			return;
 		strongSelf.refreshing = NO;
 		strongSelf.loaded = YES;
+		strongSelf.ttlDays = inactiveTtlDays;
 		strongSelf.sessions = sessions ?: [NSArray array];
 		[strongSelf.tableView reloadData];
 		if ([strongSelf respondsToSelector:@selector(refreshControl)])
@@ -77,33 +80,58 @@ static CGFloat TGSessionsRetinaPixel(void) {
 	}];
 }
 
-- (NSString *)subtitleForSession:(NSDictionary *)session {
-	NSString *platform = session[@"platform"];
-	if (![platform isKindOfClass:[NSString class]])
-		platform = @"";
-	platform = [platform stringByTrimmingCharactersInSet:
+- (NSString *)stringIn:(NSDictionary *)session forKey:(NSString *)key {
+	id value = session[key];
+	if (![value isKindOfClass:[NSString class]])
+		return @"";
+	return [value stringByTrimmingCharactersInSet:
 			[NSCharacterSet whitespaceCharacterSet]];
+}
 
-	NSString *ip = session[@"ip"];
-	if (![ip isKindOfClass:[NSString class]])
-		ip = @"";
+- (NSString *)titleForSession:(NSDictionary *)session {
+	NSString *app = [self stringIn:session forKey:@"appName"];
+	if (!app.length)
+		app = [self stringIn:session forKey:@"name"];
+	if (!app.length)
+		app = @"Unknown application";
+	NSString *version = [self stringIn:session forKey:@"appVersion"];
+	if (version.length)
+		return [NSString stringWithFormat:@"%@ %@", app, version];
+	return app;
+}
 
-	NSMutableArray *parts = [NSMutableArray array];
+- (NSString *)subtitleForSession:(NSDictionary *)session {
+	NSString *device = [self stringIn:session forKey:@"deviceModel"];
+	NSString *platform = [self stringIn:session forKey:@"platform"];
+	NSString *ip = [self stringIn:session forKey:@"ip"];
+	NSString *location = [self stringIn:session forKey:@"location"];
+
+	NSMutableArray *first = [NSMutableArray array];
+	if (device.length)
+		[first addObject:device];
 	if (platform.length)
-		[parts addObject:platform];
+		[first addObject:platform];
+
+	NSMutableArray *second = [NSMutableArray array];
 	if (ip.length)
-		[parts addObject:ip];
+		[second addObject:ip];
+	if (location.length)
+		[second addObject:location];
 
 	if ([session[@"isCurrent"] boolValue]){
-		if (!parts.count)
-			return @"online";
-		[parts addObject:@"online"];
+		[second addObject:@"online"];
 	} else {
 		NSString *seen = [self lastActiveTextForSession:session];
 		if (seen.length)
-			[parts addObject:seen];
+			[second addObject:seen];
 	}
-	return [parts componentsJoinedByString:@" - "];
+
+	NSMutableArray *lines = [NSMutableArray array];
+	if (first.count)
+		[lines addObject:[first componentsJoinedByString:@", "]];
+	if (second.count)
+		[lines addObject:[second componentsJoinedByString:@" - "]];
+	return [lines componentsJoinedByString:@"\n"];
 }
 
 - (NSString *)lastActiveTextForSession:(NSDictionary *)session {
@@ -178,16 +206,23 @@ static CGFloat TGSessionsRetinaPixel(void) {
 #pragma mark - table
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-	return 3;
+	return 4;
 }
 
 - (NSString *)headerTitleForSection:(NSInteger)section {
 	if (section == 0) return [self currentSession] ? @"This device" : nil;
 	if (section == 1) return [self othersOnly].count ? @"Active sessions" : nil;
+	if (section == 3) return self.loaded ? @"Automatically terminate old sessions" : nil;
 	return nil;
 }
 
 - (NSString *)footerTitleForSection:(NSInteger)section {
+	if (section == 3){
+		if (!self.loaded)
+			return nil;
+		return @"If you do not log in from another device for this "
+			   @"period of time, that session ends by itself.";
+	}
 	if (section != 1)
 		return nil;
 	if (!self.loaded)
@@ -195,6 +230,21 @@ static CGFloat TGSessionsRetinaPixel(void) {
 	if ([self othersOnly].count)
 		return @"Tap a session to terminate it, or swipe it away.";
 	return @"You have no other active sessions.";
+}
+
+- (NSArray *)ttlOptions {
+	return [NSArray arrayWithObjects:
+			[NSNumber numberWithInteger:7],
+			[NSNumber numberWithInteger:30],
+			[NSNumber numberWithInteger:90],
+			[NSNumber numberWithInteger:180], nil];
+}
+
+- (NSString *)ttlTitleForDays:(NSInteger)days {
+	if (days <= 7) return @"1 week";
+	if (days <= 30) return @"1 month";
+	if (days <= 90) return @"3 months";
+	return @"6 months";
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
@@ -252,7 +302,11 @@ static CGFloat TGSessionsRetinaPixel(void) {
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
-	return indexPath.section == 2 ? 46 : 44;
+	if (indexPath.section == 2)
+		return 46;
+	if (indexPath.section == 3)
+		return 44;
+	return 58;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
@@ -260,6 +314,8 @@ static CGFloat TGSessionsRetinaPixel(void) {
 		return [self currentSession] ? 1 : 0;
 	if (section == 1)
 		return [self othersOnly].count;
+	if (section == 3)
+		return self.loaded ? 1 : 0;
 	return [self othersOnly].count ? 1 : 0;
 }
 
@@ -322,9 +378,29 @@ static CGFloat TGSessionsRetinaPixel(void) {
 	return cell;
 }
 
+- (UITableViewCell *)ttlCellForTable:(UITableView *)tableView {
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"ttl"];
+	if (!cell)
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
+									  reuseIdentifier:@"ttl"];
+	[[TGTheme shared] styleCell:cell];
+	cell.textLabel.text = @"If inactive for";
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+	cell.textLabel.textColor = [[TGTheme shared] isDark]
+			? [[TGTheme shared] primaryTextColour] : TGSessionsRGB(0x516691);
+	cell.detailTextLabel.text = [self ttlTitleForDays:self.ttlDays];
+	cell.detailTextLabel.font = [UIFont systemFontOfSize:17];
+	cell.detailTextLabel.textColor = [[TGTheme shared] cellDetailColour];
+	cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+	return cell;
+}
+
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
 	if (indexPath.section == 2)
 		return [self terminateAllCellForTable:tableView];
+	if (indexPath.section == 3)
+		return [self ttlCellForTable:tableView];
 
 	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"row"];
 	if (!cell){
@@ -339,9 +415,7 @@ static CGFloat TGSessionsRetinaPixel(void) {
 
 	BOOL dark = [[TGTheme shared] isDark];
 	NSDictionary *session = [self sessionAtIndexPath:indexPath];
-	NSString *name = session[@"name"];
-	if (![name isKindOfClass:[NSString class]] || !name.length)
-		name = @"Unknown application";
+	NSString *name = session ? [self titleForSession:session] : @"Unknown application";
 
 	[[TGTheme shared] styleCell:cell];
 
@@ -351,6 +425,7 @@ static CGFloat TGSessionsRetinaPixel(void) {
 	cell.textLabel.textColor = dark ? [[TGTheme shared] primaryTextColour]
 									: TGSessionsRGB(0x516691);
 	cell.detailTextLabel.text = session ? [self subtitleForSession:session] : @"";
+	cell.detailTextLabel.numberOfLines = 2;
 	cell.detailTextLabel.font = [UIFont systemFontOfSize:13 + TGSessionsRetinaPixel()];
 	cell.detailTextLabel.textColor = dark ? [[TGTheme shared] secondaryTextColour]
 										  : TGSessionsRGB(0x888888);
@@ -407,7 +482,11 @@ static CGFloat TGSessionsRetinaPixel(void) {
 		long long sessionId = [session[@"id"] longLongValue];
 		if (!sessionId)
 			continue;
-		[[TGClient shared] terminateSession:sessionId];
+		__weak typeof(self) weakSelf = self;
+		[[TGClient shared] terminateSession:sessionId completion:^(BOOL ok){
+			if (!ok)
+				[weakSelf refresh];
+		}];
 		[remaining removeObject:session];
 	}
 	self.sessions = remaining;
@@ -424,6 +503,17 @@ static CGFloat TGSessionsRetinaPixel(void) {
 	if (self.navigationController.view)
 		return self.navigationController.view;
 	return self.view;
+}
+
+- (void)performTerminateAll {
+	NSDictionary *current = [self currentSession];
+	self.sessions = current ? [NSArray arrayWithObject:current] : [NSArray array];
+	[self.tableView reloadData];
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] terminateAllOtherSessionsWithCompletion:^(__unused BOOL ok){
+		[weakSelf refresh];
+	}];
 }
 
 - (void)confirmTerminateAll {
@@ -446,7 +536,48 @@ static CGFloat TGSessionsRetinaPixel(void) {
 				__strong typeof(weakSelf) strongSelf = weakSelf;
 				strongSelf.currentActionSheet = nil;
 				if ([action isEqualToString:@"terminateAll"])
-					[strongSelf terminateSessions:[strongSelf othersOnly]];
+					[strongSelf performTerminateAll];
+			} target:self];
+	[self.currentActionSheet showInView:[self sheetHostView]];
+}
+
+- (void)showTtlPicker {
+	NSMutableArray *actions = [NSMutableArray array];
+	for (NSNumber *option in [self ttlOptions]){
+		NSInteger days = [option integerValue];
+		NSString *title = [self ttlTitleForDays:days];
+		if (days == self.ttlDays)
+			title = [NSString stringWithFormat:@"%@ ✓", title];
+		[actions addObject:[[TGActionSheetAction alloc]
+				initWithTitle:title
+					   action:[NSString stringWithFormat:@"ttl%d", (int)days]]];
+	}
+	[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Cancel"
+														  action:@"cancel"
+															type:TGActionSheetActionTypeCancel]];
+
+	__weak typeof(self) weakSelf = self;
+	self.currentActionSheet = [[TGActionSheet alloc]
+			initWithTitle:@"Terminate sessions inactive for"
+				  actions:actions
+			  actionBlock:^(__unused id target, NSString *action){
+				__strong typeof(weakSelf) strongSelf = weakSelf;
+				strongSelf.currentActionSheet = nil;
+				if (![action hasPrefix:@"ttl"])
+					return;
+				NSInteger days = [[action substringFromIndex:3] integerValue];
+				if (days <= 0 || days == strongSelf.ttlDays)
+					return;
+				NSInteger previous = strongSelf.ttlDays;
+				strongSelf.ttlDays = days;
+				[strongSelf.tableView reloadData];
+				[[TGClient shared] setInactiveSessionTtlDays:days completion:^(BOOL ok){
+					__strong typeof(weakSelf) inner = weakSelf;
+					if (ok || !inner)
+						return;
+					inner.ttlDays = previous;
+					[inner.tableView reloadData];
+				}];
 			} target:self];
 	[self.currentActionSheet showInView:[self sheetHostView]];
 }
@@ -454,6 +585,10 @@ static CGFloat TGSessionsRetinaPixel(void) {
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
 
+	if (indexPath.section == 3){
+		[self showTtlPicker];
+		return;
+	}
 	if (indexPath.section != 1)
 		return;
 

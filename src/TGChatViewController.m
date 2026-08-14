@@ -22,6 +22,13 @@
 #import "TGCallViewController.h"
 #import "TGPopupMenu.h"
 #import "TGSnackbar.h"
+#import "TGReactionPickerView.h"
+#import "TGMessageActionsSheet.h"
+#import "TGStickerPanelView.h"
+#import "TGClient+Messages.h"
+#import "TGClient+MessageContent.h"
+#import "TGClient+Reactions.h"
+#import "TGClient+Translation.h"
 
 // Their design system is drawn for Android at 360dp; a 4S is 320pt, so
 // everything taken from it is scaled by 0.889 and rounded to a whole point.
@@ -44,6 +51,9 @@ static const CGFloat kFileDisc    = 37.0f;
 static const CGFloat kMediaRadius = 6.0f;
 // One option of a poll: a 16 circle, the text, the share, and the bar under it.
 static const CGFloat kPollRow     = 30.0f;
+// A bubble carrying chips is never narrower than this, so the row they are
+// measured at is the row they are laid out in.
+static const CGFloat kChipsWidth  = 170.0f;
 
 #pragma mark - bubble cell
 
@@ -238,7 +248,13 @@ static const CGFloat kPollRow     = 30.0f;
 @property (nonatomic, strong) UIImage *fullScreenImage;
 @property (nonatomic, strong) UIImageView *wallpaperView;
 @property (nonatomic, strong) UIButton *stickerButton;
-@property (nonatomic, strong) UIScrollView *stickerPanel;
+@property (nonatomic, strong) UIView *stickerPanel;
+@property (nonatomic, strong) NSMutableDictionary *reactionChips;   // messageId -> chips
+@property (nonatomic, strong) NSMutableSet *reactionChipsRequested;
+@property (nonatomic, strong) TGMessageActionsSheet *actionsSheet;
+@property (nonatomic, assign) int64_t forwardMessageId;
+@property (nonatomic, strong) NSArray *reportOptions;
+@property (nonatomic, assign) int64_t reportMessageId;
 @property (nonatomic, strong) UILabel *emptyLabel;
 @property (nonatomic, strong) UIButton *scrollDownButton;
 @property (nonatomic, strong) NSDate *lastTypingSent;
@@ -275,6 +291,8 @@ static const CGFloat kPollRow     = 30.0f;
 	self.mapsRequested = [NSMutableSet set];
 	self.quotes = [NSMutableDictionary dictionary];
 	self.quotesRequested = [NSMutableSet set];
+	self.reactionChips = [NSMutableDictionary dictionary];
+	self.reactionChipsRequested = [NSMutableSet set];
 	self.view.backgroundColor = [[TGTheme shared] chatBackgroundColour];
 
 	CGRect b = self.view.bounds;
@@ -299,6 +317,11 @@ static const CGFloat kPollRow     = 30.0f;
 	// Hold a message for the things a chat needs and a tap cannot carry.
 	[self.table addGestureRecognizer:[[UILongPressGestureRecognizer alloc]
 			initWithTarget:self action:@selector(messageHeld:)]];
+
+	UITapGestureRecognizer *doubleTap = [[UITapGestureRecognizer alloc]
+			initWithTarget:self action:@selector(messageDoubleTapped:)];
+	doubleTap.numberOfTapsRequired = 2;
+	[self.table addGestureRecognizer:doubleTap];
 
 	[self.view addSubview:self.table];
 
@@ -663,6 +686,9 @@ static const CGFloat kPollRow     = 30.0f;
 	// outlive the messages it was opened over.
 	[TGSnackbar commitNow];
 	[TGPopupMenu dismiss];
+	[TGReactionPickerView dismiss];
+	[self.actionsSheet dismiss];
+	self.actionsSheet = nil;
 }
 
 - (void)dealloc {
@@ -679,6 +705,8 @@ static const CGFloat kPollRow     = 30.0f;
 		if (!me)
 			return;
 		me.messages = messages;
+		[me.reactionChipsRequested removeAllObjects];
+		[me.reactionChips removeAllObjects];
 		// hold the bottom until the media has settled
 		me.anchorToBottom = YES;
 		dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6.0 * NSEC_PER_SEC)),
@@ -821,9 +849,41 @@ static const CGFloat kPollRow     = 30.0f;
 	}
 }
 
+/// The flattened message only carries the reactions as a run of text; the chip
+/// row needs counts and which one is ours, which is a separate read.
+- (void)fetchMissingReactionChips {
+	__weak typeof(self) weakSelf = self;
+	for (NSDictionary *m in self.messages){
+		NSNumber *messageId = [m[@"id"] isKindOfClass:NSNumber.class] ? m[@"id"] : nil;
+		if (!messageId || ![m[@"reactions"] length])
+			continue;
+		if (self.reactionChips[messageId] ||
+			[self.reactionChipsRequested containsObject:messageId])
+			continue;
+		[self.reactionChipsRequested addObject:messageId];
+
+		[[TGClient shared] reactionChipsForMessage:messageId.longLongValue
+											inChat:self.chatId
+										completion:^(NSArray *chips){
+			TGChatViewController *me = weakSelf;
+			if (!me || !chips.count)
+				return;
+			me.reactionChips[messageId] = chips;
+			[me.table reloadData];
+		}];
+	}
+}
+
+/// Chips already known for a message, or nil.
+- (NSArray *)chipsFor:(NSDictionary *)m {
+	NSNumber *messageId = [m[@"id"] isKindOfClass:NSNumber.class] ? m[@"id"] : nil;
+	return messageId ? self.reactionChips[messageId] : nil;
+}
+
 - (void)fetchMissingImages {
 	__weak typeof(self) weakSelf = self;
 	[self fetchMissingMaps];
+	[self fetchMissingReactionChips];
 
 	// Animated stickers need the .tgs itself, not the still thumbnail.
 	for (NSDictionary *m in self.messages){
@@ -1392,6 +1452,7 @@ static const CGFloat kPollRow     = 30.0f;
 		self.input.text = @"";
 	self.replyToId = 0;
 	self.editingId = 0;
+	[self.sendButton setTitle:@"Send" forState:UIControlStateNormal];
 	self.composeBanner.hidden = YES;
 	[self inputChanged];
 }
@@ -1438,8 +1499,8 @@ static const CGFloat kPollRow     = 30.0f;
 
 #pragma mark - stickers
 
-/// A strip of the stickers used lately. A full sticker-set browser is a screen
-/// of its own; the recents are what a chat reaches for.
+/// The full sticker keyboard: recents, favourites and every installed set,
+/// over the composer where the system keyboard would be.
 - (void)toggleStickerPanel {
 	if (self.stickerPanel){
 		[self.stickerPanel removeFromSuperview];
@@ -1447,61 +1508,38 @@ static const CGFloat kPollRow     = 30.0f;
 		return;
 	}
 
+	[self.input resignFirstResponder];
+
 	CGRect b = self.view.bounds;
-	CGFloat height = 96;
-	UIScrollView *panel = [[UIScrollView alloc] initWithFrame:
-			CGRectMake(0, CGRectGetMinY(self.inputBar.frame) - height, b.size.width, height)];
-	panel.backgroundColor = [[TGTheme shared] inputBarColour];
+	BOOL landscape = b.size.width > b.size.height;
+	CGFloat height = [TGStickerPanelView preferredHeightForLandscape:landscape];
+	TGStickerPanelView *panel = [[TGStickerPanelView alloc] initWithFrame:
+			CGRectMake(0, CGRectGetMinY(self.inputBar.frame) - height,
+					   b.size.width, height)];
 	panel.autoresizingMask = UIViewAutoresizingFlexibleWidth |
 							 UIViewAutoresizingFlexibleTopMargin;
-	[self.view addSubview:panel];
-	self.stickerPanel = panel;
 
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] recentStickersWithCompletion:^(NSArray *stickers){
+	panel.onStickerPicked = ^(NSDictionary *sticker){
 		TGChatViewController *me = weakSelf;
-		if (!me || me.stickerPanel != panel)
+		if (!me)
 			return;
-		[me fillStickerPanel:panel with:stickers];
-	}];
-}
+		NSNumber *fileId = sticker[@"fileId"];
+		if (![fileId isKindOfClass:NSNumber.class])
+			return;
+		[[TGClient shared] sendStickerWithFileId:fileId.integerValue
+										  toChat:me.chatId
+										  thread:me.threadId];
+		[me toggleStickerPanel];
+	};
+	panel.onCloseRequested = ^{
+		TGChatViewController *me = weakSelf;
+		if (me.stickerPanel)
+			[me toggleStickerPanel];
+	};
 
-- (void)fillStickerPanel:(UIScrollView *)panel with:(NSArray *)stickers {
-	CGFloat side = 72, gap = 6, x = gap;
-	for (NSDictionary *sticker in stickers){
-		UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
-		button.frame = CGRectMake(x, 12, side, side);
-		button.tag = [sticker[@"fileId"] integerValue];
-		[button addTarget:self action:@selector(stickerTapped:)
-		 forControlEvents:UIControlEventTouchUpInside];
-		// Until the picture is decoded the emoji stands in, so the strip is
-		// usable immediately rather than a row of blanks.
-		[button setTitle:sticker[@"emoji"] forState:UIControlStateNormal];
-		button.titleLabel.font = [UIFont systemFontOfSize:34];
-		[panel addSubview:button];
-		x += side + gap;
-
-		if ([sticker[@"isAnimated"] boolValue])
-			continue;
-		[[TGClient shared] downloadFile:[sticker[@"fileId"] integerValue]
-							 completion:^(NSString *path){
-			UIImage *image = path ? [UIImage convertFromWebP:path
-											  compressedData:nil error:nil] : nil;
-			if (!image)
-				return;
-			[button setTitle:@"" forState:UIControlStateNormal];
-			[button setImage:image forState:UIControlStateNormal];
-			button.imageView.contentMode = UIViewContentModeScaleAspectFit;
-		}];
-	}
-	panel.contentSize = CGSizeMake(x, panel.bounds.size.height);
-}
-
-- (void)stickerTapped:(UIButton *)button {
-	[[TGClient shared] sendStickerWithFileId:button.tag
-									  toChat:self.chatId
-									  thread:self.threadId];
-	[self toggleStickerPanel];
+	[self.view addSubview:panel];
+	self.stickerPanel = panel;
 }
 
 #pragma mark - voice
@@ -1853,6 +1891,8 @@ static const CGFloat kPollRow     = 30.0f;
 
 static const NSInteger kAttachSheetTag  = 41;
 static const NSInteger kMessageSheetTag = 42;
+static const NSInteger kForwardSheetTag = 43;
+static const NSInteger kReportSheetTag  = 44;
 
 - (void)attachTapped {
 	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
@@ -1875,6 +1915,16 @@ static const NSInteger kMessageSheetTag = 42;
 		[self runMessageAction:[sheet buttonTitleAtIndex:index]];
 		return;
 	}
+	if (sheet.tag == kForwardSheetTag){
+		[self forwardWithCopy:(index == 1) removeCaptions:(index == 2)];
+		return;
+	}
+	if (sheet.tag == kReportSheetTag){
+		if (index < (NSInteger)self.reportOptions.count)
+			[self reportMessage:self.reportMessageId
+					   optionId:self.reportOptions[index][@"id"]];
+		return;
+	}
 	if (sheet.tag != kAttachSheetTag)
 		return;
 	if (index == 0)      [self pickMedia];
@@ -1888,9 +1938,43 @@ static const NSInteger kMessageSheetTag = 42;
 	if (hold.state != UIGestureRecognizerStateBegan)
 		return;
 
-	NSIndexPath *path = [self.table indexPathForRowAtPoint:[hold locationInView:self.table]];
+	CGPoint point = [hold locationInView:self.table];
+	for (UIView *view = [self.table hitTest:point withEvent:nil]; view; view = view.superview)
+		if ([view isKindOfClass:TGReactionChipsView.class])
+			return;
+
+	NSIndexPath *path = [self.table indexPathForRowAtPoint:point];
 	if (path)
 		[self showActionsForRow:path.row];
+}
+
+/// Holding the chips opens the strip of emoji the message accepts, over the
+/// bubble the chips belong to.
+- (void)chipsHeld:(UILongPressGestureRecognizer *)hold {
+	if (hold.state != UIGestureRecognizerStateBegan)
+		return;
+	TGReactionChipsView *chips = (TGReactionChipsView *)hold.view;
+	if (![chips isKindOfClass:TGReactionChipsView.class] || !chips.messageId)
+		return;
+	[self showReactionPickerForMessage:chips.messageId
+							  fromView:chips.superview ?: chips];
+}
+
+- (void)showReactionPickerForMessage:(int64_t)messageId fromView:(UIView *)source {
+	CGRect rect = [source convertRect:source.bounds toView:self.view];
+	__weak typeof(self) weakSelf = self;
+	[TGReactionPickerView showForMessage:messageId
+								  inChat:self.chatId
+								fromRect:rect
+								  inView:self.view
+								  picked:^(NSString *emoji, BOOL nowChosen){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		[me.reactionChipsRequested removeObject:@(messageId)];
+		dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+				dispatch_get_main_queue(), ^{ [me reload]; });
+	}];
 }
 
 /// The flattened message stores an absent value as NSNull, which answers no
@@ -1910,21 +1994,12 @@ static const NSInteger kMessageSheetTag = 42;
 	NSDictionary *m = self.messages[row];
 	if ([m[@"service"] boolValue])
 		return;
+	if (![m[@"id"] isKindOfClass:NSNumber.class])
+		return;
 	self.actionMessage = m;
 
 	BOOL mine = [m[@"outgoing"] boolValue];
-	NSMutableArray *items = [NSMutableArray arrayWithObjects:
-			@{@"title" : @"Reply",   @"icon" : @"reply"},
-			@{@"title" : @"Forward", @"icon" : @"forward"},
-			@{@"title" : @"React",   @"icon" : @"react"}, nil];
-	NSString *bodyText = [self textOf:m];
-	if (bodyText.length)
-		[items addObject:@{@"title" : @"Copy", @"icon" : @"copy"}];
-	if (mine && bodyText.length)
-		[items addObject:@{@"title" : @"Edit", @"icon" : @"edit"}];
-	if (mine)
-		[items addObject:@{@"title" : @"Delete", @"icon" : @"delete",
-						   @"destructive" : @YES}];
+	int64_t messageId = [m[@"id"] longLongValue];
 
 	// Beside the message rather than over the whole screen, which is what
 	// makes it read as belonging to that bubble.
@@ -1934,10 +2009,216 @@ static const NSInteger kMessageSheetTag = 42;
 			CGPointMake(mine ? CGRectGetMaxX(rect) - 60 : 60, CGRectGetMaxY(rect) - 8)
 									  toView:self.view];
 
+	[self.actionsSheet dismiss];
+	TGMessageActionsSheet *sheet = [TGMessageActionsSheet sheetForMessage:messageId
+																   inChat:self.chatId];
+	sheet.messageText = [self textOf:m];
+	sheet.pinned = (self.pinnedMessageId == messageId);
+	sheet.allowsSelection = NO;
+	self.actionsSheet = sheet;
+
 	__weak typeof(self) weakSelf = self;
-	[TGPopupMenu showItems:items atPoint:where inView:self.view
-				  onChoice:^(NSInteger index, NSString *title){
-		[weakSelf runMessageAction:title];
+	[sheet presentAtPoint:where inView:self.view completion:^(NSString *action){
+		if (action)
+			[weakSelf performMessageAction:action];
+	}];
+}
+
+/// A double tap is how a chat reacts to a message that carries no chips yet.
+- (void)messageDoubleTapped:(UITapGestureRecognizer *)tap {
+	NSIndexPath *path = [self.table indexPathForRowAtPoint:[tap locationInView:self.table]];
+	if (!path || path.row >= (NSInteger)self.messages.count)
+		return;
+	NSDictionary *m = self.messages[path.row];
+	if ([m[@"service"] boolValue] || ![m[@"id"] isKindOfClass:NSNumber.class])
+		return;
+	UITableViewCell *cell = [self.table cellForRowAtIndexPath:path];
+	UIView *bubble = [cell isKindOfClass:TGBubbleCell.class]
+			? ((TGBubbleCell *)cell).bubble : cell;
+	[self showReactionPickerForMessage:[m[@"id"] longLongValue] fromView:(bubble ?: self.table)];
+}
+
+/// The rows TGMessageActionsSheet reports back, each wired to the category
+/// that owns it. Nothing here builds a TDLib request of its own.
+- (void)performMessageAction:(NSString *)action {
+	NSDictionary *m = self.actionMessage;
+	if (![m[@"id"] isKindOfClass:NSNumber.class])
+		return;
+	int64_t messageId = [m[@"id"] longLongValue];
+	NSString *bodyText = [self textOf:m];
+	__weak typeof(self) weakSelf = self;
+
+	if ([action isEqualToString:TGMessageActionReply]){
+		self.replyToId = messageId;
+		self.editingId = 0;
+		[self.sendButton setTitle:@"Send" forState:UIControlStateNormal];
+		[self showComposeBanner:[NSString stringWithFormat:@"Reply to: %@",
+				bodyText.length ? bodyText : (m[@"kind"] ?: @"message")]];
+		[self.input becomeFirstResponder];
+
+	} else if ([action isEqualToString:TGMessageActionEdit]){
+		self.editingId = messageId;
+		self.replyToId = 0;
+		self.input.text = bodyText ?: @"";
+		[self inputChanged];
+		[self.sendButton setTitle:@"Save" forState:UIControlStateNormal];
+		[self showComposeBanner:@"Edit message"];
+		[self.input becomeFirstResponder];
+
+	} else if ([action isEqualToString:TGMessageActionCopy]){
+		if (bodyText.length)
+			[UIPasteboard generalPasteboard].string = bodyText;
+
+	} else if ([action isEqualToString:TGMessageActionCopyLink]){
+		[[TGClient shared] linkForMessage:messageId inChat:self.chatId inThread:NO
+							   completion:^(NSString *link, BOOL isPublic){
+			TGChatViewController *me = weakSelf;
+			if (!me)
+				return;
+			if (!link.length){
+				[me showAlertTitle:@"" message:@"This message has no public link."];
+				return;
+			}
+			[UIPasteboard generalPasteboard].string = link;
+			[me showAlertTitle:@"Link copied" message:link];
+		}];
+
+	} else if ([action isEqualToString:TGMessageActionForward]){
+		self.forwardMessageId = messageId;
+		[self showForwardOptions];
+
+	} else if ([action isEqualToString:TGMessageActionTranslate]){
+		[self translateMessage:messageId];
+
+	} else if ([action isEqualToString:TGMessageActionPin] ||
+			   [action isEqualToString:TGMessageActionUnpin]){
+		[self showAlertTitle:@"" message:@"Pinning is not available in this build."];
+
+	} else if ([action isEqualToString:TGMessageActionReport]){
+		self.reportMessageId = messageId;
+		[self reportMessage:messageId optionId:nil];
+
+	} else if ([action isEqualToString:TGMessageActionDeleteForMe]){
+		[self deleteMessage:m forEveryone:NO];
+
+	} else if ([action isEqualToString:TGMessageActionDeleteForEveryone]){
+		[self deleteMessage:m forEveryone:YES];
+	}
+	self.actionMessage = nil;
+}
+
+/// The row goes off the screen at once and off the server when the undo runs
+/// out, which is what the chat already did for its one Delete row.
+- (void)deleteMessage:(NSDictionary *)m forEveryone:(BOOL)forEveryone {
+	int64_t messageId = [m[@"id"] longLongValue];
+	int64_t chatId = self.chatId;
+
+	NSMutableArray *without = [self.messages mutableCopy];
+	[without removeObject:m];
+	self.messages = without;
+	[self.table reloadData];
+	[self updateEmptyState];
+
+	__weak typeof(self) weakSelf = self;
+	[TGSnackbar showInView:self.view
+					  text:(forEveryone ? @"Deleted for everyone" : @"Deleted for you")
+				   seconds:5
+				  onCommit:^{
+		[[TGClient shared] deleteMessages:@[@(messageId)] inChat:chatId
+							  forEveryone:forEveryone completion:nil];
+	}];
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6.0 * NSEC_PER_SEC)),
+			dispatch_get_main_queue(), ^{ [weakSelf reload]; });
+}
+
+/// Forwarding is three choices, not one: with the sender's name, without it,
+/// and without the captions the media carries.
+- (void)showForwardOptions {
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Forward message"
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:@"Forward",
+														   @"Hide sender name",
+														   @"Without caption", nil];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = kForwardSheetTag;
+	[sheet showInView:self.view];
+}
+
+- (void)forwardWithCopy:(BOOL)asCopy removeCaptions:(BOOL)removeCaptions {
+	int64_t messageId = self.forwardMessageId;
+	if (!messageId)
+		return;
+
+	TGForwardPicker *picker = [[TGForwardPicker alloc] init];
+	__weak typeof(self) weakSelf = self;
+	picker.onPicked = ^(int64_t targetChatId){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		[[TGClient shared] forwardMessages:@[@(messageId)]
+								  fromChat:me.chatId
+									toChat:targetChatId
+									thread:0
+									asCopy:asCopy
+							removeCaptions:removeCaptions
+									silent:NO
+								completion:nil];
+	};
+	[self.navigationController pushViewController:picker animated:YES];
+}
+
+/// Translate into whatever the phone is set to, which is the only target a
+/// screen with no language picker can honestly offer.
+- (void)translateMessage:(int64_t)messageId {
+	NSString *preferred = [[NSLocale preferredLanguages] firstObject];
+	NSString *language = (preferred.length >= 2)
+			? [preferred substringToIndex:2] : @"en";
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] translateMessage:messageId
+								 inChat:self.chatId
+							 toLanguage:language
+								   tone:nil
+							 completion:^(NSString *text){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		[me showAlertTitle:@"Translation"
+				   message:(text.length ? text : @"This message could not be translated.")];
+	}];
+}
+
+/// TDLib asks for a reason before it accepts a report, and it asks in steps.
+- (void)reportMessage:(int64_t)messageId optionId:(NSString *)optionId {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] reportMessages:@[@(messageId)]
+							   inChat:self.chatId
+							 optionId:optionId
+								 text:@""
+						   completion:^(NSDictionary *result){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		NSString *status = result[@"status"];
+		if ([status isEqualToString:@"chooseOption"] && [result[@"options"] count]){
+			me.reportOptions = result[@"options"];
+			UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:
+					(result[@"title"] ?: @"Report") delegate:me
+										cancelButtonTitle:nil
+								   destructiveButtonTitle:nil
+										otherButtonTitles:nil];
+			for (NSDictionary *option in me.reportOptions)
+				[sheet addButtonWithTitle:(option[@"text"] ?: @"")];
+			sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+			sheet.tag = kReportSheetTag;
+			[sheet showInView:me.view];
+			return;
+		}
+		[me showAlertTitle:@""
+				   message:([status isEqualToString:@"ok"]
+						   ? @"Thank you. The message has been reported."
+						   : @"This message could not be reported.")];
 	}];
 }
 
@@ -2436,7 +2717,10 @@ static const NSInteger kMessageSheetTag = 42;
 	// they said.
 	if ([self quoteTextFor:m])
 		h += 38;
-	if ([m[@"reactions"] length])
+	NSArray *chips = [self chipsFor:m];
+	if (chips.count)
+		h += [TGReactionChipsView heightForChips:chips width:kChipsWidth] + 3;
+	else if ([m[@"reactions"] length])
 		h += 18;
 	return h;
 }
@@ -2980,6 +3264,8 @@ static UIColor *TGSenderColour(int64_t userId) {
 	CGFloat contentW = MAX(body.width, pic.width);
 	if ([self quoteTextFor:m] || [m[@"forward"] length])
 		contentW = MAX(contentW, 170);
+	if ([[self chipsFor:m] count])
+		contentW = MAX(contentW, kChipsWidth);
 	if (inlineStamp)
 		contentW = MAX(contentW, body.width + 6 + timeW);   // they share the last line
 
@@ -3236,8 +3522,40 @@ static UIColor *TGSenderColour(int64_t userId) {
 
 	// Reactions sit under the message, as they do everywhere else.
 	UILabel *reactions = (UILabel *)[cell.bubble viewWithTag:0x9002];
+	TGReactionChipsView *chipsView = (TGReactionChipsView *)[cell.bubble viewWithTag:0x9005];
 	NSString *reactionText = m[@"reactions"];
-	if ([reactionText length]){
+	NSArray *chips = [self chipsFor:m];
+	int64_t rowMessageId = [m[@"id"] isKindOfClass:NSNumber.class]
+			? [m[@"id"] longLongValue] : 0;
+
+	if (chips.count && rowMessageId){
+		reactions.hidden = YES;
+		if (!chipsView){
+			chipsView = [[TGReactionChipsView alloc] initWithFrame:CGRectZero];
+			chipsView.tag = 0x9005;
+			[chipsView addGestureRecognizer:[[UILongPressGestureRecognizer alloc]
+					initWithTarget:self action:@selector(chipsHeld:)]];
+			[cell.bubble addSubview:chipsView];
+		}
+		chipsView.hidden = NO;
+		chipsView.outgoing = mine;
+		chipsView.chatId = self.chatId;
+		chipsView.messageId = rowMessageId;
+		chipsView.chips = chips;
+		CGFloat chipsH = [TGReactionChipsView heightForChips:chips width:kChipsWidth];
+		chipsView.frame = CGRectMake(kPadH, y + body.height + 3,
+									 bubbleW - 2 * kPadH, chipsH);
+		__weak typeof(self) weakSelf = self;
+		chipsView.onChipTapped = ^(NSString *emoji, BOOL wasChosen){
+			TGChatViewController *me = weakSelf;
+			if (!me)
+				return;
+			[me.reactionChipsRequested removeObject:@(rowMessageId)];
+			dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+					dispatch_get_main_queue(), ^{ [me reload]; });
+		};
+	} else if ([reactionText length]){
+		chipsView.hidden = YES;
 		if (!reactions){
 			reactions = [[UILabel alloc] init];
 			reactions.tag = 0x9002;
@@ -3251,6 +3569,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 		reactions.frame = CGRectMake(kPadH, y + body.height + 2, bubbleW - 2 * kPadH, 16);
 	} else {
 		reactions.hidden = YES;
+		chipsView.hidden = YES;
 	}
 
 	// A stamp already on the picture must not be repeated under it.
