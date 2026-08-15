@@ -330,15 +330,14 @@ static UIImage *TGProfileStretched(NSString *name) {
 		_button.titleLabel.shadowOffset = CGSizeMake(0, -1);
 		_button.adjustsImageWhenDisabled = NO;
 		_button.exclusiveTouch = YES;
-		[self addSubview:_button];
+		[self.contentView addSubview:_button];
 	}
 	return self;
 }
 
 - (void)layoutSubviews {
 	[super layoutSubviews];
-	_button.frame = CGRectMake(kGroupedInset, 0,
-							   self.bounds.size.width - kGroupedInset * 2,
+	_button.frame = CGRectMake(0, 0, self.contentView.bounds.size.width,
 							   kActionButtonHeight);
 }
 
@@ -3172,6 +3171,12 @@ static UIImage *TGProfileStretched(NSString *name) {
 		return lastRow ? kButtonsRowHeight : kButtonsRowHeight + kButtonsRowGutter;
 	}
 	if ([kind isEqualToString:@"delete"]) return kActionButtonHeight;
+	if ([kind isEqualToString:@"details"] &&
+		indexPath.row < (NSInteger)self.details.count){
+		NSArray *pair = self.details[indexPath.row];
+		if ([pair[0] isEqualToString:@"about"])
+			return [self aboutRowHeightForValue:pair[1] inTable:tableView];
+	}
 	return 44;
 }
 
@@ -3250,6 +3255,16 @@ static UIImage *TGProfileStretched(NSString *name) {
 	cell.detailTextLabel.text = nil;
 	cell.imageView.image = nil;
 	return cell;
+}
+
+- (CGFloat)aboutRowHeightForValue:(NSString *)value inTable:(UITableView *)tableView {
+	CGFloat width = tableView.bounds.size.width - 2 * kGroupedInset - 78 - 12;
+	if (width < 40)
+		width = 40;
+	CGSize size = [(value ?: @"") sizeWithFont:[UIFont boldSystemFontOfSize:15]
+							 constrainedToSize:CGSizeMake(width, 400)
+								 lineBreakMode:NSLineBreakByWordWrapping];
+	return MAX(44, size.height + 22);
 }
 
 - (UITableViewCell *)detailsRowCell:(UITableView *)tableView row:(NSInteger)row {
@@ -3573,6 +3588,8 @@ static UIImage *TGProfileStretched(NSString *name) {
 		valueView.tag = 12;
 		valueView.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 		valueView.font = [UIFont boldSystemFontOfSize:15];
+		valueView.numberOfLines = 0;
+		valueView.lineBreakMode = NSLineBreakByWordWrapping;
 		valueView.backgroundColor = [UIColor clearColor];
 		[cell.contentView addSubview:valueView];
 	}
@@ -3595,6 +3612,13 @@ static UIImage *TGProfileStretched(NSString *name) {
 	labelView.textColor = theme.isDark ? [theme secondaryTextColour]
 									   : TGProfileColour(0x5d708f);
 	valueView.text = value;
+	CGFloat valueWidth = cell.contentView.bounds.size.width - 78 - 12;
+	if (valueWidth < 40)
+		valueWidth = 40;
+	CGSize valueSize = [(value ?: @"") sizeWithFont:valueView.font
+								  constrainedToSize:CGSizeMake(valueWidth, 400)
+									  lineBreakMode:NSLineBreakByWordWrapping];
+	valueView.frame = CGRectMake(78, 11, valueWidth, MAX(20, valueSize.height));
 	if (hiddenPhone)
 		valueView.textColor = TGProfileColour(0xaaaaaa);
 	else if (isPhone)
