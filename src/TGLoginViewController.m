@@ -22,7 +22,26 @@ typedef NS_ENUM(NSInteger, TGLoginStep) {
 static const NSInteger TGLoginAlertTerms = 101;
 static const NSInteger TGLoginAlertDeleteAccount = 102;
 
-@interface TGLoginViewController () <UIAlertViewDelegate>
+@protocol TGBackspaceTextFieldDelegate <NSObject>
+- (void)textFieldDidHitLastBackspace;
+@end
+
+@interface TGBackspaceTextField : UITextField
+@property (nonatomic, weak) id<TGBackspaceTextFieldDelegate> backspaceDelegate;
+@end
+
+@implementation TGBackspaceTextField
+
+- (void)deleteBackward {
+    BOOL wasEmpty = self.text.length == 0;
+    [super deleteBackward];
+    if (wasEmpty)
+        [self.backspaceDelegate textFieldDidHitLastBackspace];
+}
+
+@end
+
+@interface TGLoginViewController () <UIAlertViewDelegate, TGBackspaceTextFieldDelegate>
 
 @property (nonatomic, assign) TGLoginStep currentStep;
 @property (nonatomic, strong) UILabel *noticeLabel;
@@ -37,6 +56,14 @@ static const NSInteger TGLoginAlertDeleteAccount = 102;
 @property (nonatomic, strong) UIButton *optionsButton;
 @property (nonatomic, strong) UIButton *backButton;
 @property (nonatomic, strong) UILabel *timeoutLabel;
+@property (nonatomic, strong) UILabel *requestingCallLabel;
+@property (nonatomic, strong) UILabel *callSentLabel;
+@property (nonatomic, assign) NSInteger callRequestState;
+@property (nonatomic, strong) UIView *shadeView;
+@property (nonatomic, strong) UIButton *addPhotoButton;
+@property (nonatomic, strong) UIImage *plateImage;
+@property (nonatomic, strong) UIImage *plateTopImage;
+@property (nonatomic, strong) UIImage *plateBottomImage;
 @property (nonatomic, strong) UILabel *qrLinkLabel;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @property (nonatomic, copy) NSString *savedPhoneNumber;
@@ -76,6 +103,20 @@ static UIColor *tgRGBA(int rgb, CGFloat alpha) {
                            alpha:alpha];
 }
 
+static void tgStylePlaceholder(UITextField *field, UIFont *font, UIColor *colour) {
+    NSString *text = field.placeholder;
+    if (text.length == 0)
+        return;
+    if (![field respondsToSelector:@selector(setAttributedPlaceholder:)])
+        return;
+    NSMutableDictionary *attributes = [NSMutableDictionary dictionary];
+    if (colour != nil)
+        [attributes setObject:colour forKey:NSForegroundColorAttributeName];
+    if (font != nil)
+        [attributes setObject:font forKey:NSFontAttributeName];
+    field.attributedPlaceholder = [[NSAttributedString alloc] initWithString:text attributes:attributes];
+}
+
 static NSDictionary *tgDialCodes(void) {
     static NSDictionary *codes = nil;
     if (codes == nil) {
@@ -98,6 +139,85 @@ static NSDictionary *tgDialCodes(void) {
                    @"CO" : @"+57", @"PE" : @"+51", @"MX" : @"+52", @"VE" : @"+58" };
     }
     return codes;
+}
+
+static NSString *tgGroupDigits(NSString *digits, const int *groups, int groupCount, NSString *separator, BOOL parenthesiseFirst) {
+    NSMutableString *result = [NSMutableString string];
+    NSUInteger position = 0;
+    for (int i = 0; i < groupCount && position < digits.length; i++) {
+        NSUInteger length = (NSUInteger)groups[i];
+        if (position + length > digits.length)
+            length = digits.length - position;
+        NSString *chunk = [digits substringWithRange:NSMakeRange(position, length)];
+        if (i == 0 && parenthesiseFirst) {
+            [result appendFormat:@"(%@", chunk];
+            if (position + length < digits.length || length == (NSUInteger)groups[0])
+                [result appendString:@")"];
+        } else {
+            if (result.length > 0)
+                [result appendString:i == 1 ? @" " : separator];
+            [result appendString:chunk];
+        }
+        position += length;
+    }
+    if (position < digits.length)
+        [result appendFormat:@"%@%@", separator, [digits substringFromIndex:position]];
+    return result;
+}
+
+static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *nationalDigits) {
+    if (nationalDigits.length == 0)
+        return @"";
+    if ([dialDigits isEqualToString:@"1"]) {
+        static const int groups[] = { 3, 3, 4 };
+        NSMutableString *out = [NSMutableString string];
+        NSUInteger position = 0;
+        for (int i = 0; i < 3 && position < nationalDigits.length; i++) {
+            NSUInteger length = (NSUInteger)groups[i];
+            if (position + length > nationalDigits.length)
+                length = nationalDigits.length - position;
+            NSString *chunk = [nationalDigits substringWithRange:NSMakeRange(position, length)];
+            if (i == 0) {
+                [out appendFormat:@"(%@", chunk];
+                if (length == 3)
+                    [out appendString:@")"];
+            } else if (i == 1) {
+                [out appendFormat:@" %@", chunk];
+            } else {
+                [out appendFormat:@"-%@", chunk];
+            }
+            position += length;
+        }
+        if (position < nationalDigits.length)
+            [out appendFormat:@"-%@", [nationalDigits substringFromIndex:position]];
+        return out;
+    }
+    if ([dialDigits isEqualToString:@"7"]) {
+        static const int groups[] = { 3, 3, 2, 2 };
+        return tgGroupDigits(nationalDigits, groups, 4, @"-", NO);
+    }
+    return nationalDigits;
+}
+
+- (NSString *)formattedPhoneForDigits:(NSString *)nationalDigits {
+    return tgFormatNationalNumber([self digitsOnly:self.countryCodeField.text], nationalDigits);
+}
+
+- (void)updateTitleText {
+    NSString *nationalDigits = [self digitsOnly:self.inputField.text];
+    NSString *dialDigits = [self digitsOnly:self.countryCodeField.text];
+    if (nationalDigits.length == 0 || dialDigits.length == 0) {
+        self.title = @"Your Phone";
+        return;
+    }
+    self.title = [NSString stringWithFormat:@"+%@ %@", dialDigits, tgFormatNationalNumber(dialDigits, nationalDigits)];
+}
+
+- (void)reformatPhoneField {
+    if (self.currentStep != TGLoginStepPhone)
+        return;
+    self.inputField.text = [self formattedPhoneForDigits:[self digitsOnly:self.inputField.text]];
+    [self updateTitleText];
 }
 
 - (void)viewDidLoad {
@@ -238,6 +358,21 @@ static NSDictionary *tgDialCodes(void) {
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:self.optionsButton];
 }
 
+- (UILabel *)countdownStateLabelWithText:(NSString *)text {
+    UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
+    label.font = [UIFont systemFontOfSize:14];
+    label.textColor = tgRGB(0xc4c9d2);
+    label.shadowColor = tgRGB(0x25272b);
+    label.shadowOffset = CGSizeMake(0, 1);
+    label.textAlignment = NSTextAlignmentCenter;
+    label.contentMode = UIViewContentModeCenter;
+    label.numberOfLines = 0;
+    label.backgroundColor = [UIColor clearColor];
+    label.text = text;
+    label.hidden = YES;
+    return label;
+}
+
 - (void)setupUI {
     UIImage *linen = [UIImage imageNamed:@"DarkLinen.png"];
     if (linen != nil)
@@ -306,9 +441,21 @@ static NSDictionary *tgDialCodes(void) {
     [self.view addSubview:self.countryButton];
 
     UIImage *rawInputImage = [UIImage imageNamed:@"LoginInput.png"];
-    self.inputBackgroundView = [[UIImageView alloc] initWithFrame:CGRectZero];
     if (rawInputImage != nil)
-        self.inputBackgroundView.image = [rawInputImage stretchableImageWithLeftCapWidth:(int)(rawInputImage.size.width / 2) topCapHeight:(int)(rawInputImage.size.height / 2)];
+        self.plateImage = [rawInputImage stretchableImageWithLeftCapWidth:(int)(rawInputImage.size.width / 2) topCapHeight:(int)(rawInputImage.size.height / 2)];
+
+    UIImage *rawTopImage = [UIImage imageNamed:@"LoginInput_Top.png"];
+    self.plateTopImage = rawTopImage != nil
+        ? [rawTopImage stretchableImageWithLeftCapWidth:(int)(rawTopImage.size.width / 2) topCapHeight:0]
+        : self.plateImage;
+
+    UIImage *rawBottomImage = [UIImage imageNamed:@"LoginInput_Bottom.png"];
+    self.plateBottomImage = rawBottomImage != nil
+        ? [rawBottomImage stretchableImageWithLeftCapWidth:(int)(rawBottomImage.size.width / 2) topCapHeight:0]
+        : self.plateImage;
+
+    self.inputBackgroundView = [[UIImageView alloc] initWithFrame:CGRectZero];
+    self.inputBackgroundView.image = self.plateImage;
     [self.view addSubview:self.inputBackgroundView];
 
     UIImage *rawDivider = [UIImage imageNamed:@"LoginInputDivider.png"];
@@ -318,7 +465,7 @@ static NSDictionary *tgDialCodes(void) {
     [self.inputBackgroundView addSubview:self.inputDivider];
 
     self.inputBackgroundView.userInteractionEnabled = YES;
-    [self.inputBackgroundView addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(inputBackgroundTapped)]];
+    [self.inputBackgroundView addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(inputBackgroundTapped:)]];
 
     self.countryCodeField = [[UITextField alloc] initWithFrame:CGRectZero];
     self.countryCodeField.font = [UIFont boldSystemFontOfSize:18];
@@ -330,10 +477,12 @@ static NSDictionary *tgDialCodes(void) {
     [self.countryCodeField addTarget:self action:@selector(countryCodeChanged) forControlEvents:UIControlEventEditingChanged];
     [self.view addSubview:self.countryCodeField];
 
-    self.inputField = [[UITextField alloc] initWithFrame:CGRectZero];
+    TGBackspaceTextField *phoneField = [[TGBackspaceTextField alloc] initWithFrame:CGRectZero];
+    phoneField.backspaceDelegate = self;
+    self.inputField = phoneField;
     self.inputField.font = [UIFont boldSystemFontOfSize:18];
     self.inputField.backgroundColor = tgRGB(0xf5f5f5);
-    self.inputField.placeholder = @"Phone number";
+    self.inputField.placeholder = @"Your phone number";
     self.inputField.keyboardType = UIKeyboardTypeNumberPad;
     self.inputField.delegate = self;
     self.inputField.returnKeyType = UIReturnKeyDone;
@@ -343,17 +492,16 @@ static NSDictionary *tgDialCodes(void) {
     [self.view addSubview:self.inputField];
 
     self.lastNameBackgroundView = [[UIImageView alloc] initWithFrame:CGRectZero];
-    if (rawInputImage != nil)
-        self.lastNameBackgroundView.image = [rawInputImage stretchableImageWithLeftCapWidth:(int)(rawInputImage.size.width / 2) topCapHeight:(int)(rawInputImage.size.height / 2)];
+    self.lastNameBackgroundView.image = self.plateBottomImage;
     self.lastNameBackgroundView.userInteractionEnabled = YES;
     self.lastNameBackgroundView.hidden = YES;
     [self.lastNameBackgroundView addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(lastNameBackgroundTapped)]];
     [self.view addSubview:self.lastNameBackgroundView];
 
     self.lastNameField = [[UITextField alloc] initWithFrame:CGRectZero];
-    self.lastNameField.font = [UIFont boldSystemFontOfSize:18];
+    self.lastNameField.font = [UIFont boldSystemFontOfSize:15.0f];
     self.lastNameField.backgroundColor = tgRGB(0xf5f5f5);
-    self.lastNameField.placeholder = @"Last Name";
+    self.lastNameField.placeholder = @"Last name";
     self.lastNameField.keyboardType = UIKeyboardTypeDefault;
     self.lastNameField.autocorrectionType = UITextAutocorrectionTypeNo;
     self.lastNameField.autocapitalizationType = UITextAutocapitalizationTypeWords;
@@ -374,6 +522,12 @@ static NSDictionary *tgDialCodes(void) {
     self.timeoutLabel.backgroundColor = [UIColor clearColor];
     self.timeoutLabel.hidden = YES;
     [self.view addSubview:self.timeoutLabel];
+
+    self.requestingCallLabel = [self countdownStateLabelWithText:@"Requesting a call from Telegram..."];
+    [self.view addSubview:self.requestingCallLabel];
+
+    self.callSentLabel = [self countdownStateLabelWithText:@"Telegram dialed your number"];
+    [self.view addSubview:self.callSentLabel];
 
     self.resendButton = [self loginToolbarButtonWithTitle:@"Send the code again"
                                                     plate:@"HeaderButton_Login.png"
@@ -405,6 +559,12 @@ static NSDictionary *tgDialCodes(void) {
     self.qrLinkLabel.backgroundColor = [UIColor clearColor];
     self.qrLinkLabel.hidden = YES;
     [self.view addSubview:self.qrLinkLabel];
+
+    self.shadeView = [[UIView alloc] initWithFrame:self.view.bounds];
+    self.shadeView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.shadeView.backgroundColor = [UIColor clearColor];
+    self.shadeView.hidden = YES;
+    [self.view addSubview:self.shadeView];
 
     self.currentStep = TGLoginStepPhone;
     [self updateCountryNameForDialCode];
@@ -438,27 +598,38 @@ static NSDictionary *tgDialCodes(void) {
     return dial != nil ? dial : @"+1";
 }
 
+- (void)setMatchedCountryTitle:(NSString *)title {
+    [self.countryButton setTitleColor:tgRGB(0xf0f0f0) forState:UIControlStateNormal];
+    [self.countryButton setTitle:title forState:UIControlStateNormal];
+}
+
+- (void)setUnmatchedCountryTitle {
+    [self.countryButton setTitleColor:tgRGBA(0xf0f0f0, 0.7f) forState:UIControlStateNormal];
+    [self.countryButton setTitle:self.countryCodeField.text.length <= 1 ? @"Country Code" : @"Invalid Country Code"
+                        forState:UIControlStateNormal];
+}
+
 - (void)updateCountryNameForDialCode {
     NSString *dial = self.countryCodeField.text;
     if (dial.length < 2) {
-        [self.countryButton setTitle:@"Country" forState:UIControlStateNormal];
+        [self setUnmatchedCountryTitle];
         return;
     }
 
     NSString *currentId = [self currentCountryId];
     if (currentId != nil && [[tgDialCodes() objectForKey:currentId] isEqualToString:dial]) {
-        [self.countryButton setTitle:[self countryNameForId:currentId] forState:UIControlStateNormal];
+        [self setMatchedCountryTitle:[self countryNameForId:currentId]];
         return;
     }
 
     NSDictionary *codes = tgDialCodes();
     for (NSString *countryId in codes) {
         if ([[codes objectForKey:countryId] isEqualToString:dial]) {
-            [self.countryButton setTitle:[self countryNameForId:countryId] forState:UIControlStateNormal];
+            [self setMatchedCountryTitle:[self countryNameForId:countryId]];
             return;
         }
     }
-    [self.countryButton setTitle:@"Country" forState:UIControlStateNormal];
+    [self setUnmatchedCountryTitle];
 }
 
 - (void)countryButtonTapped {
@@ -473,14 +644,37 @@ static NSDictionary *tgDialCodes(void) {
         if (me == nil)
             return;
         if (name.length > 0)
-            [me.countryButton setTitle:name forState:UIControlStateNormal];
+            [me setMatchedCountryTitle:name];
         if (dialCode.length > 0)
             me.countryCodeField.text = dialCode;
+        [me reformatPhoneField];
         [me updateNextEnabled];
+        [me dismissViewControllerAnimated:YES completion:nil];
     };
 
-    if (self.navigationController != nil)
-        [self.navigationController pushViewController:picker animated:YES];
+    UINavigationController *navigationController = [[UINavigationController alloc] initWithRootViewController:picker];
+    UINavigationBar *bar = navigationController.navigationBar;
+    bar.barStyle = UIBarStyleBlackOpaque;
+    UIImage *header = [UIImage imageNamed:@"LoginHeader.png"];
+    if (header != nil && [bar respondsToSelector:@selector(setBackgroundImage:forBarMetrics:)])
+        [bar setBackgroundImage:header forBarMetrics:UIBarMetricsDefault];
+    if ([bar respondsToSelector:@selector(setTitleTextAttributes:)])
+        bar.titleTextAttributes = @{ UITextAttributeTextColor : [UIColor whiteColor],
+                                     UITextAttributeTextShadowColor : tgRGB(0x25272b),
+                                     UITextAttributeTextShadowOffset : [NSValue valueWithUIOffset:UIOffsetMake(0, 1)] };
+
+    picker.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"Cancel"
+                                                                               style:UIBarButtonItemStyleBordered
+                                                                              target:self
+                                                                              action:@selector(dismissCountryPicker)];
+
+    [self presentViewController:navigationController animated:YES completion:nil];
+}
+
+- (void)dismissCountryPicker {
+    [self dismissViewControllerAnimated:YES completion:^{
+        [self.inputField becomeFirstResponder];
+    }];
 }
 
 - (CGFloat)plateWidthForCurrentStep {
@@ -495,11 +689,29 @@ static NSDictionary *tgDialCodes(void) {
     }
 }
 
+- (void)restylePlaceholders {
+    UIFont *fieldFont = [UIFont boldSystemFontOfSize:self.currentStep == TGLoginStepRegistration ? 15.0f : 18.0f];
+    if (![self.inputField.font isEqual:fieldFont])
+        self.inputField.font = fieldFont;
+
+    if (self.currentStep == TGLoginStepPhone) {
+        tgStylePlaceholder(self.inputField, [UIFont systemFontOfSize:17], tgRGB(0x999999));
+    } else if (self.currentStep == TGLoginStepRegistration) {
+        tgStylePlaceholder(self.inputField, self.inputField.font, tgRGB(0x999da4));
+        tgStylePlaceholder(self.lastNameField, self.lastNameField.font, tgRGB(0x999da4));
+    } else {
+        tgStylePlaceholder(self.inputField, [UIFont systemFontOfSize:18], tgRGB(0xadb0b6));
+    }
+}
+
 - (void)setNextButtonTitle:(NSString *)title {
     if ([[self.nextButton titleForState:UIControlStateNormal] isEqualToString:title])
         return;
     [self.nextButton setTitle:title forState:UIControlStateNormal];
-    [self sizeLoginToolbarButton:self.nextButton paddingLeft:7 paddingRight:7 minWidth:52];
+    [self sizeLoginToolbarButton:self.nextButton
+                     paddingLeft:7
+                    paddingRight:7
+                        minWidth:self.currentStep == TGLoginStepRegistration ? 51 : 52];
     self.spinner.frame = CGRectMake(floorf((self.nextButton.frame.size.width - self.spinner.frame.size.width) / 2),
                                     floorf((self.nextButton.frame.size.height - self.spinner.frame.size.height) / 2),
                                     self.spinner.frame.size.width, self.spinner.frame.size.height);
@@ -511,6 +723,11 @@ static NSDictionary *tgDialCodes(void) {
     CGSize viewSize = CGSizeMake(screenSize.width, screenSize.height - 20 - 44 - (keyboardUp ? 216 : 0));
 
     [self setNextButtonTitle:self.currentStep == TGLoginStepRegistration ? @"Done" : @"Next"];
+    [self restylePlaceholders];
+
+    self.noticeLabel.hidden = self.currentStep == TGLoginStepRegistration;
+    if (self.currentStep != TGLoginStepRegistration)
+        self.inputBackgroundView.image = self.plateImage;
 
     if (self.currentStep != TGLoginStepRegistration) {
         self.lastNameBackgroundView.hidden = YES;
@@ -518,7 +735,7 @@ static NSDictionary *tgDialCodes(void) {
     }
 
     if (self.currentStep == TGLoginStepRegistration) {
-        CGFloat width = 290;
+        CGFloat width = 288;
         self.countryButton.hidden = YES;
         self.countryCodeField.hidden = YES;
         self.inputDivider.hidden = YES;
@@ -528,27 +745,29 @@ static NSDictionary *tgDialCodes(void) {
         self.lastNameBackgroundView.hidden = NO;
         self.lastNameField.hidden = NO;
 
-        CGFloat top = (int)((viewSize.height - 92) / 2);
-        self.inputBackgroundView.frame = CGRectIntegral(CGRectMake((viewSize.width - width) / 2, top, width, 43));
-        self.inputField.frame = CGRectMake(self.inputBackgroundView.frame.origin.x + 12,
-                                           self.inputBackgroundView.frame.origin.y + 10,
-                                           width - 24, 22);
+        self.inputBackgroundView.image = self.plateTopImage;
+        self.lastNameBackgroundView.image = self.plateBottomImage;
+
+        CGFloat retinaOffset = [UIScreen mainScreen].scale > 1.0f ? 0.5f : 0.0f;
+        CGFloat top = (int)((viewSize.height - 68) / 2) - 7;
+        self.inputBackgroundView.frame = CGRectMake((int)((viewSize.width - width) / 2), top, width, 43);
+        self.inputField.frame = CGRectMake(self.inputBackgroundView.frame.origin.x + 15,
+                                           self.inputBackgroundView.frame.origin.y + 11.0f + retinaOffset,
+                                           width - 20, 22);
         self.inputField.textAlignment = NSTextAlignmentLeft;
 
         self.lastNameBackgroundView.frame = CGRectIntegral(CGRectMake(self.inputBackgroundView.frame.origin.x,
-                                                                      self.inputBackgroundView.frame.origin.y + 49,
+                                                                      self.inputBackgroundView.frame.origin.y + 43,
                                                                       width, 43));
-        self.lastNameField.frame = CGRectMake(self.lastNameBackgroundView.frame.origin.x + 12,
-                                              self.lastNameBackgroundView.frame.origin.y + 10,
-                                              width - 24, 22);
+        self.lastNameField.frame = CGRectMake(self.lastNameBackgroundView.frame.origin.x + 15,
+                                              self.lastNameBackgroundView.frame.origin.y + 10.0f + retinaOffset,
+                                              width - 20, 22);
 
-        CGSize registrationNoticeSize = [self.noticeLabel sizeThatFits:CGSizeMake(280, 1024)];
-        self.noticeLabel.frame = CGRectIntegral(CGRectMake((viewSize.width - registrationNoticeSize.width) / 2,
-                                                           top - 16 - registrationNoticeSize.height,
-                                                           registrationNoticeSize.width, registrationNoticeSize.height));
-        self.noticeLabel.alpha = self.noticeLabel.frame.origin.y < 0 ? 0.0f : 1.0f;
+        self.noticeLabel.hidden = YES;
 
         self.timeoutLabel.hidden = YES;
+        self.requestingCallLabel.hidden = YES;
+        self.callSentLabel.hidden = YES;
         self.resendButton.hidden = YES;
         self.extraButton.hidden = YES;
         return;
@@ -572,6 +791,8 @@ static NSDictionary *tgDialCodes(void) {
                                                            linkSize.width, linkSize.height));
 
         self.timeoutLabel.hidden = YES;
+        self.requestingCallLabel.hidden = YES;
+        self.callSentLabel.hidden = YES;
         self.resendButton.hidden = YES;
         self.extraButton.hidden = NO;
         self.extraButton.frame = CGRectMake((int)((viewSize.width - self.extraButton.frame.size.width) / 2),
@@ -629,11 +850,21 @@ static NSDictionary *tgDialCodes(void) {
     CGSize timeoutSize = [self.timeoutLabel sizeThatFits:CGSizeMake(300, 1024)];
     self.timeoutLabel.frame = CGRectIntegral(CGRectMake((viewSize.width - timeoutSize.width) / 2, resendY, timeoutSize.width, timeoutSize.height));
 
+    CGSize requestingSize = [self.requestingCallLabel sizeThatFits:CGSizeMake(300, 1024)];
+    self.requestingCallLabel.frame = CGRectIntegral(CGRectMake((viewSize.width - requestingSize.width) / 2, resendY, requestingSize.width, requestingSize.height));
+
+    CGSize callSentSize = [self.callSentLabel sizeThatFits:CGSizeMake(300, 1024)];
+    self.callSentLabel.frame = CGRectIntegral(CGRectMake((viewSize.width - callSentSize.width) / 2, resendY, callSentSize.width, callSentSize.height));
+
     self.resendButton.frame = CGRectMake((int)((viewSize.width - self.resendButton.frame.size.width) / 2), resendY,
                                          self.resendButton.frame.size.width, self.resendButton.frame.size.height);
 
     BOOL resetRow = self.currentStep == TGLoginStepPassword && self.passwordResetPending;
     BOOL countdownStep = self.currentStep == TGLoginStepCode || self.currentStep == TGLoginStepEmailCode;
+
+    BOOL callStateVisible = self.currentStep == TGLoginStepCode && self.callRequestState > 0 && self.resendSeconds <= 0;
+    self.requestingCallLabel.hidden = !(callStateVisible && self.callRequestState == 1);
+    self.callSentLabel.hidden = !(callStateVisible && self.callRequestState == 2);
 
     if (resetRow) {
         self.timeoutLabel.hidden = NO;
@@ -642,7 +873,7 @@ static NSDictionary *tgDialCodes(void) {
                                              resendY + timeoutSize.height + 8,
                                              self.resendButton.frame.size.width, self.resendButton.frame.size.height);
     } else {
-        self.timeoutLabel.hidden = !countdownStep || self.resendSeconds <= 0;
+        self.timeoutLabel.hidden = !countdownStep || (self.resendSeconds <= 0 && self.callRequestState == 0);
         self.resendButton.hidden = !countdownStep || self.resendSeconds > 0 || self.suppressResendButton;
     }
 
@@ -657,12 +888,31 @@ static NSDictionary *tgDialCodes(void) {
                                         self.extraButton.frame.size.width, self.extraButton.frame.size.height);
 }
 
-- (void)inputBackgroundTapped {
+- (void)inputBackgroundTapped:(UITapGestureRecognizer *)recognizer {
+    if (recognizer.state != UIGestureRecognizerStateRecognized)
+        return;
+
+    if (!self.countryCodeField.hidden) {
+        CGPoint location = [recognizer locationInView:self.inputBackgroundView];
+        CGFloat countryRight = self.countryCodeField.frame.origin.x + self.countryCodeField.frame.size.width
+            - self.inputBackgroundView.frame.origin.x;
+        if (location.x < countryRight) {
+            [self.countryCodeField becomeFirstResponder];
+            return;
+        }
+    }
+
     [self.inputField becomeFirstResponder];
+}
+
+- (void)textFieldDidHitLastBackspace {
+    if (self.currentStep == TGLoginStepPhone)
+        [self.countryCodeField becomeFirstResponder];
 }
 
 - (void)setBusy:(BOOL)busy {
     _busy = busy;
+    self.shadeView.hidden = !busy;
     [self updateNextEnabled];
     if (busy)
         [self.spinner startAnimating];
@@ -706,9 +956,49 @@ static NSDictionary *tgDialCodes(void) {
 }
 
 - (void)updateNextEnabled {
-    BOOL enabled = !self.busy && [self hasSubmittableInput];
+    BOOL enabled = !self.busy && self.currentStep != TGLoginStepQrCode;
     self.nextButton.enabled = enabled;
     self.nextButton.titleLabel.alpha = self.busy ? 0.0f : (enabled ? 1.0f : 0.6f);
+}
+
+- (void)shakeView:(UIView *)view {
+    if (view == nil || view.hidden)
+        return;
+
+    CGRect originalFrame = view.frame;
+    CGRect right = originalFrame;
+    right.origin.x = originalFrame.origin.x + 4;
+    CGRect left = originalFrame;
+    left.origin.x = originalFrame.origin.x - 4;
+
+    [UIView animateWithDuration:0.05 delay:0.0 options:UIViewAnimationOptionAutoreverse animations:^{
+        view.frame = right;
+    } completion:^(BOOL finished) {
+        if (!finished) {
+            view.frame = originalFrame;
+            return;
+        }
+        [UIView animateWithDuration:0.05
+                              delay:0.0
+                            options:(UIViewAnimationOptionRepeat | UIViewAnimationOptionAutoreverse)
+                         animations:^{
+            [UIView setAnimationRepeatCount:3];
+            view.frame = left;
+        } completion:^(__unused BOOL innerFinished) {
+            view.frame = originalFrame;
+        }];
+    }];
+}
+
+- (void)shakeInputRow {
+    [self shakeView:self.inputField];
+    [self shakeView:self.inputBackgroundView];
+    if (!self.countryCodeField.hidden)
+        [self shakeView:self.countryCodeField];
+    if (self.currentStep == TGLoginStepRegistration) {
+        [self shakeView:self.lastNameField];
+        [self shakeView:self.lastNameBackgroundView];
+    }
 }
 
 - (void)inputChanged {
@@ -726,6 +1016,7 @@ static NSDictionary *tgDialCodes(void) {
         digits = [digits substringToIndex:4];
     self.countryCodeField.text = [@"+" stringByAppendingString:digits];
     [self updateCountryNameForDialCode];
+    [self reformatPhoneField];
     [self updateNextEnabled];
 }
 
@@ -733,9 +1024,16 @@ static NSDictionary *tgDialCodes(void) {
     if (self.busy)
         return;
 
+    if (self.currentStep == TGLoginStepQrCode)
+        return;
+
     NSString *text = [self trimmedInput];
     if (![self hasSubmittableInput]) {
-        [self.inputField becomeFirstResponder];
+        [self shakeInputRow];
+        if (self.currentStep == TGLoginStepPhone && [self digitsOnly:self.countryCodeField.text].length < 1)
+            [self.countryCodeField becomeFirstResponder];
+        else
+            [self.inputField becomeFirstResponder];
         return;
     }
 
@@ -843,7 +1141,7 @@ static NSDictionary *tgDialCodes(void) {
     self.codeIsText = NO;
     self.codeIsPhrase = NO;
     self.title = phoneNumber.length > 0 ? phoneNumber : (self.savedPhoneNumber.length > 0 ? self.savedPhoneNumber : @"Enter Code");
-    self.noticeLabel.text = @"We have sent you an SMS with the code";
+    self.noticeLabel.text = @"We've sent an SMS with an activation code to your phone. Please enter the code below.";
 
     self.inputField.text = @"";
     self.inputField.secureTextEntry = NO;
@@ -918,6 +1216,8 @@ static NSDictionary *tgDialCodes(void) {
     if ([timeout isKindOfClass:[NSNumber class]] && [timeout intValue] > 0) {
         [self stopResendCountdown];
         self.resendSeconds = [timeout integerValue];
+        self.callRequestState = 0;
+        self.timeoutLabel.alpha = 1.0f;
         [self startResendTimer];
     }
 
@@ -962,7 +1262,8 @@ static NSDictionary *tgDialCodes(void) {
 
     self.inputField.text = @"";
     self.inputField.secureTextEntry = NO;
-    self.inputField.placeholder = @"First Name";
+    self.inputField.font = [UIFont boldSystemFontOfSize:15.0f];
+    self.inputField.placeholder = @"First name";
     self.inputField.keyboardType = UIKeyboardTypeDefault;
     self.inputField.autocapitalizationType = UITextAutocapitalizationTypeWords;
     self.inputField.returnKeyType = UIReturnKeyNext;
@@ -1054,7 +1355,8 @@ static NSDictionary *tgDialCodes(void) {
 
     self.inputField.text = @"";
     self.inputField.secureTextEntry = NO;
-    self.inputField.placeholder = @"Phone number";
+    self.inputField.font = [UIFont boldSystemFontOfSize:18];
+    self.inputField.placeholder = @"Your phone number";
     self.inputField.keyboardType = UIKeyboardTypeNumberPad;
     self.inputField.returnKeyType = UIReturnKeyDone;
     self.inputField.autocapitalizationType = UITextAutocapitalizationTypeNone;
@@ -1438,6 +1740,8 @@ static NSDictionary *tgDialCodes(void) {
 
 - (void)installBackButton {
     if (self.backButton != nil) {
+        [self.backButton setTitleShadowColor:self.currentStep == TGLoginStepRegistration ? tgRGBA(0x07080a, 0.35f) : tgRGBA(0x050608, 0.4f)
+                                    forState:UIControlStateNormal];
         self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:self.backButton];
         return;
     }
@@ -1453,6 +1757,8 @@ static NSDictionary *tgDialCodes(void) {
                                                    minWidth:0
                                                      isBack:YES];
     [backButton addTarget:self action:@selector(backTapped) forControlEvents:UIControlEventTouchUpInside];
+    if (self.currentStep == TGLoginStepRegistration)
+        [backButton setTitleShadowColor:tgRGBA(0x07080a, 0.35f) forState:UIControlStateNormal];
     self.backButton = backButton;
 
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:backButton];
@@ -1489,8 +1795,53 @@ static NSDictionary *tgDialCodes(void) {
 - (void)startResendCountdown {
     [self stopResendCountdown];
     self.resendSeconds = 60;
+    self.callRequestState = 0;
+    self.timeoutLabel.alpha = 1.0f;
+    self.requestingCallLabel.alpha = 0.0f;
+    self.callSentLabel.alpha = 0.0f;
     [self updateResendTitle];
     [self startResendTimer];
+}
+
+- (void)beginCallRequest {
+    self.callRequestState = 1;
+    self.requestingCallLabel.hidden = NO;
+    self.requestingCallLabel.alpha = 0.0f;
+
+    [UIView animateWithDuration:0.2 animations:^{
+        self.timeoutLabel.alpha = 0.0f;
+    }];
+    [UIView animateWithDuration:0.2 delay:0.1 options:0 animations:^{
+        self.requestingCallLabel.alpha = 1.0f;
+    } completion:nil];
+
+    __weak TGLoginViewController *weakSelf = self;
+    [[TGClient shared] resendAuthenticationCodeWithFailureMessage:nil completion:^(NSDictionary *info) {
+        TGLoginViewController *me = weakSelf;
+        if (me == nil || me.currentStep != TGLoginStepCode)
+            return;
+        if (info != nil)
+            [me applyCodeInfo:info];
+        [me finishCallRequest];
+    }];
+}
+
+- (void)finishCallRequest {
+    if (self.currentStep != TGLoginStepCode || self.callRequestState != 1)
+        return;
+
+    self.callRequestState = 2;
+    self.callSentLabel.hidden = NO;
+    self.callSentLabel.alpha = 0.0f;
+
+    [UIView animateWithDuration:0.2 animations:^{
+        self.requestingCallLabel.alpha = 0.0f;
+    }];
+    [UIView animateWithDuration:0.2 delay:0.1 options:0 animations:^{
+        self.callSentLabel.alpha = 1.0f;
+    } completion:nil];
+
+    [self layoutInterface];
 }
 
 - (void)startResendTimer {
@@ -1515,6 +1866,8 @@ static NSDictionary *tgDialCodes(void) {
     if (self.resendSeconds <= 0) {
         [self.resendTimer invalidate];
         self.resendTimer = nil;
+        if (self.currentStep == TGLoginStepCode && self.callRequestState == 0 && !self.suppressResendButton)
+            [self beginCallRequest];
     }
 }
 
@@ -1542,7 +1895,7 @@ static NSDictionary *tgDialCodes(void) {
     if (self.resendSeconds > 0) {
         NSString *format = self.currentStep == TGLoginStepEmailCode
             ? @"You will be able to reset your email address in %d:%02d"
-            : @"You can request the code again in %d:%02d";
+            : @"Telegram will call you in %d:%.2d";
         self.timeoutLabel.text = [NSString stringWithFormat:format,
                                   (int)self.resendSeconds / 60, (int)self.resendSeconds % 60];
         self.resendButton.enabled = NO;
@@ -1616,14 +1969,14 @@ static NSDictionary *tgDialCodes(void) {
 
     if (self.currentStep == TGLoginStepRegistration) {
         NSString *result = [textField.text stringByReplacingCharactersInRange:range withString:string];
-        return result.length <= 64;
+        return result.length <= 30;
     }
 
     if (self.currentStep == TGLoginStepCode) {
         NSString *result = [textField.text stringByReplacingCharactersInRange:range withString:string];
         if (self.codeIsText)
             return result.length <= 64;
-        return [self digitsOnly:result].length <= 8 && [[self digitsOnly:string] length] == string.length;
+        return [self digitsOnly:result].length <= 5 && [[self digitsOnly:string] length] == string.length;
     }
 
     if (self.currentStep == TGLoginStepEmailCode || self.currentStep == TGLoginStepRecoveryCode) {
@@ -1633,7 +1986,37 @@ static NSDictionary *tgDialCodes(void) {
 
     if (self.currentStep == TGLoginStepPhone) {
         NSString *result = [textField.text stringByReplacingCharactersInRange:range withString:string];
-        return [self digitsOnly:result].length <= 15;
+        NSString *digits = [self digitsOnly:result];
+        if (digits.length > 15)
+            return NO;
+
+        NSString *prefix = [textField.text substringToIndex:range.location];
+        NSUInteger digitsBeforeCaret = [self digitsOnly:prefix].length + [self digitsOnly:string].length;
+
+        NSString *formatted = [self formattedPhoneForDigits:digits];
+        textField.text = formatted;
+
+        NSUInteger caret = formatted.length;
+        NSUInteger seen = 0;
+        for (NSUInteger i = 0; i < formatted.length; i++) {
+            if (seen == digitsBeforeCaret) {
+                caret = i;
+                break;
+            }
+            unichar c = [formatted characterAtIndex:i];
+            if (c >= '0' && c <= '9')
+                seen++;
+        }
+        if (seen == digitsBeforeCaret && caret == formatted.length)
+            caret = formatted.length;
+
+        UITextPosition *position = [textField positionFromPosition:textField.beginningOfDocument offset:(NSInteger)caret];
+        if (position != nil)
+            textField.selectedTextRange = [textField textRangeFromPosition:position toPosition:position];
+
+        [self updateTitleText];
+        [self inputChanged];
+        return NO;
     }
 
     return YES;

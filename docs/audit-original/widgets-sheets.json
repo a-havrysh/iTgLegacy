@@ -1,0 +1,46 @@
+{
+  "screen": "Sheets, alerts and the transient undo bar (TGActionSheet / TGAlertView / TGSnackbar)",
+  "originalCounterpart": "telegram-original-sources/extracted/telegram_iphone.src/Telegraph/Telegraph/{TGAppDelegate.mm,TGProfileController.m,TGLoginProfileController.m,TGChatSettingsController.m,TGForwardTargetController.m,TGNotificationSettingsController.m,TGTelegraphConversationCompanion.mm}; .../TelegraphKit/TelegraphKit/{TGConversationController.mm,TGDialogListCell.m,TGConversationActionsPanel.m}",
+  "findings": [
+    {
+      "kind": "colour",
+      "visibility": "obvious",
+      "ours": "TGActionSheet.m:50 forces `self.actionSheetStyle = UIActionSheetStyleDefault;`, so every sheet renders in the light silver/blue iOS 6 style.",
+      "theirs": "The original never assigns actionSheetStyle anywhere - every UIActionSheet is left at UIActionSheetStyleAutomatic - and the app forces a black status bar at launch, so Automatic resolves to the black-translucent sheet chrome. All 2013 sheets were dark.",
+      "citation": "Telegraph/Telegraph/TGAppDelegate.mm:209 `[(TGApplication *)application forceSetStatusBarStyle:UIStatusBarStyleBlackTranslucent animated:false];` plus TGProfileController.m:3032, TGLoginProfileController.m:473/489, TGNotificationSettingsController.m:669 - none of which set actionSheetStyle.",
+      "fix": "Delete line 50 of src/TGActionSheet.m (leave the style at UIActionSheetStyleAutomatic), or set it explicitly to UIActionSheetStyleBlackTranslucent."
+    },
+    {
+      "kind": "layout",
+      "visibility": "noticeable",
+      "ours": "Sheets raised from tab-rooted controllers are shown with `showInView:self.view` (TGChatListViewController.m:844, TGContactsViewController.m:514/635 fall back to the nav view, TGChatEventsViewController.m:1175, TGGroupMembersViewController.m:459). Only TGChatListViewController.m:1837 uses showFromTabBar:. TGActionSheet offers no presentation helper, so each caller improvises.",
+      "theirs": "The original always checked for a tab bar controller and presented into its view, so the sheet's cancel button sits flush on the screen bottom and the dimming covers the tab bar rather than leaving a 49pt strip.",
+      "citation": "Telegraph/Telegraph/TGProfileController.m:2993-2996 `if ([self.parentViewController isKindOfClass:[UITabBarController class]]) [_currentActionSheet showInView:self.parentViewController.view]; else [_currentActionSheet showInView:self.view];` (same idiom at :3035-3037, :4544-4546, :5150-5152)",
+      "fix": "Add a `- (void)showFromController:(UIViewController *)controller` to TGActionSheet that reproduces the original test: present into `controller.parentViewController.view` when that parent is a UITabBarController, otherwise `controller.view`; point all call sites at it."
+    },
+    {
+      "kind": "metric",
+      "visibility": "subtle",
+      "ours": "TGSnackbar.m:188-190 centres the Undo button as `(int)((kBarHeight - kButtonHeight) / 2) + retinaPixel` = 11.5pt from the top of the 55pt plate.",
+      "theirs": "The original centres the action-bar buttons on the same art with an extra one-point nudge: `(int)((_baseInputContainerHeight - forwardButtonImage.size.height) / 2) + 1 + retinaPixel`.",
+      "citation": "TelegraphKit/TelegraphKit/TGConversationController.mm:5105 (and the delete twin at :5090)",
+      "fix": "In src/TGSnackbar.m:189 change the y term to `(int)((kBarHeight - kButtonHeight) / 2) + 1 + retinaPixel`."
+    },
+    {
+      "kind": "wording",
+      "visibility": "subtle",
+      "ours": "TGAlertView.m:54 injects a hardcoded `[self addButtonWithTitle:@\"OK\"]` when no buttons were supplied; TGActionSheet.m:38 falls back to a literal @\"Cancel\"; TGSnackbar.m:173 defaults the message to @\"Done\" and :207 hardcodes @\"Undo\".",
+      "theirs": "Every button title in the original comes from the string table - `TGLocalized(@\"Common.OK\")`, `NSLocalizedString(@\"Common.Cancel\", nil)`, `Common.Done` - never a bare literal in code.",
+      "citation": "Telegraph/Telegraph/TGChatSettingsController.m:662 `cancelButtonTitle:TGLocalized(@\"Common.OK\")`; TGLoginProfileController.m:477 `NSLocalizedString(@\"Common.Cancel\", nil)`; en.lproj/Localizable.strings:39-43 (`Common.OK`, `Common.Cancel`, `Common.Done`)",
+      "fix": "Route these through the localized keys: `Common.OK` in TGAlertView.m:54, `Common.Cancel` in TGActionSheet.m:36-39 (drop the invented fallback chain), `Common.Done` for the TGSnackbar.m:173 default; add an `Common.Undo` key rather than a literal at :207."
+    },
+    {
+      "kind": "colour",
+      "visibility": "subtle",
+      "ours": "TGSnackbar.m:145 falls back to a hand-mixed `colorWithRed:0.20 green:0.22 blue:0.24` flat plate when ConversationActionBar.png is missing.",
+      "theirs": "The original only ever draws this bar from the stretched PNG (`ConversationActionBar.png`, 40x110 px @2x = 20x55 pt) and has no flat-colour fallback anywhere; the value 0.20/0.22/0.24 appears nowhere in its source.",
+      "citation": "Telegraph/Telegraph/TGTelegraphConversationCompanion.mm:4868-4876 `image = [UIImage imageNamed:@\"ConversationActionBar.png\"];`; the asset is present unused-free at iTgLegacy/images/ConversationActionBar@2x.png",
+      "fix": "Drop the fallback branch in src/TGSnackbar.m:144-146; the asset ships in images/, so an eyeballed colour can only ever be wrong."
+    }
+  ]
+}

@@ -125,7 +125,7 @@
 	self.statusLabel.backgroundColor = [UIColor clearColor];
 	[self.view addSubview:self.statusLabel];
 
-	CGFloat buttonWidth = (CGFloat)(int)((b.size.width - 9 * 2 - 8) / 2);
+	CGFloat buttonWidth = (CGFloat)(int)((b.size.width - 9 * 2 - 10) / 2);
 	CGFloat baseline = b.size.height - 20;
 	CGRect leftFrame = CGRectMake(9, baseline - 43, buttonWidth, 43);
 	CGRect rightFrame = CGRectMake(b.size.width - 9 - buttonWidth, baseline - 45, buttonWidth, 45);
@@ -140,13 +140,13 @@
 									  asset:@"GroupedActionButton"
 									  frame:leftFrame
 									 action:@selector(toggleMute)];
-	self.endButton = [self buttonWithTitle:@"End"
+	self.endButton = [self buttonWithTitle:(self.outgoing ? @"End" : @"Decline")
 									 asset:@"MenuRedButton"
 									 frame:rightFrame
 									action:@selector(end)];
 
 	if (!self.outgoing){
-		self.acceptButton = [self buttonWithTitle:@"Answer"
+		self.acceptButton = [self buttonWithTitle:@"Accept"
 											asset:@"GroupedActionButtonGreen"
 											frame:leftFrame
 										   action:@selector(answer)];
@@ -177,6 +177,18 @@
 												 selector:@selector(tick)
 												 userInfo:nil
 												  repeats:YES];
+}
+
+- (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)orientation {
+	return UIInterfaceOrientationIsPortrait(orientation);
+}
+
+- (NSUInteger)supportedInterfaceOrientations {
+	return UIInterfaceOrientationMaskPortrait;
+}
+
+- (BOOL)shouldAutorotate {
+	return NO;
 }
 
 - (NSString *)initials {
@@ -246,6 +258,9 @@
 	button.adjustsImageWhenDisabled = NO;
 	[button setBackgroundImage:background forState:UIControlStateNormal];
 	[button setBackgroundImage:backgroundHighlighted forState:UIControlStateHighlighted];
+	[button setBackgroundImage:backgroundHighlighted forState:UIControlStateSelected];
+	[button setBackgroundImage:backgroundHighlighted
+					  forState:UIControlStateSelected | UIControlStateHighlighted];
 	[button setTitle:title forState:UIControlStateNormal];
 
 	if ([asset isEqualToString:@"GroupedActionButton"]){
@@ -256,12 +271,16 @@
 						   forState:UIControlStateNormal];
 		[button setTitleColor:[UIColor whiteColor] forState:UIControlStateHighlighted];
 		[button setTitleShadowColor:[UIColor clearColor] forState:UIControlStateHighlighted];
+		[button setTitleColor:[UIColor whiteColor] forState:UIControlStateSelected];
+		[button setTitleShadowColor:[UIColor clearColor] forState:UIControlStateSelected];
+		[button setTitleColor:[UIColor whiteColor]
+					 forState:UIControlStateSelected | UIControlStateHighlighted];
 		button.titleLabel.font = [UIFont boldSystemFontOfSize:14];
 		button.titleLabel.shadowOffset = CGSizeMake(0, 1);
 	} else {
 		UIColor *shadow = [asset isEqualToString:@"GroupedActionButtonGreen"]
 				? [UIColor colorWithRed:0x12 / 255.0f green:0x46 / 255.0f blue:0x06 / 255.0f alpha:0.3f]
-				: [UIColor colorWithWhite:0.0f alpha:0.3f];
+				: [UIColor colorWithRed:0xa1 / 255.0f green:0x06 / 255.0f blue:0x03 / 255.0f alpha:0.5f];
 		[button setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
 		[button setTitleColor:[UIColor whiteColor] forState:UIControlStateHighlighted];
 		[button setTitleShadowColor:shadow forState:UIControlStateNormal];
@@ -419,42 +438,45 @@ static NSData *TGCallToneWrap(NSData *samples, double rate) {
 
 	switch (state){
 		case TGCallStateNone:
-			self.statusLabel.text = self.outgoing ? @"Waiting..." : @"Incoming call";
+			self.statusLabel.text = self.outgoing ? @"Contacting..." : @"Telegram Audio...";
 			[self startRingingTone];
 			break;
 		case TGCallStatePending:
-			self.statusLabel.text = self.outgoing ? @"Calling..." : @"Incoming call";
+			self.statusLabel.text = self.outgoing ? @"Ringing..." : @"Telegram Audio...";
 			[self startRingingTone];
 			self.acceptButton.hidden = self.outgoing;
 			self.muteButton.hidden = !self.outgoing;
 			break;
 		case TGCallStateExchangingKeys:
-			self.statusLabel.text = @"Exchanging keys...";
+			self.statusLabel.text = @"Connecting...";
 			self.acceptButton.hidden = YES;
 			self.muteButton.hidden = NO;
+			[self setEndButtonEnding];
 			[self stopTone];
 			break;
 		case TGCallStateConnecting:
 			self.statusLabel.text = @"Connecting...";
 			self.acceptButton.hidden = YES;
 			self.muteButton.hidden = NO;
+			[self setEndButtonEnding];
 			[self stopTone];
 			break;
 		case TGCallStateEstablished:
 			self.acceptButton.hidden = YES;
 			self.muteButton.hidden = NO;
+			[self setEndButtonEnding];
 			self.wasEstablished = YES;
 			[self stopTone];
 			[self setProximityEnabled:!self.speakerOn];
 			[self tick];
 			break;
 		case TGCallStateFailed:
-			self.statusLabel.text = [self endText:@"Call failed"];
+			self.statusLabel.text = [self endText:@"Call Failed"];
 			[self playEndTone];
 			[self finish];
 			break;
 		case TGCallStateEnded:
-			self.statusLabel.text = [self endText:@"Call ended"];
+			self.statusLabel.text = [self endText:@"Call Ended"];
 			[self playEndTone];
 			[self finish];
 			break;
@@ -472,9 +494,21 @@ static NSData *TGCallToneWrap(NSData *samples, double rate) {
 
 - (NSString *)endText:(NSString *)fallback {
 	NSString *reason = [TGCall shared].endReason;
-	if ([reason isKindOfClass:[NSString class]] && reason.length)
-		return reason;
-	return fallback;
+	if (![reason isKindOfClass:[NSString class]] || reason.length == 0)
+		return fallback;
+	if ([reason isEqualToString:@"No answer"])
+		return @"No Answer";
+	if ([reason isEqualToString:@"Declined"])
+		return @"Busy";
+	if ([reason isEqualToString:@"Disconnected"])
+		return @"Call Failed";
+	if ([reason isEqualToString:@"Call ended"])
+		return @"Call Ended";
+	return reason;
+}
+
+- (void)setEndButtonEnding {
+	[self.endButton setTitle:@"End" forState:UIControlStateNormal];
 }
 
 - (void)syncMuteTitle {
@@ -492,12 +526,14 @@ static NSData *TGCallToneWrap(NSData *samples, double rate) {
 		elapsed = 0;
 	NSInteger seconds = (NSInteger)elapsed;
 	self.lastDuration = seconds;
+	NSString *durationString;
 	if (seconds >= 3600)
-		self.statusLabel.text = [NSString stringWithFormat:@"%ld:%02ld:%02ld",
-				(long)(seconds / 3600), (long)((seconds % 3600) / 60), (long)(seconds % 60)];
+		durationString = [NSString stringWithFormat:@"%02d:%02d:%02d",
+				(int)(seconds / 3600), (int)((seconds / 60) % 60), (int)(seconds % 60)];
 	else
-		self.statusLabel.text = [NSString stringWithFormat:@"%ld:%02ld",
-				(long)(seconds / 60), (long)(seconds % 60)];
+		durationString = [NSString stringWithFormat:@"%02d:%02d",
+				(int)((seconds / 60) % 60), (int)(seconds % 60)];
+	self.statusLabel.text = [NSString stringWithFormat:@"Telegram Audio %@", durationString];
 }
 
 - (void)toggleMute {
@@ -519,8 +555,8 @@ static NSData *TGCallToneWrap(NSData *samples, double rate) {
 	[session overrideOutputAudioPort:(self.speakerOn
 			? AVAudioSessionPortOverrideSpeaker
 			: AVAudioSessionPortOverrideNone) error:nil];
-	[self.speakerButton setTitle:(self.speakerOn ? @"Earpiece" : @"Speaker")
-						forState:UIControlStateNormal];
+	[self.speakerButton setTitle:@"Speaker" forState:UIControlStateNormal];
+	self.speakerButton.selected = self.speakerOn;
 	if ([TGCall shared].state == TGCallStateEstablished)
 		[self setProximityEnabled:!self.speakerOn];
 	else
@@ -534,6 +570,7 @@ static NSData *TGCallToneWrap(NSData *samples, double rate) {
 	self.acceptButton.hidden = YES;
 	self.muteButton.hidden = NO;
 	self.speakerButton.hidden = NO;
+	[self setEndButtonEnding];
 	self.statusLabel.text = @"Connecting...";
 	[[TGCall shared] accept];
 }
@@ -542,7 +579,7 @@ static NSData *TGCallToneWrap(NSData *samples, double rate) {
 	if (self.dismissing)
 		return;
 	[[TGCall shared] hangUp];
-	self.statusLabel.text = [self endText:@"Call ended"];
+	self.statusLabel.text = [self endText:@"Call Ended"];
 	[self playEndTone];
 	[self finish];
 }
@@ -599,8 +636,9 @@ static NSData *TGCallToneWrap(NSData *samples, double rate) {
 	UIColor *chromeShadow = [UIColor colorWithRed:0x0e / 255.0f green:0x28 / 255.0f
 											 blue:0x4d / 255.0f alpha:0.4f];
 
-	self.ratingTitleLabel = [[UILabel alloc] initWithFrame:CGRectMake(9, 0, b.size.width - 18, 22)];
-	self.ratingTitleLabel.text = @"Rate this call";
+	self.ratingTitleLabel = [[UILabel alloc] initWithFrame:CGRectMake(9, 0, b.size.width - 18, 40)];
+	self.ratingTitleLabel.numberOfLines = 2;
+	self.ratingTitleLabel.text = @"Please rate the quality\nof your Telegram call";
 	self.ratingTitleLabel.font = [UIFont boldSystemFontOfSize:17];
 	self.ratingTitleLabel.textColor = [UIColor whiteColor];
 	self.ratingTitleLabel.shadowColor = chromeShadow;
@@ -610,50 +648,47 @@ static NSData *TGCallToneWrap(NSData *samples, double rate) {
 	[self.ratingPanel addSubview:self.ratingTitleLabel];
 
 	self.starButtons = [NSMutableArray array];
-	CGFloat starSide = 44;
-	CGFloat starsWidth = starSide * 5;
+	CGFloat starsWidth = 246;
+	CGFloat starsHeight = 38;
+	CGFloat starsY = 46;
 	CGFloat starsX = (CGFloat)(int)((b.size.width - starsWidth) / 2);
+	UIView *starsStrip = [[UIView alloc] initWithFrame:
+			CGRectMake(starsX, starsY, starsWidth, starsHeight)];
+	starsStrip.backgroundColor = [UIColor clearColor];
+	[starsStrip addGestureRecognizer:[[UIPanGestureRecognizer alloc]
+			initWithTarget:self action:@selector(handleStarPan:)]];
+	[self.ratingPanel addSubview:starsStrip];
 	for (NSInteger i = 0; i < 5; i++){
 		UIButton *star = [UIButton buttonWithType:UIButtonTypeCustom];
-		star.frame = CGRectMake(starsX + starSide * i, 26, starSide, starSide);
+		star.frame = CGRectMake(18 + 42 * i, 0, 42, starsHeight);
 		star.tag = i + 1;
 		star.exclusiveTouch = YES;
+		star.adjustsImageWhenHighlighted = NO;
 		star.backgroundColor = [UIColor clearColor];
 		star.titleLabel.font = [UIFont systemFontOfSize:30];
 		[star setTitle:@"☆" forState:UIControlStateNormal];
 		[star setTitleColor:[UIColor colorWithWhite:1.0f alpha:0.6f] forState:UIControlStateNormal];
 		[star addTarget:self action:@selector(starPressed:)
 				forControlEvents:UIControlEventTouchUpInside];
-		[self.ratingPanel addSubview:star];
+		[starsStrip addSubview:star];
 		[self.starButtons addObject:star];
 	}
 
-	CGFloat y = 26 + starSide + 8;
+	CGFloat y = starsY + starsHeight + 8;
 	self.problemButtons = [NSMutableArray array];
 	NSArray *titles = [NSArray arrayWithObjects:@"Echo", @"Noise", @"Interruptions",
 			@"Distorted speech", @"Silent remote", @"Dropped", nil];
-	CGFloat cellWidth = (CGFloat)(int)((b.size.width - 9 * 2 - 8) / 2);
+	CGFloat cellWidth = (CGFloat)(int)((b.size.width - 9 * 2 - 10) / 2);
 	for (NSUInteger i = 0; i < [titles count]; i++){
 		CGFloat px = (i % 2 == 0) ? 9 : (b.size.width - 9 - cellWidth);
 		CGFloat py = y + (CGFloat)(int)(i / 2) * 34;
-		UIButton *chip = [UIButton buttonWithType:UIButtonTypeCustom];
-		chip.frame = CGRectMake(px, py, cellWidth, 30);
+		UIButton *chip = [self ratingButtonWithTitle:[titles objectAtIndex:i]
+											   asset:@"GroupedActionButton"
+											   frame:CGRectMake(px, py, cellWidth, 30)
+											  action:@selector(problemPressed:)];
 		chip.tag = (NSInteger)i;
-		chip.exclusiveTouch = YES;
 		chip.titleLabel.font = [UIFont boldSystemFontOfSize:13];
-		chip.titleLabel.shadowOffset = CGSizeMake(0, -1);
-		chip.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.12f];
-		chip.layer.cornerRadius = 4;
-		chip.layer.borderWidth = 1;
-		chip.layer.borderColor = [UIColor colorWithWhite:1.0f alpha:0.25f].CGColor;
-		[chip setTitle:[titles objectAtIndex:i] forState:UIControlStateNormal];
-		[chip setTitleColor:[UIColor colorWithWhite:1.0f alpha:0.75f]
-				   forState:UIControlStateNormal];
-		[chip setTitleShadowColor:chromeShadow forState:UIControlStateNormal];
-		[chip addTarget:self action:@selector(problemPressed:)
-				forControlEvents:UIControlEventTouchUpInside];
 		chip.hidden = YES;
-		[self.ratingPanel addSubview:chip];
 		[self.problemButtons addObject:chip];
 	}
 
@@ -661,7 +696,7 @@ static NSData *TGCallToneWrap(NSData *samples, double rate) {
 			CGRectMake(9, y + 3 * 34 + 4, b.size.width - 18, 31)];
 	self.commentField.borderStyle = UITextBorderStyleRoundedRect;
 	self.commentField.font = [UIFont systemFontOfSize:14];
-	self.commentField.placeholder = @"Comment (optional)";
+	self.commentField.placeholder = @"Write a comment...";
 	self.commentField.returnKeyType = UIReturnKeyDone;
 	self.commentField.autocorrectionType = UITextAutocorrectionTypeDefault;
 	self.commentField.clearButtonMode = UITextFieldViewModeWhileEditing;
@@ -670,18 +705,18 @@ static NSData *TGCallToneWrap(NSData *samples, double rate) {
 	[self.ratingPanel addSubview:self.commentField];
 
 	CGFloat baseline = b.size.height - 20 - self.ratingPanel.frame.origin.y;
-	CGFloat buttonWidth = (CGFloat)(int)((b.size.width - 9 * 2 - 8) / 2);
+	CGFloat buttonWidth = (CGFloat)(int)((b.size.width - 9 * 2 - 10) / 2);
 	self.laterButton = [self ratingButtonWithTitle:@"Not Now"
 											 asset:@"GroupedActionButton"
 											 frame:CGRectMake(9, baseline - 43, buttonWidth, 43)
 											action:@selector(skipRating)];
-	self.sendButton = [self ratingButtonWithTitle:@"Send"
+	self.sendButton = [self ratingButtonWithTitle:@"Submit"
 											asset:@"GroupedActionButtonGreen"
 											frame:CGRectMake(b.size.width - 9 - buttonWidth,
 													baseline - 45, buttonWidth, 45)
 										   action:@selector(submitRating)];
 	self.sendButton.enabled = NO;
-	self.sendButton.alpha = 0.5f;
+	self.sendButton.alpha = 0.7f;
 
 	[UIView animateWithDuration:0.2 animations:^{
 		self.ratingPanel.alpha = 1.0f;
@@ -715,17 +750,28 @@ static NSData *TGCallToneWrap(NSData *samples, double rate) {
 		chip.hidden = !detail;
 	self.commentField.hidden = !detail;
 
+	self.commentField.placeholder = (self.stars > 0 && self.stars < 4)
+			? @"What went wrong?" : @"Write a comment...";
+
 	self.sendButton.enabled = (self.stars > 0);
-	self.sendButton.alpha = (self.stars > 0) ? 1.0f : 0.5f;
+	self.sendButton.alpha = (self.stars > 0) ? 1.0f : 0.7f;
+}
+
+- (void)handleStarPan:(UIPanGestureRecognizer *)recognizer {
+	if (recognizer.state != UIGestureRecognizerStateChanged)
+		return;
+	CGPoint location = [recognizer locationInView:recognizer.view];
+	location.x = MAX(0.0f, MIN(recognizer.view.frame.size.width, location.x));
+	location.y = 0;
+	for (UIButton *star in self.starButtons){
+		CGPoint inStar = [recognizer.view convertPoint:location toView:star];
+		if ([star pointInside:inStar withEvent:nil])
+			[self starPressed:star];
+	}
 }
 
 - (void)setChip:(UIButton *)chip selected:(BOOL)selected {
 	chip.selected = selected;
-	chip.backgroundColor = selected
-			? [UIColor colorWithRed:0x36 / 255.0f green:0x8a / 255.0f blue:0x2e / 255.0f alpha:0.9f]
-			: [UIColor colorWithWhite:1.0f alpha:0.12f];
-	[chip setTitleColor:(selected ? [UIColor whiteColor] : [UIColor colorWithWhite:1.0f alpha:0.75f])
-			   forState:UIControlStateNormal];
 }
 
 - (void)problemPressed:(UIButton *)sender {

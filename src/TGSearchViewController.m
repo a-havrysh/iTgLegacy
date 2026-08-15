@@ -20,7 +20,9 @@ static const CGFloat kSearchSectionHeight = 25.0f;
 static const CGFloat kSearchMessageRowHeight = 73.0f;
 static const CGFloat kSearchMessageAvatar = 56.0f;
 static const CGFloat kSearchMessageTextLeft = 73.0f;
-static const CGFloat kSearchScopeHeight = 36.0f;
+static const CGFloat kSearchScopeHeight = 44.0f;
+static const CGFloat kSearchScopeButtonTop = 7.0f;
+static const CGFloat kSearchScopeButtonHeight = 30.0f;
 static const CGFloat kSearchTagStripHeight = 34.0f;
 
 @interface TGSearchResultCell : UITableViewCell
@@ -29,7 +31,7 @@ static const CGFloat kSearchTagStripHeight = 34.0f;
 @property (nonatomic, strong) UILabel *titleLabelSecond;
 @property (nonatomic, strong) UILabel *subtitleLabel;
 @property (nonatomic, strong) UILabel *dateLabel;
-- (void)setTitleText:(NSString *)title matching:(NSString *)query;
+- (void)setTitleFirst:(NSString *)first second:(NSString *)second;
 @end
 
 @implementation TGSearchResultCell
@@ -94,44 +96,22 @@ static const CGFloat kSearchTagStripHeight = 34.0f;
 	return self;
 }
 
-- (void)setTitleText:(NSString *)title matching:(NSString *)query {
-	NSString *text = title ?: @"";
-	_titleLabel.text = text;
-	_titleLabel.font = [UIFont systemFontOfSize:19];
-	_titleLabelSecond.text = nil;
-	_titleLabelSecond.hidden = YES;
+- (void)setTitleFirst:(NSString *)first second:(NSString *)second {
+	NSString *firstText = first ?: @"";
+	NSString *secondText = second ?: @"";
 
-	if (!query.length || !text.length)
-		return;
-
-	NSRange space = [text rangeOfString:@" "];
-	if (space.location == NSNotFound){
-		if ([text rangeOfString:query options:(NSCaseInsensitiveSearch | NSAnchoredSearch)].location
-				!= NSNotFound)
-			_titleLabel.font = [UIFont boldSystemFontOfSize:19];
+	if (!secondText.length){
+		_titleLabel.text = firstText;
+		_titleLabel.font = [UIFont boldSystemFontOfSize:19];
+		_titleLabelSecond.text = nil;
+		_titleLabelSecond.hidden = YES;
 		return;
 	}
 
-	NSString *first = [text substringToIndex:space.location];
-	NSString *second = [text substringFromIndex:space.location + 1];
-	if (!second.length)
-		return;
-
-	BOOL secondMatches = [second rangeOfString:query
-									   options:(NSCaseInsensitiveSearch | NSAnchoredSearch)].location
-			!= NSNotFound;
-	BOOL firstMatches = [first rangeOfString:query
-									 options:(NSCaseInsensitiveSearch | NSAnchoredSearch)].location
-			!= NSNotFound;
-	if (!firstMatches && !secondMatches)
-		return;
-
-	_titleLabel.text = first;
-	_titleLabel.font = firstMatches ? [UIFont boldSystemFontOfSize:19]
-									: [UIFont systemFontOfSize:19];
-	_titleLabelSecond.text = second;
-	_titleLabelSecond.font = (secondMatches && !firstMatches)
-			? [UIFont boldSystemFontOfSize:19] : [UIFont systemFontOfSize:19];
+	_titleLabel.text = firstText;
+	_titleLabel.font = [UIFont systemFontOfSize:19];
+	_titleLabelSecond.text = secondText;
+	_titleLabelSecond.font = [UIFont boldSystemFontOfSize:19];
 	_titleLabelSecond.hidden = NO;
 }
 
@@ -272,15 +252,16 @@ static const CGFloat kSearchTagStripHeight = 34.0f;
 	CGFloat dateWidth = 0;
 	if (_dateLabel.text.length){
 		CGSize dateSize = [_dateLabel.text sizeWithFont:_dateLabel.font];
-		dateWidth = (CGFloat)(int)dateSize.width + 4;
+		dateWidth = (CGFloat)(int)dateSize.width;
 	}
 	_dateLabel.hidden = dateWidth == 0;
+	CGFloat dateX = viewSize.width - dateWidth - 9;
 	if (dateWidth > 0)
-		_dateLabel.frame = CGRectMake(viewSize.width - 9 - dateWidth, 8, dateWidth, 16);
+		_dateLabel.frame = CGRectMake(dateX, 9, dateWidth, 15);
 
 	CGFloat titleWidth = viewSize.width - kSearchMessageTextLeft - 10;
 	if (dateWidth > 0)
-		titleWidth -= dateWidth + 6;
+		titleWidth = (CGFloat)(int)(dateX - 4 - kSearchMessageTextLeft - 18);
 	if (titleWidth < 0)
 		titleWidth = 0;
 	_titleLabel.frame = CGRectMake(kSearchMessageTextLeft, 6, titleWidth, 20);
@@ -309,6 +290,7 @@ static const NSUInteger kSearchRecentsLimit = 12;
 @property (nonatomic, strong) NSArray *recentTags;
 @property (nonatomic, strong) NSArray *remoteRecents;
 @property (nonatomic, strong) NSMutableArray *scopeButtons;
+@property (nonatomic, strong) NSMutableArray *scopeDividers;
 @property (nonatomic, strong) UIView *scopeBar;
 @property (nonatomic, strong) UIButton *scopeChatButton;
 @property (nonatomic, strong) UIButton *scopeSenderButton;
@@ -637,7 +619,9 @@ static const CGFloat kSearchPeerAvatar = 54.0f;
 			: [UIColor colorWithRed:0xc3 / 255.0f green:0xcb / 255.0f
 								blue:0xd4 / 255.0f alpha:1.0f];
 
-	UIImage *background = [UIImage imageNamed:@"SearchBarBackground.png"];
+	UIImage *background = [UIImage imageNamed:@"SearchBarScopeBarBackground.png"];
+	if (!background)
+		background = [UIImage imageNamed:@"SearchBarBackground.png"];
 	if (background && ![TGTheme shared].isFlat){
 		UIImageView *backgroundView = [[UIImageView alloc] initWithImage:background];
 		backgroundView.frame = CGRectMake(0, 0, width, kSearchScopeHeight);
@@ -657,6 +641,18 @@ static const CGFloat kSearchPeerAvatar = 54.0f;
 			 forControlEvents:UIControlEventTouchDown];
 		[_scopeBar addSubview:button];
 		[_scopeButtons addObject:button];
+	}
+
+	_scopeDividers = [NSMutableArray array];
+	UIImage *dividerLeft = [UIImage imageNamed:@"SearchScopeBarScopeDividerLeft.png"];
+	UIImage *dividerRight = [UIImage imageNamed:@"SearchScopeBarScopeDividerRight.png"];
+	if (dividerLeft && dividerRight && titles.count > 1){
+		for (NSUInteger i = 0; i + 1 < titles.count; i++){
+			UIImageView *divider = [[UIImageView alloc] initWithImage:dividerLeft];
+			divider.hidden = YES;
+			[_scopeBar addSubview:divider];
+			[_scopeDividers addObject:divider];
+		}
 	}
 
 	_scopeChatButton = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -780,16 +776,20 @@ static const CGFloat kSearchPeerAvatar = 54.0f;
 	if (_scopedChatId){
 		for (UIButton *button in _scopeButtons)
 			button.hidden = YES;
+		for (UIImageView *divider in _scopeDividers)
+			divider.hidden = YES;
 		_scopeChatButton.hidden = NO;
 		if (_scopedIsGroup){
 			CGFloat half = (CGFloat)(int)((width - 18) / 2);
-			_scopeChatButton.frame = CGRectMake(6, 3, half, 30);
+			_scopeChatButton.frame = CGRectMake(6, kSearchScopeButtonTop, half,
+					kSearchScopeButtonHeight);
 			_scopeSenderButton.hidden = NO;
-			_scopeSenderButton.frame = CGRectMake(6 + half + 6, 3,
-					width - 12 - half - 6, 30);
+			_scopeSenderButton.frame = CGRectMake(6 + half + 6, kSearchScopeButtonTop,
+					width - 12 - half - 6, kSearchScopeButtonHeight);
 		} else {
 			_scopeSenderButton.hidden = YES;
-			_scopeChatButton.frame = CGRectMake(6, 3, width - 12, 30);
+			_scopeChatButton.frame = CGRectMake(6, kSearchScopeButtonTop, width - 12,
+					kSearchScopeButtonHeight);
 		}
 		return;
 	}
@@ -805,7 +805,38 @@ static const CGFloat kSearchPeerAvatar = 54.0f;
 		UIButton *button = _scopeButtons[i];
 		button.hidden = NO;
 		CGFloat buttonWidth = (i == count - 1) ? (available - each * (count - 1)) : each;
-		button.frame = CGRectMake(6 + each * i, 3, buttonWidth, 30);
+		button.frame = CGRectMake(6 + each * i, kSearchScopeButtonTop, buttonWidth,
+				kSearchScopeButtonHeight);
+	}
+	[self updateScopeDividers];
+}
+
+- (void)updateScopeDividers {
+	if (!_scopeDividers.count)
+		return;
+	UIImage *dividerLeft = [UIImage imageNamed:@"SearchScopeBarScopeDividerLeft.png"];
+	UIImage *dividerRight = [UIImage imageNamed:@"SearchScopeBarScopeDividerRight.png"];
+	for (NSUInteger i = 0; i < _scopeDividers.count; i++){
+		UIImageView *divider = _scopeDividers[i];
+		if (_scopedChatId || i + 1 >= _scopeButtons.count){
+			divider.hidden = YES;
+			continue;
+		}
+		UIImage *art = nil;
+		if (_scope == (NSInteger)i)
+			art = dividerLeft;
+		else if (_scope == (NSInteger)(i + 1))
+			art = dividerRight;
+		if (!art){
+			divider.hidden = YES;
+			continue;
+		}
+		UIButton *right = _scopeButtons[i + 1];
+		divider.image = art;
+		divider.hidden = NO;
+		divider.frame = CGRectMake(right.frame.origin.x - (CGFloat)(int)(art.size.width / 2),
+				kSearchScopeButtonTop, art.size.width, kSearchScopeButtonHeight);
+		[_scopeBar bringSubviewToFront:divider];
 	}
 }
 
@@ -818,6 +849,7 @@ static const CGFloat kSearchPeerAvatar = 54.0f;
 	_scope = button.tag;
 	for (UIButton *other in _scopeButtons)
 		[self styleScopeButton:other selected:(other.tag == _scope)];
+	[self updateScopeDividers];
 	[self restartSearch];
 }
 
@@ -1340,7 +1372,7 @@ static const CGFloat kSearchPeerAvatar = 54.0f;
 		if ([title rangeOfString:_query options:NSCaseInsensitiveSearch].location == NSNotFound)
 			continue;
 		[titles addObject:@{@"title": title,
-							@"subtitle": ([c[@"text"] isKindOfClass:NSString.class] ? c[@"text"] : @""),
+							@"subtitle": @"",
 							@"chatId": (c[@"id"] ?: @0),
 							@"isGroup": @([c[@"isGroup"] boolValue]),
 							@"fileId": (c[@"photoFileId"] ?: [NSNull null])}];
@@ -1371,7 +1403,9 @@ static const CGFloat kSearchPeerAvatar = 54.0f;
 		if (!userId)
 			continue;
 		[people addObject:@{@"title": name,
-							@"subtitle": (username.length ? [@"@" stringByAppendingString:username] : @""),
+							@"subtitle": @"",
+							@"firstName": (first.length ? first : last),
+							@"lastName": (first.length ? last : @""),
 							@"userId": @(userId),
 							@"chatId": @0,
 							@"isGroup": @NO,
@@ -1747,10 +1781,11 @@ static const CGFloat kSearchPeerAvatar = 54.0f;
 		if (tagRows.count)
 			[built addObject:@{@"title": @"Recent Hashtags", @"rows": tagRows, @"tags": @YES}];
 	} else {
-		if (self.chatHits.count)
-			[built addObject:@{@"title": @"Conversations", @"rows": self.chatHits}];
-		if (self.contactHits.count)
-			[built addObject:@{@"title": @"Contacts", @"rows": self.contactHits}];
+		NSMutableArray *localHits = [NSMutableArray array];
+		[localHits addObjectsFromArray:self.chatHits];
+		[localHits addObjectsFromArray:self.contactHits];
+		if (localHits.count)
+			[built addObject:@{@"title": @"", @"rows": localHits, @"noHeader": @YES}];
 		if (self.globalHits.count)
 			[built addObject:@{@"title": @"Global Search", @"rows": self.globalHits}];
 		if (self.hashtagHits.count)
@@ -1823,7 +1858,10 @@ static const CGFloat kSearchPeerAvatar = 54.0f;
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
 	if (section >= (NSInteger)self.sections.count)
 		return nil;
-	return ((NSDictionary *)self.sections[section])[@"title"];
+	NSDictionary *info = self.sections[section];
+	if ([info[@"noHeader"] boolValue])
+		return nil;
+	return info[@"title"];
 }
 
 - (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
@@ -1831,6 +1869,8 @@ static const CGFloat kSearchPeerAvatar = 54.0f;
 		return nil;
 
 	NSDictionary *info = self.sections[section];
+	if ([info[@"noHeader"] boolValue])
+		return nil;
 	NSString *title = [info[@"title"] isKindOfClass:NSString.class] ? info[@"title"] : @"";
 	BOOL isRecent = [info[@"recent"] boolValue];
 	BOOL isTags = [info[@"tags"] boolValue];
@@ -1901,6 +1941,8 @@ static const CGFloat kSearchPeerAvatar = 54.0f;
 
 - (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
 	if (section >= (NSInteger)self.sections.count)
+		return 0;
+	if ([((NSDictionary *)self.sections[section])[@"noHeader"] boolValue])
 		return 0;
 	return kSearchSectionHeight;
 }
@@ -2075,7 +2117,13 @@ static const CGFloat kSearchPeerAvatar = 54.0f;
 	if (!colourId)
 		colourId = [row[@"userId"] longLongValue];
 
-	[cell setTitleText:title matching:_query];
+	NSString *nameFirst = [row[@"firstName"] isKindOfClass:NSString.class] ? row[@"firstName"] : @"";
+	NSString *nameLast = [row[@"lastName"] isKindOfClass:NSString.class] ? row[@"lastName"] : @"";
+	if (nameFirst.length || nameLast.length)
+		[cell setTitleFirst:(nameFirst.length ? nameFirst : nameLast)
+					 second:(nameFirst.length ? nameLast : nil)];
+	else
+		[cell setTitleFirst:title second:nil];
 	cell.subtitleLabel.text = subtitle;
 	cell.dateLabel.text = [row[@"date"] isKindOfClass:NSString.class] ? row[@"date"] : @"";
 

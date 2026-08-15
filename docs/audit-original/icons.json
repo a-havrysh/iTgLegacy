@@ -1,0 +1,142 @@
+{
+  "screen": "TGIcons.m — the shared glyph/avatar/header-button factory (nav bar buttons, list avatars, chat ticks, bubble tails, menu glyphs)",
+  "originalCounterpart": "TelegraphKit/TelegraphKit/TGToolbarButton.m; Telegraph/Telegraph/TGInterfaceAssets.mm; Telegraph/Telegraph/TGTelegraph.mm; Telegraph/Telegraph/TGTelegraphConversationMessageAssetsSource.m; TelegraphKit/TelegraphKit/TGConversationMessageItemView.mm; Telegraph/Telegraph/TGMainTabsController.m; Telegraph/Telegraph/TGFlatActionCell.m; Telegraph/Telegraph/TGActionMenuItemCell.m; Telegraph/Telegraph/TGSettingsController.m — all under /Users/alexanderhavrysh/Git/iOS/telegram-original-sources/extracted/telegram_iphone.src",
+  "findings": [
+    {
+      "kind": "type",
+      "visibility": "obvious",
+      "ours": "TGIcons.m:41 — `UIFont *font = bold ? [UIFont boldSystemFontOfSize:12] : [UIFont systemFontOfSize:12];`. 35 call sites, and the common ones (\"More\", \"Edit\", \"New\", \"Cancel\", \"Reload\", \"Chat\", \"Try Again\") pass bold:NO, so most nav-bar buttons render in regular weight.",
+      "theirs": "Every toolbar button label, of every type, is `[UIFont boldSystemFontOfSize:12]`. There is no regular-weight variant in the class.",
+      "citation": "TelegraphKit/TelegraphKit/TGToolbarButton.m:279 (and again at :325 for the custom-image initialiser)",
+      "fix": "Drop the `bold:` branch in TGIcons.m:41 — always `[UIFont boldSystemFontOfSize:12]`. Keep the `bold:` parameter for source compatibility but ignore it for the font (see the Done-plate finding for what it should actually select)."
+    },
+    {
+      "kind": "asset",
+      "visibility": "obvious",
+      "ours": "TGIcons.m:864-925 `avatarWithInitials:size:colourId:` draws a coloured rounded rect with a white letter for every placeholder avatar (30 call sites: chat list, contacts, profile, forward picker, settings header).",
+      "theirs": "The original never draws initials. A placeholder avatar is one of eight shipped PNGs, `DialogListAvatar%d.png` (56pt), `SmallAvatar%d.png` (40pt) or `ProfileAvatar%d.png`, with `DialogListAvatarPlaceholder.png` as the generic and `DialogListAvatarSystem.png` for uid 333000.",
+      "citation": "Telegraph/Telegraph/TGInterfaceAssets.mm:273-292 (`avatarPlaceholder:` → `DialogListAvatar%d.png`), :314-332 (`smallAvatarPlaceholder:`), :450-467 (`profileAvatarPlaceholder:`)",
+      "fix": "images/ already carries `DialogListAvatar.png`, `DialogListAvatarPlaceholder@2x.png`, `DialogListAvatarSystem.png`, `DialogListGroupAvatar.png` (all 112px = 56pt) and `DialogListAvatarStroke.png`. Load those instead of drawing; at minimum stop drawing the letter, which no 2013 build ever showed."
+    },
+    {
+      "kind": "colour",
+      "visibility": "obvious",
+      "ours": "TGIcons.m:871-882 — a 7-entry palette (#E17177, #EDA86C, #A695E7, #7BC862, #6EC9CB, #65AADD, #EE7AAE) indexed by `llabs(colourId) % 7` through a re-order table `{0,4,1,6,3,5,2}`. That is the 2018-era Telegram palette.",
+      "theirs": "Eight colours: 0 #EE4928, 1 #41A903, 2 #E09602, 3 #0F94ED, 4 #8F3BF7, 5 #FC4380, 6 #00A1C4, 7 #EB7002, indexed by `MD5(\"<uid><selfUid>\")[abs(uid%16)] % 8` — no re-order table, and eight buckets not seven.",
+      "citation": "Telegraph/Telegraph/TGInterfaceAssets.mm:98-118 (`userColors[0..7]`) and :22-44 (`colorIndexForUid`)",
+      "fix": "Replace the palette in TGIcons.m:873-879 with the eight hex values above in that order, drop the `order[7]` table at :880, and index `% 8`. docs/design-language/typography-colour.md:181-183 already records the correct eight — TGIcons is the file that ignores the rulebook."
+    },
+    {
+      "kind": "asset",
+      "visibility": "obvious",
+      "ours": "TGIcons.m:735-759 `bubbleTailForColour:outgoing:` renders a 6x10 CoreGraphics curl that TGChatViewController.m:5439 puts in a separate `cell.tail` image view.",
+      "theirs": "The bubble is one stretchable PNG with the tail baked into the cap region: `[[UIImage imageNamed:@\"Msg_Out.png\"] stretchableImageWithLeftCapWidth:15 topCapHeight:15]` (and `Msg_In.png` likewise). There is no separate tail view.",
+      "citation": "Telegraph/Telegraph/TGTelegraphConversationMessageAssetsSource.m:721 (Msg_Out), :731/:750/:775 (High/Selected variants)",
+      "fix": "`Msg_In@2x.png`, `Msg_Out@2x.png`, `Msg_Out_High@2x.png` and the `_Selected` variants are all sitting in images/ (Msg_Out@2x is 80x62px = 40x31pt). Use them as `stretchableImageWithLeftCapWidth:15 topCapHeight:15` for the bubble background and delete the tail view."
+    },
+    {
+      "kind": "asset",
+      "visibility": "noticeable",
+      "ours": "TGIcons.m:761-790 `ticksWhite:` draws one 15x9 image containing both ticks, the second offset +5.5pt from the first, at 1.2pt line width.",
+      "theirs": "Two separate image views, both holding the *same* `MessageCheckFull.png` (24x20px = 12x10pt), placed at x=35 and x=31 — i.e. 4pt apart — with a third view holding `MessageCheckHalf.png` behind the first for the one-tick state.",
+      "citation": "TelegraphKit/TelegraphKit/TGConversationMessageItemView.mm:471-483; asset getters at Telegraph/Telegraph/TGTelegraphConversationMessageAssetsSource.m:855-869",
+      "fix": "Emit a single 12x10pt check and stamp it twice 4pt apart (or ship MessageCheckFull/MessageCheckHalf — they are in the original's Resources but not yet in our images/). Adjust the composed size from 15x9 to 16x10."
+    },
+    {
+      "kind": "colour",
+      "visibility": "noticeable",
+      "ours": "TGIcons.m:769 — the non-white tick is stroked in `0.35, 0.72, 0.42` (#59B86B), a green.",
+      "theirs": "There is no green checkmark anywhere in the 2013 app. Both delivery states use the same white-ish `MessageCheckFull.png` / `MessageCheckHalf.png`; the dialog list uses `DialogListSent.png` / `DialogListRead.png` plus their `_Highlighted` pairs, again untinted art.",
+      "citation": "Telegraph/Telegraph/TGTelegraphConversationMessageAssetsSource.m:855-869; TelegraphKit/TelegraphKit/TGDialogListCell.m:89-119",
+      "fix": "Delete the green branch. `DialogListSent@2x.png` (26x22px) and `DialogListRead@2x.png` (36x22px) with their `_Highlighted` variants are already in images/ — TGChatListViewController.m:2713 uses them, only the chat bubble path still draws the green."
+    },
+    {
+      "kind": "colour",
+      "visibility": "noticeable",
+      "ours": "TGIcons.m:35-55 builds the label with `textColor = white` and no shadow at all.",
+      "theirs": "Every toolbar-button label carries `shadowOffset = CGSizeMake(0, -1)` with colour `UIColorRGBA(0x0e284d, 0.4)` for generic buttons (`0x042651` at 0.3 for the blue Done type). On the blue linen bar the missing shadow makes our labels sit flat.",
+      "citation": "TelegraphKit/TelegraphKit/TGToolbarButton.m:204 (generic shadow colour), :173 (done shadow 0x042651 @0.3), :280-282 (assignment and offset)",
+      "fix": "In TGIcons.m after :47 add `label.shadowColor = [UIColor colorWithRed:0x0e/255.0 green:0x28/255.0 blue:0x4d/255.0 alpha:0.4]; label.shadowOffset = CGSizeMake(0, -1);` — and 0x042651 @0.3 for the blue/Done plate."
+    },
+    {
+      "kind": "asset",
+      "visibility": "noticeable",
+      "ours": "TGIcons.m:23-38 `styleHeaderButton:` always plates with `HeaderButton` / `HeaderButton_Pressed`; `headerButtonWithTitle:bold:` calls it unconditionally, so \"Done\", \"Save\", \"Create\" (all bold:YES) get the same grey glass as \"Cancel\".",
+      "theirs": "`TGToolbarButtonTypeDone` is a distinct type plated with `HeaderButton_Blue.png` / `_Pressed`, stretched at `width/2`; the login-style confirm uses `HeaderButton_Login_Blue.png`. The commit button is blue, not grey.",
+      "citation": "TelegraphKit/TelegraphKit/TGToolbarButton.m:67-85 (`backgroundDone` / `backgroundDonePressed`), :375-379 (type dispatch)",
+      "fix": "Make `bold:YES` select the blue plate. `HeaderButton_Blue` is not in our bundle, but `HeaderButton_Login_Blue@2x.png` / `_Pressed@2x.png` are — docs/design-language/components.md:315 already prescribes exactly this substitution, with cap `width/2`."
+    },
+    {
+      "kind": "state",
+      "visibility": "noticeable",
+      "ours": "TGIcons.m:58-98 `iconNamed:` caches one image per (name, flat, dark) and returns it as an `AlwaysTemplate`; there is no highlighted counterpart, so a glyph inside a row keeps its dark ink when the row goes blue under a finger.",
+      "theirs": "Every list/tab glyph ships as a normal + `_Highlighted` pair and the view swaps on highlight: `[[UIImageView alloc] initWithImage:… highlightedImage:…]`, and `_iconView.highlightedImage = inviteIconHighlighted;`.",
+      "citation": "Telegraph/Telegraph/TGMainTabsController.m:62-70; Telegraph/Telegraph/TGFlatActionCell.m:81-116; Telegraph/Telegraph/TGBlockActionCell.m:72-73",
+      "fix": "Add a `highlighted:` variant to `iconNamed:` that draws the same path in white (ink 1.0, no drop shadow) and hand both to `UIImageView.image` / `.highlightedImage` at the call sites."
+    },
+    {
+      "kind": "metric",
+      "visibility": "noticeable",
+      "ours": "TGIcons.m:801 and :895 — avatar corner radius is `side * 0.12f`, i.e. 6.7pt on a 56pt list avatar and 4.8pt on a 40pt one.",
+      "theirs": "Fixed radii per size: the `avatar56` processor rounds at `5`, `avatar40` at `4`, `avatarAuthor` (30pt in a 32pt box) at `5`, and `avatar27` at `0` with a full circle mask.",
+      "citation": "Telegraph/Telegraph/TGTelegraph.mm:476-493",
+      "fix": "Replace the proportional radius with a lookup: 56→5, 40→4, 30→5, else `roundf(side * 0.09f)`. At the two 70pt profile avatars this is the difference between 8.4 and ~6."
+    },
+    {
+      "kind": "asset",
+      "visibility": "noticeable",
+      "ours": "TGIcons.m:325-600 `menuGlyphNamed:` invents 27 outline glyphs, including a full settings set (notifications, privacy, data, chat, folder, devices, language, faq, policy) and menu-row marks (reply, copy, delete, pin, mute…).",
+      "theirs": "The original's settings screen contains no `imageNamed:` at all, and an action-menu row is a bare `boldSystemFontOfSize:17` title with at most a `ListCheck.png` tick on the right. The only per-row glyphs that exist are the four `ListIcon*` pairs (Invite, Friends, Encrypted, Block) on the contacts list.",
+      "citation": "Telegraph/Telegraph/TGSettingsController.m (no `imageNamed:` in the whole 566-line file); Telegraph/Telegraph/TGActionMenuItemCell.m:33 and :70; Telegraph/Telegraph/TGFlatActionCell.m:81-86",
+      "fix": "Stop putting glyphs on settings rows and menu rows — a 2013 settings list is text plus a disclosure chevron. Keep `menuGlyphNamed:` only for the contacts-list actions, and use `ListIcon*` naming/geometry (icon origin (13,12) for Invite, (10,12) for Friends, (10,9) for Encrypted) when you do."
+    },
+    {
+      "kind": "layout",
+      "visibility": "subtle",
+      "ours": "TGIcons.m:43 — `button.frame = CGRectMake(0, 0, size.width + 16, 30);` i.e. 8pt of padding per side.",
+      "theirs": "`_paddingLeft = 7; _paddingRight = 7;` (Back is the only exception at 15/9), and width is `paddingLeft + label + paddingRight`. Height 30 portrait is correct.",
+      "citation": "TelegraphKit/TelegraphKit/TGToolbarButton.m:265-266 and :520-540 (`sizeToFit`)",
+      "fix": "`size.width + 14`. Note docs/design-language/components.md:99-101 currently blesses +16 as \"close enough\" — that line is wrong against the source and should be corrected to 14 at the same time, since other agents read it as law."
+    },
+    {
+      "kind": "behaviour",
+      "visibility": "subtle",
+      "ours": "TGIcons.m:35-55 returns a plain `UIButton` whose touch target is exactly its 30pt-tall frame. A 12pt label with 8pt padding gives roughly a 34x30 target.",
+      "theirs": "`_touchInset = CGSizeMake(8, 8)` — the hit area is the bounds inset by -8 on both axes, so a short-titled bar button is still comfortably hittable.",
+      "citation": "TelegraphKit/TelegraphKit/TGToolbarButton.m:263 (and :311 in the custom initialiser)",
+      "fix": "Subclass or category-override `pointInside:withEvent:` to test `CGRectInset(self.bounds, -8, -8)` on the button returned by `headerButtonWithTitle:`."
+    },
+    {
+      "kind": "colour",
+      "visibility": "subtle",
+      "ours": "TGIcons.m:607, :633 and :650 — media and file discs are filled with `0.447, 0.710, 0.914` (#72B5E9), described in the comment as \"the blue their file and media blocks put behind a glyph\". That value appears nowhere in the original.",
+      "theirs": "The media action button is artwork, `MediaActionButton.png` / `MediaActionButton_Highlighted.png`, stretched into place — no programmatic fill, no such hex.",
+      "citation": "TelegraphKit/TelegraphKit/TGConversationMessageItemView.mm:1470-1472",
+      "fix": "Either ship `MediaActionButton(.png/_Highlighted)` from the original Resources folder, or, if the disc must stay procedural, drop the invented #72B5E9 for a colour that exists in the palette (the identity blue #0F94ED, TGInterfaceAssets.mm:104)."
+    },
+    {
+      "kind": "colour",
+      "visibility": "subtle",
+      "ours": "TGIcons.m:806-809 `TGGlyphAvatar` fills every system avatar (archive, saved messages, invite friends) with a #769AC0 → #436890 vertical gradient, commented as \"the same blue gradient as the navigation bar\".",
+      "theirs": "No such gradient exists as a constant. System avatars are shipped art (`DialogListAvatarSystem.png`, `SmallAvatarSystem.png`, `ProfileAvatarSystem.png`) and identity colours are the flat eight listed at TGInterfaceAssets.mm:100-116.",
+      "citation": "Telegraph/Telegraph/TGInterfaceAssets.mm:279 (`DialogListAvatarSystem.png`), :320 (`SmallAvatarSystem.png`), :456 (`ProfileAvatarSystem.png`)",
+      "fix": "Use `DialogListAvatarSystem.png` (in images/, 56pt) as the tile for the system rows and draw the white glyph over it, rather than inventing a two-stop gradient."
+    },
+    {
+      "kind": "asset",
+      "visibility": "subtle",
+      "ours": "TGIcons.m:102-154 draws `chats`, `contacts` and `settings` tab glyphs in CoreGraphics at 28x28. Nothing calls them — TGTabBar.m:43 already loads `TabIconContacts` / `TabIconMessages` / `TabIconSettings`.",
+      "theirs": "Three shipped pairs loaded straight into `UIImageView initWithImage:highlightedImage:`, at their native sizes 33x29 (Messages), 31x29 (Contacts), 28x28 (Settings) — not one uniform 28pt box.",
+      "citation": "Telegraph/Telegraph/TGMainTabsController.m:62-70",
+      "fix": "Delete `+chats`, `+contacts`, `+settings` from TGIcons. They are dead code that will drift back into use and re-introduce the wrong glyph sizes."
+    },
+    {
+      "kind": "asset",
+      "visibility": "subtle",
+      "ours": "TGIcons.m:853-862 `inviteFriendsAvatarOfSide:` renders the invite-friends row as a full-size gradient avatar tile with a head-and-shoulders mark.",
+      "theirs": "The invite row is not an avatar row. It is a `TGFlatActionCell` with a small `ListIconInvite.png` at origin (13,12) plus a disclosure indicator; the create-group row uses `ListIconFriends.png` at (10,12).",
+      "citation": "Telegraph/Telegraph/TGFlatActionCell.m:88-112",
+      "fix": "Render the invite/create rows with a small left icon at (13,12)/(10,12) and a disclosure chevron, not with an avatar-sized tile — otherwise the row reads as a contact."
+    }
+  ]
+}

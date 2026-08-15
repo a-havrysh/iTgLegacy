@@ -15,9 +15,6 @@
 @end
 
 @implementation TGTabBar {
-	BOOL _tracking;
-	int _touchStartIndex;
-	int _pendingIndex;
 	int _unreadCount;
 }
 
@@ -63,9 +60,6 @@
 			[self.labelViews addObject:label];
 		}
 
-		_tracking = false;
-		_touchStartIndex = 0;
-		_pendingIndex = -1;
 		_unreadCount = 0;
 		[self updateAccessibility];
 	}
@@ -87,6 +81,29 @@
 	}
 }
 
+- (void)layoutSelectedView {
+	NSUInteger count = self.buttonViews.count;
+	CGFloat width = self.frame.size.width;
+	if (count == 0 || width < 1)
+		return;
+
+	float indicatorWidth = floorf(width / count);
+	if (((int)indicatorWidth) % 2 != 0)
+		indicatorWidth -= 1;
+
+	float paddingLeft = floorf((width - indicatorWidth * count) / 2);
+
+	float additionalWidth = 0;
+	float additionalOffset = 0;
+	if (_selectedIndex == 0 || _selectedIndex == (int)count - 1)
+		additionalWidth += paddingLeft + 1;
+	if (_selectedIndex == 0)
+		additionalOffset += -paddingLeft - 1;
+
+	self.selectedView.frame = CGRectMake(paddingLeft + indicatorWidth * _selectedIndex + additionalOffset,
+										  0, indicatorWidth + additionalWidth, 49);
+}
+
 - (int)indexForLocation:(CGPoint)location {
 	NSUInteger count = self.buttonViews.count;
 	if (count == 0)
@@ -104,6 +121,7 @@
 	}
 
 	_selectedIndex = selectedIndex;
+	[self layoutSelectedView];
 	[self setNeedsLayout];
 
 	if (_selectedIndex >= 0 && _selectedIndex < (int)self.buttonViews.count){
@@ -125,64 +143,10 @@
 	if (index < 0)
 		return;
 
-	_tracking = true;
-	_touchStartIndex = _selectedIndex;
-	_pendingIndex = index;
-	self.selectedIndex = index;
-}
-
-- (void)touchesMoved:(NSSet *)touches withEvent:(UIEvent *)event {
-	[super touchesMoved:touches withEvent:event];
-
-	if (!_tracking)
-		return;
-
-	UITouch *touch = [touches anyObject];
-	if (touch == nil)
-		return;
-
-	CGPoint location = [touch locationInView:self];
-	if (!CGRectContainsPoint(CGRectInset(self.bounds, 0, -16), location)){
-		if (_pendingIndex >= 0){
-			_pendingIndex = -1;
-			self.selectedIndex = _touchStartIndex;
-		}
-		return;
-	}
-
-	int index = [self indexForLocation:location];
-	if (index >= 0 && index != _pendingIndex){
-		_pendingIndex = index;
-		self.selectedIndex = index;
-	}
-}
-
-- (void)touchesEnded:(NSSet *)touches withEvent:(UIEvent *)event {
-	[super touchesEnded:touches withEvent:event];
-
-	BOOL wasTracking = _tracking;
-	int index = _pendingIndex;
-	_tracking = false;
-	_pendingIndex = -1;
-
-	if (!wasTracking || index < 0 || index >= (int)self.buttonViews.count)
-		return;
-
 	self.selectedIndex = index;
 
 	if ([self.tabDelegate respondsToSelector:@selector(tabBarSelectedItem:)])
 		[self.tabDelegate tabBarSelectedItem:index];
-}
-
-- (void)touchesCancelled:(NSSet *)touches withEvent:(UIEvent *)event {
-	[super touchesCancelled:touches withEvent:event];
-
-	if (!_tracking)
-		return;
-
-	_tracking = false;
-	_pendingIndex = -1;
-	self.selectedIndex = _touchStartIndex;
 }
 
 - (void)loadUnreadBadgeView {
@@ -270,15 +234,7 @@
 		indicatorWidth -= 1;
 
 	float paddingLeft = floorf((viewSize.width - indicatorWidth * count) / 2);
-	float additionalWidth = 0;
-	float additionalOffset = 0;
-	if (self.selectedIndex == 0 || self.selectedIndex == (int)count - 1)
-		additionalWidth += paddingLeft + 1;
-	if (self.selectedIndex == 0)
-		additionalOffset += -paddingLeft - 1;
-
-	self.selectedView.frame = CGRectMake(paddingLeft + indicatorWidth * self.selectedIndex + additionalOffset,
-										  0, indicatorWidth + additionalWidth, 49);
+	[self layoutSelectedView];
 
 	int index = -1;
 	for (UIView *iconView in self.buttonViews){

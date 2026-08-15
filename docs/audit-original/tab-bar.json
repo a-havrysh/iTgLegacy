@@ -1,0 +1,70 @@
+{
+  "screen": "Main tab bar (TGTabBar + tabs container)",
+  "originalCounterpart": "telegram-original-sources/extracted/telegram_iphone.src/Telegraph/Telegraph/TGMainTabsController.m (TGTabBar + TGMainTabsController), TGAppDelegate.mm:297-303",
+  "findings": [
+    {
+      "kind": "behaviour",
+      "visibility": "obvious",
+      "ours": "TGTabBar.m:117-176 - tap only commits on touchesEnded; touchesBegan sets a pending index and touchesMoved/touchesCancelled can revert to _touchStartIndex, so the delegate (and the actual tab switch) fires on lift.",
+      "theirs": "The tab switches on touch-down: touchesBegan sets the index and calls the delegate immediately; there is no touchesMoved/touchesEnded/touchesCancelled at all, so dragging off the bar cannot cancel a switch.",
+      "citation": "TGMainTabsController.m:144-154 (-touchesBegan:withEvent:)",
+      "fix": "Delete -touchesMoved:, -touchesEnded:, -touchesCancelled: and the _tracking/_touchStartIndex/_pendingIndex ivars from TGTabBar.m; in -touchesBegan: compute index, [self setSelectedIndex:index] and call [self.tabDelegate tabBarSelectedItem:index] right there."
+    },
+    {
+      "kind": "behaviour",
+      "visibility": "obvious",
+      "ours": "RootViewController.m:74-77 - tabBarSelectedItem: only acts when the index changes; tapping the already-selected tab does nothing.",
+      "theirs": "Tapping the selected tab again sends scrollToTopRequested to the selected view controller, scrolling the chat/contact list back to the top.",
+      "citation": "TGMainTabsController.m:425-434 (-tabBarSelectedItem:)",
+      "fix": "In RootViewController -tabBarSelectedItem: add an else branch: if ([self.selectedViewController respondsToSelector:@selector(scrollToTopRequested)]) [self.selectedViewController performSelector:@selector(scrollToTopRequested)]; and implement -scrollToTopRequested on the chat list / contacts / settings controllers (setContentOffset to -contentInset.top, animated)."
+    },
+    {
+      "kind": "layout",
+      "visibility": "noticeable",
+      "ours": "RootViewController.m:69-72 - customTabBar.hidden is flipped when a child navigation controller pushes, so the bar disappears/reappears abruptly mid push animation.",
+      "theirs": "The tabs controller is the root of a single outer TGNavigationController; pushes happen on that outer stack, so the whole tabs view (bar included) slides off together. The tab bar is never hidden and never toggles.",
+      "citation": "TGAppDelegate.mm:303 ([TGNavigationController navigationControllerWithRootController:_mainTabsController]) plus the absence of any hidden= on _customTabBar in TGMainTabsController.m:353-365",
+      "fix": "Push detail controllers on the outer navigation controller (self.navigationController of RootViewController) instead of per-tab UINavigationControllers, and remove the -navigationController:willShowViewController: hidden toggle at RootViewController.m:69-72."
+    },
+    {
+      "kind": "behaviour",
+      "visibility": "noticeable",
+      "ours": "RootViewController.m:30-42 wraps each tab in its own UINavigationController, so each tab carries its own nav bar and title, and switching tabs cross-fades two different bars.",
+      "theirs": "One shared navigation bar owned by the outer navigation controller; the tabs controller pulls title / titleView / left+right bar button items from the child via TGTabControllerChild and updates them in place, with a 0.1s CATransition on the title when it changes, and honours navigationBarShouldBeHidden per child.",
+      "citation": "TGMainTabsController.m:398-410 (-tabBarController:shouldSelectViewController:), 461-566 (-updateTitleForController:switchingTabs:animateText:)",
+      "fix": "Adopt the original structure: children conform to a TGTabControllerChild-style protocol (controllerTitle, controllerTitleView:, controllerLeft/RightBarButtonItem, navigationBarShouldBeHidden) and RootViewController writes them onto its own navigationItem on selection, with the 0.1s kCAMediaTimingFunctionEaseIn CATransition on the title layer."
+    },
+    {
+      "kind": "layout",
+      "visibility": "noticeable",
+      "ours": "RootViewController.m:21-25 - the TGHacks layout delegate is installed on self.view only.",
+      "theirs": "It is installed on self.view AND on self.view.subviews[0] (the UITabBar content container), which is what forces the transition view to fill the container's bounds; without it child content can be laid out short by the tab-bar height.",
+      "citation": "TGMainTabsController.m:349-352 (-loadView)",
+      "fix": "In RootViewController -loadView also call [TGHacks setLayoutDelegateForContainerView:self.view.subviews[0] layoutDelegate:<a second TGTabsContainerViewDelegate instance>] (guarding for a non-empty subviews array), retaining it like self.layoutDelegate."
+    },
+    {
+      "kind": "behaviour",
+      "visibility": "subtle",
+      "ours": "TGTabBar.m:97-115 - setSelectedIndex only calls setNeedsLayout, so the white selection PNG moves on the next layout pass rather than at the moment of the touch.",
+      "theirs": "setSelectedIndex recomputes indicatorWidth/paddingLeft and assigns _selectedView.frame synchronously inside the setter (duplicating the layoutSubviews math), so the highlight snaps under the finger immediately.",
+      "citation": "TGMainTabsController.m:108-141 (-setSelectedIndex:)",
+      "fix": "In TGTabBar -setSelectedIndex: compute indicatorWidth/paddingLeft/additionalWidth/additionalOffset and set self.selectedView.frame = CGRectMake(paddingLeft + indicatorWidth*_selectedIndex + additionalOffset, 0, indicatorWidth + additionalWidth, 49) directly, in addition to (or instead of) setNeedsLayout."
+    },
+    {
+      "kind": "order",
+      "visibility": "subtle",
+      "ours": "RootViewController.m:38-42 - the third tab is TGSettingsViewController, a settings list.",
+      "theirs": "The third tab (labelled Settings.TabTitle) is the user's own profile page, TGProfileController initWithUid:0, i.e. the account screen with avatar/phone/username at the top and settings below.",
+      "citation": "TGAppDelegate.mm:293 and 298 ([[TGProfileController alloc] initWithUid:0 ...] placed third in setViewControllers:)",
+      "fix": "Make the third tab open our profile/account screen (own avatar, name, phone header) with the settings rows below it, rather than a bare settings table; keep the tab caption \"Settings\"."
+    },
+    {
+      "kind": "behaviour",
+      "visibility": "subtle",
+      "ours": "RootViewController.m:93-113 - the tab badge sums unread only over unmuted chats and also writes applicationIconBadgeNumber.",
+      "theirs": "TGTabBar setUnreadCount: is fed a single count and renders it; no muting filter or app-icon badge is applied in the tabs controller.",
+      "citation": "TGMainTabsController.m:174-207 (-setUnreadCount:) and 442-445 (-setUnreadCount: forwarding)",
+      "fix": "Keep the arithmetic if the muted-chat concept is deliberate, but move it out of the tab controller; do not let the mute filter make the tab badge disagree with the chat list's own unread badges."
+    }
+  ]
+}

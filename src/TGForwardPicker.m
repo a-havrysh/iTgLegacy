@@ -16,6 +16,34 @@ static const CGFloat kGroupButtonWidth = 80.0f;
 static const CGFloat kGroupSeparatorWidth = 2.0f;
 static const CGFloat kGroupButtonHeight = 30.0f;
 
+static NSString *TGForwardDateString(NSTimeInterval unix) {
+	if (unix <= 0)
+		return @"";
+
+	NSDate *date = [NSDate dateWithTimeIntervalSince1970:unix];
+	NSTimeInterval age = -[date timeIntervalSinceNow];
+
+	static NSDateFormatter *time = nil, *weekday = nil, *full = nil;
+	if (!time){
+		NSLocale *fixed = [[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"];
+		time = [[NSDateFormatter alloc] init];
+		[time setLocale:fixed];
+		[time setDateFormat:@"HH:mm"];
+		weekday = [[NSDateFormatter alloc] init];
+		[weekday setLocale:fixed];
+		[weekday setDateFormat:@"EEE"];
+		full = [[NSDateFormatter alloc] init];
+		[full setLocale:fixed];
+		[full setDateFormat:@"dd.MM.yy"];
+	}
+
+	if (age < 24 * 3600)
+		return [time stringFromDate:date];
+	if (age < 7 * 24 * 3600)
+		return [weekday stringFromDate:date];
+	return [full stringFromDate:date];
+}
+
 static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 	UIImage *raw = [UIImage imageNamed:name];
 	return [raw stretchableImageWithLeftCapWidth:leftCap topCapHeight:0];
@@ -24,7 +52,10 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 @interface TGForwardPickerCell : UITableViewCell
 @property (nonatomic, strong) UIImageView *avatar;
 @property (nonatomic, strong) UILabel *title;
+@property (nonatomic, strong) UILabel *titleSecond;
 @property (nonatomic, strong) UILabel *preview;
+@property (nonatomic, strong) UILabel *date;
+@property (nonatomic, strong) UIImageView *groupIcon;
 @property (nonatomic, assign) BOOL compact;
 @end
 
@@ -45,13 +76,36 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 	_title.backgroundColor = [UIColor clearColor];
 	_title.textColor = [UIColor colorWithRed:0x11 / 255.0f green:0x11 / 255.0f
 										blue:0x11 / 255.0f alpha:1.0f];
+	_title.highlightedTextColor = [UIColor whiteColor];
 	[self.contentView addSubview:_title];
+
+	_titleSecond = [[UILabel alloc] init];
+	_titleSecond.backgroundColor = [UIColor clearColor];
+	_titleSecond.textColor = _title.textColor;
+	_titleSecond.highlightedTextColor = [UIColor whiteColor];
+	[self.contentView addSubview:_titleSecond];
+
+	_groupIcon = [[UIImageView alloc] init];
+	_groupIcon.backgroundColor = [UIColor clearColor];
+	_groupIcon.hidden = YES;
+	[self.contentView addSubview:_groupIcon];
 
 	_preview = [[UILabel alloc] init];
 	_preview.backgroundColor = [UIColor clearColor];
 	_preview.textColor = [UIColor colorWithRed:0x88 / 255.0f green:0x88 / 255.0f
 										  blue:0x88 / 255.0f alpha:1.0f];
+	_preview.highlightedTextColor = [UIColor whiteColor];
+	_preview.lineBreakMode = NSLineBreakByTruncatingTail;
 	[self.contentView addSubview:_preview];
+
+	_date = [[UILabel alloc] init];
+	_date.backgroundColor = [UIColor clearColor];
+	_date.font = [UIFont boldSystemFontOfSize:13];
+	_date.textAlignment = NSTextAlignmentRight;
+	_date.textColor = [UIColor colorWithRed:0x33 / 255.0f green:0x7a / 255.0f
+									   blue:0xcc / 255.0f alpha:1.0f];
+	_date.highlightedTextColor = [UIColor whiteColor];
+	[self.contentView addSubview:_date];
 
 	self.backgroundView = [[UIImageView alloc] init];
 	self.selectedBackgroundView = [[UIImageView alloc] init];
@@ -72,11 +126,16 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 - (void)applyStyle {
 	if (_compact) {
 		self.title.font = [UIFont systemFontOfSize:19];
+		self.titleSecond.font = [UIFont boldSystemFontOfSize:19];
 		self.preview.font = [UIFont systemFontOfSize:13];
+		self.preview.numberOfLines = 1;
 	} else {
 		self.title.font = [UIFont boldSystemFontOfSize:16];
+		self.titleSecond.font = self.title.font;
 		self.preview.font = [UIFont systemFontOfSize:14];
+		self.preview.numberOfLines = 2;
 	}
+	self.date.hidden = _compact;
 
 	UIImage *plate = TGForwardStretchImage(_compact ? @"Cell102.png" : @"DialogListCell.png", 1);
 	UIImage *platePressed = TGForwardStretchImage(
@@ -104,23 +163,68 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 	_avatar.frame = CGRectMake(inset, inset, side, side);
 	_avatar.layer.cornerRadius = _compact ? 4 : 5;
 
-	CGFloat left = _compact ? 49 : 73;
+	CGFloat left = _compact ? 54 : 73;
 	CGFloat right = _compact ? 5 : 10;
 	CGFloat width = w - left - right;
 	if (width < 0)
 		width = 0;
 
-	if (_preview.text.length == 0) {
-		CGFloat titleHeight = _compact ? 24 : 20;
-		_title.frame = CGRectMake(left, (CGFloat)(int)((h - titleHeight) / 2), width, titleHeight);
-		_preview.frame = CGRectZero;
-	} else if (_compact) {
-		_title.frame = CGRectMake(left, 6, width, 22);
-		_preview.frame = CGRectMake(left + 1, 28, width, 18);
-	} else {
-		_title.frame = CGRectMake(left, 6, width, 20);
-		_preview.frame = CGRectMake(left, 29, width, 20);
+	if (_compact) {
+		_groupIcon.hidden = YES;
+		_date.frame = CGRectZero;
+
+		CGFloat titleHeight = _title.font.lineHeight;
+		CGFloat subtitleHeight = _preview.font.lineHeight;
+		CGFloat titleY;
+		if (_preview.text.length == 0) {
+			titleY = (CGFloat)(int)((CGFloat)(int)((h - titleHeight) / 2) - 1);
+			_preview.frame = CGRectZero;
+		} else {
+			titleY = (CGFloat)(int)((h - titleHeight - subtitleHeight - 1) / 2);
+			_preview.frame = CGRectMake(left + 1, titleY + titleHeight, width, subtitleHeight);
+		}
+
+		CGFloat firstWidth = width;
+		if (_titleSecond.text.length) {
+			CGFloat cap = w - left - 5 - 14;
+			if (cap < 0)
+				cap = 0;
+			firstWidth = [_title.text sizeWithFont:_title.font].width;
+			if (firstWidth > cap)
+				firstWidth = cap;
+			CGFloat secondX = left + firstWidth + 4;
+			CGFloat secondWidth = w - secondX - 5;
+			if (secondWidth < 0)
+				secondWidth = 0;
+			_titleSecond.frame = CGRectMake(secondX, titleY, secondWidth, titleHeight);
+		} else {
+			_titleSecond.frame = CGRectZero;
+		}
+		_title.frame = CGRectMake(left, titleY, firstWidth, titleHeight);
+		return;
 	}
+
+	_titleSecond.frame = CGRectZero;
+
+	CGFloat dateWidth = (CGFloat)(int)[_date.text sizeWithFont:_date.font].width;
+	CGFloat dateX = w - dateWidth - 9;
+	_date.frame = CGRectMake(dateX, 9, dateWidth, 15);
+
+	CGFloat iconWidth = 0;
+	if (_groupIcon.image) {
+		iconWidth = 21;
+		_groupIcon.hidden = NO;
+		CGSize iconSize = _groupIcon.image.size;
+		_groupIcon.frame = CGRectMake(left, 6 + 4, iconSize.width, iconSize.height);
+	} else {
+		_groupIcon.hidden = YES;
+	}
+
+	CGFloat titleWidth = (CGFloat)(int)(dateX - 4 - 73 - 18) - iconWidth;
+	if (titleWidth < 0)
+		titleWidth = 0;
+	_title.frame = CGRectMake(left + iconWidth, 6, titleWidth, 20);
+	_preview.frame = CGRectMake(left, 29, width, 40);
 }
 
 @end
@@ -129,6 +233,12 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 @property (nonatomic, strong) NSArray *chats;
 @property (nonatomic, strong) NSArray *contacts;
 @property (nonatomic, strong) NSArray *visibleRows;
+@property (nonatomic, strong) NSArray *sections;
+@property (nonatomic, strong) NSArray *sectionIndices;
+@property (nonatomic, copy) NSString *chatsQuery;
+@property (nonatomic, copy) NSString *contactsQuery;
+@property (nonatomic, assign) CGFloat chatsOffset;
+@property (nonatomic, assign) CGFloat contactsOffset;
 @property (nonatomic, assign) NSInteger mode;
 @property (nonatomic, assign) BOOL contactsLoaded;
 @property (nonatomic, assign) BOOL picking;
@@ -136,7 +246,9 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 @property (nonatomic, copy) NSString *query;
 @property (nonatomic, strong) NSMutableDictionary *avatars;
 @property (nonatomic, strong) NSMutableSet *avatarsRequested;
-@property (nonatomic, strong) UILabel *emptyLabel;
+@property (nonatomic, strong) UIView *emptyContainer;
+@property (nonatomic, strong) UILabel *emptyTitle;
+@property (nonatomic, strong) UILabel *emptyText;
 @property (nonatomic, strong) UIView *toolbarContainerView;
 @property (nonatomic, strong) NSMutableArray *groupButtons;
 @property (nonatomic, strong) NSMutableArray *groupSeparators;
@@ -153,6 +265,9 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 	self.visibleRows = self.chats;
 	self.mode = 0;
 	self.query = @"";
+	self.chatsQuery = @"";
+	self.contactsQuery = @"";
+	self.sections = [NSArray array];
 	self.avatars = [[NSMutableDictionary alloc] init];
 	self.avatarsRequested = [[NSMutableSet alloc] init];
 
@@ -175,8 +290,9 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 	self.searchBar = [[UISearchBar alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 44)];
 	self.searchBar.delegate = self;
 	self.searchBar.placeholder = @"Search";
-	if ([self.searchBar respondsToSelector:@selector(setBarTintColor:)])
-		self.searchBar.barTintColor = [[TGTheme shared] listBackgroundColour];
+	UIImage *searchBackground = [UIImage imageNamed:@"SearchBarBackground.png"];
+	if (searchBackground && [self.searchBar respondsToSelector:@selector(setBackgroundImage:)])
+		[self.searchBar setBackgroundImage:searchBackground];
 	else
 		[self.searchBar tg_setTintColor:[UIColor colorWithWhite:0.68f alpha:1.0f]];
 	self.tableView.tableHeaderView = self.searchBar;
@@ -185,16 +301,16 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 	background.backgroundColor = [[TGTheme shared] listBackgroundColour];
 	background.autoresizingMask =
 			UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-	self.emptyLabel = [[UILabel alloc] initWithFrame:
-			CGRectMake(0, 120, background.bounds.size.width, 22)];
-	self.emptyLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-	self.emptyLabel.backgroundColor = [UIColor clearColor];
-	self.emptyLabel.textAlignment = NSTextAlignmentCenter;
-	self.emptyLabel.font = [UIFont systemFontOfSize:15];
-	self.emptyLabel.textColor = [[TGTheme shared] secondaryTextColour];
-	self.emptyLabel.hidden = YES;
-	[background addSubview:self.emptyLabel];
 	self.tableView.backgroundView = background;
+
+	UIView *overscroll = [[UIView alloc] initWithFrame:
+			CGRectMake(0, -500, self.tableView.bounds.size.width, 500)];
+	overscroll.backgroundColor = [UIColor colorWithRed:0xe4 / 255.0f green:0xe9 / 255.0f
+												  blue:0xf0 / 255.0f alpha:1.0f];
+	overscroll.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	[self.tableView addSubview:overscroll];
+
+	[self buildEmptyContainer];
 
 	[self buildToolbar];
 
@@ -213,6 +329,62 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 		[[TGClient shared] loadChats];
 
 	[self refreshRows];
+}
+
+- (void)buildEmptyContainer {
+	UIView *background = self.tableView.backgroundView;
+	if (!background)
+		return;
+
+	UIColor *grey = [UIColor colorWithRed:0x8b / 255.0f green:0x97 / 255.0f
+									 blue:0xa5 / 255.0f alpha:1.0f];
+
+	self.emptyContainer = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 250, 0)];
+	self.emptyContainer.backgroundColor = [UIColor clearColor];
+	self.emptyContainer.hidden = YES;
+	self.emptyContainer.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin
+			| UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin
+			| UIViewAutoresizingFlexibleBottomMargin;
+
+	self.emptyTitle = [[UILabel alloc] init];
+	self.emptyTitle.backgroundColor = [UIColor clearColor];
+	self.emptyTitle.textColor = grey;
+	self.emptyTitle.font = [UIFont boldSystemFontOfSize:15];
+	[self.emptyContainer addSubview:self.emptyTitle];
+
+	self.emptyText = [[UILabel alloc] init];
+	self.emptyText.backgroundColor = [UIColor clearColor];
+	self.emptyText.textColor = grey;
+	self.emptyText.font = [UIFont systemFontOfSize:14];
+	self.emptyText.textAlignment = NSTextAlignmentCenter;
+	self.emptyText.lineBreakMode = NSLineBreakByWordWrapping;
+	self.emptyText.numberOfLines = 0;
+	[self.emptyContainer addSubview:self.emptyText];
+
+	[background addSubview:self.emptyContainer];
+}
+
+- (void)showEmptyTitle:(NSString *)title text:(NSString *)text {
+	if (!self.emptyContainer)
+		return;
+
+	self.emptyTitle.text = title;
+	[self.emptyTitle sizeToFit];
+	CGRect titleFrame = self.emptyTitle.frame;
+	titleFrame.origin = CGPointMake((CGFloat)(int)((250 - titleFrame.size.width) / 2), 0);
+	self.emptyTitle.frame = titleFrame;
+
+	self.emptyText.text = text ?: @"";
+	CGSize textSize = [self.emptyText sizeThatFits:CGSizeMake(232, 1000)];
+	self.emptyText.frame = CGRectMake((CGFloat)(int)((250 - textSize.width) / 2),
+			titleFrame.origin.y + titleFrame.size.height + (text.length ? 8 : 0),
+			textSize.width, text.length ? textSize.height : 0);
+
+	CGFloat height = self.emptyText.frame.origin.y + self.emptyText.frame.size.height;
+	CGRect bounds = self.tableView.backgroundView.bounds;
+	self.emptyContainer.frame = CGRectMake((CGFloat)(int)((bounds.size.width - 250) / 2),
+			(CGFloat)(int)((bounds.size.height - height) / 2), 250, height);
+	self.emptyContainer.hidden = NO;
 }
 
 - (NSArray *)orderedChats {
@@ -307,20 +479,60 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 		self.visibleRows = filtered;
 	}
 
+	[self rebuildSections];
+
 	if (self.visibleRows.count == 0){
 		if (query.length > 0)
-			self.emptyLabel.text = @"No results";
+			[self showEmptyTitle:@"No results" text:@""];
 		else if (self.mode == 1)
-			self.emptyLabel.text = self.contactsLoaded ? @"No contacts" : @"Loading...";
+			[self showEmptyTitle:self.contactsLoaded ? @"You have no contacts yet" : @"Loading"
+							text:self.contactsLoaded
+					? @"People from your address book who use Telegram show up here."
+					: @""];
 		else
-			self.emptyLabel.text = @"No chats";
-		self.emptyLabel.hidden = NO;
+			[self showEmptyTitle:@"You have no conversations yet"
+							text:@"Start messaging by picking someone from the Contacts section."];
 	} else {
-		self.emptyLabel.hidden = YES;
+		self.emptyContainer.hidden = YES;
 	}
 
 	[self.tableView reloadData];
 	[self fetchMissingAvatars];
+}
+
+- (void)rebuildSections {
+	NSArray *rows = self.visibleRows ?: [NSArray array];
+	if (self.mode == 0 || rows.count == 0){
+		self.sections = rows.count
+				? [NSArray arrayWithObject:[NSDictionary dictionaryWithObject:rows forKey:@"rows"]]
+				: [NSArray array];
+		self.sectionIndices = nil;
+		return;
+	}
+
+	NSMutableArray *sections = [NSMutableArray array];
+	NSMutableArray *indices = [NSMutableArray arrayWithObject:UITableViewIndexSearch];
+	NSString *currentLetter = nil;
+	NSMutableArray *current = nil;
+	for (NSDictionary *row in rows){
+		NSString *name = [self titleForRow:row];
+		NSString *letter = name.length
+				? [[name substringToIndex:1] uppercaseString] : @"#";
+		unichar first = [letter characterAtIndex:0];
+		if (!((first >= 'A' && first <= 'Z') || (first >= 0x0410 && first <= 0x042f)))
+			letter = @"#";
+		if (!currentLetter || ![letter isEqualToString:currentLetter]){
+			currentLetter = letter;
+			current = [NSMutableArray array];
+			[sections addObject:[NSDictionary dictionaryWithObjectsAndKeys:
+					letter, @"letter", current, @"rows", nil]];
+			[indices addObject:letter];
+		}
+		[current addObject:row];
+	}
+
+	self.sections = sections;
+	self.sectionIndices = indices;
 }
 
 - (void)fetchMissingAvatars {
@@ -509,11 +721,23 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 - (void)groupButtonPressed:(UIButton *)button {
 	if (self.mode == button.tag)
 		return;
+
+	if (self.mode == 0){
+		self.chatsQuery = self.query;
+		self.chatsOffset = self.tableView.contentOffset.y;
+	} else {
+		self.contactsQuery = self.query;
+		self.contactsOffset = self.tableView.contentOffset.y;
+	}
+
 	self.mode = button.tag;
+	self.query = (self.mode == 0) ? self.chatsQuery : self.contactsQuery;
+	self.searchBar.text = self.query;
 	[self updateGroupImages];
 	self.tableView.rowHeight = (self.mode == 0) ? kChatRowHeight : kContactRowHeight;
 	[self refreshRows];
-	[self.tableView setContentOffset:CGPointZero animated:NO];
+	CGFloat offset = (self.mode == 0) ? self.chatsOffset : self.contactsOffset;
+	[self.tableView setContentOffset:CGPointMake(0, offset) animated:NO];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -541,16 +765,87 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 	return self.visibleRows ?: [NSArray array];
 }
 
+- (NSArray *)rowsInSection:(NSInteger)section {
+	if (section < 0 || section >= (NSInteger)self.sections.count)
+		return [NSArray array];
+	NSArray *rows = [[self.sections objectAtIndex:section] objectForKey:@"rows"];
+	return [rows isKindOfClass:NSArray.class] ? rows : [NSArray array];
+}
+
 - (NSDictionary *)rowAtIndexPath:(NSIndexPath *)indexPath {
-	NSArray *rows = [self rows];
+	NSArray *rows = [self rowsInSection:indexPath.section];
 	if (indexPath.row < 0 || indexPath.row >= (NSInteger)rows.count)
 		return nil;
 	NSDictionary *row = [rows objectAtIndex:indexPath.row];
 	return [row isKindOfClass:NSDictionary.class] ? row : nil;
 }
 
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+	return (NSInteger)self.sections.count;
+}
+
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-	return [self rows].count;
+	return (NSInteger)[self rowsInSection:section].count;
+}
+
+- (NSString *)letterForSection:(NSInteger)section {
+	if (section < 0 || section >= (NSInteger)self.sections.count)
+		return nil;
+	NSString *letter = [[self.sections objectAtIndex:section] objectForKey:@"letter"];
+	return [letter isKindOfClass:NSString.class] ? letter : nil;
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
+	return [self letterForSection:section] ? 25 : 0;
+}
+
+- (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
+	NSString *letter = [self letterForSection:section];
+	if (!letter)
+		return nil;
+
+	UIView *container = [[UIView alloc] initWithFrame:
+			CGRectMake(0, 0, tableView.bounds.size.width, 25)];
+	container.clipsToBounds = NO;
+	container.backgroundColor = [UIColor clearColor];
+
+	UIImageView *plate = [[UIImageView alloc] initWithFrame:
+			CGRectMake(0, -1, container.bounds.size.width, 26)];
+	plate.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+	plate.image = [UIImage imageNamed:
+			(section == 0) ? @"CategoryDividerFirst.png" : @"CategoryDivider.png"];
+	[container addSubview:plate];
+
+	UILabel *label = [[UILabel alloc] init];
+	label.font = [UIFont boldSystemFontOfSize:15];
+	label.backgroundColor = [UIColor clearColor];
+	label.textColor = [UIColor whiteColor];
+	label.shadowColor = [UIColor colorWithRed:0x88 / 255.0f green:0x92 / 255.0f
+										 blue:0x9c / 255.0f alpha:1.0f];
+	label.shadowOffset = CGSizeMake(0, -1);
+	label.numberOfLines = 1;
+	label.text = letter;
+	[label sizeToFit];
+	label.frame = CGRectOffset(label.frame, 10, 1);
+	[container addSubview:label];
+
+	return container;
+}
+
+- (NSArray *)sectionIndexTitlesForTableView:(UITableView *)tableView {
+	return self.sectionIndices.count > 1 ? self.sectionIndices : nil;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView
+sectionForSectionIndexTitle:(NSString *)title atIndex:(NSInteger)index {
+	if (index == 0){
+		[tableView setContentOffset:CGPointMake(0, -tableView.contentInset.top) animated:NO];
+		return -1;
+	}
+	NSUInteger found = [self.sectionIndices indexOfObject:title];
+	if (found == NSNotFound)
+		return -1;
+	return (NSInteger)found - 1;
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -597,23 +892,35 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 
 	cell.compact = (self.mode == 1);
 	cell.title.text = title;
-	cell.title.textColor = [[TGTheme shared] primaryTextColour];
-	cell.preview.textColor = [[TGTheme shared] secondaryTextColour];
+	cell.titleSecond.text = @"";
+	cell.date.text = @"";
+	cell.groupIcon.image = nil;
 
 	NSString *preview = @"";
 	if (self.mode == 0){
 		NSString *text = row[@"text"];
 		if ([text isKindOfClass:NSString.class])
 			preview = text;
+		cell.date.text = TGForwardDateString([row[@"date"] doubleValue]);
+		if ([row[@"isGroup"] boolValue])
+			cell.groupIcon.image = [UIImage imageNamed:@"DialogListGroupChatIcon.png"];
+		cell.preview.textColor = [UIColor colorWithRed:0x88 / 255.0f green:0x88 / 255.0f
+												  blue:0x88 / 255.0f alpha:1.0f];
 	} else {
-		NSString *username = row[@"username"];
-		NSString *phone = row[@"phone"];
-		if ([username isKindOfClass:NSString.class] && username.length
-				&& ![title hasPrefix:@"@"])
-			preview = [NSString stringWithFormat:@"@%@", username];
-		else if ([phone isKindOfClass:NSString.class] && phone.length
-				&& ![title isEqualToString:phone])
-			preview = phone;
+		NSString *first = [row[@"first_name"] isKindOfClass:NSString.class] ? row[@"first_name"] : @"";
+		NSString *last = [row[@"last_name"] isKindOfClass:NSString.class] ? row[@"last_name"] : @"";
+		if (first.length && last.length){
+			cell.title.text = first;
+			cell.titleSecond.text = last;
+		}
+		NSString *status = row[@"statusText"];
+		if ([status isKindOfClass:NSString.class])
+			preview = status;
+		BOOL online = [row[@"isOnline"] boolValue];
+		cell.preview.textColor = online
+				? [UIColor colorWithRed:0x07 / 255.0f green:0x79 / 255.0f
+									blue:0xd0 / 255.0f alpha:1.0f]
+				: [UIColor colorWithWhite:0 alpha:0.53f];
 	}
 	cell.preview.text = preview;
 

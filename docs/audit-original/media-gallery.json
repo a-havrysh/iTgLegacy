@@ -1,0 +1,142 @@
+{
+  "screen": "Shared media grid + full-screen media viewer (src/TGMediaViewController.m)",
+  "originalCounterpart": "Telegraph/Telegraph/TGPhotoGridController.mm, Telegraph/Telegraph/TGPhotoGridCell.m, TelegraphKit/TelegraphKit/TGImageViewControllerInterfaceView.m, TelegraphKit/TelegraphKit/TGImageViewController.mm, TelegraphKit/TelegraphKit/TGImageViewPage.m, Telegraph/Telegraph/en.lproj/Localizable.strings",
+  "findings": [
+    {
+      "kind": "asset",
+      "visibility": "obvious",
+      "ours": "Viewer chrome is two flat CG rectangles: _topBar 44pt tall at y=0 with colorWithWhite:0 alpha:0.6, _bottomBar 60pt tall, and the status bar is hidden on appear (src/TGMediaViewController.m:657-658, 687-690, 766).",
+      "theirs": "Top and bottom chrome are shipped PNGs: GalleryTopPanel.png placed at y = status bar height (20) so the status bar stays visible, plus a stretched NavigationBar_Corners.png at y=-20; the bottom is a horizontally stretched GalleryBottomPanel.png whose height comes from the art. Status bar is faded via TGHacks setApplicationStatusBarAlpha, never hidden.",
+      "citation": "TGImageViewControllerInterfaceView.m:45-56, 92-97, 227, 259-262",
+      "fix": "Replace the two UIViews with UIImageViews using GalleryTopPanel.png (frame 0,20,width,image.height), NavigationBar_Corners.png stretched at y=-20 inside it, and GalleryBottomPanel.png stretched with leftCapWidth = width/2 pinned to the bottom. Stop calling setStatusBarHidden:YES; fade the status bar alpha instead. The PNGs are not yet in images/ and must be pulled from the original resource set."
+    },
+    {
+      "kind": "metric",
+      "visibility": "obvious",
+      "ours": "_counterLabel uses boldSystemFontOfSize:15 in a 20pt box at y=3, x=70, width-140 (src/TGMediaViewController.m:671-676); a second _dateLabel systemFontOfSize:11 sits under it at y=22 in the top bar.",
+      "theirs": "Counter label is boldSystemFontOfSize:20, frame (floorf((width-140)/2), 11, 140, 20), white with a 0x000000/0.5 shadow offset (0,-1). There is no date in the top panel at all — date lives in the bottom panel.",
+      "citation": "TGImageViewControllerInterfaceView.m:82-90",
+      "fix": "Set _counterLabel.font = boldSystemFontOfSize:20, frame ((width-140)/2, 11, 140, 20), shadowColor UIColorRGBA(0x000000,0.5), shadowOffset (0,-1); remove _dateLabel from the top bar and move the date to the bottom panel (see the bottom-panel finding)."
+    },
+    {
+      "kind": "layout",
+      "visibility": "obvious",
+      "ours": "Bottom bar carries a text button \"Actions\" at (4,10,66,40), a 3-line caption label systemFontOfSize:13 at (74,0,width-164,60), and a text \"Play\"/\"▶ m:ss\" button at the right (src/TGMediaViewController.m:693-717, 1071).",
+      "theirs": "Bottom panel is: an image action button GalleryActionIcon.png at (6,2,40,40) on the left; a trash button GalleryTrashIcon.png at (width-40-6, 2, 40, 40) on the right; a centred author label boldSystemFontOfSize:14 at ((width-220)/2, 4, 220, 20); a centred date label at ((width-140)/2, 23, 140, 20) with dateFont 13 / dateLabelFont 11; and a centred VideoPanelPlay.png / VideoPanelPause.png image button that replaces author+date while a video is playable. No caption text is shown anywhere.",
+      "citation": "TGImageViewControllerInterfaceView.m:103-146, 182-197, 442-451",
+      "fix": "Rebuild the bottom bar to that layout: icon buttons at both ends, centred author (bold 14, y=4) over centred date (13, y=23) both white with 0x000000/0.5 shadow at (0,-1), and a centred play/pause image button that toggles author/date alpha to 0 when visible. Drop the caption label; expose delete as the right-hand trash button instead of an action-sheet row."
+    },
+    {
+      "kind": "wording",
+      "visibility": "obvious",
+      "ours": "Top-right button titled \"Done\", boldSystemFontOfSize:15, at (width-70, 0, 66, 44) (src/TGMediaViewController.m:662-669).",
+      "theirs": "A TGToolbarButton on the LEFT of the top panel, text TGLocalized(@\"Common.Close\") = \"Close\", built from stretched GalleryDoneButton.png / GalleryDoneButton_Highlighted.png (leftCapWidth 11), minWidth 55, touchInset (16,16), sizeToFit then offset by (5, 7).",
+      "citation": "TGImageViewControllerInterfaceView.m:60-67; en.lproj/Localizable.strings:48 (\"Common.Close\" = \"Close\")",
+      "fix": "Move the button to the left edge at offset (5,7), size to fit with minWidth 55, title \"Close\", and back it with the stretched GalleryDoneButton.png artwork rather than a bare title."
+    },
+    {
+      "kind": "wording",
+      "visibility": "obvious",
+      "ours": "self.title = @\"Shared Media\", overridden by chatTitle in viewDidLoad (src/TGMediaViewController.m:1469, 1654-1655).",
+      "theirs": "self.titleText = NSLocalizedString(@\"ConversationMedia.Title\", nil), which is \"Media\". The chat title is never put in this navigation bar.",
+      "citation": "TGPhotoGridController.mm:118; en.lproj/Localizable.strings:500 (\"ConversationMedia.Title\" = \"Media\")",
+      "fix": "Set the title to \"Media\" and delete the chatTitle override in viewDidLoad."
+    },
+    {
+      "kind": "state",
+      "visibility": "obvious",
+      "ours": "Empty state is a single UILabel, systemFontOfSize:15, secondaryTextColour, text \"No shared media\" / \"No shared files\" / \"No shared links\" / \"No shared music\", positioned at height/2 - 50 (src/TGMediaViewController.m:151-158, 1555-1565).",
+      "theirs": "Empty state is a PhotosBlankPlaceholder.png image with a label 12pt below it, boldSystemFontOfSize:17, colour UIColorRGB(0x808895) on white, text TGLocalized(@\"ConversationMedia.Empty\") = \"No Photos in this Conversation\"; the whole group is centred in the view and inserted BELOW the table, fading in over the standard animation when !canLoadMore && count == 0.",
+      "citation": "TGPhotoGridController.mm:700-745; en.lproj/Localizable.strings:501",
+      "fix": "For the Media scope use the image+label group: PhotosBlankPlaceholder.png, gap 12, label boldSystemFontOfSize:17 in #808895, text \"No Photos in this Conversation\", container centred in self.view and inserted belowSubview:_tableView, alpha faded in. Keep the invented Files/Links/Music strings but match the 17pt bold #808895 type."
+    },
+    {
+      "kind": "asset",
+      "visibility": "noticeable",
+      "ours": "Each tile is a bare TGRemoteImageView with a flat 0.87-white CG-generated placeholder and no shadow (src/TGMediaViewController.m:53-65, 293-304).",
+      "theirs": "Each 75x75 tile gets a shadow UIImageView built from [TGInterfaceAssets mediaGridImageShadow] (MediaGridImageShadow.png, stretched in centre) added as a subview of the image view, and the placeholder is the shipped FlatImagePlaceholder.png via mediaGridImagePlaceholder.",
+      "citation": "TGPhotoGridCell.m:100-101, 121-122, 142; TGInterfaceAssets.mm:749-763",
+      "fix": "Add a stretched MediaGridImageShadow.png UIImageView per tile and use FlatImagePlaceholder.png as the placeholder instead of TGMediaTilePlaceholder()'s CG grey. Neither PNG is in images/ yet; both need to be added. docs/design-language/typography-colour.md:300 already states the shadow is artwork, so our code contradicts the rulebook."
+    },
+    {
+      "kind": "metric",
+      "visibility": "noticeable",
+      "ours": "TGMediaPageGap = 20; the paging scroll view sits at x=0 with width = bounds.width + 20 and each page is laid out full-bounds-width (src/TGMediaViewController.m:22, 644-645, 805, 815-816).",
+      "theirs": "pageGap = 40. The paging scroll view is placed at x = -pageGap/2 with width = bounds.width + pageGap, and each page frame is (index * width + pageGap/2, 0, width - pageGap, height) so the gap is split evenly on both sides of every page.",
+      "citation": "TGImageViewController.mm:149, 168, 187; TGImagePagingScrollView.mm:217, 323, 450",
+      "fix": "Set TGMediaPageGap = 40, position _pagingView at x = -20 with width bounds.width + 40, and lay each page out at (index * pageWidth + 20, 0, bounds.width - 40, height)."
+    },
+    {
+      "kind": "behaviour",
+      "visibility": "noticeable",
+      "ours": "While the full image downloads we spin a white large UIActivityIndicatorView in the centre of the screen, and on failure show an invented rounded \"Tap to retry\" button (src/TGMediaViewController.m:719-739, 1004-1031).",
+      "theirs": "Download progress is shown in the bottom panel: the controls container fades to 0 and a progress container fades in carrying the author name plus a systemFontOfSize:13 white label reading TGLocalized(@\"Preview.LoadingImage\") = \"loading full image...\" (or \"loading video...\"), with a 15x15 TGClockProgressView pinned at x = -19 to the left of that label. There is no centre spinner and no retry affordance.",
+      "citation": "TGImageViewControllerInterfaceView.m:148-178, 453-477; en.lproj/Localizable.strings:507-508",
+      "fix": "Move the loading indication into the bottom bar as a 13pt white label \"loading full image...\" / \"loading video...\" with a small clock progress view 19pt to its left, cross-fading with the author/date container; remove the centre white spinner and the \"Tap to retry\" button."
+    },
+    {
+      "kind": "wording",
+      "visibility": "noticeable",
+      "ours": "Action sheet is default-styled and offers \"Save Image\" / \"Save Video\", \"Forward\", \"Delete\" (src/TGMediaViewController.m:1218-1234).",
+      "theirs": "The sheet is UIActionSheetStyleBlackTranslucent; the action button's sheet only offers TGLocalized(@\"Preview.SaveToCameraRoll\") = \"Save to Camera Roll\" plus Common.Cancel, and deletion is a separate confirmation sheet whose destructive title is Preview.DeletePhoto = \"Delete Photo\" or Preview.DeleteVideo = \"Delete Video\", raised by the trash button.",
+      "citation": "TGImageViewController.mm:525-534, 545-555; en.lproj/Localizable.strings:510-513",
+      "fix": "Set actionSheetStyle = UIActionSheetStyleBlackTranslucent, rename the save row to \"Save to Camera Roll\" for both photo and video, and move deletion out of this sheet into a trash-button-triggered sheet titled \"Delete Photo\"/\"Delete Video\"."
+    },
+    {
+      "kind": "colour",
+      "visibility": "noticeable",
+      "ours": "Grid screen background and table background use [[TGTheme shared] listBackgroundColour] (src/TGMediaViewController.m:1470, 1481).",
+      "theirs": "self.view.backgroundColor = [UIColor whiteColor] for the shared-media grid.",
+      "citation": "TGPhotoGridController.mm:121",
+      "fix": "Use plain white for the grid screen's view and table background (the list scopes may keep the themed list colour, but the Media grid was white)."
+    },
+    {
+      "kind": "asset",
+      "visibility": "subtle",
+      "ours": "The video badge play glyph is CG-drawn via [TGIcons play] and vertically centred inside the 19pt bar with MIN(11,...) clamping (src/TGMediaViewController.m:315-319, TGIcons.m:210).",
+      "theirs": "The badge icon is the shipped MessageInlineVideoIcon.png, added at a fixed offset of (4, 5) from the bar's origin, in a bar of exactly (0, 75-19, 75, 19) with colour UIColorRGBA(0x000000, 0.6f) and a right-aligned boldSystemFontOfSize:10 label at (75-56-3, 0, 56, 19).",
+      "citation": "TGPhotoGridCell.m:157-177",
+      "fix": "Use MessageInlineVideoIcon.png at its natural size offset by (4,5) instead of the CG play glyph. Bar geometry, 0.6 black, and the 10pt bold right-aligned 56x19 label already match."
+    },
+    {
+      "kind": "metric",
+      "visibility": "subtle",
+      "ours": "The loading row's spinner is centred vertically in the 50pt row at y=25 (src/TGMediaViewController.m:1844).",
+      "theirs": "The loading cell's gray activity indicator is horizontally centred but pinned at y = 14 in the 50pt row, not centred.",
+      "citation": "TGPhotoGridController.mm:280 (frame origin.y = 14), :234 (row height 50)",
+      "fix": "Position the loading spinner with frame origin y = 14 rather than centering it at y = 25."
+    },
+    {
+      "kind": "metric",
+      "visibility": "subtle",
+      "ours": "The grid table has no bottom content inset (src/TGMediaViewController.m:1477-1485).",
+      "theirs": "The controller sets an explicit table inset of UIEdgeInsetsMake(0, 0, 4, 0) with a zero scroll-indicator inset, so the last row of tiles clears the bottom by 4pt, matching the 4pt gap above each row.",
+      "citation": "TGPhotoGridController.mm:131",
+      "fix": "Set _tableView.contentInset bottom to 4 while leaving scrollIndicatorInsets at zero."
+    },
+    {
+      "kind": "behaviour",
+      "visibility": "subtle",
+      "ours": "Zoom is minimumZoomScale 1.0 / maximumZoomScale 3.0, and double tap zooms to a fixed 2.5x rect (src/TGMediaViewController.m:539-540, 1112).",
+      "theirs": "Maximum zoom is derived: for a fitted image it is minScale * 2.0f (i.e. exactly 2x the fitted size), otherwise the natural pixel scale; double tap toggles between minimumZoomScale and that maximum, never a hard-coded factor.",
+      "citation": "TGImageViewPage.m:1429-1443, 1289-1294",
+      "fix": "Compute maximumZoomScale as minimumZoomScale * 2 (clamped to the image's natural scale) and make double-tap toggle between min and max rather than zooming to a 2.5x rect."
+    },
+    {
+      "kind": "behaviour",
+      "visibility": "subtle",
+      "ours": "Chrome show/hide both animate over 0.2s (src/TGMediaViewController.m:1082).",
+      "theirs": "toggleShowHide uses asymmetric durations: 0.15s to show, 0.3s to hide.",
+      "citation": "TGImageViewControllerInterfaceView.m:230-234",
+      "fix": "Use 0.15s when revealing the bars and 0.3s when hiding them."
+    },
+    {
+      "kind": "behaviour",
+      "visibility": "subtle",
+      "ours": "Tapping a tile always opens the full-screen viewer, whatever the tile is showing (src/TGMediaViewController.m:499-511).",
+      "theirs": "The tap handler bails out when the tile has not finished loading: `UIImage *currentImage = [remoteImageView currentImage]; if (currentImage == nil) return;` — a still-placeholder tile is not tappable.",
+      "citation": "TGPhotoGridCell.m:207-209",
+      "fix": "In -handleTap:, ignore the hit when the matched tile's image is still the placeholder (no loaded image), matching the original's no-op on unloaded tiles."
+    }
+  ]
+}

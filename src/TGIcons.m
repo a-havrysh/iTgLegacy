@@ -1,8 +1,37 @@
 #import "TGIcons.h"
 #import "TGTheme.h"
 
+@interface TGHeaderButton : UIButton
+@end
+
+@implementation TGHeaderButton
+
+- (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
+	return CGRectContainsPoint(CGRectInset(self.bounds, -8, -8), point);
+}
+
+@end
+
 static NSMutableDictionary *sCache = nil;
 static NSCache *sAvatarCache = nil;
+
+static CGFloat TGAvatarCornerRadius(CGFloat side) {
+	if (fabs(side - 56) < 0.5f) return 5;
+	if (fabs(side - 40) < 0.5f) return 4;
+	if (fabs(side - 30) < 0.5f) return 5;
+	return roundf(side * 0.09f);
+}
+
+static BOOL TGInitialsAreName(NSString *initials) {
+	if (initials.length == 0)
+		return YES;
+	NSCharacterSet *letters = [NSCharacterSet alphanumericCharacterSet];
+	for (NSUInteger i = 0; i < initials.length; i++){
+		if ([letters characterIsMember:[initials characterAtIndex:i]])
+			return YES;
+	}
+	return NO;
+}
 
 static NSCache *TGAvatarCache(void) {
 	static dispatch_once_t once;
@@ -21,30 +50,48 @@ static NSCache *TGAvatarCache(void) {
 }
 
 + (void)styleHeaderButton:(UIButton *)button {
+	[self styleHeaderButton:button done:NO];
+}
+
++ (void)styleHeaderButton:(UIButton *)button done:(BOOL)done {
 	static UIImage *bg = nil;
 	static UIImage *bgPressed = nil;
+	static UIImage *bgDone = nil;
+	static UIImage *bgDonePressed = nil;
 	static dispatch_once_t onceToken;
 	dispatch_once(&onceToken, ^{
-		bg = [[UIImage imageNamed:@"HeaderButton"] resizableImageWithCapInsets:UIEdgeInsetsMake(0, 6, 0, 6)];
-		bgPressed = [[UIImage imageNamed:@"HeaderButton_Pressed"] resizableImageWithCapInsets:UIEdgeInsetsMake(0, 6, 0, 6)];
+		bg = [[UIImage imageNamed:@"HeaderButton"] stretchableImageWithLeftCapWidth:6 topCapHeight:0];
+		bgPressed = [[UIImage imageNamed:@"HeaderButton_Pressed"] stretchableImageWithLeftCapWidth:6 topCapHeight:0];
+
+		UIImage *rawDone = [UIImage imageNamed:@"HeaderButton_Login_Blue"];
+		UIImage *rawDonePressed = [UIImage imageNamed:@"HeaderButton_Login_Blue_Pressed"];
+		bgDone = [rawDone stretchableImageWithLeftCapWidth:(int)(rawDone.size.width / 2) topCapHeight:0];
+		bgDonePressed = [rawDonePressed stretchableImageWithLeftCapWidth:(int)(rawDonePressed.size.width / 2) topCapHeight:0];
 	});
-	[button setBackgroundImage:bg forState:UIControlStateNormal];
-	[button setBackgroundImage:bgPressed forState:UIControlStateHighlighted];
+
+	UIImage *normal = (done && bgDone) ? bgDone : bg;
+	UIImage *pressed = (done && bgDonePressed) ? bgDonePressed : bgPressed;
+	[button setBackgroundImage:normal forState:UIControlStateNormal];
+	[button setBackgroundImage:pressed forState:UIControlStateHighlighted];
 }
 
 + (UIButton *)headerButtonWithTitle:(NSString *)title bold:(BOOL)bold
 							  target:(id)target action:(SEL)action {
-	UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
-	[self styleHeaderButton:button];
+	UIButton *button = [[TGHeaderButton alloc] initWithFrame:CGRectZero];
+	[self styleHeaderButton:button done:bold];
 	[button addTarget:target action:action forControlEvents:UIControlEventTouchUpInside];
 
-	UIFont *font = bold ? [UIFont boldSystemFontOfSize:12] : [UIFont systemFontOfSize:12];
+	UIFont *font = [UIFont boldSystemFontOfSize:12];
 	CGSize size = [title sizeWithFont:font];
-	button.frame = CGRectMake(0, 0, size.width + 16, 30);
+	button.frame = CGRectMake(0, 0, size.width + 14, 30);
 
 	UILabel *label = [[UILabel alloc] initWithFrame:button.bounds];
 	label.text = title;
 	label.textColor = [UIColor whiteColor];
+	label.shadowColor = bold
+			? [UIColor colorWithRed:0x04 / 255.0f green:0x26 / 255.0f blue:0x51 / 255.0f alpha:0.3f]
+			: [UIColor colorWithRed:0x0e / 255.0f green:0x28 / 255.0f blue:0x4d / 255.0f alpha:0.4f];
+	label.shadowOffset = CGSizeMake(0, -1);
 	label.textAlignment = NSTextAlignmentCenter;
 	label.backgroundColor = [UIColor clearColor];
 	label.font = font;
@@ -603,8 +650,7 @@ static NSCache *TGAvatarCache(void) {
 	UIGraphicsBeginImageContextWithOptions(CGSizeMake(side, side), NO, 0);
 	CGContextRef ctx = UIGraphicsGetCurrentContext();
 
-	// #72B5E9, the blue their file and media blocks put behind a glyph.
-	CGContextSetRGBFillColor(ctx, 0.447f, 0.710f, 0.914f, 1.0f);
+	CGContextSetRGBFillColor(ctx, 0x0f / 255.0f, 0x94 / 255.0f, 0xed / 255.0f, 1.0f);
 	CGContextFillEllipseInRect(ctx, CGRectMake(0, 0, side, side));
 
 	CGContextSetRGBFillColor(ctx, 1, 1, 1, 1);
@@ -630,7 +676,7 @@ static NSCache *TGAvatarCache(void) {
 	UIGraphicsBeginImageContextWithOptions(CGSizeMake(side, side), NO, 0);
 	CGContextRef ctx = UIGraphicsGetCurrentContext();
 
-	CGContextSetRGBFillColor(ctx, 0.447f, 0.710f, 0.914f, 1.0f);   // #72B5E9
+	CGContextSetRGBFillColor(ctx, 0x0f / 255.0f, 0x94 / 255.0f, 0xed / 255.0f, 1.0f);
 	CGContextFillEllipseInRect(ctx, CGRectMake(0, 0, side, side));
 
 	// A sheet with the top right corner turned down, drawn as one path so the
@@ -647,7 +693,7 @@ static NSCache *TGAvatarCache(void) {
 	CGContextFillPath(ctx);
 
 	// The fold itself, punched back out in the disc's blue.
-	CGContextSetRGBFillColor(ctx, 0.447f, 0.710f, 0.914f, 1.0f);
+	CGContextSetRGBFillColor(ctx, 0x0f / 255.0f, 0x94 / 255.0f, 0xed / 255.0f, 1.0f);
 	CGContextMoveToPoint(ctx, r - fold, t);
 	CGContextAddLineToPoint(ctx, r, t + fold);
 	CGContextAddLineToPoint(ctx, r - fold, t + fold);
@@ -759,30 +805,26 @@ static NSCache *TGAvatarCache(void) {
 }
 
 + (UIImage *)ticksWhite:(BOOL)white {
-	CGSize size = CGSizeMake(15, 9);
+	CGSize size = CGSizeMake(16, 10);
 	UIGraphicsBeginImageContextWithOptions(size, NO, 0);
 	CGContextRef ctx = UIGraphicsGetCurrentContext();
 
 	if (white)
 		CGContextSetRGBStrokeColor(ctx, 1, 1, 1, 1);
 	else
-		CGContextSetRGBStrokeColor(ctx, 0.35f, 0.72f, 0.42f, 1);
+		CGContextSetRGBStrokeColor(ctx, 0.051f, 0.710f, 0.051f, 1);
 
 	CGContextSetLineWidth(ctx, 1.2f);
 	CGContextSetLineCap(ctx, kCGLineCapRound);
 	CGContextSetLineJoin(ctx, kCGLineJoinRound);
 
-	// back tick, then the front one shifted right - they overlap, which is
-	// what makes it read as one mark rather than two symbols.
-	CGContextMoveToPoint(ctx, 0.5f, 5.0f);
-	CGContextAddLineToPoint(ctx, 3.0f, 7.6f);
-	CGContextAddLineToPoint(ctx, 8.4f, 1.4f);
-	CGContextStrokePath(ctx);
-
-	CGContextMoveToPoint(ctx, 6.0f, 5.0f);
-	CGContextAddLineToPoint(ctx, 8.5f, 7.6f);
-	CGContextAddLineToPoint(ctx, 14.0f, 1.4f);
-	CGContextStrokePath(ctx);
+	for (int i = 0; i < 2; i++){
+		CGFloat dx = i * 4.0f;
+		CGContextMoveToPoint(ctx, dx + 0.6f, 5.4f);
+		CGContextAddLineToPoint(ctx, dx + 3.4f, 8.4f);
+		CGContextAddLineToPoint(ctx, dx + 11.4f, 1.6f);
+		CGContextStrokePath(ctx);
+	}
 
 	UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
 	UIGraphicsEndImageContext();
@@ -791,28 +833,17 @@ static NSCache *TGAvatarCache(void) {
 
 #pragma mark - avatars
 
-/// Both rows use the same blue gradient as the navigation bar, with a white
-/// glyph on top - a letter in a coloured circle reads as a person.
+/// The system rows sit on the flat identity blue their placeholder art uses,
+/// with a white glyph on top.
 static UIImage *TGGlyphAvatar(CGFloat side, void (^draw)(CGContextRef ctx, CGFloat s)) {
 	UIGraphicsBeginImageContextWithOptions(CGSizeMake(side, side), NO, 0);
 	CGContextRef ctx = UIGraphicsGetCurrentContext();
 
 	UIBezierPath *shape = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, side, side)
-													  cornerRadius:side * 0.12f];
-	CGContextSaveGState(ctx);
+													  cornerRadius:TGAvatarCornerRadius(side)];
+	CGContextSetRGBFillColor(ctx, 0x0f / 255.0f, 0x94 / 255.0f, 0xed / 255.0f, 1.0f);
 	CGContextAddPath(ctx, shape.CGPath);
-	CGContextClip(ctx);
-
-	CGFloat components[] = {
-		0x76 / 255.0f, 0x9a / 255.0f, 0xc0 / 255.0f, 1.0f,
-		0x43 / 255.0f, 0x68 / 255.0f, 0x90 / 255.0f, 1.0f
-	};
-	CGColorSpaceRef colourSpace = CGColorSpaceCreateDeviceRGB();
-	CGGradientRef gradient = CGGradientCreateWithColorComponents(colourSpace, components, NULL, 2);
-	CGContextDrawLinearGradient(ctx, gradient, CGPointMake(0, 0), CGPointMake(0, side), 0);
-	CGGradientRelease(gradient);
-	CGColorSpaceRelease(colourSpace);
-	CGContextRestoreGState(ctx);
+	CGContextFillPath(ctx);
 
 	CGContextSetRGBFillColor(ctx, 1, 1, 1, 1);
 	CGContextSetRGBStrokeColor(ctx, 1, 1, 1, 1);
@@ -830,8 +861,6 @@ static UIImage *TGGlyphAvatar(CGFloat side, void (^draw)(CGContextRef ctx, CGFlo
 		CGContextFillRect(ctx, CGRectMake(x, s * 0.32f, w, s * 0.10f));
 		CGContextFillRect(ctx, CGRectMake(x + s * 0.03f, s * 0.44f,
 										  w - s * 0.06f, s * 0.24f));
-		// The slot is a soft shadow rather than a background punch-out, since
-		// the disc behind it is a gradient now, not a flat colour to match.
 		CGContextSetRGBFillColor(ctx, 0, 0, 0, 0.25f);
 		CGContextFillRect(ctx, CGRectMake(s * 0.44f, s * 0.50f, s * 0.12f, s * 0.05f));
 	});
@@ -865,24 +894,21 @@ static UIImage *TGGlyphAvatar(CGFloat side, void (^draw)(CGContextRef ctx, CGFlo
                            size:(CGFloat)size
                        colourId:(int64_t)colourId
 {
-	// Telegram's own placeholder colours, and its own mapping: the palette is
-	// indexed through [0,4,1,6,3,5,2] so that the same person gets the same
-	// colour here as in every other client.
 	static NSArray *palette = nil;
 	if (!palette)
-		palette = @[@[@0.882f, @0.443f, @0.463f],   // red
-					@[@0.929f, @0.659f, @0.424f],   // orange
-					@[@0.651f, @0.584f, @0.906f],   // violet
-					@[@0.482f, @0.784f, @0.384f],   // green
-					@[@0.431f, @0.788f, @0.796f],   // cyan
-					@[@0.396f, @0.667f, @0.867f],   // blue
-					@[@0.933f, @0.478f, @0.682f]];  // pink
-	static const NSUInteger order[7] = {0, 4, 1, 6, 3, 5, 2};
-	NSUInteger slot = (NSUInteger)(llabs(colourId) % 7);
-	NSArray *c = palette[order[slot]];
+		palette = @[@[@0xee, @0x49, @0x28],
+					@[@0x41, @0xa9, @0x03],
+					@[@0xe0, @0x96, @0x02],
+					@[@0x0f, @0x94, @0xed],
+					@[@0x8f, @0x3b, @0xf7],
+					@[@0xfc, @0x43, @0x80],
+					@[@0x00, @0xa1, @0xc4],
+					@[@0xeb, @0x70, @0x02]];
+	NSUInteger slot = (NSUInteger)(llabs(colourId) % 8);
+	NSArray *c = palette[slot];
 
 	NSString *cacheKey = [NSString stringWithFormat:@"%@-%d-%u-%d",
-			initials.length ? initials : @"?", (int)(size * 100),
+			TGInitialsAreName(initials) ? @"*" : initials, (int)(size * 100),
 			(unsigned)slot, (int)[TGTheme shared].isFlat];
 	UIImage *cachedAvatar = [TGAvatarCache() objectForKey:cacheKey];
 	if (cachedAvatar)
@@ -892,30 +918,35 @@ static UIImage *TGGlyphAvatar(CGFloat side, void (^draw)(CGContextRef ctx, CGFlo
 	CGContextRef ctx = UIGraphicsGetCurrentContext();
 
 	UIBezierPath *shape = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, size, size)
-													  cornerRadius:size * 0.12f];
-	CGContextSetRGBFillColor(ctx, [c[0] floatValue], [c[1] floatValue],
-								  [c[2] floatValue], 1.0f);
+													  cornerRadius:TGAvatarCornerRadius(size)];
+	CGContextSetRGBFillColor(ctx, [c[0] floatValue] / 255.0f, [c[1] floatValue] / 255.0f,
+								  [c[2] floatValue] / 255.0f, 1.0f);
 	CGContextAddPath(ctx, shape.CGPath);
 	CGContextFillPath(ctx);
 
-	if (![TGTheme shared].isFlat){
-		// a glassy highlight across the top half
-		CGContextSaveGState(ctx);
-		CGContextAddPath(ctx, shape.CGPath);
-		CGContextClip(ctx);
-		CGContextSetRGBFillColor(ctx, 1, 1, 1, 0.20f);
-		CGContextFillEllipseInRect(ctx,
-				CGRectMake(-size * 0.2f, -size * 0.55f, size * 1.4f, size * 0.95f));
-		CGContextRestoreGState(ctx);
-	}
+	CGContextSaveGState(ctx);
+	CGContextAddPath(ctx, shape.CGPath);
+	CGContextClip(ctx);
 
-	NSString *text = initials.length ? initials : @"?";
-	UIFont *font = [UIFont boldSystemFontOfSize:size * 0.4f];
-	CGSize textSize = [text sizeWithFont:font];
-	[[UIColor whiteColor] set];
-	[text drawAtPoint:CGPointMake((size - textSize.width) / 2,
-								  (size - textSize.height) / 2)
-			 withFont:font];
+	if (TGInitialsAreName(initials)){
+		UIBezierPath *person = [UIBezierPath bezierPathWithOvalInRect:
+				CGRectMake(size * 0.315f, size * 0.14f, size * 0.37f, size * 0.40f)];
+		[person appendPath:[UIBezierPath bezierPathWithRoundedRect:
+				CGRectMake(size * 0.14f, size * 0.55f, size * 0.72f, size * 0.62f)
+													 cornerRadius:size * 0.31f]];
+		CGContextSetRGBFillColor(ctx, 0, 0, 0, 0.28f);
+		CGContextAddPath(ctx, person.CGPath);
+		CGContextFillPath(ctx);
+	} else {
+		NSString *text = initials;
+		UIFont *font = [UIFont boldSystemFontOfSize:size * 0.4f];
+		CGSize textSize = [text sizeWithFont:font];
+		[[UIColor whiteColor] set];
+		[text drawAtPoint:CGPointMake((size - textSize.width) / 2,
+									  (size - textSize.height) / 2)
+				 withFont:font];
+	}
+	CGContextRestoreGState(ctx);
 
 	UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
 	UIGraphicsEndImageContext();

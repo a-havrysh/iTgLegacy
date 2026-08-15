@@ -19,7 +19,7 @@ static const CGFloat TGMediaTileSpacing = 4.0f;
 static const CGFloat TGMediaRowHeight   = 79.0f;
 static const CGFloat TGMediaBannerHeight = 44.0f;
 static const NSInteger TGMediaPageSize  = 50;
-static const CGFloat TGMediaPageGap     = 20.0f;
+static const CGFloat TGMediaPageGap     = 40.0f;
 static const CGFloat TGMediaScopeHeight = 36.0f;
 static const CGFloat TGMediaListRowHeight = 56.0f;
 
@@ -54,6 +54,9 @@ static UIImage *TGMediaTilePlaceholder(void) {
 	static UIImage *placeholder = nil;
 	static dispatch_once_t once;
 	dispatch_once(&once, ^{
+		placeholder = [UIImage imageNamed:@"FlatImagePlaceholder.png"];
+		if (placeholder)
+			return;
 		CGSize size = CGSizeMake(TGMediaTileSide, TGMediaTileSide);
 		UIGraphicsBeginImageContextWithOptions(size, YES, 0.0f);
 		[[UIColor colorWithWhite:0.87f alpha:1.0f] setFill];
@@ -153,7 +156,7 @@ static NSString *TGMediaEmptyTextForScope(NSInteger scope) {
 		case TGMediaScopeFiles: return @"No shared files";
 		case TGMediaScopeLinks: return @"No shared links";
 		case TGMediaScopeMusic: return @"No shared music";
-		default: return @"No shared media";
+		default: return @"No Photos in this Conversation";
 	}
 }
 
@@ -282,6 +285,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 @property (nonatomic, strong) UIView *badgeBar;
 @property (nonatomic, strong) UILabel *badgeLabel;
 @property (nonatomic, strong) UIImageView *playView;
+@property (nonatomic, strong) UIImageView *shadowView;
 
 - (void)showVideoBadge:(NSString *)text;
 - (void)hideVideoBadge;
@@ -299,8 +303,24 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 		self.userInteractionEnabled = NO;
 		self.fadeTransition = true;
 		self.backgroundColor = [UIColor colorWithWhite:0.87f alpha:1.0f];
+
+		UIImage *shadow = [UIImage imageNamed:@"MediaGridImageShadow.png"];
+		if (shadow){
+			_shadowView = [[UIImageView alloc] initWithImage:
+					[shadow stretchableImageWithLeftCapWidth:(int)(shadow.size.width / 2)
+												topCapHeight:(int)(shadow.size.height / 2)]];
+			_shadowView.frame = CGRectMake(0, 0, TGMediaTileSide, TGMediaTileSide);
+			_shadowView.userInteractionEnabled = NO;
+			[self addSubview:_shadowView];
+		}
 	}
 	return self;
+}
+
+- (void)layoutSubviews {
+	[super layoutSubviews];
+	if (_shadowView)
+		_shadowView.frame = self.bounds;
 }
 
 - (void)buildBadge {
@@ -312,11 +332,17 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	_badgeBar.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.6f];
 	_badgeBar.userInteractionEnabled = NO;
 
-	UIImage *play = [TGIcons play];
-	_playView = [[UIImageView alloc] initWithImage:play];
-	_playView.frame = CGRectMake(4, (int)((19 - MIN(11.0f, play.size.height)) / 2),
-								 MIN(11.0f, play.size.width), MIN(11.0f, play.size.height));
-	_playView.contentMode = UIViewContentModeScaleAspectFit;
+	UIImage *play = [UIImage imageNamed:@"MessageInlineVideoIcon.png"];
+	if (play){
+		_playView = [[UIImageView alloc] initWithImage:play];
+		_playView.frame = CGRectOffset(_playView.frame, 4, 5);
+	} else {
+		play = [TGIcons play];
+		_playView = [[UIImageView alloc] initWithImage:play];
+		_playView.frame = CGRectMake(4, (int)((19 - MIN(11.0f, play.size.height)) / 2),
+									 MIN(11.0f, play.size.width), MIN(11.0f, play.size.height));
+		_playView.contentMode = UIViewContentModeScaleAspectFit;
+	}
 	[_badgeBar addSubview:_playView];
 
 	_badgeLabel = [[UILabel alloc] initWithFrame:CGRectMake(TGMediaTileSide - 56 - 3, 0, 56, 19)];
@@ -504,6 +530,9 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	for (NSInteger i = 0; i < (NSInteger)_tiles.count; i++){
 		TGMediaTileView *tile = _tiles[i];
 		if (CGRectContainsPoint(CGRectInset(tile.frame, -2, -2), point)){
+			UIImage *loaded = [tile currentImage];
+			if (loaded == nil || loaded == TGMediaTilePlaceholder())
+				return;
 			[self.gridDelegate gridCell:self tappedItemAtIndex:self.baseIndex + i];
 			return;
 		}
@@ -537,7 +566,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 		self.scrollsToTop = NO;
 		self.bouncesZoom = YES;
 		self.minimumZoomScale = 1.0f;
-		self.maximumZoomScale = 3.0f;
+		self.maximumZoomScale = 2.0f;
 		self.delegate = self;
 		self.pageIndex = -1;
 
@@ -595,15 +624,19 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 @property (nonatomic, strong) NSMutableArray *pagePool;
 @property (nonatomic, strong) NSMutableDictionary *imageCache;
 
-@property (nonatomic, strong) UIView *topBar;
+@property (nonatomic, strong) UIImageView *topBar;
 @property (nonatomic, strong) UILabel *counterLabel;
 @property (nonatomic, strong) UILabel *dateLabel;
-@property (nonatomic, strong) UIView *bottomBar;
-@property (nonatomic, strong) UILabel *captionLabel;
+@property (nonatomic, strong) UIImageView *bottomBar;
+@property (nonatomic, strong) UIView *controlsContainer;
+@property (nonatomic, strong) UIView *progressContainer;
+@property (nonatomic, strong) UILabel *progressLabel;
+@property (nonatomic, strong) UIActivityIndicatorView *progressSpinner;
+@property (nonatomic, strong) UILabel *authorLabel;
 @property (nonatomic, strong) UIButton *playButton;
 @property (nonatomic, strong) UIButton *actionButton;
+@property (nonatomic, strong) UIButton *deleteButton;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
-@property (nonatomic, strong) UIButton *retryButton;
 @property (nonatomic, strong) NSMutableSet *failedPages;
 @property (nonatomic, strong) NSMutableSet *prefetchedFiles;
 @property (nonatomic, strong) NSArray *sheetActions;
@@ -642,7 +675,8 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	CGRect bounds = self.view.bounds;
 
 	_pagingView = [[UIScrollView alloc] initWithFrame:
-			CGRectMake(0, 0, bounds.size.width + TGMediaPageGap, bounds.size.height)];
+			CGRectMake(-TGMediaPageGap / 2.0f, 0,
+					   bounds.size.width + TGMediaPageGap, bounds.size.height)];
 	_pagingView.pagingEnabled = YES;
 	_pagingView.alwaysBounceHorizontal = YES;
 	_pagingView.alwaysBounceVertical = NO;
@@ -654,89 +688,199 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	_pagingView.delegate = self;
 	[self.view addSubview:_pagingView];
 
-	_topBar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, bounds.size.width, 44)];
-	_topBar.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.6f];
+	UIImage *topPanelImage = [UIImage imageNamed:@"GalleryTopPanel.png"];
+	CGFloat topPanelHeight = topPanelImage ? topPanelImage.size.height : 44.0f;
+	_topBar = [[UIImageView alloc] initWithFrame:
+			CGRectMake(0, 20, bounds.size.width, topPanelHeight)];
+	_topBar.image = topPanelImage;
+	if (!topPanelImage)
+		_topBar.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.6f];
+	_topBar.userInteractionEnabled = YES;
 	_topBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	[self.view addSubview:_topBar];
 
+	UIImage *cornersImage = [UIImage imageNamed:@"NavigationBar_Corners.png"];
+	if (cornersImage){
+		UIImageView *corners = [[UIImageView alloc] initWithImage:
+				[cornersImage stretchableImageWithLeftCapWidth:(int)(cornersImage.size.width / 2)
+												  topCapHeight:0]];
+		corners.frame = CGRectMake(0, -20, bounds.size.width, cornersImage.size.height);
+		corners.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+		[_topBar addSubview:corners];
+	}
+
+	UIImage *closePlate = [UIImage imageNamed:@"GalleryDoneButton.png"];
+	UIImage *closePlateHighlighted = [UIImage imageNamed:@"GalleryDoneButton_Highlighted.png"];
 	UIButton *done = [UIButton buttonWithType:UIButtonTypeCustom];
-	done.frame = CGRectMake(bounds.size.width - 70, 0, 66, 44);
-	done.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
-	done.titleLabel.font = [UIFont boldSystemFontOfSize:15];
-	[done setTitle:@"Done" forState:UIControlStateNormal];
+	done.titleLabel.font = [UIFont boldSystemFontOfSize:12];
+	[done setTitle:@"Close" forState:UIControlStateNormal];
 	[done setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+	[done setTitleShadowColor:[UIColor colorWithWhite:0.0f alpha:0.5f]
+					 forState:UIControlStateNormal];
+	done.titleLabel.shadowOffset = CGSizeMake(0, -1);
+	if (closePlate){
+		[done setBackgroundImage:[closePlate stretchableImageWithLeftCapWidth:11 topCapHeight:0]
+						forState:UIControlStateNormal];
+		if (closePlateHighlighted)
+			[done setBackgroundImage:[closePlateHighlighted
+					stretchableImageWithLeftCapWidth:11 topCapHeight:0]
+							forState:UIControlStateHighlighted];
+	}
+	CGSize closeTitleSize = [@"Close" sizeWithFont:done.titleLabel.font];
+	CGFloat closeWidth = closeTitleSize.width + 22.0f;
+	if (closeWidth < 55.0f)
+		closeWidth = 55.0f;
+	done.frame = CGRectMake(5, 7, closeWidth, 30);
 	[done addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
 	[_topBar addSubview:done];
 
-	_counterLabel = [[UILabel alloc] initWithFrame:CGRectMake(70, 3, bounds.size.width - 140, 20)];
-	_counterLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	_counterLabel = [[UILabel alloc] initWithFrame:
+			CGRectMake((CGFloat)(int)((bounds.size.width - 140) / 2), 11, 140, 20)];
+	_counterLabel.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin
+			| UIViewAutoresizingFlexibleRightMargin;
 	_counterLabel.backgroundColor = [UIColor clearColor];
 	_counterLabel.textColor = [UIColor whiteColor];
-	_counterLabel.font = [UIFont boldSystemFontOfSize:15];
+	_counterLabel.font = [UIFont boldSystemFontOfSize:20];
+	_counterLabel.shadowColor = [UIColor colorWithWhite:0.0f alpha:0.5f];
+	_counterLabel.shadowOffset = CGSizeMake(0, -1);
 	_counterLabel.textAlignment = NSTextAlignmentCenter;
 	[_topBar addSubview:_counterLabel];
 
-	_dateLabel = [[UILabel alloc] initWithFrame:CGRectMake(70, 22, bounds.size.width - 140, 16)];
-	_dateLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-	_dateLabel.backgroundColor = [UIColor clearColor];
-	_dateLabel.textColor = [UIColor colorWithWhite:0.8f alpha:1.0f];
-	_dateLabel.font = [UIFont systemFontOfSize:11];
-	_dateLabel.textAlignment = NSTextAlignmentCenter;
-	[_topBar addSubview:_dateLabel];
-
-	_bottomBar = [[UIView alloc] initWithFrame:
-			CGRectMake(0, bounds.size.height - 60, bounds.size.width, 60)];
-	_bottomBar.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.6f];
-	_bottomBar.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin;
+	UIImage *bottomPanelImage = [UIImage imageNamed:@"GalleryBottomPanel.png"];
+	CGFloat bottomPanelHeight = bottomPanelImage ? bottomPanelImage.size.height : 44.0f;
+	_bottomBar = [[UIImageView alloc] initWithFrame:
+			CGRectMake(0, bounds.size.height - bottomPanelHeight,
+					   bounds.size.width, bottomPanelHeight)];
+	if (bottomPanelImage)
+		_bottomBar.image = [bottomPanelImage
+				stretchableImageWithLeftCapWidth:(int)(bottomPanelImage.size.width / 2)
+									topCapHeight:0];
+	else
+		_bottomBar.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.6f];
+	_bottomBar.userInteractionEnabled = YES;
+	_bottomBar.autoresizingMask = UIViewAutoresizingFlexibleWidth
+			| UIViewAutoresizingFlexibleTopMargin;
 	[self.view addSubview:_bottomBar];
 
+	_controlsContainer = [[UIView alloc] initWithFrame:_bottomBar.bounds];
+	_controlsContainer.backgroundColor = [UIColor clearColor];
+	_controlsContainer.autoresizingMask = UIViewAutoresizingFlexibleWidth
+			| UIViewAutoresizingFlexibleHeight;
+	[_bottomBar addSubview:_controlsContainer];
+
+	_authorLabel = [[UILabel alloc] initWithFrame:
+			CGRectMake((CGFloat)(int)((bounds.size.width - 220) / 2), 4, 220, 20)];
+	_authorLabel.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin
+			| UIViewAutoresizingFlexibleRightMargin;
+	_authorLabel.backgroundColor = [UIColor clearColor];
+	_authorLabel.textColor = [UIColor whiteColor];
+	_authorLabel.font = [UIFont boldSystemFontOfSize:14];
+	_authorLabel.shadowColor = [UIColor colorWithWhite:0.0f alpha:0.5f];
+	_authorLabel.shadowOffset = CGSizeMake(0, -1);
+	_authorLabel.textAlignment = NSTextAlignmentCenter;
+	[_controlsContainer addSubview:_authorLabel];
+
+	_dateLabel = [[UILabel alloc] initWithFrame:
+			CGRectMake((CGFloat)(int)((bounds.size.width - 140) / 2), 23, 140, 20)];
+	_dateLabel.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin
+			| UIViewAutoresizingFlexibleRightMargin;
+	_dateLabel.backgroundColor = [UIColor clearColor];
+	_dateLabel.textColor = [UIColor whiteColor];
+	_dateLabel.font = [UIFont systemFontOfSize:13];
+	_dateLabel.shadowColor = [UIColor colorWithWhite:0.0f alpha:0.5f];
+	_dateLabel.shadowOffset = CGSizeMake(0, -1);
+	_dateLabel.textAlignment = NSTextAlignmentCenter;
+	[_controlsContainer addSubview:_dateLabel];
+
+	UIImage *playImage = [UIImage imageNamed:@"VideoPanelPlay.png"];
+	_playButton = [UIButton buttonWithType:UIButtonTypeCustom];
+	if (playImage){
+		_playButton.frame = CGRectMake(
+				(CGFloat)(int)((bounds.size.width - playImage.size.width) / 2),
+				(CGFloat)(int)((bottomPanelHeight - playImage.size.height) / 2),
+				playImage.size.width, playImage.size.height);
+		[_playButton setBackgroundImage:playImage forState:UIControlStateNormal];
+	} else {
+		_playButton.frame = CGRectMake((CGFloat)(int)((bounds.size.width - 60) / 2),
+									   (CGFloat)(int)((bottomPanelHeight - 30) / 2), 60, 30);
+		_playButton.titleLabel.font = [UIFont boldSystemFontOfSize:14];
+		[_playButton setTitle:@"Play" forState:UIControlStateNormal];
+		[_playButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+	}
+	_playButton.showsTouchWhenHighlighted = YES;
+	_playButton.exclusiveTouch = YES;
+	_playButton.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin
+			| UIViewAutoresizingFlexibleRightMargin;
+	[_playButton addTarget:self action:@selector(playTapped)
+		  forControlEvents:UIControlEventTouchUpInside];
+	[_controlsContainer addSubview:_playButton];
+
+	_progressContainer = [[UIView alloc] initWithFrame:_bottomBar.bounds];
+	_progressContainer.backgroundColor = [UIColor clearColor];
+	_progressContainer.userInteractionEnabled = NO;
+	_progressContainer.alpha = 0.0f;
+	_progressContainer.autoresizingMask = UIViewAutoresizingFlexibleWidth
+			| UIViewAutoresizingFlexibleHeight;
+	[_bottomBar addSubview:_progressContainer];
+
+	_progressLabel = [[UILabel alloc] initWithFrame:
+			CGRectMake((CGFloat)(int)((bounds.size.width - 220) / 2), 12, 220, 20)];
+	_progressLabel.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin
+			| UIViewAutoresizingFlexibleRightMargin;
+	_progressLabel.backgroundColor = [UIColor clearColor];
+	_progressLabel.textColor = [UIColor whiteColor];
+	_progressLabel.font = [UIFont systemFontOfSize:13];
+	_progressLabel.shadowColor = [UIColor colorWithWhite:0.0f alpha:0.5f];
+	_progressLabel.shadowOffset = CGSizeMake(0, -1);
+	_progressLabel.textAlignment = NSTextAlignmentCenter;
+	_progressLabel.clipsToBounds = NO;
+	[_progressContainer addSubview:_progressLabel];
+
+	_progressSpinner = [[UIActivityIndicatorView alloc]
+			initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhite];
+	_progressSpinner.frame = CGRectMake(0, 3, 15, 15);
+	_progressSpinner.hidesWhenStopped = YES;
+	[_progressContainer addSubview:_progressSpinner];
+
+	UIImage *actionIcon = [UIImage imageNamed:@"GalleryActionIcon.png"];
 	_actionButton = [UIButton buttonWithType:UIButtonTypeCustom];
-	_actionButton.frame = CGRectMake(4, 10, 66, 40);
-	_actionButton.titleLabel.font = [UIFont boldSystemFontOfSize:15];
-	[_actionButton setTitle:@"Actions" forState:UIControlStateNormal];
-	[_actionButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+	_actionButton.frame = CGRectMake(6, 2, 40, 40);
+	_actionButton.exclusiveTouch = YES;
+	_actionButton.showsTouchWhenHighlighted = YES;
+	if (actionIcon)
+		[_actionButton setBackgroundImage:actionIcon forState:UIControlStateNormal];
+	else {
+		_actionButton.titleLabel.font = [UIFont boldSystemFontOfSize:14];
+		[_actionButton setTitle:@"…" forState:UIControlStateNormal];
+		[_actionButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+	}
+	_actionButton.autoresizingMask = UIViewAutoresizingFlexibleTopMargin;
 	[_actionButton addTarget:self action:@selector(actionsTapped)
 			forControlEvents:UIControlEventTouchUpInside];
 	[_bottomBar addSubview:_actionButton];
 
-	_captionLabel = [[UILabel alloc] initWithFrame:CGRectMake(74, 0, bounds.size.width - 164, 60)];
-	_captionLabel.backgroundColor = [UIColor clearColor];
-	_captionLabel.textColor = [UIColor whiteColor];
-	_captionLabel.font = [UIFont systemFontOfSize:13];
-	_captionLabel.numberOfLines = 3;
-	[_bottomBar addSubview:_captionLabel];
-
-	_playButton = [UIButton buttonWithType:UIButtonTypeCustom];
-	_playButton.frame = CGRectMake(bounds.size.width - 80, 10, 70, 40);
-	_playButton.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
-	_playButton.titleLabel.font = [UIFont boldSystemFontOfSize:15];
-	[_playButton setTitle:@"Play" forState:UIControlStateNormal];
-	[_playButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-	[_playButton addTarget:self action:@selector(playTapped)
-		  forControlEvents:UIControlEventTouchUpInside];
-	[_bottomBar addSubview:_playButton];
+	UIImage *trashIcon = [UIImage imageNamed:@"GalleryTrashIcon.png"];
+	_deleteButton = [UIButton buttonWithType:UIButtonTypeCustom];
+	_deleteButton.frame = CGRectMake(bounds.size.width - 40 - 6, 2, 40, 40);
+	_deleteButton.exclusiveTouch = YES;
+	_deleteButton.showsTouchWhenHighlighted = YES;
+	if (trashIcon)
+		[_deleteButton setBackgroundImage:trashIcon forState:UIControlStateNormal];
+	else {
+		_deleteButton.titleLabel.font = [UIFont boldSystemFontOfSize:14];
+		[_deleteButton setTitle:@"Delete" forState:UIControlStateNormal];
+		[_deleteButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+	}
+	_deleteButton.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+	[_deleteButton addTarget:self action:@selector(deleteTapped)
+			forControlEvents:UIControlEventTouchUpInside];
+	[_bottomBar addSubview:_deleteButton];
 
 	_spinner = [[UIActivityIndicatorView alloc]
 			initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhiteLarge];
 	_spinner.center = CGPointMake(bounds.size.width / 2, bounds.size.height / 2);
 	_spinner.hidesWhenStopped = YES;
 	[self.view addSubview:_spinner];
-
-	_retryButton = [UIButton buttonWithType:UIButtonTypeCustom];
-	_retryButton.frame = CGRectMake((bounds.size.width - 160) / 2,
-									bounds.size.height / 2 - 22, 160, 44);
-	_retryButton.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin
-			| UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin
-			| UIViewAutoresizingFlexibleBottomMargin;
-	_retryButton.titleLabel.font = [UIFont boldSystemFontOfSize:15];
-	_retryButton.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.6f];
-	_retryButton.layer.cornerRadius = 6.0f;
-	[_retryButton setTitle:@"Tap to retry" forState:UIControlStateNormal];
-	[_retryButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-	[_retryButton addTarget:self action:@selector(retryTapped)
-		   forControlEvents:UIControlEventTouchUpInside];
-	_retryButton.hidden = YES;
-	[self.view addSubview:_retryButton];
 
 	UITapGestureRecognizer *doubleTap = [[UITapGestureRecognizer alloc]
 			initWithTarget:self action:@selector(handleDoubleTap:)];
@@ -763,15 +907,15 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
 	_statusBarWasHidden = [UIApplication sharedApplication].statusBarHidden;
-	[[UIApplication sharedApplication] setStatusBarHidden:YES
-											withAnimation:UIStatusBarAnimationFade];
+	if (_statusBarWasHidden)
+		[[UIApplication sharedApplication] setStatusBarHidden:NO
+												withAnimation:UIStatusBarAnimationFade];
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
 	[super viewWillDisappear:animated];
-	if (!_statusBarWasHidden)
-		[[UIApplication sharedApplication] setStatusBarHidden:NO
-												withAnimation:UIStatusBarAnimationFade];
+	[[UIApplication sharedApplication] setStatusBarHidden:_statusBarWasHidden
+											withAnimation:UIStatusBarAnimationFade];
 }
 
 - (void)viewDidLayoutSubviews {
@@ -802,7 +946,8 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	if (bounds.size.width < 1)
 		return;
 
-	_pagingView.frame = CGRectMake(0, 0, bounds.size.width + TGMediaPageGap, bounds.size.height);
+	_pagingView.frame = CGRectMake(-TGMediaPageGap / 2.0f, 0,
+								   bounds.size.width + TGMediaPageGap, bounds.size.height);
 	_pagingView.contentSize = CGSizeMake([self pageWidth] * _items.count, bounds.size.height);
 
 	CGFloat wanted = index * [self pageWidth];
@@ -812,7 +957,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 
 	for (NSNumber *key in _visiblePages.allKeys){
 		TGMediaPageView *page = _visiblePages[key];
-		page.frame = CGRectMake([key integerValue] * [self pageWidth], 0,
+		page.frame = CGRectMake([key integerValue] * [self pageWidth] + TGMediaPageGap / 2.0f, 0,
 								bounds.size.width, bounds.size.height);
 		[page layoutImage];
 	}
@@ -864,7 +1009,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 
 		page = [self takePage];
 		page.pageIndex = index;
-		page.frame = CGRectMake(index * [self pageWidth], 0,
+		page.frame = CGRectMake(index * [self pageWidth] + TGMediaPageGap / 2.0f, 0,
 								self.view.bounds.size.width, self.view.bounds.size.height);
 		[page resetZoom];
 		[_pagingView addSubview:page];
@@ -1008,17 +1153,27 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	NSNumber *key = @(_currentIndex);
 	TGMediaPageView *page = _visiblePages[key];
 
-	if ([_failedPages containsObject:key]){
-		[_spinner stopAnimating];
-		_retryButton.hidden = NO;
-		return;
+	BOOL loading = page && !_imageCache[key] && page.loadingFileId
+			&& ![_failedPages containsObject:key];
+
+	if (loading){
+		NSDictionary *item = [self currentItem];
+		_progressLabel.text = [item[@"isVideo"] boolValue]
+				? @"loading video..." : @"loading full image...";
+		CGSize textSize = [_progressLabel.text sizeWithFont:_progressLabel.font];
+		CGFloat textLeft = _progressLabel.frame.origin.x
+				+ (_progressLabel.frame.size.width - textSize.width) / 2.0f;
+		_progressSpinner.frame = CGRectMake((CGFloat)(int)(textLeft - 19.0f),
+											_progressLabel.frame.origin.y + 3.0f, 15, 15);
+		[_progressSpinner startAnimating];
+	} else {
+		[_progressSpinner stopAnimating];
 	}
 
-	_retryButton.hidden = YES;
-	if (page && !_imageCache[key] && page.loadingFileId)
-		[_spinner startAnimating];
-	else
-		[_spinner stopAnimating];
+	[UIView animateWithDuration:0.2 animations:^{
+		self.progressContainer.alpha = loading ? 1.0f : 0.0f;
+		self.controlsContainer.alpha = loading ? 0.0f : 1.0f;
+	}];
 }
 
 - (void)retryTapped {
@@ -1026,7 +1181,6 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	[_failedPages removeObject:key];
 	TGMediaPageView *page = _visiblePages[key];
 	page.loadingFileId = nil;
-	_retryButton.hidden = YES;
 	[self loadImageForPageAtIndex:_currentIndex];
 }
 
@@ -1062,15 +1216,14 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 
 	NSDictionary *item = _items[_currentIndex];
 	NSString *caption = item[@"caption"];
-	_captionLabel.text = [caption isKindOfClass:NSString.class] ? caption : @"";
+	_authorLabel.text = [caption isKindOfClass:NSString.class] ? caption : @"";
 	_dateLabel.text = TGMediaDayForDate([item[@"date"] integerValue]);
 
 	BOOL isVideo = [item[@"isVideo"] boolValue];
 	_playButton.hidden = !isVideo;
-	if (isVideo)
-		[_playButton setTitle:[NSString stringWithFormat:@"▶ %@",
-				TGMediaFormatDuration([item[@"duration"] integerValue])]
-					 forState:UIControlStateNormal];
+	_authorLabel.alpha = isVideo ? 0.0f : 1.0f;
+	_dateLabel.alpha = isVideo ? 0.0f : 1.0f;
+	_deleteButton.hidden = (self.chatId == 0 || [item[@"messageId"] longLongValue] == 0);
 
 	[self updateLoadingChrome];
 }
@@ -1078,8 +1231,10 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 - (void)setChromeHidden:(BOOL)hidden animated:(BOOL)animated {
 	_chromeHidden = hidden;
 	CGFloat alpha = hidden ? 0.0f : 1.0f;
+	[[UIApplication sharedApplication] setStatusBarHidden:hidden
+											withAnimation:UIStatusBarAnimationFade];
 	if (animated){
-		[UIView animateWithDuration:0.2 animations:^{
+		[UIView animateWithDuration:(hidden ? 0.3 : 0.15) animations:^{
 			self.topBar.alpha = alpha;
 			self.bottomBar.alpha = alpha;
 		}];
@@ -1092,6 +1247,10 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 - (void)handleSingleTap:(UITapGestureRecognizer *)recognizer {
 	if (recognizer.state != UIGestureRecognizerStateRecognized)
 		return;
+	if ([_failedPages containsObject:@(_currentIndex)]){
+		[self retryTapped];
+		return;
+	}
 	[self setChromeHidden:!_chromeHidden animated:YES];
 }
 
@@ -1103,13 +1262,13 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	if (!page)
 		return;
 
-	if (page.zoomScale > 1.01f){
-		[page setZoomScale:1.0f animated:YES];
+	if (page.zoomScale > page.minimumZoomScale + 0.01f){
+		[page setZoomScale:page.minimumZoomScale animated:YES];
 		return;
 	}
 
 	CGPoint point = [recognizer locationInView:page.imageView];
-	CGFloat scale = 2.5f;
+	CGFloat scale = page.maximumZoomScale;
 	CGSize size = page.bounds.size;
 	CGRect target = CGRectMake(point.x - (size.width / scale) / 2.0f,
 							   point.y - (size.height / scale) / 2.0f,
@@ -1208,11 +1367,9 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 		return;
 
 	NSMutableArray *actions = [NSMutableArray array];
-	[actions addObject:@"save"];
-	if (self.chatId != 0 && [item[@"messageId"] longLongValue] != 0){
+	if (self.chatId != 0 && [item[@"messageId"] longLongValue] != 0)
 		[actions addObject:@"forward"];
-		[actions addObject:@"delete"];
-	}
+	[actions addObject:@"save"];
 	self.sheetActions = actions;
 
 	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
@@ -1220,17 +1377,34 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 											  cancelButtonTitle:nil
 										 destructiveButtonTitle:nil
 											  otherButtonTitles:nil];
+	sheet.actionSheetStyle = UIActionSheetStyleBlackTranslucent;
 	for (NSString *action in actions){
 		if ([action isEqualToString:@"save"])
-			[sheet addButtonWithTitle:[item[@"isVideo"] boolValue]
-					? @"Save Video" : @"Save Image"];
-		else if ([action isEqualToString:@"forward"])
-			[sheet addButtonWithTitle:@"Forward"];
+			[sheet addButtonWithTitle:@"Save to Camera Roll"];
 		else
-			[sheet addButtonWithTitle:@"Delete"];
+			[sheet addButtonWithTitle:@"Forward via Telegram"];
 	}
-	if ([actions containsObject:@"delete"])
-		sheet.destructiveButtonIndex = (NSInteger)actions.count - 1;
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	[sheet showInView:self.view];
+}
+
+- (void)deleteTapped {
+	NSDictionary *item = [self currentItem];
+	if (!item)
+		return;
+	if (self.chatId == 0 || [item[@"messageId"] longLongValue] == 0)
+		return;
+
+	self.sheetActions = @[@"delete"];
+
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:nil];
+	sheet.actionSheetStyle = UIActionSheetStyleBlackTranslucent;
+	sheet.destructiveButtonIndex = [sheet addButtonWithTitle:[item[@"isVideo"] boolValue]
+			? @"Delete Video" : @"Delete Photo"];
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 	[sheet showInView:self.view];
 }
@@ -1449,7 +1623,10 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 @property (nonatomic, assign) BOOL bannerVisible;
 
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
+@property (nonatomic, strong) UIView *emptyView;
+@property (nonatomic, strong) UIImageView *emptyImageView;
 @property (nonatomic, strong) UILabel *emptyLabel;
+@property (nonatomic, assign) BOOL emptyVisible;
 
 @end
 
@@ -1463,11 +1640,17 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	return self;
 }
 
+- (UIColor *)backgroundColourForScope:(NSInteger)scope {
+	return TGMediaScopeIsGrid(scope)
+			? [UIColor whiteColor]
+			: [[TGTheme shared] listBackgroundColour];
+}
+
 - (void)loadView {
 	[super loadView];
 
-	self.title = @"Shared Media";
-	self.view.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	self.title = @"Media";
+	self.view.backgroundColor = [self backgroundColourForScope:_scope];
 
 	_items = [[NSMutableArray alloc] init];
 	_recycler = [[TGViewRecycler alloc] init];
@@ -1478,7 +1661,9 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 											  style:UITableViewStylePlain];
 	_tableView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
 	_tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
-	_tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	_tableView.backgroundColor = [self backgroundColourForScope:_scope];
+	_tableView.contentInset = UIEdgeInsetsMake(0, 0, 4, 0);
+	_tableView.scrollIndicatorInsets = UIEdgeInsetsZero;
 	_tableView.rowHeight = TGMediaRowHeight;
 	_tableView.dataSource = self;
 	_tableView.delegate = self;
@@ -1552,17 +1737,29 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	_spinner.hidesWhenStopped = YES;
 	[self.view addSubview:_spinner];
 
-	_emptyLabel = [[UILabel alloc] initWithFrame:
-			CGRectMake(0, self.view.bounds.size.height / 2 - 50,
-					   self.view.bounds.size.width, 20)];
-	_emptyLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	UIImage *blank = [UIImage imageNamed:@"PhotosBlankPlaceholder.png"];
+	_emptyImageView = [[UIImageView alloc] initWithImage:blank];
+
+	_emptyLabel = [[UILabel alloc] initWithFrame:CGRectZero];
 	_emptyLabel.backgroundColor = [UIColor clearColor];
 	_emptyLabel.textAlignment = NSTextAlignmentCenter;
-	_emptyLabel.font = [UIFont systemFontOfSize:15];
-	_emptyLabel.textColor = [[TGTheme shared] secondaryTextColour];
-	_emptyLabel.text = @"No shared media";
-	_emptyLabel.hidden = YES;
-	[self.view addSubview:_emptyLabel];
+	_emptyLabel.font = [UIFont boldSystemFontOfSize:17];
+	_emptyLabel.textColor = [UIColor colorWithRed:0x80 / 255.0f green:0x88 / 255.0f
+											 blue:0x95 / 255.0f alpha:1.0f];
+	_emptyLabel.text = TGMediaEmptyTextForScope(_scope);
+	[_emptyLabel sizeToFit];
+
+	_emptyView = [[UIView alloc] initWithFrame:CGRectZero];
+	_emptyView.backgroundColor = [UIColor clearColor];
+	_emptyView.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin
+			| UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin
+			| UIViewAutoresizingFlexibleBottomMargin;
+	[_emptyView addSubview:_emptyImageView];
+	[_emptyView addSubview:_emptyLabel];
+	_emptyImageView.hidden = !TGMediaScopeIsGrid(_scope);
+	_emptyView.alpha = 0.0f;
+	[self.view insertSubview:_emptyView belowSubview:_tableView];
+	[self layoutEmptyView];
 
 	_dateIndicator = [[UILabel alloc] initWithFrame:
 			CGRectMake(self.view.bounds.size.width - 140, TGMediaScopeHeight + 8, 128, 22)];
@@ -1575,6 +1772,41 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	_dateIndicator.clipsToBounds = YES;
 	_dateIndicator.alpha = 0.0f;
 	[self.view addSubview:_dateIndicator];
+}
+
+- (void)layoutEmptyView {
+	CGRect bounds = self.view.bounds;
+	UIImage *blank = _emptyImageView.hidden ? nil : _emptyImageView.image;
+	CGFloat imageHeight = blank ? blank.size.height : 0.0f;
+	CGFloat imageWidth = blank ? blank.size.width : 0.0f;
+	CGFloat gap = imageHeight > 0.0f ? 12.0f : 0.0f;
+	CGFloat width = MAX(imageWidth, _emptyLabel.frame.size.width);
+	CGFloat height = imageHeight + gap + _emptyLabel.frame.size.height;
+
+	_emptyView.frame = CGRectIntegral(CGRectMake((bounds.size.width - width) / 2.0f,
+												 (bounds.size.height - height) / 2.0f - 18.0f,
+												 width, height));
+	_emptyImageView.frame = CGRectIntegral(CGRectMake((width - imageWidth) / 2.0f, 0,
+													  imageWidth, imageHeight));
+	_emptyLabel.frame = CGRectIntegral(CGRectMake(
+			(width - _emptyLabel.frame.size.width) / 2.0f, imageHeight + gap,
+			_emptyLabel.frame.size.width, _emptyLabel.frame.size.height));
+}
+
+- (void)setEmptyVisible:(BOOL)visible animated:(BOOL)animated {
+	if (_emptyVisible == visible)
+		return;
+	_emptyVisible = visible;
+	[self layoutEmptyView];
+
+	void (^apply)(void) = ^{
+		self.emptyView.alpha = visible ? 1.0f : 0.0f;
+		self.tableView.alpha = visible ? 0.0f : 1.0f;
+	};
+	if (animated)
+		[UIView animateWithDuration:0.2 animations:apply];
+	else
+		apply();
 }
 
 - (void)styleScopeButton:(UIButton *)button selected:(BOOL)selected {
@@ -1631,8 +1863,13 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	_canLoadMore = YES;
 	_loadedOnce = NO;
 	_loading = NO;
-	_emptyLabel.hidden = YES;
+	[self setEmptyVisible:NO animated:NO];
 	_emptyLabel.text = TGMediaEmptyTextForScope(_scope);
+	[_emptyLabel sizeToFit];
+	_emptyImageView.hidden = !TGMediaScopeIsGrid(_scope);
+	[self layoutEmptyView];
+	self.view.backgroundColor = [self backgroundColourForScope:_scope];
+	_tableView.backgroundColor = [self backgroundColourForScope:_scope];
 	_dateIndicator.alpha = 0.0f;
 	[_recycler removeAllViews];
 	_tableView.rowHeight = TGMediaScopeIsGrid(_scope)
@@ -1651,9 +1888,6 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
 		self.edgesForExtendedLayout = UIRectEdgeNone;
 
-	if (self.chatTitle.length)
-		self.title = self.chatTitle;
-
 	[self loadNextPage];
 	[self refreshDownloadsBanner];
 }
@@ -1661,7 +1895,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
-	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	self.tableView.backgroundColor = [self backgroundColourForScope:_scope];
 	[self refreshDownloadsBanner];
 }
 
@@ -1675,6 +1909,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	[self layoutScopeButtons];
 	top += TGMediaScopeHeight;
 	_tableView.frame = CGRectMake(0, top, bounds.size.width, bounds.size.height - top);
+	[self layoutEmptyView];
 	_dateIndicator.frame = CGRectMake(bounds.size.width - 140, top + 8, 128, 22);
 
 	NSInteger perRow = [self itemsPerRowForWidth:bounds.size.width];
@@ -1729,7 +1964,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 		NSArray *messages = result[@"messages"];
 		if (![messages isKindOfClass:NSArray.class] || messages.count == 0){
 			me.canLoadMore = NO;
-			me.emptyLabel.hidden = me.items.count != 0;
+			[me setEmptyVisible:(me.items.count == 0) animated:YES];
 			[me.tableView reloadData];
 			return;
 		}
@@ -1753,7 +1988,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 		if (messages.count < (NSUInteger)TGMediaPageSize)
 			me.canLoadMore = NO;
 
-		me.emptyLabel.hidden = me.items.count != 0;
+		[me setEmptyVisible:(me.items.count == 0 && !me.canLoadMore) animated:YES];
 		[me.tableView reloadData];
 
 		if (added == 0 && me.canLoadMore)
@@ -1841,7 +2076,10 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 			UIActivityIndicatorView *spinner = [[UIActivityIndicatorView alloc]
 					initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleGray];
 			spinner.tag = 401;
-			spinner.center = CGPointMake(tableView.bounds.size.width / 2, 25);
+			spinner.frame = CGRectMake(
+					(CGFloat)(int)((tableView.bounds.size.width
+							- spinner.frame.size.width) / 2), 14,
+					spinner.frame.size.width, spinner.frame.size.height);
 			spinner.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin
 					| UIViewAutoresizingFlexibleRightMargin;
 			[cell.contentView addSubview:spinner];
@@ -1931,7 +2169,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 			continue;
 		[_items removeObjectAtIndex:i];
 		[_tableView reloadData];
-		_emptyLabel.hidden = _items.count != 0;
+		[self setEmptyVisible:(_items.count == 0 && !_canLoadMore) animated:YES];
 		return;
 	}
 }

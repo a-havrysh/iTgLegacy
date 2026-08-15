@@ -48,6 +48,34 @@ static UIColor *TGStorageRGB(int rgb) {
 						   alpha:1.0f];
 }
 
+static UIColor *TGStorageListBackground(void) {
+	TGTheme *theme = [TGTheme shared];
+	if (theme.isFlat || theme.isDark || theme.importedName)
+		return [theme listBackgroundColour];
+	UIImage *pattern = [UIImage imageNamed:@"SettingsBackground.png"];
+	if (pattern)
+		return [UIColor colorWithPatternImage:pattern];
+	return [theme listBackgroundColour];
+}
+
+static void TGStorageApplyTableBackground(UITableView *tableView) {
+	UIView *backdrop = [[UIView alloc] initWithFrame:tableView.bounds];
+	backdrop.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+	backdrop.backgroundColor = TGStorageListBackground();
+	tableView.backgroundView = backdrop;
+	tableView.backgroundColor = [UIColor clearColor];
+	tableView.opaque = NO;
+}
+
+static UIView *TGStorageDisclosureIndicator(void) {
+	UIImage *image = [UIImage imageNamed:@"MenuDisclosureIndicator.png"];
+	if (!image)
+		return nil;
+	UIImage *highlighted = [UIImage imageNamed:@"MenuDisclosureIndicator_Highlighted.png"];
+	UIImageView *view = [[UIImageView alloc] initWithImage:image highlightedImage:highlighted];
+	return view;
+}
+
 static NSString *TGStorageKindName(NSString *kind) {
 	static NSDictionary *names = nil;
 	if (!names)
@@ -174,7 +202,7 @@ static NSString *TGStorageSizeName(long long maxBytes) {
 	self.title = @"Storage";
 	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
 		self.edgesForExtendedLayout = UIRectEdgeNone;
-	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	TGStorageApplyTableBackground(self.tableView);
 	self.tableView.separatorColor = [[TGTheme shared] bubbleBorderColour];
 	[self refresh];
 	[self refreshDetail];
@@ -345,7 +373,7 @@ static NSString *TGHumanSize(long long bytes) {
 	if (section == TGStorageSectionChats && self.detailLoaded && self.chatRows.count == 0)
 		return 1;
 	if (section == TGStorageSectionEverything)
-		return 12;
+		return 14;
 	if (section == TGStorageSectionSummary && [self diskBarIsAvailable])
 		return 64;
 	return 46;
@@ -651,7 +679,11 @@ static NSString *TGHumanSize(long long bytes) {
 		NSDictionary *row = [self.chatRows objectAtIndex:indexPath.row];
 		cell.textLabel.text = [row objectForKey:@"title"];
 		cell.detailTextLabel.text = TGHumanSize([[row objectForKey:@"size"] longLongValue]);
-		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+		UIView *indicator = TGStorageDisclosureIndicator();
+		if (indicator)
+			cell.accessoryView = indicator;
+		else
+			cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
 		return cell;
 	}
@@ -1041,7 +1073,7 @@ static NSString *TGHumanSize(long long bytes) {
 	self.title = self.chatTitle.length ? self.chatTitle : @"Chat";
 	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
 		self.edgesForExtendedLayout = UIRectEdgeNone;
-	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	TGStorageApplyTableBackground(self.tableView);
 	self.tableView.separatorColor = [[TGTheme shared] bubbleBorderColour];
 	[self reload];
 }
@@ -1086,7 +1118,7 @@ static NSString *TGHumanSize(long long bytes) {
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
-	return section == 0 ? 46 : 12;
+	return section == 0 ? 46 : 14;
 }
 
 - (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {

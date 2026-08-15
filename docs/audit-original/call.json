@@ -1,0 +1,134 @@
+{
+  "screen": "In-call screen (TGCallViewController) — avatar/name/status, mute/speaker/end/answer buttons, post-call rating panel",
+  "originalCounterpart": "No call UI existed in the 2013 source (telegram_iphone.src has only the phone TL RPCs). Chrome reference: /Users/alexanderhavrysh/Git/iOS/telegram-original-sources/extracted/telegram_iphone.src/Telegraph/Telegraph/TGButtonsMenuItemView.m, TGButtonMenuItemCell.m, TGInterfaceAssets.mm, TGProfileController.m. Call semantics/strings reference: /Users/alexanderhavrysh/Git/iOS/twelve/Telegraph/TGCallInfoView.m, TGCallButtonsView.m, TGCallRatingView.m, TGCallController.mm, en.lproj/Localizable.strings",
+  "findings": [
+    {
+      "kind": "wording",
+      "visibility": "obvious",
+      "ours": "Ongoing-call status is a bare, non-padded timer: \"%ld:%02ld\" giving \"0:05\" (src/TGCallViewController.m:496-500)",
+      "theirs": "Status is TGLocalized(\"Call.StatusOngoing\") = \"Telegram Audio %@\" with a zero-padded duration \"%02d:%02d\" (and \"%02d:%02d:%02d\" past an hour)",
+      "citation": "twelve/Telegraph/TGCallInfoView.m:225-229; twelve/Telegraph/en.lproj/Localizable.strings:2227",
+      "fix": "In -tick, format duration as [NSString stringWithFormat:@\"%02d:%02d\", (int)(seconds/60)%60, (int)seconds%60] (three-part %02d:%02d:%02d at >= 3600) and set statusLabel.text to [NSString stringWithFormat:@\"Telegram Audio %@\", durationString]."
+    },
+    {
+      "kind": "wording",
+      "visibility": "obvious",
+      "ours": "Incoming-call accept button is titled \"Answer\" and the red button is always \"End\" (src/TGCallViewController.m:143,149)",
+      "theirs": "Accept button uses Call.Accept = \"Accept\"; the incoming-call red button uses Call.Decline = \"Decline\", switching to the end action only once the call is ongoing",
+      "citation": "twelve/Telegraph/en.lproj/Localizable.strings:2231-2232; twelve/Telegraph/TGCallButtonsView.m:76,275",
+      "fix": "Title the green button \"Accept\", and title the red button \"Decline\" while state is None/Pending on an incoming call, switching it to \"End\" when the call reaches Established."
+    },
+    {
+      "kind": "wording",
+      "visibility": "obvious",
+      "ours": "Status strings are invented and sentence-cased: \"Calling...\", \"Incoming call\", \"Exchanging keys...\", \"Call ended\", \"Call failed\" (src/TGCallViewController.m:422,426,432,452,457)",
+      "theirs": "\"Contacting...\" (requesting), \"Waiting...\", \"Ringing...\" (peer received), \"Telegram Audio...\" (incoming/handshake), \"Connecting...\" (accepting/handshake — there is no \"Exchanging keys\" string anywhere), title-cased \"Call Ended\" and \"Call Failed\"",
+      "citation": "twelve/Telegraph/en.lproj/Localizable.strings:2222-2229; twelve/Telegraph/TGCallInfoView.m:178,185,192,200,207,239,271",
+      "fix": "Outgoing pending -> \"Contacting...\" then \"Ringing...\" once the peer has it; incoming pending -> \"Telegram Audio...\"; ExchangingKeys and Connecting -> \"Connecting...\"; ended -> \"Call Ended\"; failed -> \"Call Failed\"."
+    },
+    {
+      "kind": "state",
+      "visibility": "noticeable",
+      "ours": "Every non-failure termination collapses to \"Call ended\"; there is no busy and no no-answer state (src/TGCallViewController.m:451-460)",
+      "theirs": "Terminal state distinguishes Call.StatusBusy = \"Busy\" and Call.StatusNoAnswer = \"No Answer\" from Call.StatusEnded before falling back to \"Call Ended\"",
+      "citation": "twelve/Telegraph/TGCallInfoView.m:262-271; twelve/Telegraph/en.lproj/Localizable.strings:2230,2580",
+      "fix": "In -applyState, before the generic ended text, map the discard reason to \"Busy\" and \"No Answer\" (and keep the server error path on \"Call Failed\")."
+    },
+    {
+      "kind": "behaviour",
+      "visibility": "noticeable",
+      "ours": "The whole screen is laid out once in viewDidLoad against self.view.bounds and never re-laid-out; nothing overrides shouldAutorotateToInterfaceOrientation (src/TGCallViewController.m:90-155)",
+      "theirs": "Call chrome recomputes every frame in layoutSubviews from the current view size, so a rotation reflows the labels and buttons",
+      "citation": "twelve/Telegraph/TGCallInfoView.m:308-331 (-layoutSubviews)",
+      "fix": "Move the avatar/name/status/button frame math out of viewDidLoad into -viewDidLayoutSubviews (or a -layoutViews called from it), or pin the controller to portrait by returning only UIInterfaceOrientationIsPortrait from shouldAutorotateToInterfaceOrientation:."
+    },
+    {
+      "kind": "colour",
+      "visibility": "noticeable",
+      "ours": "The MenuRedButton title shadow is plain black at 30% — [UIColor colorWithWhite:0.0f alpha:0.3f] (src/TGCallViewController.m:264)",
+      "theirs": "The red menu button's title shadow is UIColorRGBA(0xa10603, 0.5f) at offset (0,-1), for both normal and highlighted",
+      "citation": "telegram-original-sources/.../Telegraph/Telegraph/TGButtonMenuItemCell.m:79-81",
+      "fix": "Replace the black 0.3 shadow in the non-green branch of -buttonWithTitle:asset:frame:action: with rgba(0xA10603, 0.5)."
+    },
+    {
+      "kind": "wording",
+      "visibility": "noticeable",
+      "ours": "Rating panel heading is \"Rate this call\" on one line (src/TGCallViewController.m:603)",
+      "theirs": "Calls.RatingTitle = \"Please rate the quality\\nof your Telegram call\" — two lines",
+      "citation": "twelve/Telegraph/en.lproj/Localizable.strings:2057; twelve/Telegraph/TGCallController.mm:534",
+      "fix": "Set ratingTitleLabel.text to @\"Please rate the quality\\nof your Telegram call\", numberOfLines = 2, and grow the label frame from 22 to about 40pt, shifting the stars down accordingly."
+    },
+    {
+      "kind": "wording",
+      "visibility": "noticeable",
+      "ours": "Rating confirm button reads \"Send\" (src/TGCallViewController.m:678)",
+      "theirs": "The rating alert's done button is Calls.SubmitRating = \"Submit\" (the \"Send\" string belongs to the separate technical-log alert)",
+      "citation": "twelve/Telegraph/en.lproj/Localizable.strings:2058,2523; twelve/Telegraph/TGCallController.mm:534,580",
+      "fix": "Title the green rating button \"Submit\". (\"Not Now\" on the left is already correct — Calls.NotNow, strings:2053.)"
+    },
+    {
+      "kind": "wording",
+      "visibility": "noticeable",
+      "ours": "Comment field placeholder is \"Comment (optional)\" (src/TGCallViewController.m:664)",
+      "theirs": "Placeholder is Calls.RatingFeedback = \"Write a comment...\", swapping to Call.ReportPlaceholder = \"What went wrong?\" when 1-3 stars are selected",
+      "citation": "twelve/Telegraph/en.lproj/Localizable.strings:2220,2519; twelve/Telegraph/TGCallRatingView.m:51,114-117",
+      "fix": "Default the placeholder to \"Write a comment...\"; in -starPressed:, set it to \"What went wrong?\" when stars is 1-3 and back to \"Write a comment...\" for 4."
+    },
+    {
+      "kind": "layout",
+      "visibility": "noticeable",
+      "ours": "Six invented problem chips (Echo / Noise / Interruptions / Distorted speech / Silent remote / Dropped) are drawn as hand-rolled 30pt rounded-rect buttons with a CoreGraphics border and a 0.12-white fill (src/TGCallViewController.m:632-658)",
+      "theirs": "The rating sheet is stars plus a single free-text comment view only; the qualitative detail is collected as text, and technical detail through a separate \"Send technical information\" alert — there is no chip grid",
+      "citation": "twelve/Telegraph/TGCallRatingView.m:20-64 (the whole view is _starsView + _commentView); twelve/Telegraph/TGCallController.mm:580",
+      "fix": "Drop the chip grid and keep the comment field as the only detail control (keep sending problem keys derived from the free text if the API needs them); if the chips are kept as a deliberate extra, plate them with GroupedActionButton art rather than a hand-drawn border, since no bordered-translucent-chip control exists in the 2013 kit."
+    },
+    {
+      "kind": "asset",
+      "visibility": "noticeable",
+      "ours": "Stars are the Unicode glyphs \"☆\"/\"★\" in systemFontOfSize:30 inside 44x44 buttons laid out edge to edge (src/TGCallViewController.m:613-629)",
+      "theirs": "Stars are the CallStar / CallStar_Highlighted images in 42x38 buttons, laid out at x = 18 + 42*i inside a 246x38 strip, with adjustsImageWhenHighlighted disabled and selection driven by the highlighted image",
+      "citation": "twelve/Telegraph/TGCallRatingView.m:21-41",
+      "fix": "There is no CallStar PNG in images/ yet, so either add it and use 42x38 buttons at x = 18 + 42*i (strip width 246, height 38) with a normal/selected image pair, or, if the glyphs stay, match the geometry: 42x38 buttons, 38pt strip height, no per-button background."
+    },
+    {
+      "kind": "wording",
+      "visibility": "subtle",
+      "ours": "The speaker button relabels itself \"Earpiece\" when speaker is on (src/TGCallViewController.m:522)",
+      "theirs": "The speaker control keeps a single label, Call.AudioRouteSpeaker = \"Speaker\", and expresses the on state through the control's selected state; no \"Earpiece\" string exists in the catalogue",
+      "citation": "twelve/Telegraph/en.lproj/Localizable.strings:2277-2279; twelve/Telegraph/TGCallButtonsView.m:296-300",
+      "fix": "Keep the title \"Speaker\" in both states and show the on state with the button's _Highlighted plate (setBackgroundImage:…forState:UIControlStateSelected plus button.selected = speakerOn)."
+    },
+    {
+      "kind": "metric",
+      "visibility": "subtle",
+      "ours": "The side-by-side button pair is separated by 8pt: buttonWidth = (int)((width - 9*2 - 8) / 2) (src/TGCallViewController.m:128, and again at :635,673)",
+      "theirs": "The paired grouped-action row uses a 10pt gutter: buttonWidth = floorf((contentWidth - 10) / 2), left at x=0 and right flush to the right edge of the 9pt-inset content width",
+      "citation": "telegram-original-sources/.../Telegraph/Telegraph/TGButtonsMenuItemView.m:141-146",
+      "fix": "Change the three occurrences to (int)((b.size.width - 9*2 - 10) / 2), i.e. 146pt each at 320 wide, right button at x = 320 - 9 - 146 = 165."
+    },
+    {
+      "kind": "metric",
+      "visibility": "subtle",
+      "ours": "A disabled/unavailable action button is dimmed to alpha 0.5 (src/TGCallViewController.m:684,719)",
+      "theirs": "Disabled menu buttons are dimmed to alpha 0.7",
+      "citation": "telegram-original-sources/.../Telegraph/Telegraph/TGButtonMenuItemCell.m:124-128; TGButtonsMenuItemView.m:82-84",
+      "fix": "Use 0.7f instead of 0.5f for the disabled Send/Submit button alpha."
+    },
+    {
+      "kind": "behaviour",
+      "visibility": "subtle",
+      "ours": "Stars respond only to a tap on an individual star button (src/TGCallViewController.m:625-626)",
+      "theirs": "A UIPanGestureRecognizer on the stars strip lets the rating be dragged across, setting whichever star the finger is over",
+      "citation": "twelve/Telegraph/TGCallRatingView.m:43-44,66-79",
+      "fix": "Add a pan recognizer on the stars container that hit-tests the star buttons on state-changed and calls -starPressed: for the one under the clamped x."
+    },
+    {
+      "kind": "colour",
+      "visibility": "subtle",
+      "ours": "docs/design-language/components.md:374-377 tells agents that GroupedActionButton text is \"boldSystemFontOfSize:14 white with the standard (0,-1) shadow\" for both the neutral and the affirmative form, and gives MenuRedButton as \"cap 12, height 45\" with no label spec",
+      "theirs": "The neutral GroupedActionButton label is #4A6587 with an rgba(0xFFFFFF, 0.45) shadow at (0,+1) — white/(0,-1) applies only to the green form (shadow rgba(0x124606,0.3)); the red MenuRedButton label is boldSystemFontOfSize:17 white with rgba(0xA10603,0.5) at (0,-1), and its image is stretched with topCapHeight = height/2 = 22, not 0",
+      "citation": "telegram-original-sources/.../Telegraph/Telegraph/TGButtonsMenuItemView.m:120-129; TGButtonMenuItemCell.m:29-34,74-81; TGInterfaceAssets.mm:14,836-841",
+      "fix": "Correct components.md:374-377 to split neutral (#4A6587 label, rgba(#FFFFFF,0.45) shadow at (0,1), bold 14) from affirmative (white label, rgba(#124606,0.3) at (0,-1), bold 16 when paired), and add to the MenuRedButton row at components.md:283 the top cap 22 and the label spec bold 17 / white / rgba(#A10603,0.5) at (0,-1). typography-colour.md:132 already has the neutral colours right, so the two files currently contradict each other."
+    }
+  ]
+}

@@ -64,6 +64,7 @@ enum {
 
 enum {
 	TGSettingsRootKindSuggestions = 0,
+	TGSettingsRootKindGeneral,
 	TGSettingsRootKindAccount,
 	TGSettingsRootKindSettings,
 	TGSettingsRootKindStories,
@@ -165,6 +166,7 @@ static NSString *TGSettingsDuration(double seconds) {
 @property (nonatomic, strong) NSMutableDictionary *chatTitles;
 @property (nonatomic, assign) BOOL wallpaperBlurred;
 @property (nonatomic, strong) UIImage *wallpaperOriginal;
++ (NSArray *)generalRows;
 + (NSArray *)rootSettingsRows;
 + (NSArray *)telegramRows;
 + (NSArray *)groupToolRows;
@@ -185,6 +187,9 @@ static NSString *TGSettingsDuration(double seconds) {
 - (NSString *)initialsForName:(NSString *)name;
 - (void)refreshHeader;
 - (void)confirmClearDatabase;
+- (void)buildVersionFooter;
+- (void)updateEditButton;
+- (UITableViewCell *)fillSavePhotosCell:(UITableViewCell *)cell;
 - (UIView *)disclosureAccessory;
 - (UIView *)checkAccessory;
 - (void)markDisclosure:(UITableViewCell *)cell;
@@ -251,22 +256,48 @@ static NSString *TGSettingsDuration(double seconds) {
 	}
 
 	if (self.page == TGSettingsPageRoot){
-		UIButton *edit = [TGIcons headerButtonWithTitle:@"Edit" bold:NO
-												 target:self action:@selector(editProfileTapped)];
-		self.navigationItem.rightBarButtonItem =
-				[[UIBarButtonItem alloc] initWithCustomView:edit];
+		[self updateEditButton];
+		self.tableView.sectionHeaderHeight = 0;
+		self.tableView.sectionFooterHeight = 0;
+		self.tableView.contentInset = UIEdgeInsetsMake(0, 0, 7, 0);
 		[self buildHeader];
+		[self buildVersionFooter];
 	}
 	[self loadForPage];
 }
 
-- (void)editProfileTapped {
-	UIViewController *profile = [[TGEditProfileViewController alloc] init];
-	[self.navigationController pushViewController:profile animated:YES];
+- (void)updateEditButton {
+	BOOL editing = self.tableView.isEditing;
+	UIButton *edit = [TGIcons headerButtonWithTitle:(editing ? @"Done" : @"Edit")
+											   bold:editing
+											 target:self
+											 action:@selector(editTapped)];
+	self.navigationItem.rightBarButtonItem =
+			[[UIBarButtonItem alloc] initWithCustomView:edit];
+}
+
+- (void)editTapped {
+	[self.tableView setEditing:!self.tableView.isEditing animated:YES];
+	[self updateEditButton];
+	[self.tableView reloadData];
+}
+
+- (BOOL)tableView:(UITableView *)tableView
+		canEditRowAtIndexPath:(NSIndexPath *)indexPath {
+	return NO;
 }
 
 - (void)applyTheme {
-	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	if (self.page == TGSettingsPageRoot && ![[TGTheme shared] isDark]){
+		UIImage *tile = [UIImage imageNamed:@"SettingsBackground.png"];
+		self.tableView.backgroundColor = tile
+				? [UIColor colorWithPatternImage:tile]
+				: [[TGTheme shared] listBackgroundColour];
+		self.tableView.backgroundView = nil;
+		self.tableView.opaque = NO;
+	} else {
+		self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	}
 	self.tableView.separatorColor = [[TGTheme shared] separatorColour];
 	if (self.navigationController.navigationBar)
 		[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
@@ -451,14 +482,10 @@ static NSString *TGSettingsDuration(double seconds) {
 	}];
 }
 
-/// The version, the way their page ends with one.
-- (UIView *)tableView:(UITableView *)tableView viewForFooterInSection:(NSInteger)section {
-	if (self.page != TGSettingsPageRoot
-			|| [self rootKindForSection:section] != TGSettingsRootKindLogout)
-		return nil;
+- (void)buildVersionFooter {
 	NSDictionary *info = [NSBundle mainBundle].infoDictionary;
 	UILabel *label = [[UILabel alloc] initWithFrame:
-			CGRectMake(0, 0, self.view.bounds.size.width, 40)];
+			CGRectMake(0, 0, self.view.bounds.size.width ?: 320, 40)];
 	label.text = [NSString stringWithFormat:@"iTgLegacy %@ (%@) armv7",
 			info[@"CFBundleShortVersionString"] ?: @"", info[@"CFBundleVersion"] ?: @""];
 	label.font = [UIFont systemFontOfSize:14];
@@ -470,13 +497,31 @@ static NSString *TGSettingsDuration(double seconds) {
 		label.shadowColor = TGSettingsRGB(0xdae0e8);
 		label.shadowOffset = CGSizeMake(0, 1);
 	}
-	return label;
+	label.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	self.tableView.tableFooterView = label;
+}
+
+static inline CGFloat TGSettingsRetinaPixel(void) {
+	return [[UIScreen mainScreen] scale] > 1.0f ? 0.5f : 1.0f;
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
+	if (self.page == TGSettingsPageRoot)
+		return 12;
+	return UITableViewAutomaticDimension;
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForFooterInSection:(NSInteger)section {
-	if (self.page == TGSettingsPageRoot
-			&& [self rootKindForSection:section] == TGSettingsRootKindLogout)
-		return 44;
+	if (self.page == TGSettingsPageRoot){
+		NSString *caption = [self tableView:tableView titleForFooterInSection:section];
+		if (caption.length){
+			CGSize size = [caption sizeWithFont:[UIFont systemFontOfSize:14]
+							  constrainedToSize:CGSizeMake(280, 300)
+								  lineBreakMode:NSLineBreakByWordWrapping];
+			return size.height + 16;
+		}
+		return 1 + TGSettingsRetinaPixel();
+	}
 	return UITableViewAutomaticDimension;
 }
 
@@ -534,6 +579,17 @@ static NSString *TGSettingsDuration(double seconds) {
 
 	if (self.page == TGSettingsPageRoot){
 		[self loadSuggestions];
+		[[TGClient shared] autosaveSettingsWithCompletion:^(NSDictionary *privateChats,
+														   NSDictionary *groups,
+														   NSDictionary *channels){
+			if ([privateChats isKindOfClass:[NSDictionary class]])
+				weakSelf.autosave[@"private"] = privateChats;
+			if ([groups isKindOfClass:[NSDictionary class]])
+				weakSelf.autosave[@"groups"] = groups;
+			if ([channels isKindOfClass:[NSDictionary class]])
+				weakSelf.autosave[@"channels"] = channels;
+			[weakSelf.tableView reloadData];
+		}];
 		return;
 	}
 
@@ -1050,7 +1106,8 @@ static NSString *TGSettingsDuration(double seconds) {
 	if ((NSInteger)self.page == TGSettingsPageNotificationExceptions)
 		return 1;
 	if (self.page == TGSettingsPageRoot)
-		return [self showsSuggestions] ? 8 : 7;
+		return ([self showsSuggestions] ? 8 : 7)
+				+ (self.tableView.isEditing ? 1 : 0);
 	switch (self.page){
 		case TGSettingsPageAppearance:    return 3;
 		case TGSettingsPageData:          return 3;
@@ -1118,6 +1175,8 @@ static NSString *TGSettingsDuration(double seconds) {
 
 	switch ([self rootKindForSection:section]){
 		case TGSettingsRootKindSuggestions: return (NSInteger)self.suggestions.count;
+		case TGSettingsRootKindGeneral:
+			return (NSInteger)[TGSettingsViewController generalRows].count;
 		case TGSettingsRootKindAccount:     return 3;
 		case TGSettingsRootKindSettings:
 			return (NSInteger)[TGSettingsViewController rootSettingsRows].count;
@@ -1127,7 +1186,7 @@ static NSString *TGSettingsDuration(double seconds) {
 		case TGSettingsRootKindGroupTools:
 			return (NSInteger)[TGSettingsViewController groupToolRows].count;
 		case TGSettingsRootKindHelp:
-			return (NSInteger)[TGSettingsViewController helpRows].count;
+			return (NSInteger)[TGSettingsViewController helpRows].count + 1;
 		default: break;
 	}
 	return 1;                      // log out
@@ -1167,18 +1226,6 @@ static NSString *TGSettingsDuration(double seconds) {
 			return nil;
 		case TGSettingsPageData:
 			return section == 1 ? @"Archive" : nil;
-		default: break;
-	}
-	if (self.page != TGSettingsPageRoot)
-		return nil;
-	switch ([self rootKindForSection:section]){
-		case TGSettingsRootKindSuggestions: return @"Suggested";
-		case TGSettingsRootKindAccount:     return @"Account";
-		case TGSettingsRootKindSettings:    return @"Settings";
-		case TGSettingsRootKindStories:     return @"Stories";
-		case TGSettingsRootKindTelegram:    return @"Telegram";
-		case TGSettingsRootKindGroupTools:  return @"Group tools";
-		case TGSettingsRootKindHelp:        return @"Help";
 		default: break;
 	}
 	return nil;
@@ -1266,6 +1313,9 @@ static NSString *TGSettingsDuration(double seconds) {
 	if (self.page == TGSettingsPageRoot
 			&& [self rootKindForSection:section] == TGSettingsRootKindGroupTools)
 		return @"Pick a group or channel when you tap one of these.";
+	if (self.page == TGSettingsPageRoot
+			&& [self rootKindForSection:section] == TGSettingsRootKindHelp)
+		return @"Save incoming photos to the Camera Roll";
 	if (self.page == TGSettingsPageLanguage)
 		return @"This app's own text is English throughout. The language is "
 			   @"what Telegram itself writes in, and it follows the account "
@@ -1331,14 +1381,20 @@ static NSString *TGSettingsDuration(double seconds) {
 	}
 }
 
-/// The settings list from their page, with the line icon each row carries.
-+ (NSArray *)rootSettingsRows {
++ (NSArray *)generalRows {
 	static NSArray *rows = nil;
 	if (!rows)
 		rows = @[@[@"Notifications and Sounds", @"notifications"],
-				 @[@"Privacy and Security",     @"privacy"],
+				 @[@"Blocked Users",            @"privacy"],
+				 @[@"Chat Settings",            @"chat"]];
+	return rows;
+}
+
++ (NSArray *)rootSettingsRows {
+	static NSArray *rows = nil;
+	if (!rows)
+		rows = @[@[@"Privacy and Security",     @"privacy"],
 				 @[@"Data and Storage",         @"data"],
-				 @[@"Chat Settings",            @"chat"],
 				 @[@"Stickers",                 @"react"],
 				 @[@"Folders",                  @"folder"],
 				 @[@"Chat List",                @"folder"],
@@ -1376,11 +1432,11 @@ static NSString *TGSettingsDuration(double seconds) {
 }
 
 - (UITableViewCell *)fillRootCell:(UITableViewCell *)cell at:(NSIndexPath *)indexPath {
-	TGTheme *theme = [TGTheme shared];
-
 	NSInteger kind = [self rootKindForSection:indexPath.section];
 	NSArray *table = nil;
-	if (kind == TGSettingsRootKindSettings)
+	if (kind == TGSettingsRootKindGeneral)
+		table = [TGSettingsViewController generalRows];
+	else if (kind == TGSettingsRootKindSettings)
 		table = [TGSettingsViewController rootSettingsRows];
 	else if (kind == TGSettingsRootKindTelegram)
 		table = [TGSettingsViewController telegramRows];
@@ -1389,25 +1445,56 @@ static NSString *TGSettingsDuration(double seconds) {
 	else if (kind == TGSettingsRootKindHelp)
 		table = [TGSettingsViewController helpRows];
 
+	if (kind == TGSettingsRootKindHelp
+			&& (NSUInteger)indexPath.row == table.count)
+		return [self fillSavePhotosCell:cell];
+
 	if (table && (NSUInteger)indexPath.row < table.count){
 		NSArray *row = table[indexPath.row];
 		cell.textLabel.text = row[0];
 		cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
-		cell.imageView.image = [TGIcons menuGlyphNamed:row[1]];
-		[cell.imageView tg_setTintColor:[theme secondaryTextColour]];
 		if (kind == TGSettingsRootKindSettings
 				&& [row[0] isEqualToString:@"Chat List"]){
 			cell.detailTextLabel.text = [TGSettingsViewController chatListLayoutTitle];
-			cell.detailTextLabel.textColor = [theme cellDetailColour];
+			cell.detailTextLabel.textColor = TGSettingsRGB(0x356596);
+			cell.detailTextLabel.font = [UIFont systemFontOfSize:16];
 		}
 		[self markDisclosure:cell];
 		return cell;
 	}
 
-	cell.textLabel.text = @"Log out";
+	cell.textLabel.text = @"Log Out";
 	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
 	cell.textLabel.textColor = [UIColor colorWithRed:0.8f green:0.1f blue:0.1f alpha:1.0f];
 	return cell;
+}
+
+- (UITableViewCell *)fillSavePhotosCell:(UITableViewCell *)cell {
+	cell.textLabel.text = @"Save Incoming Photos";
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+	cell.selectionStyle = UITableViewCellSelectionStyleNone;
+	NSDictionary *settings = self.autosave[@"private"];
+	UISwitch *toggle = [[UISwitch alloc] init];
+	toggle.on = [settings[@"photos"] boolValue];
+	[toggle addTarget:self action:@selector(savePhotosToggled:)
+	 forControlEvents:UIControlEventValueChanged];
+	cell.accessoryView = toggle;
+	return cell;
+}
+
+- (void)savePhotosToggled:(UISwitch *)toggle {
+	NSDictionary *settings = self.autosave[@"private"];
+	BOOL videos = [settings[@"videos"] boolValue];
+	long long maxVideo = [settings[@"maxVideoBytes"] longLongValue];
+	if (maxVideo <= 0)
+		maxVideo = 10 * 1024 * 1024;
+	self.autosave[@"private"] = @{@"photos"        : @(toggle.on),
+								  @"videos"        : @(videos),
+								  @"maxVideoBytes" : @(maxVideo)};
+	[[TGClient shared] setAutosavePhotos:toggle.on
+								  videos:videos
+						   maxVideoBytes:maxVideo
+								forScope:@"private"];
 }
 
 - (UITableViewCell *)accountCellInTable:(UITableView *)tableView at:(NSIndexPath *)indexPath {
@@ -1463,7 +1550,7 @@ static NSString *TGSettingsDuration(double seconds) {
 		button.titleLabel.shadowOffset = CGSizeMake(0, -1);
 		button.adjustsImageWhenHighlighted = NO;
 		button.adjustsImageWhenDisabled = NO;
-		[button setTitle:@"Log out" forState:UIControlStateNormal];
+		[button setTitle:@"Log Out" forState:UIControlStateNormal];
 		[button setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
 		[button setTitleColor:[UIColor whiteColor] forState:UIControlStateHighlighted];
 		[button setTitleShadowColor:[UIColor colorWithRed:0xa1 / 255.0f green:0x06 / 255.0f
@@ -2349,35 +2436,43 @@ static NSString *TGSettingsDuration(double seconds) {
 		return;
 	}
 
+	if (kind == TGSettingsRootKindGeneral){
+		if (indexPath.row == 0)
+			[self openPage:TGSettingsPageNotifications];
+		else if (indexPath.row == 1)
+			[self openPage:TGSettingsPageBlocked];
+		else
+			[self openPage:TGSettingsPageAppearance];
+		return;
+	}
+
 	if (kind == TGSettingsRootKindSettings){
 		switch (indexPath.row){
-			case 0: [self openPage:TGSettingsPageNotifications]; break;
-			case 1: [self openPage:TGSettingsPagePrivacy]; break;
-			case 2: [self openPage:TGSettingsPageData]; break;
-			case 3: [self openPage:TGSettingsPageAppearance]; break;
-			case 4: {
+			case 0: [self openPage:TGSettingsPagePrivacy]; break;
+			case 1: [self openPage:TGSettingsPageData]; break;
+			case 2: {
 				TGStickersViewController *stickers =
 						[[TGStickersViewController alloc] init];
 				stickers.page = TGStickersPageRoot;
 				[self.navigationController pushViewController:stickers animated:YES];
 				break;
 			}
-			case 5: {
+			case 3: {
 				TGFoldersViewController *folders =
 						[[TGFoldersViewController alloc] init];
 				folders.page = TGFoldersPageList;
 				[self.navigationController pushViewController:folders animated:YES];
 				break;
 			}
-			case 6:
+			case 4:
 				[self openPage:(TGSettingsPage)TGSettingsPageChatListLayout];
 				break;
-			case 7: {
+			case 5: {
 				TGProxyViewController *proxy = [[TGProxyViewController alloc] init];
 				[self.navigationController pushViewController:proxy animated:YES];
 				break;
 			}
-			case 8: {
+			case 6: {
 				UIViewController *sessions = [[TGSessionsViewController alloc] init];
 				[self.navigationController pushViewController:sessions animated:YES];
 				break;
@@ -2401,7 +2496,8 @@ static NSString *TGSettingsDuration(double seconds) {
 	}
 
 	if (kind == TGSettingsRootKindHelp){
-		[self openHelp:indexPath.row];
+		if ((NSUInteger)indexPath.row < [TGSettingsViewController helpRows].count)
+			[self openHelp:indexPath.row];
 		return;
 	}
 

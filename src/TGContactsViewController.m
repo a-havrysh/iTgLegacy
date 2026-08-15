@@ -3,6 +3,7 @@
 #import "TGClient.h"
 #import "TGClient+Contacts.h"
 #import "TGClient+UserStatus.h"
+#import "TGClient+Groups.h"
 #import "TGIcons.h"
 #import "TGTheme.h"
 #import "TGImageDecode.h"
@@ -20,7 +21,13 @@ static const CGFloat kContactTextLeft = 54.0f;
 static const CGFloat kContactSectionHeight = 25.0f;
 static const CGFloat kContactBadgeSide = 14.0f;
 static const CGFloat kContactBadgeGap = 3.0f;
-static const CGFloat kContactFooterHeight = 58.0f;
+static const CGFloat kContactActionRowHeight = 44.0f;
+static const CGFloat kContactAvatarCorner = 4.0f;
+
+static NSString *const TGContactActionInvite = @"invite";
+static NSString *const TGContactActionNewGroup = @"newGroup";
+static NSString *const TGContactActionSync = @"sync";
+static NSString *const TGContactActionLink = @"link";
 
 static UIColor *TGContactsRGB(int rgb) {
 	return [UIColor colorWithRed:((rgb >> 16) & 0xff) / 255.0f
@@ -117,9 +124,88 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 
 @end
 
+@interface TGFlatActionCell : UITableViewCell
+@property (nonatomic, strong) UILabel *titleLabel;
+@property (nonatomic, strong) UIImageView *iconView;
+@property (nonatomic, strong) UIImageView *disclosureIndicator;
+- (void)setIconImage:(UIImage *)image at:(CGPoint)origin;
+@end
+
+@implementation TGFlatActionCell
+
+- (id)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)reuseIdentifier {
+	self = [super initWithStyle:UITableViewCellStyleDefault reuseIdentifier:reuseIdentifier];
+	if (!self)
+		return nil;
+
+	BOOL flat = [[TGTheme shared] isFlat];
+	if (!flat){
+		UIImage *background = TGContactsStretchable(@"Cell88") ?: TGContactsStretchable(@"Cell102");
+		UIImage *highlighted = TGContactsStretchable(@"CellHighlighted88")
+				?: TGContactsStretchable(@"CellHighlighted102");
+		if (background){
+			UIImageView *view = [[UIImageView alloc] initWithImage:background];
+			view.contentMode = UIViewContentModeTop;
+			view.clipsToBounds = YES;
+			self.backgroundView = view;
+		}
+		if (highlighted){
+			UIImageView *view = [[UIImageView alloc] initWithImage:highlighted];
+			view.contentMode = UIViewContentModeTop;
+			view.clipsToBounds = YES;
+			self.selectedBackgroundView = view;
+		}
+	}
+	self.backgroundColor = [[TGTheme shared] listBackgroundColour];
+
+	self.titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(53, 12, 200, 20)];
+	self.titleLabel.backgroundColor = [UIColor clearColor];
+	self.titleLabel.contentMode = UIViewContentModeLeft;
+	self.titleLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	self.titleLabel.font = [UIFont boldSystemFontOfSize:16];
+	self.titleLabel.textColor = TGContactsRGB(0x0779d0);
+	self.titleLabel.highlightedTextColor = [UIColor whiteColor];
+	[self.contentView addSubview:self.titleLabel];
+
+	self.iconView = [[UIImageView alloc] initWithFrame:CGRectZero];
+	[self.contentView addSubview:self.iconView];
+
+	self.disclosureIndicator = [[UIImageView alloc] initWithImage:
+			[UIImage imageNamed:@"MenuDisclosureIndicator"]
+											 highlightedImage:
+			[UIImage imageNamed:@"MenuDisclosureIndicator_Highlighted"]];
+	self.disclosureIndicator.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+	[self.contentView addSubview:self.disclosureIndicator];
+
+	return self;
+}
+
+- (void)setIconImage:(UIImage *)image at:(CGPoint)origin {
+	self.iconView.image = image;
+	if (!image){
+		self.iconView.frame = CGRectZero;
+		return;
+	}
+	self.iconView.frame = CGRectMake(origin.x, origin.y, image.size.width, image.size.height);
+}
+
+- (void)layoutSubviews {
+	[super layoutSubviews];
+	CGFloat width = self.contentView.bounds.size.width;
+	CGSize arrow = self.disclosureIndicator.image.size;
+	if (arrow.width > 0)
+		self.disclosureIndicator.frame = CGRectMake(width - arrow.width - 12, 14,
+				arrow.width, arrow.height);
+	CGFloat right = self.disclosureIndicator.hidden ? 12 : (arrow.width + 18);
+	self.titleLabel.frame = CGRectMake(53, 12, MAX(20.0f, width - 53 - right), 20);
+}
+
+@end
+
 @interface TGContactRowCell : UITableViewCell
 @property (nonatomic, strong) UIImageView *avatarView;
 @property (nonatomic, strong) UILabel *titleLabel;
+@property (nonatomic, strong) UILabel *secondTitleLabel;
 @property (nonatomic, strong) UILabel *subtitleLabel;
 @property (nonatomic, strong) UIImageView *premiumView;
 @property (nonatomic, strong) UILabel *verifiedLabel;
@@ -156,6 +242,14 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 	self.titleLabel.textColor = flat ? [[TGTheme shared] primaryTextColour] : [UIColor blackColor];
 	self.titleLabel.highlightedTextColor = [UIColor whiteColor];
 	[self.contentView addSubview:self.titleLabel];
+
+	self.secondTitleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	self.secondTitleLabel.backgroundColor = [UIColor clearColor];
+	self.secondTitleLabel.font = [UIFont boldSystemFontOfSize:19];
+	self.secondTitleLabel.textColor = flat ? [[TGTheme shared] primaryTextColour] : [UIColor blackColor];
+	self.secondTitleLabel.highlightedTextColor = [UIColor whiteColor];
+	self.secondTitleLabel.hidden = YES;
+	[self.contentView addSubview:self.secondTitleLabel];
 
 	self.subtitleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
 	self.subtitleLabel.backgroundColor = [UIColor clearColor];
@@ -203,10 +297,8 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 	return width;
 }
 
-- (void)layoutBadgesAfterTitleWidth:(CGFloat)titleWidth titleY:(CGFloat)titleY
-					   titleHeight:(CGFloat)titleHeight {
-	CGSize fit = [self.titleLabel sizeThatFits:CGSizeMake(titleWidth, titleHeight)];
-	CGFloat x = kContactTextLeft + MIN(fit.width, titleWidth) + kContactBadgeGap;
+- (void)layoutBadgesAfterX:(CGFloat)x titleY:(CGFloat)titleY
+			   titleHeight:(CGFloat)titleHeight {
 	CGFloat y = (CGFloat)(int)(titleY + (titleHeight - kContactBadgeSide) / 2);
 	if (!self.closeFriendLabel.hidden){
 		self.closeFriendLabel.frame = CGRectMake(x, y, kContactBadgeSide, kContactBadgeSide);
@@ -232,17 +324,36 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 	CGFloat subtitleHeight = self.subtitleLabel.font.lineHeight;
 	CGFloat titleWidth = MAX(20.0f, width - [self badgeWidth]);
 
+	CGFloat titleY = self.subtitleLabel.text.length == 0
+			? (CGFloat)(int)((viewSize.height - titleHeight) / 2) - 1
+			: (CGFloat)(int)((viewSize.height - titleHeight - subtitleHeight - 1) / 2);
+
+	CGFloat firstLimit = viewSize.width - kContactTextLeft - 5 - 14;
+	CGFloat firstWidth = titleWidth;
+	if (!self.secondTitleLabel.hidden){
+		CGSize firstSize = [self.titleLabel.text sizeWithFont:self.titleLabel.font];
+		firstWidth = MIN(firstSize.width, firstLimit);
+	}
+	self.titleLabel.frame = CGRectMake(kContactTextLeft, titleY, firstWidth, titleHeight);
+
+	CGFloat badgeX = kContactTextLeft + firstWidth + kContactBadgeGap;
+	if (!self.secondTitleLabel.hidden){
+		CGFloat secondX = kContactTextLeft + firstWidth + 4;
+		CGFloat secondWidth = MAX(0.0f, viewSize.width - 5 - [self badgeWidth] - secondX);
+		self.secondTitleLabel.frame = CGRectMake(secondX, titleY, secondWidth, titleHeight);
+		CGSize secondFit = [self.secondTitleLabel.text sizeWithFont:self.secondTitleLabel.font];
+		badgeX = secondX + MIN(secondFit.width, secondWidth) + kContactBadgeGap;
+	} else {
+		CGSize fit = [self.titleLabel sizeThatFits:CGSizeMake(titleWidth, titleHeight)];
+		badgeX = kContactTextLeft + MIN(fit.width, titleWidth) + kContactBadgeGap;
+		self.secondTitleLabel.frame = CGRectZero;
+	}
+	[self layoutBadgesAfterX:badgeX titleY:titleY titleHeight:titleHeight];
+
 	if (self.subtitleLabel.text.length == 0){
-		CGFloat titleY = (CGFloat)(int)((viewSize.height - titleHeight) / 2) - 1;
-		self.titleLabel.frame = CGRectMake(kContactTextLeft, titleY, titleWidth, titleHeight);
 		self.subtitleLabel.frame = CGRectZero;
-		[self layoutBadgesAfterTitleWidth:titleWidth titleY:titleY titleHeight:titleHeight];
 		return;
 	}
-
-	CGFloat titleY = (CGFloat)(int)((viewSize.height - titleHeight - subtitleHeight - 1) / 2);
-	self.titleLabel.frame = CGRectMake(kContactTextLeft, titleY, titleWidth, titleHeight);
-	[self layoutBadgesAfterTitleWidth:titleWidth titleY:titleY titleHeight:titleHeight];
 	self.subtitleLabel.frame = CGRectMake(kContactTextLeft + 1, titleY + titleHeight + 0.5f,
 			width, subtitleHeight);
 }
@@ -250,6 +361,7 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 @end
 
 static NSString *TGContactString(NSDictionary *u, NSString *key);
+static NSString *TGContactName(NSDictionary *u);
 
 @interface TGMessageComposerShim : UIViewController
 + (BOOL)canSendText;
@@ -427,6 +539,136 @@ static BOOL TGCanSendSMS(void) {
 
 @end
 
+@interface TGNewGroupMembersViewController : UITableViewController <UIAlertViewDelegate>
+@property (nonatomic, strong) NSArray *contacts;
+@property (nonatomic, strong) NSMutableArray *selected;
+@property (nonatomic, strong) UIButton *nextButton;
+@property (nonatomic, strong) UILabel *nextLabel;
+@end
+
+@implementation TGNewGroupMembersViewController
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
+		self.edgesForExtendedLayout = UIRectEdgeNone;
+	self.title = @"New Group";
+	self.selected = [NSMutableArray array];
+	self.tableView.rowHeight = kContactRowHeight;
+	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	self.tableView.separatorColor = [[TGTheme shared] separatorColour];
+	self.nextButton = [UIButton buttonWithType:UIButtonTypeCustom];
+	[TGIcons styleHeaderButton:self.nextButton];
+	[self.nextButton addTarget:self action:@selector(nextTapped)
+			  forControlEvents:UIControlEventTouchUpInside];
+	self.nextLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	self.nextLabel.textColor = [UIColor whiteColor];
+	self.nextLabel.textAlignment = NSTextAlignmentCenter;
+	self.nextLabel.backgroundColor = [UIColor clearColor];
+	self.nextLabel.font = [UIFont boldSystemFontOfSize:12];
+	self.nextLabel.userInteractionEnabled = NO;
+	[self.nextButton addSubview:self.nextLabel];
+	self.navigationItem.rightBarButtonItem =
+			[[UIBarButtonItem alloc] initWithCustomView:self.nextButton];
+	[self updateNextButton];
+}
+
+- (void)updateNextButton {
+	NSString *title = self.selected.count
+			? [NSString stringWithFormat:@"Next (%d)", (int)self.selected.count] : @"Next";
+	self.nextLabel.text = title;
+	CGSize size = [title sizeWithFont:self.nextLabel.font];
+	self.nextButton.frame = CGRectMake(0, 0, size.width + 16, 30);
+	self.nextLabel.frame = self.nextButton.bounds;
+	self.nextButton.enabled = self.selected.count > 0;
+	self.nextButton.alpha = self.selected.count ? 1.0f : 0.5f;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	return self.contacts.count;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	static NSString *reuse = @"TGNewGroupMemberCell";
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
+	if (!cell)
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+									  reuseIdentifier:reuse];
+	if (indexPath.row >= (NSInteger)self.contacts.count)
+		return cell;
+	NSDictionary *u = self.contacts[indexPath.row];
+	cell.textLabel.font = [UIFont systemFontOfSize:19];
+	cell.textLabel.text = TGContactName(u);
+	cell.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	NSNumber *userId = [u[@"id"] isKindOfClass:NSNumber.class] ? u[@"id"] : nil;
+	cell.accessoryType = (userId && [self.selected containsObject:userId])
+			? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+	return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	if (indexPath.row >= (NSInteger)self.contacts.count)
+		return;
+	NSDictionary *u = self.contacts[indexPath.row];
+	NSNumber *userId = [u[@"id"] isKindOfClass:NSNumber.class] ? u[@"id"] : nil;
+	if (!userId)
+		return;
+	if ([self.selected containsObject:userId])
+		[self.selected removeObject:userId];
+	else
+		[self.selected addObject:userId];
+	[tableView reloadRowsAtIndexPaths:@[indexPath]
+					 withRowAnimation:UITableViewRowAnimationNone];
+	[self updateNextButton];
+}
+
+- (void)nextTapped {
+	if (!self.selected.count)
+		return;
+	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"New Group"
+													message:@"Group name"
+												   delegate:self
+										  cancelButtonTitle:@"Cancel"
+										  otherButtonTitles:@"Create", nil];
+	alert.alertViewStyle = UIAlertViewStylePlainTextInput;
+	[alert show];
+}
+
+- (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)index {
+	if (index == alertView.cancelButtonIndex)
+		return;
+	NSString *title = [[alertView textFieldAtIndex:0].text
+			stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+	if (!title.length)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] createBasicGroupWithTitle:title
+										 userIds:[self.selected copy]
+									  completion:^(int64_t chatId, NSArray *failedUserIds){
+		TGNewGroupMembersViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (chatId == 0){
+			[[[UIAlertView alloc] initWithTitle:nil
+										message:@"Could not create this group."
+									   delegate:nil
+							  cancelButtonTitle:@"OK"
+							  otherButtonTitles:nil] show];
+			return;
+		}
+		TGChatViewController *vc = [[TGChatViewController alloc] init];
+		vc.chatId = chatId;
+		vc.chatTitle = title;
+		NSMutableArray *stack = [me.navigationController.viewControllers mutableCopy];
+		[stack removeObject:me];
+		[stack addObject:vc];
+		[me.navigationController setViewControllers:stack animated:YES];
+	}];
+}
+
+@end
+
 @interface TGContactsViewController () <UISearchBarDelegate, UIActionSheetDelegate, UIAlertViewDelegate>
 @property (nonatomic, strong) NSArray *users;
 @property (nonatomic, strong) NSArray *filteredUsers;
@@ -436,13 +678,12 @@ static BOOL TGCanSendSMS(void) {
 @property (nonatomic, strong) NSMutableSet *photosRequested;
 @property (nonatomic, strong) UISearchBar *searchBar;
 @property (nonatomic, strong) NSString *searchQuery;
-@property (nonatomic, strong) UILabel *emptyLabel;
-@property (nonatomic, assign) BOOL sortByName;
 @property (nonatomic, assign) BOOL loaded;
+@property (nonatomic, strong) UIView *phonebookAccessOverlay;
+@property (nonatomic, strong) UIButton *addButton;
 @property (nonatomic, strong) NSMutableSet *closeFriendIds;
 @property (nonatomic, strong) NSMutableDictionary *badges;
 @property (nonatomic, strong) NSMutableSet *badgesRequested;
-@property (nonatomic, strong) UILabel *importLabel;
 @property (nonatomic, assign) NSInteger importedCount;
 @property (nonatomic, assign) BOOL importedCountKnown;
 @property (nonatomic, strong) NSDictionary *actionUser;
@@ -484,34 +725,27 @@ static NSString *TGContactName(NSDictionary *u) {
 	return TGContactString(u, @"phone");
 }
 
-- (void)sortUsers {
-	self.users = [self.users sortedArrayUsingComparator:^NSComparisonResult(id a, id b){
-		if (self.isPickerMode || self.sortByName)
-			return [TGContactName(a) localizedCaseInsensitiveCompare:TGContactName(b)];
-		int64_t rankA = [a[@"statusRank"] longLongValue];
-		int64_t rankB = [b[@"statusRank"] longLongValue];
-		if (rankA != rankB)
-			return rankA > rankB ? NSOrderedAscending : NSOrderedDescending;
-		return [TGContactName(a) localizedCaseInsensitiveCompare:TGContactName(b)];
-	}];
+static NSString *TGContactSortKey(NSDictionary *u) {
+	NSString *last = TGContactString(u, @"last_name");
+	if (last.length)
+		return last;
+	NSString *first = TGContactString(u, @"first_name");
+	if (first.length)
+		return first;
+	return TGContactName(u);
 }
 
-- (void)sortTapped {
-	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Sort by"
-													   delegate:self
-											  cancelButtonTitle:nil
-										 destructiveButtonTitle:nil
-											  otherButtonTitles:
-			self.sortByName ? @"Last Seen" : @"Last Seen ✓",
-			self.sortByName ? @"Name ✓" : @"Name", nil];
-	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
-	sheet.tag = 1;
-	UITabBar *tabBar = [self.tabBarController isKindOfClass:UITabBarController.class]
-			? self.tabBarController.tabBar : nil;
-	if (tabBar)
-		[sheet showFromTabBar:tabBar];
-	else
-		[sheet showInView:self.navigationController.view];
+- (void)sortUsers {
+	self.users = [self.users sortedArrayUsingComparator:^NSComparisonResult(id a, id b){
+		NSComparisonResult result = [TGContactSortKey(a) caseInsensitiveCompare:TGContactSortKey(b)];
+		if (result != NSOrderedSame)
+			return result;
+		NSString *firstA = TGContactString(a, @"first_name");
+		NSString *firstB = TGContactString(b, @"first_name");
+		if (!firstA.length || !firstB.length)
+			return NSOrderedSame;
+		return [firstA caseInsensitiveCompare:firstB];
+	}];
 }
 
 - (BOOL)isCloseFriend:(NSDictionary *)u {
@@ -548,22 +782,8 @@ static NSString *TGContactName(NSDictionary *u) {
 			return;
 		me.importedCount = count;
 		me.importedCountKnown = YES;
-		[me updateImportFooter];
+		[me reloadTableSoon];
 	}];
-}
-
-- (void)updateImportFooter {
-	if (!self.importLabel)
-		return;
-	if (!self.importedCountKnown)
-		self.importLabel.text = @"Sync contacts from your address book";
-	else if (self.importedCount <= 0)
-		self.importLabel.text = @"No address book contacts synced\nTap to sync";
-	else if (self.importedCount == 1)
-		self.importLabel.text = @"1 contact synced from your address book";
-	else
-		self.importLabel.text = [NSString stringWithFormat:
-				@"%d contacts synced from your address book", (int)self.importedCount];
 }
 
 - (NSInteger)contactLinkSecondsRemaining {
@@ -605,7 +825,7 @@ static NSString *TGContactName(NSDictionary *u) {
 		me.contactLinkExpiresIn = expiresIn;
 		me.contactLinkFetchedAt = [NSDate date];
 		if (appeared)
-			[me.tableView reloadData];
+			[me refreshTable];
 		else
 			[me reloadTableSoon];
 	}];
@@ -787,7 +1007,7 @@ static NSString *TGContactName(NSDictionary *u) {
 		return;
 	CGPoint point = [gesture locationInView:self.tableView];
 	NSIndexPath *indexPath = [self.tableView indexPathForRowAtPoint:point];
-	if (!indexPath || [self extraRowIndexAtIndexPath:indexPath] >= 0)
+	if (!indexPath || [self actionIdentifierAtIndexPath:indexPath])
 		return;
 	NSDictionary *u = [self userAtIndexPath:indexPath];
 	if (!u)
@@ -931,11 +1151,6 @@ static NSString *TGContactName(NSDictionary *u) {
 - (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
 	if (index == sheet.cancelButtonIndex)
 		return;
-	if (sheet.tag == 1){
-		self.sortByName = (index == 1);
-		[self refreshTable];
-		return;
-	}
 	if (sheet.tag == 2){
 		NSDictionary *u = self.actionUser;
 		self.actionUser = nil;
@@ -1059,8 +1274,18 @@ static NSString *TGContactName(NSDictionary *u) {
 	self.filteredUsers = out;
 }
 
+- (NSArray *)actionRowIdentifiers {
+	if (self.isPickerMode || self.filteredUsers)
+		return nil;
+	NSMutableArray *rows = [NSMutableArray arrayWithObjects:
+			TGContactActionInvite, TGContactActionNewGroup, TGContactActionSync, nil];
+	if (self.contactLink.length)
+		[rows addObject:TGContactActionLink];
+	return rows;
+}
+
 - (void)rebuildSections {
-	if ((!self.isPickerMode && !self.sortByName) || self.filteredUsers){
+	if (self.filteredUsers){
 		self.sectionTitles = nil;
 		self.sections = nil;
 		return;
@@ -1068,20 +1293,46 @@ static NSString *TGContactName(NSDictionary *u) {
 	NSMutableArray *titles = [NSMutableArray array];
 	NSMutableArray *groups = [NSMutableArray array];
 	for (NSDictionary *u in self.users){
-		NSString *name = TGContactName(u);
-		NSString *letter = name.length
-				? [name substringToIndex:1].uppercaseString : @"#";
+		NSString *key = TGContactSortKey(u);
+		NSString *letter = key.length
+				? [key substringToIndex:1].capitalizedString : @"#";
 		if (![letter rangeOfCharacterFromSet:
-				[NSCharacterSet uppercaseLetterCharacterSet]].length)
+				[NSCharacterSet letterCharacterSet]].length)
 			letter = @"#";
-		if (![titles.lastObject isEqualToString:letter]){
+		if (![titles.lastObject isEqual:letter]){
 			[titles addObject:letter];
 			[groups addObject:[NSMutableArray array]];
 		}
 		[groups.lastObject addObject:u];
 	}
+
+	if (!self.isPickerMode){
+		if (titles.count)
+			titles[0] = [NSNull null];
+		NSArray *actions = [self actionRowIdentifiers];
+		if (actions.count){
+			[titles insertObject:[NSNull null] atIndex:0];
+			[groups insertObject:actions atIndex:0];
+		}
+	}
+
 	self.sectionTitles = titles;
 	self.sections = groups;
+}
+
+- (NSString *)letterForSection:(NSInteger)section {
+	if (!self.sectionTitles || section < 0 || section >= (NSInteger)self.sectionTitles.count)
+		return nil;
+	id title = self.sectionTitles[section];
+	return [title isKindOfClass:NSString.class] ? title : nil;
+}
+
+- (NSString *)actionIdentifierAtIndexPath:(NSIndexPath *)indexPath {
+	NSArray *rows = [self rowsForSection:indexPath.section];
+	if (indexPath.row < 0 || indexPath.row >= (NSInteger)rows.count)
+		return nil;
+	id row = rows[indexPath.row];
+	return [row isKindOfClass:NSString.class] ? row : nil;
 }
 
 - (void)userStatusChanged:(NSNotification *)note {
@@ -1117,7 +1368,6 @@ static NSString *TGContactName(NSDictionary *u) {
 	[self applyFilter];
 	[self rebuildSections];
 	[self.tableView reloadData];
-	[self updateEmptyState];
 }
 
 - (void)reloadTableSoon {
@@ -1131,18 +1381,134 @@ static NSString *TGContactName(NSDictionary *u) {
 	[self.tableView reloadData];
 }
 
-- (void)updateEmptyState {
-	if (!self.emptyLabel)
+- (BOOL)phonebookAccessDenied {
+	ABAuthorizationStatus status = ABAddressBookGetAuthorizationStatus();
+	return status == kABAuthorizationStatusDenied
+			|| status == kABAuthorizationStatusRestricted;
+}
+
+- (void)layoutPhonebookAccessOverlay {
+	if (!self.phonebookAccessOverlay)
 		return;
-	NSString *text = nil;
-	if (!self.loaded)
-		text = @"Loading...";
-	else if (self.filteredUsers && self.filteredUsers.count == 0)
-		text = @"No results";
-	else if (!self.filteredUsers && self.users.count == 0)
-		text = @"You have no contacts yet";
-	self.emptyLabel.text = text ?: @"";
-	self.emptyLabel.hidden = (text == nil);
+	UIView *container = [self.phonebookAccessOverlay viewWithTag:100];
+	UIImageView *iconView = (UIImageView *)[self.phonebookAccessOverlay viewWithTag:200];
+	UILabel *titleLabel = (UILabel *)[self.phonebookAccessOverlay viewWithTag:300];
+	UILabel *subtitleLabel = (UILabel *)[self.phonebookAccessOverlay viewWithTag:400];
+
+	CGSize overlaySize = self.phonebookAccessOverlay.bounds.size;
+	container.frame = CGRectMake((CGFloat)(int)((overlaySize.width - 40) / 2),
+			(CGFloat)(int)((overlaySize.height - 4) / 2), 40, 4);
+	CGFloat containerWidth = container.frame.size.width;
+	CGFloat additionalOffset = ([UIScreen mainScreen].bounds.size.height > 480.5f) ? -20 : -15;
+
+	CGSize iconSize = iconView.image ? iconView.image.size : CGSizeZero;
+	iconView.frame = CGRectMake((CGFloat)(int)((containerWidth - iconSize.width) / 2),
+			-113 + additionalOffset, iconSize.width, iconSize.height);
+
+	CGSize titleSize = [titleLabel sizeThatFits:CGSizeMake(265, 1000)];
+	titleLabel.frame = CGRectMake((CGFloat)(int)((containerWidth - titleSize.width) / 2),
+			-10 + additionalOffset, titleSize.width, titleSize.height);
+
+	CGSize subtitleSize = [subtitleLabel sizeThatFits:CGSizeMake(210, 1000)];
+	subtitleLabel.frame = CGRectMake((CGFloat)(int)((containerWidth - subtitleSize.width) / 2),
+			41 + additionalOffset, subtitleSize.width, subtitleSize.height);
+}
+
+- (void)updatePhonebookAccess {
+	BOOL denied = [self phonebookAccessDenied];
+	if (!denied){
+		if (self.phonebookAccessOverlay){
+			[self.phonebookAccessOverlay removeFromSuperview];
+			self.phonebookAccessOverlay = nil;
+			self.tableView.scrollEnabled = YES;
+			self.addButton.hidden = NO;
+		}
+		return;
+	}
+	if (self.phonebookAccessOverlay)
+		return;
+
+	UIView *overlay = [[UIView alloc] initWithFrame:self.view.bounds];
+	overlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+	UIImage *lines = [UIImage imageNamed:@"SettingsBackground"];
+	overlay.backgroundColor = lines
+			? [UIColor colorWithPatternImage:lines] : TGContactsRGB(0xe4e9f0);
+
+	UIView *container = [[UIView alloc] initWithFrame:CGRectZero];
+	container.tag = 100;
+	container.backgroundColor = [UIColor clearColor];
+	container.clipsToBounds = NO;
+	container.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin
+			| UIViewAutoresizingFlexibleRightMargin
+			| UIViewAutoresizingFlexibleTopMargin
+			| UIViewAutoresizingFlexibleBottomMargin;
+	[overlay addSubview:container];
+
+	UIImageView *iconView = [[UIImageView alloc] initWithImage:
+			[UIImage imageNamed:@"ContactsIcon"]];
+	iconView.tag = 200;
+	[container addSubview:iconView];
+
+	UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	titleLabel.tag = 300;
+	titleLabel.backgroundColor = [UIColor clearColor];
+	titleLabel.font = [UIFont boldSystemFontOfSize:17];
+	titleLabel.textColor = TGContactsRGB(0x697487);
+	titleLabel.shadowColor = [UIColor colorWithWhite:1.0f alpha:0.3f];
+	titleLabel.shadowOffset = CGSizeMake(0, 1);
+	titleLabel.numberOfLines = 0;
+	titleLabel.textAlignment = NSTextAlignmentCenter;
+	titleLabel.text = @"Telegram does not have access to your contacts";
+	[container addSubview:titleLabel];
+
+	CGFloat bodySize = ([UIScreen mainScreen].scale > 1.5f) ? 14.5f : 15.0f;
+	NSString *body = @"Please go to your iPhone Settings — Privacy — Contacts."
+			" Then select ON for Telegram.";
+	UILabel *subtitleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	subtitleLabel.tag = 400;
+	subtitleLabel.backgroundColor = [UIColor clearColor];
+	subtitleLabel.font = [UIFont boldSystemFontOfSize:bodySize];
+	subtitleLabel.textColor = TGContactsRGB(0x697487);
+	subtitleLabel.shadowColor = [UIColor colorWithWhite:1.0f alpha:0.3f];
+	subtitleLabel.shadowOffset = CGSizeMake(0, 1);
+	subtitleLabel.numberOfLines = 0;
+	subtitleLabel.textAlignment = NSTextAlignmentCenter;
+	if ([UILabel instancesRespondToSelector:@selector(setAttributedText:)]){
+		NSMutableAttributedString *text = [[NSMutableAttributedString alloc]
+				initWithString:body
+					attributes:@{NSFontAttributeName : [UIFont systemFontOfSize:bodySize],
+								 NSForegroundColorAttributeName : TGContactsRGB(0x697487)}];
+		NSRange range = [body rangeOfString:@"ON"];
+		if (range.length)
+			[text addAttribute:NSFontAttributeName
+						 value:[UIFont boldSystemFontOfSize:bodySize]
+						 range:range];
+		subtitleLabel.attributedText = text;
+	} else {
+		subtitleLabel.text = body;
+	}
+	[container addSubview:subtitleLabel];
+
+	[self.view addSubview:overlay];
+	self.phonebookAccessOverlay = overlay;
+	self.tableView.scrollEnabled = NO;
+	self.addButton.hidden = YES;
+	[self layoutPhonebookAccessOverlay];
+}
+
+- (void)viewDidLayoutSubviews {
+	[super viewDidLayoutSubviews];
+	if (self.phonebookAccessOverlay){
+		self.phonebookAccessOverlay.frame = CGRectMake(self.tableView.contentOffset.x,
+				self.tableView.contentOffset.y,
+				self.tableView.bounds.size.width, self.tableView.bounds.size.height);
+		[self layoutPhonebookAccessOverlay];
+	}
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+	[super viewWillAppear:animated];
+	[self updatePhonebookAccess];
 }
 
 - (void)reloadContacts {
@@ -1162,6 +1528,41 @@ static NSString *TGContactName(NSDictionary *u) {
 		if ([me respondsToSelector:@selector(refreshControl)])
 			[me.refreshControl endRefreshing];
 	}];
+}
+
+- (void)styleSearchField:(UIView *)view {
+	if ([view isKindOfClass:UITextField.class]){
+		UITextField *field = (UITextField *)view;
+		field.background = nil;
+		field.clipsToBounds = NO;
+		UIImage *inputImage = [UIImage imageNamed:@"SearchInputField"];
+		if (inputImage){
+			inputImage = [inputImage stretchableImageWithLeftCapWidth:
+					(int)(inputImage.size.width / 2) topCapHeight:0];
+			UIImageView *inputView = [[UIImageView alloc] initWithFrame:
+					CGRectMake(0, ([UIScreen mainScreen].scale > 1.5f) ? 0.5f : 0,
+							field.frame.size.width, inputImage.size.height)];
+			inputView.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+			inputView.image = inputImage;
+			[field addSubview:inputView];
+			[field sendSubviewToBack:inputView];
+		}
+		UIImage *icon = [UIImage imageNamed:@"SearchBarIcon"];
+		if (icon && [field.leftView isKindOfClass:UIImageView.class]){
+			UIImageView *iconView = (UIImageView *)field.leftView;
+			iconView.image = icon;
+			[iconView sizeToFit];
+		}
+	}
+	for (UIView *child in view.subviews)
+		[self styleSearchField:child];
+}
+
+- (void)hideStripe:(UIView *)view {
+	if ([view isKindOfClass:UIImageView.class] && view.frame.size.height == 1)
+		view.hidden = YES;
+	for (UIView *child in view.subviews)
+		[self hideStripe:child];
 }
 
 - (void)viewDidLoad {
@@ -1187,27 +1588,30 @@ static NSString *TGContactName(NSDictionary *u) {
 			? UITableViewCellSeparatorStyleSingleLine
 			: UITableViewCellSeparatorStyleNone;
 
-	self.searchBar = [[UISearchBar alloc] initWithFrame:CGRectMake(0, 0, 320, 44)];
+	UIView *overscroll = [[UIView alloc] initWithFrame:
+			CGRectMake(0, -500, self.tableView.bounds.size.width, 500)];
+	overscroll.backgroundColor = TGContactsRGB(0xe4e9f0);
+	overscroll.opaque = YES;
+	overscroll.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	[self.tableView addSubview:overscroll];
+
+	self.searchBar = [[UISearchBar alloc] initWithFrame:
+			CGRectMake(0, 0, self.tableView.bounds.size.width, 44)];
+	self.searchBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	self.searchBar.delegate = self;
 	self.searchBar.placeholder = @"Search";
-	if ([self.searchBar respondsToSelector:@selector(setBarTintColor:)])
-		self.searchBar.barTintColor = [[TGTheme shared] listBackgroundColour];
-	else
+	UIImage *searchBackground = [UIImage imageNamed:@"SearchBarBackground"];
+	if (searchBackground && [self.searchBar respondsToSelector:@selector(setBackgroundImage:)])
+		[self.searchBar setBackgroundImage:searchBackground];
+	else if (![self.searchBar respondsToSelector:@selector(setBackgroundImage:)])
 		[self.searchBar tg_setTintColor:[UIColor colorWithWhite:0.68f alpha:1.0f]];
 	self.tableView.tableHeaderView = self.searchBar;
+	[self styleSearchField:self.searchBar];
+	[self hideStripe:self.searchBar];
 
 	UIView *background = [[UIView alloc] initWithFrame:self.tableView.bounds];
 	background.backgroundColor = [[TGTheme shared] listBackgroundColour];
 	background.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-	self.emptyLabel = [[UILabel alloc] initWithFrame:
-			CGRectMake(0, 120, background.bounds.size.width, 22)];
-	self.emptyLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-	self.emptyLabel.backgroundColor = [UIColor clearColor];
-	self.emptyLabel.textAlignment = NSTextAlignmentCenter;
-	self.emptyLabel.font = [UIFont systemFontOfSize:15];
-	self.emptyLabel.textColor = [[TGTheme shared] secondaryTextColour];
-	self.emptyLabel.hidden = YES;
-	[background addSubview:self.emptyLabel];
 	self.tableView.backgroundView = background;
 
 	if (!self.isPickerMode && [self respondsToSelector:@selector(setRefreshControl:)]
@@ -1230,34 +1634,20 @@ static NSString *TGContactName(NSDictionary *u) {
 		plus.backgroundColor = [UIColor clearColor];
 		plus.font = [UIFont boldSystemFontOfSize:18];
 		plus.userInteractionEnabled = NO;
+		UIImage *addIcon = [UIImage imageNamed:@"AddIcon"];
+		if (addIcon){
+			plus.hidden = YES;
+			[add setImage:addIcon forState:UIControlStateNormal];
+			add.frame = CGRectMake(0, 0, MAX(35.0f, addIcon.size.width + 12), 30);
+		}
 		[add addSubview:plus];
+		self.addButton = add;
 		self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:add];
-
-		UIButton *sort = [TGIcons headerButtonWithTitle:@"Sort" bold:NO
-												  target:self action:@selector(sortTapped)];
-		self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:sort];
 	}
 
-	if (!self.isPickerMode){
-		UIView *footer = [[UIView alloc] initWithFrame:
-				CGRectMake(0, 0, self.tableView.bounds.size.width, kContactFooterHeight)];
-		footer.backgroundColor = [UIColor clearColor];
-		footer.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-		self.importLabel = [[UILabel alloc] initWithFrame:
-				CGRectMake(10, 14, footer.bounds.size.width - 20, 34)];
-		self.importLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-		self.importLabel.backgroundColor = [UIColor clearColor];
-		self.importLabel.textAlignment = NSTextAlignmentCenter;
-		self.importLabel.numberOfLines = 2;
-		self.importLabel.font = [UIFont systemFontOfSize:14];
-		self.importLabel.textColor = [[TGTheme shared] secondaryTextColour];
-		[footer addSubview:self.importLabel];
-		UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc]
-				initWithTarget:self action:@selector(importFooterTapped)];
-		[footer addGestureRecognizer:tap];
-		self.tableView.tableFooterView = footer;
-		[self updateImportFooter];
+	self.tableView.tableFooterView = [[UIView alloc] init];
 
+	if (!self.isPickerMode){
 		UILongPressGestureRecognizer *press = [[UILongPressGestureRecognizer alloc]
 				initWithTarget:self action:@selector(longPressed:)];
 		press.minimumPressDuration = 0.5f;
@@ -1269,7 +1659,7 @@ static NSString *TGContactName(NSDictionary *u) {
 				name:TGUserStatusDidChangeNotification
 			  object:nil];
 
-	[self updateEmptyState];
+	[self updatePhonebookAccess];
 	[self reloadContacts];
 	if (!self.isPickerMode){
 		[self reloadCloseFriends];
@@ -1412,6 +1802,12 @@ static NSString *TGContactName(NSDictionary *u) {
 	});
 }
 
+- (void)newGroupTapped {
+	TGNewGroupMembersViewController *vc = [[TGNewGroupMembersViewController alloc] init];
+	vc.contacts = self.users;
+	[self.navigationController pushViewController:vc animated:YES];
+}
+
 - (void)addContactTapped {
 	TGNewContactViewController *vc = [[TGNewContactViewController alloc] init];
 	__weak typeof(self) weakSelf = self;
@@ -1430,7 +1826,6 @@ static NSString *TGContactName(NSDictionary *u) {
 	[self applyFilter];
 	[self rebuildSections];
 	[self.tableView reloadData];
-	[self updateEmptyState];
 }
 
 - (void)searchBarTextDidBeginEditing:(UISearchBar *)searchBar {
@@ -1451,7 +1846,6 @@ static NSString *TGContactName(NSDictionary *u) {
 	self.filteredUsers = nil;
 	[self rebuildSections];
 	[self.tableView reloadData];
-	[self updateEmptyState];
 	[searchBar resignFirstResponder];
 }
 
@@ -1567,28 +1961,11 @@ static NSString *TGContactName(NSDictionary *u) {
 	return self.filteredUsers ?: self.users;
 }
 
-- (NSInteger)extraRowCount {
-	if (self.isPickerMode || self.filteredUsers)
-		return 0;
-	return self.contactLink.length ? 2 : 1;
-}
-
-- (NSInteger)extraRowIndexAtIndexPath:(NSIndexPath *)indexPath {
-	if (indexPath.section != 0)
-		return -1;
-	NSInteger extra = [self extraRowCount];
-	return indexPath.row < extra ? indexPath.row : -1;
-}
-
 - (NSDictionary *)userAtIndexPath:(NSIndexPath *)indexPath {
-	if ([self extraRowIndexAtIndexPath:indexPath] >= 0)
-		return nil;
-	NSInteger row = indexPath.row
-			- ((indexPath.section == 0) ? [self extraRowCount] : 0);
 	NSArray *rows = [self rowsForSection:indexPath.section];
-	if (row < 0 || row >= (NSInteger)rows.count)
+	if (indexPath.row < 0 || indexPath.row >= (NSInteger)rows.count)
 		return nil;
-	NSDictionary *u = rows[row];
+	id u = rows[indexPath.row];
 	return [u isKindOfClass:NSDictionary.class] ? u : nil;
 }
 
@@ -1597,20 +1974,21 @@ static NSString *TGContactName(NSDictionary *u) {
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-	NSInteger extra = (section == 0) ? [self extraRowCount] : 0;
-	return [self rowsForSection:section].count + extra;
+	return [self rowsForSection:section].count;
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
-	return kContactRowHeight;
+	return [self actionIdentifierAtIndexPath:indexPath]
+			? kContactActionRowHeight : kContactRowHeight;
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
-	return self.sections ? kContactSectionHeight : 0;
+	return [self letterForSection:section] ? kContactSectionHeight : 0;
 }
 
 - (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
-	if (!self.sections || section < 0 || section >= (NSInteger)self.sectionTitles.count)
+	NSString *letter = [self letterForSection:section];
+	if (!letter)
 		return nil;
 
 	CGFloat width = tableView.bounds.size.width;
@@ -1623,7 +2001,7 @@ static NSString *TGContactName(NSDictionary *u) {
 	label.backgroundColor = [UIColor clearColor];
 	label.font = [UIFont boldSystemFontOfSize:15];
 	label.numberOfLines = 1;
-	label.text = self.sectionTitles[section];
+	label.text = letter;
 
 	if ([[TGTheme shared] isFlat]){
 		container.backgroundColor = [[TGTheme shared] listBackgroundColour];
@@ -1651,40 +2029,55 @@ static NSString *TGContactName(NSDictionary *u) {
 }
 
 - (NSArray *)sectionIndexTitlesForTableView:(UITableView *)tableView {
-	return self.sectionTitles;
+	if (!self.isPickerMode || !self.sectionTitles.count)
+		return nil;
+	NSMutableArray *indices = [NSMutableArray arrayWithObject:UITableViewIndexSearch];
+	for (id title in self.sectionTitles){
+		if ([title isKindOfClass:NSString.class])
+			[indices addObject:title];
+	}
+	return indices.count > 10 ? indices : nil;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView
+		sectionForSectionIndexTitle:(NSString *)title atIndex:(NSInteger)index {
+	if (index == 0){
+		[tableView setContentOffset:CGPointZero animated:NO];
+		return 0;
+	}
+	for (NSUInteger section = 0; section < self.sectionTitles.count; section++){
+		if ([self.sectionTitles[section] isEqual:title])
+			return (NSInteger)section;
+	}
+	return 0;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
 	static NSString *reuse = @"TGContactCell";
-	static NSString *inviteReuse = @"TGInviteCell";
+	static NSString *actionReuse = @"TGFlatActionCell";
 
-	NSInteger extraRow = [self extraRowIndexAtIndexPath:indexPath];
-	if (extraRow >= 0){
-		TGContactRowCell *cell = (TGContactRowCell *)
-				[tableView dequeueReusableCellWithIdentifier:inviteReuse];
+	NSString *action = [self actionIdentifierAtIndexPath:indexPath];
+	if (action){
+		TGFlatActionCell *cell = (TGFlatActionCell *)
+				[tableView dequeueReusableCellWithIdentifier:actionReuse];
 		if (!cell)
-			cell = [[TGContactRowCell alloc] initWithStyle:UITableViewCellStyleDefault
-										   reuseIdentifier:inviteReuse];
-		cell.titleLabel.attributedText = nil;
-		cell.titleLabel.font = [UIFont systemFontOfSize:19];
-		cell.titleLabel.textColor = [[TGTheme shared] accentColour];
-		if (extraRow == 0){
-			cell.titleLabel.text = @"Invite Friends";
-			cell.subtitleLabel.text = @"";
-			cell.avatarView.image = [TGIcons inviteFriendsAvatarOfSide:kContactAvatar];
-		} else {
-			cell.titleLabel.text = @"My Invite Link";
-			cell.subtitleLabel.text = [self contactLinkSubtitle];
-			cell.subtitleLabel.textColor = [UIColor colorWithWhite:0.0f alpha:0.53f];
-			cell.avatarView.image = [TGIcons avatarWithInitials:@"@"
-														   size:kContactAvatar
-													   colourId:0];
-		}
-		cell.avatarView.layer.cornerRadius = kContactAvatar * 0.12f;
+			cell = [[TGFlatActionCell alloc] initWithStyle:UITableViewCellStyleDefault
+										   reuseIdentifier:actionReuse];
 		cell.accessoryType = UITableViewCellAccessoryNone;
-		cell.premiumView.hidden = YES;
-		cell.verifiedLabel.hidden = YES;
-		cell.closeFriendLabel.hidden = YES;
+		cell.disclosureIndicator.hidden = NO;
+		if ([action isEqualToString:TGContactActionInvite]){
+			cell.titleLabel.text = @"Invite Friends";
+			[cell setIconImage:[UIImage imageNamed:@"ListIconInvite"] at:CGPointMake(13, 12)];
+		} else if ([action isEqualToString:TGContactActionNewGroup]){
+			cell.titleLabel.text = @"New Group";
+			[cell setIconImage:[UIImage imageNamed:@"ListIconFriends"] at:CGPointMake(10, 12)];
+		} else if ([action isEqualToString:TGContactActionSync]){
+			cell.titleLabel.text = @"Sync Contacts";
+			[cell setIconImage:nil at:CGPointZero];
+		} else {
+			cell.titleLabel.text = [self contactLinkSubtitle];
+			[cell setIconImage:nil at:CGPointZero];
+		}
 		[cell setNeedsLayout];
 		return cell;
 	}
@@ -1696,8 +2089,9 @@ static NSString *TGContactName(NSDictionary *u) {
 
 	NSDictionary *u = [self userAtIndexPath:indexPath];
 	if (!u){
-		cell.titleLabel.attributedText = nil;
 		cell.titleLabel.text = @"";
+		cell.secondTitleLabel.text = @"";
+		cell.secondTitleLabel.hidden = YES;
 		cell.subtitleLabel.text = @"";
 		cell.avatarView.image = nil;
 		cell.premiumView.hidden = YES;
@@ -1710,18 +2104,15 @@ static NSString *TGContactName(NSDictionary *u) {
 	NSString *name = TGContactName(u);
 	BOOL online = [u[@"isOnline"] boolValue];
 
+	cell.titleLabel.font = [UIFont systemFontOfSize:19];
 	if (first.length && last.length){
-		NSMutableAttributedString *title = [[NSMutableAttributedString alloc]
-				initWithString:[NSString stringWithFormat:@"%@ %@", first, last]
-					attributes:@{NSFontAttributeName : [UIFont systemFontOfSize:19]}];
-		[title addAttribute:NSFontAttributeName
-					  value:[UIFont boldSystemFontOfSize:19]
-					  range:NSMakeRange(first.length + 1, last.length)];
-		cell.titleLabel.attributedText = title;
+		cell.titleLabel.text = first;
+		cell.secondTitleLabel.text = last;
+		cell.secondTitleLabel.hidden = NO;
 	} else {
-		cell.titleLabel.attributedText = nil;
 		cell.titleLabel.text = name;
-		cell.titleLabel.font = [UIFont systemFontOfSize:19];
+		cell.secondTitleLabel.text = @"";
+		cell.secondTitleLabel.hidden = YES;
 	}
 
 	NSString *phone = TGContactString(u, @"phone");
@@ -1765,20 +2156,23 @@ static NSString *TGContactName(NSDictionary *u) {
 									   size:kContactAvatar
 								   colourId:[u[@"id"] longLongValue]];
 	cell.avatarView.image = photo;
-	cell.avatarView.layer.cornerRadius = kContactAvatar * 0.12f;
+	cell.avatarView.layer.cornerRadius = kContactAvatarCorner;
 	return cell;
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
 
-	NSInteger extraRow = [self extraRowIndexAtIndexPath:indexPath];
-	if (extraRow == 0){
-		[self inviteFriendsTapped];
-		return;
-	}
-	if (extraRow > 0){
-		[self contactLinkTapped];
+	NSString *action = [self actionIdentifierAtIndexPath:indexPath];
+	if (action){
+		if ([action isEqualToString:TGContactActionInvite])
+			[self inviteFriendsTapped];
+		else if ([action isEqualToString:TGContactActionNewGroup])
+			[self newGroupTapped];
+		else if ([action isEqualToString:TGContactActionSync])
+			[self importFooterTapped];
+		else
+			[self contactLinkTapped];
 		return;
 	}
 	NSDictionary *u = [self userAtIndexPath:indexPath];

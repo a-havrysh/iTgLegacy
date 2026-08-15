@@ -1,0 +1,78 @@
+{
+  "screen": "Context popup menu (TGPopupMenu) and the chat-list actions menu (TGActionsMenu)",
+  "originalCounterpart": "telegram-original-sources/extracted/telegram_iphone.src/TelegraphKit/TelegraphKit/TGMenuView.m (TGMenuButtonView, TGMenuView, TGMenuContainerView) and its only caller, TelegraphKit/TelegraphKit/TGConversationController.mm:7347-7402",
+  "findings": [
+    {
+      "kind": "layout",
+      "visibility": "obvious",
+      "ours": "TGActionsMenu.m:441-449 places the card BELOW the anchor first (rect.y + rect.height + 17) and only flips above when it does not fit, so the chat-list menu drops from the nav-bar button with the arrow on top - but the preference order is inverted relative to the shared component.",
+      "theirs": "The menu always tries ABOVE first: frame.origin.y = rect.origin.y - frame.size.height - 14, and only if that lands above y=2 does it fall back to rect.origin.y + rect.size.height + 17.",
+      "citation": "TelegraphKit/TelegraphKit/TGMenuView.m:367-382",
+      "fix": "In TGActionsMenu.m -positionCard, mirror TGPopupMenu.m:387-398: set frame.origin.y = rect.origin.y - frame.size.height - kMenuGapAbove first; if < 2, set frame.origin.y = rect.origin.y + rect.size.height + kMenuGapBelow and _arrowOnTop = YES; if that also overflows self.bounds.size.height - kMenuGapAbove, centre vertically and _arrowOnTop = NO."
+    },
+    {
+      "kind": "layout",
+      "visibility": "obvious",
+      "ours": "TGPopupMenu.m:269 and 283-295 cap the card at self.bounds.size.width - 8 and, when the natural width exceeds it, scale every button down (floor(width*scale), floor to a 24pt minimum) so titles truncate with an ellipsis. With the 10 items TGMessageActionsSheet.m:205-259 can emit, every label is shredded.",
+      "theirs": "No maximum width and no scaling exists. Each button is exactly [title sizeWithFont:] + 34 wide (+1 for the first and last), the card is the sum of those widths, and the only constraint is the 4pt horizontal clamp. Titles are never truncated because the original never offered more than three buttons.",
+      "citation": "TelegraphKit/TelegraphKit/TGMenuView.m:116 and 340-353 (sizeToFit: width = text + 34, height 41; no clamp)",
+      "fix": "Remove the naturalWidth/maximumWidth scaling block in TGPopupMenu.m:283-295 and TGActionsMenu.m:344-356 and keep the natural widths; instead cap the item count at the caller (TGMessageActionsSheet.m:205-259) so the menu never needs more width than the screen, matching the original's 2-3 button menus."
+    },
+    {
+      "kind": "state",
+      "visibility": "obvious",
+      "ours": "Nothing in src/ sets any context-selected state on the anchor row or bubble while a menu is open - grep for contextSelected/menuHighlight across src/ returns nothing. The menu floats over an untinted, normal-looking bubble.",
+      "theirs": "Immediately before showing the menu the message view is put into its context-selected appearance and held there for the life of the menu: [messageView setIsContextSelected:true animated:false], with every other visible cell explicitly deselected.",
+      "citation": "TelegraphKit/TelegraphKit/TGConversationController.mm:7375 (and 7418 for the deselect of the other cells)",
+      "fix": "Add an isContextSelected flag to the chat bubble / list cell, set it on the anchor row before calling [TGPopupMenu showItems:...] and clear it in the onChoice block and in the dismissal path, clearing it on all other visible cells at show time."
+    },
+    {
+      "kind": "layout",
+      "visibility": "noticeable",
+      "ours": "All callers add the menu to the full host view: TGPopupMenu.m:160-168 uses host.bounds, and every call site passes self.navigationController.view (TGChatListViewController.m:2234, TGProfileViewController.m:726, TGTopicsViewController.m:1145, TGSavedMessagesViewController.m:901). The card can therefore be placed over the navigation bar or over the chat input panel.",
+      "theirs": "The container is inset to the content area only - it starts at controllerInset.top and ends at the bottom of the table, so the menu can never overlay the nav bar or the input container; the anchor rect is additionally intersected with the area above the input panel before use.",
+      "citation": "TelegraphKit/TelegraphKit/TGConversationController.mm:7386 (container frame) and 7370-7373 (CGRectIntersection with _inputContainer.frame.origin.y)",
+      "fix": "Give TGPopupMenu a host-content rect rather than host.bounds: add the menu with a frame of CGRectMake(0, contentInsetTop, host.width, inputPanelTop - contentInsetTop) and do all positioning inside that rect, as TGConversationController.mm:7386 does."
+    },
+    {
+      "kind": "behaviour",
+      "visibility": "noticeable",
+      "ours": "The menu closes only on touch-up (TGPopupMenu.m:556-563, TGActionsMenu.m:645-652) and only if the touch lands outside CGRectInset(_card.frame, -4, -12) - so a tap in a 4pt horizontal / 12pt vertical dead halo around the card does nothing at all, and a touch that starts outside and drags never dismisses.",
+      "theirs": "Dismissal is a hitTest on the container: any touch that reaches the container itself (i.e. anywhere not on a menu button) hides the menu immediately at touch-down, with no dead zone. It also swallows that touch by returning nil.",
+      "citation": "TelegraphKit/TelegraphKit/TGMenuView.m:591-602 (-hitTest:withEvent:)",
+      "fix": "Replace -touchesEnded: in both files with -hitTest:withEvent:: call super, and if the result is self or nil, call externalDismiss and return nil. Drop the CGRectInset(-4,-12) halo entirely."
+    },
+    {
+      "kind": "layout",
+      "visibility": "noticeable",
+      "ours": "TGPopupMenu's only entry point takes a bare CGPoint (TGPopupMenu.m:130-133) and builds a zero-size rect from it (line 372), so the arrow points at that point and the below-fallback places the card only 17pt below the same point - on top of the bubble it belongs to.",
+      "theirs": "The menu is anchored from the message bubble's content rect, so the card sits 14pt above the bubble's top edge, the arrow centres on the bubble's horizontal centre, and the below-fallback clears the bubble's full height (+17 from its bottom edge).",
+      "citation": "TelegraphKit/TelegraphKit/TGConversationController.mm:7368-7402 ([_menuContainerView showMenuFromRect:...contentFrame...]) driving TGMenuView.m:355-388",
+      "fix": "Add +showItems:fromRect:inView:onChoice: to TGPopupMenu, pass the anchor's rect through to -positionCardFromRect: unchanged, and convert the point-based callers (TGMessageActionsSheet.m:129, TGChatListViewController.m:2234, TGProfileViewController.m:726, TGTopicsViewController.m:1145, TGSavedMessagesViewController.m:901) to pass the row/bubble rect."
+    },
+    {
+      "kind": "behaviour",
+      "visibility": "subtle",
+      "ours": "TGPopupMenu.m:154-158 applies the 0.4s reopen suppression only when no menu was already open (`if (!wasOpen && ...) return;`), so a menu dismissed by tapping outside can be reopened within the guard window in some paths.",
+      "theirs": "The 0.4s guard is unconditional and evaluated before anything else in the show path: `if (CFAbsoluteTimeGetCurrent() < _lastMenuHideTime + 0.4) return;`.",
+      "citation": "TelegraphKit/TelegraphKit/TGConversationController.mm:7349-7350",
+      "fix": "In TGPopupMenu.m:154-158 drop the `!wasOpen &&` term so the suppression check runs unconditionally before [self dismiss]."
+    },
+    {
+      "kind": "layout",
+      "visibility": "subtle",
+      "ours": "TGActionsMenu.m:436-439 clamps the right edge first and the left edge second; TGPopupMenu.m:380-385 clamps left, then right, then left again.",
+      "theirs": "The clamp is exactly two statements in this order: left edge to 4, then right edge to view.width - 4, with no third pass.",
+      "citation": "TelegraphKit/TelegraphKit/TGMenuView.m:362-365",
+      "fix": "Use the original two-step order in both files: `if (x < 4) x = 4; if (x + w > W - 4) x = W - 4 - w;` and remove the extra clamp at TGPopupMenu.m:384-385."
+    },
+    {
+      "kind": "wording",
+      "visibility": "subtle",
+      "ours": "TGActionsMenu.m:158 prefixes the selected folder's title with a literal \"✓ \" glyph inside the button title, changing the button's measured width and pushing the label off the optical centre.",
+      "theirs": "A menu button carries a title and nothing else - setTitle:forState: is the only content ever set, there is no icon, glyph or accessory support in TGMenuButtonView, and its width is derived purely from the title text.",
+      "citation": "TelegraphKit/TelegraphKit/TGMenuView.m:210 and 116",
+      "fix": "Drop the \"✓ \" prefix in TGActionsMenu.m -decoratedTitle:forList:; indicate the current folder with the button's selected state (which already swaps to the _Highlighted artwork via applyHighlight:) instead of mutating the title string."
+    }
+  ]
+}

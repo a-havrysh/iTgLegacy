@@ -1,0 +1,126 @@
+{
+  "screen": "Forward picker (Forward to... chat/contact chooser)",
+  "originalCounterpart": "Telegraph/Telegraph/TGForwardTargetController.m (shell) + TelegraphKit/TelegraphKit/TGDialogListController.mm and TGDialogListCell.m (Chats tab) + Telegraph/Telegraph/TGContactsController.mm, TGContactCell.m, TGContactCellContents.m (Contacts tab) + TelegraphKit/TelegraphKit/TGButtonGroupView.m (toolbar segment)",
+  "findings": [
+    {
+      "kind": "layout",
+      "visibility": "obvious",
+      "ours": "Chat rows show no date/time at all; the whole row width from x=73 to width-10 is given to title and preview (src/TGForwardPicker.m:121-122).",
+      "theirs": "Every dialog row draws a right-aligned date label at x = width - dateWidth - 9, y = 9, height 15, font systemFontOfSize:13 (bold for the text form), colour 0x337acc, and the title width is clamped to dateFrame.origin.x - 4 - 73 - 18.",
+      "citation": "TelegraphKit/TelegraphKit/TGDialogListCell.m:1305-1312 (dateY=9, dateFrame, titleLabelWidth) and :391-394 (dateFont 13, dateTextFont bold 13, textColor 0x337acc)",
+      "fix": "Add a right-aligned date label to TGForwardPickerCell for the non-compact (chat) style: frame (w - dateWidth - 9, 9, dateWidth, 15), font [UIFont boldSystemFontOfSize:13], colour rgb(0x33,0x7a,0xcc), white when highlighted; shrink the title frame to (73, 6, dateX - 4 - 73 - 18, 20)."
+    },
+    {
+      "kind": "layout",
+      "visibility": "obvious",
+      "ours": "Chat preview is one 20pt-tall line at y=29 (src/TGForwardPicker.m:122), so a long last message truncates after one line.",
+      "theirs": "The dialog list message rect is CGRectMake(73, 29, width-73-10, 40) — 40pt tall, i.e. two lines of the 14pt text font, drawn with NSLineBreakByTruncatingTail.",
+      "citation": "TelegraphKit/TelegraphKit/TGDialogListCell.m:1338-1339 (messageRect height 40) and :271 (drawInRect withFont:_textFont lineBreakMode:NSLineBreakByTruncatingTail)",
+      "fix": "In the non-compact branch of -layoutSubviews set _preview.frame = CGRectMake(73, 29, w - 73 - 10, 40) and _preview.numberOfLines = 2 with lineBreakMode NSLineBreakByTruncatingTail."
+    },
+    {
+      "kind": "layout",
+      "visibility": "obvious",
+      "ours": "The Contacts tab is a single flat alphabetically sorted section with no headers and no index bar (src/TGForwardPicker.m:244-266, numberOfRowsInSection returns one flat array).",
+      "theirs": "The contacts list is split into per-letter sections with a 25pt header per lettered section and a live A–Z section index down the right edge (sectionIndexTitlesForTableView / sectionForSectionIndexTitle, whose first entry scrolls to the search bar).",
+      "citation": "Telegraph/Telegraph/TGContactsController.mm:1333-1343 (heightForHeaderInSection returns 25) and :1377-1406 (sectionIndexTitlesForTableView, sectionForSectionIndexTitle)",
+      "fix": "Group self.contacts into sections keyed by the uppercased first letter of the sort name, implement numberOfSectionsInTableView / titleForHeader via the original's section container view, return 25 from heightForHeaderInSection for lettered sections, and return the letters from sectionIndexTitlesForTableView (index 0 scrolling to contentOffset -contentInset.top)."
+    },
+    {
+      "kind": "wording",
+      "visibility": "obvious",
+      "ours": "The contact row subtitle is the @username, or failing that the phone number (src/TGForwardPicker.m:608-617).",
+      "theirs": "The contact subtitle is the user's presence string — \"online\" / \"last seen ...\" — coloured 0x0779d0 when online and UIColorRGBA(0, 0.53) otherwise; usernames and phone numbers never appear as the subtitle.",
+      "citation": "Telegraph/Telegraph/TGContactsController.mm:1466-1468 and :1475-1491 (subtitleStringForUser, Presence.online), TGContactCell.m:543-546 (activeColor 0x0779d0, normalColor UIColorRGBA(0,0.53))",
+      "fix": "Set cell.preview.text from the user's status (online / last seen), colour it rgb(0x07,0x79,0xd0) when online and [UIColor colorWithWhite:0 alpha:0.53] otherwise; drop the @username/phone fallback."
+    },
+    {
+      "kind": "colour",
+      "visibility": "obvious",
+      "ours": "The search bar is a stock UISearchBar tinted with barTintColor = listBackgroundColour, or tg_setTintColor white 0.68 on iOS 6 (src/TGForwardPicker.m:175-182).",
+      "theirs": "The list's search bar is a TGSearchBar whose backgroundImage is SearchBarBackground.png, with the dialogListSearchIcon set into a cleared input field and the stripe hidden; placeholder DialogList.SearchLabel = \"Search\".",
+      "citation": "TelegraphKit/TelegraphKit/TGDialogListController.mm:499-536 (setBackgroundImage:[UIImage imageNamed:@\"SearchBarBackground.png\"], placeholder DialogList.SearchLabel)",
+      "fix": "images/SearchBarBackground@2x.png is already in the repo and is used this way by TGChatListViewController.m:1416. Apply [self.searchBar setBackgroundImage:[UIImage imageNamed:@\"SearchBarBackground.png\"]] (guarded by respondsToSelector) instead of the barTintColor/tintColor path."
+    },
+    {
+      "kind": "state",
+      "visibility": "noticeable",
+      "ours": "The empty state is a single centred 15pt secondary-colour label pinned at y=120 with invented strings \"No chats\" / \"No contacts\" / \"Loading...\" / \"No results\" (src/TGForwardPicker.m:188-196, 310-320).",
+      "theirs": "The empty dialog list is a 250pt-wide container centred vertically in the view: NoMessages.png icon on top, then a boldSystemFontOfSize:15 title 21pt below it, then a systemFontOfSize:14 word-wrapped body 8pt below that, both in 0x8b97a5, with the table hidden while it shows. Strings are DialogList.NoMessagesTitle = \"You have no conversations yet\" and DialogList.NoMessagesText.",
+      "citation": "TelegraphKit/TelegraphKit/TGDialogListController.mm:884-916 (container 250 wide, icon, bold 15 title, 14 body, 0x8b97a5, gaps 21 and 8) and Telegraph/Telegraph/en.lproj/Localizable.strings:227-228",
+      "fix": "Replace the single label with the original's stacked container: icon + bold 15 title + 14 body, both rgb(0x8b,0x97,0xa5), centred in the view, gaps 21 and 8, container width 250, body wrapped to 232pt, and hide the table while it is visible. Note images/ has no NoMessages.png yet — it must be copied from the original bundle before the icon can be used."
+    },
+    {
+      "kind": "colour",
+      "visibility": "noticeable",
+      "ours": "Row labels keep their dark text while the row is pressed — the labels have no highlightedTextColor and only the selectedBackgroundView plate changes (src/TGForwardPicker.m:44-60, 86-87).",
+      "theirs": "On highlight the dialog cell fills the title, message and author text with pure white, and the contact cell draws its title white and its subtitle in highlightedTextColor 0xffffff.",
+      "citation": "TelegraphKit/TelegraphKit/TGDialogListCell.m:195 and :249-252 (highlightedColor = white, used when _highlighted), Telegraph/Telegraph/TGContactCell.m:348 (highlightedTextColor 0xffffff), TGContactCellContents.m:80",
+      "fix": "Set _title.highlightedTextColor and _preview.highlightedTextColor to [UIColor whiteColor] in TGForwardPickerCell -initWithStyle:."
+    },
+    {
+      "kind": "metric",
+      "visibility": "noticeable",
+      "ours": "Contact rows put the title at x=49 and the subtitle at x=50 (src/TGForwardPicker.m:107, 118-119).",
+      "theirs": "The contact cell computes avatarWidth = 5 + 40 = 45 and lays the title at avatarWidth + 9 = 54, the subtitle at avatarWidth + 9 + 1 = 55; the right edge is width - 5.",
+      "citation": "Telegraph/Telegraph/TGContactCell.m:662 (avatarWidth = 5 + 40), :690 (subtitle x = avatarWidth + 9 + 1) and :708 (titleOffset x = avatarWidth + 9)",
+      "fix": "In the compact branch use left = 54 for the title and left + 1 = 55 for the subtitle instead of 49/50."
+    },
+    {
+      "kind": "asset",
+      "visibility": "noticeable",
+      "ours": "Group chats in the Chats tab are rendered exactly like private chats — no icon before the title (src/TGForwardPicker.m:121).",
+      "theirs": "A group conversation draws DialogListGroupChatIcon.png at the title origin offset (0, 4) and reserves 21pt, shifting the title right to 73 + 21 and reducing its width by the same amount (highlighted variant on press).",
+      "citation": "TelegraphKit/TelegraphKit/TGDialogListCell.m:227-247 (DialogListGroupChatIcon.png drawn at (0,4)) and :1317-1321 (groupChatIconWidth = 21, titleRect x = 73 + groupChatIconWidth)",
+      "fix": "images/DialogListGroupChatIcon@2x.png is present and unused. When row[@\"isGroup\"] is set, place the icon at (73, titleY + 4) and lay the title at x = 73 + 21 with width reduced by 21."
+    },
+    {
+      "kind": "type",
+      "visibility": "noticeable",
+      "ours": "Contact names render in a single plain [UIFont systemFontOfSize:19] label for the whole \"First Last\" string (src/TGForwardPicker.m:74, 584).",
+      "theirs": "The contact cell draws two runs at 19pt — titleFont systemFontOfSize:19 and titleBoldFont boldSystemFontOfSize:19 — with boldMode 2, i.e. the first name regular and the last name bold, separated by a 4pt gap.",
+      "citation": "Telegraph/Telegraph/TGContactCell.m:332-333 (titleFont/titleBoldFont 19) and :337 (_boldMode = 2); TGContactCellContents.m:67-86 (first run regular, second run bold, +4 gap)",
+      "fix": "Draw the contact name as two runs: first name in systemFontOfSize:19, last name in boldSystemFontOfSize:19 starting 4pt after the measured width of the first (first run truncated to width - x - 5 - 14)."
+    },
+    {
+      "kind": "colour",
+      "visibility": "subtle",
+      "ours": "cellForRowAtIndexPath overrides the cell's own colours with the theme's, giving title 0x222222 and preview 0x8D8E90 (src/TGForwardPicker.m:600-601; TGTheme.m:223-224).",
+      "theirs": "Dialog and contact rows use title 0x111111 and secondary/message text 0x888888 — the same values the cell's own -initWithStyle: already sets in our file before the override.",
+      "citation": "TelegraphKit/TelegraphKit/TGDialogListCell.m:193 (0x111111) and :791 (normalTextColor 0x888888); Telegraph/Telegraph/TGContactCell.m:347 (0x888888)",
+      "fix": "Delete the two theme-colour assignments in cellForRowAtIndexPath and keep the literal 0x111111 / 0x888888 already set in TGForwardPickerCell -initWithStyle:."
+    },
+    {
+      "kind": "colour",
+      "visibility": "subtle",
+      "ours": "The table's backgroundView is a flat listBackgroundColour view, so over-scrolling past the top of either list exposes plain white (src/TGForwardPicker.m:184-197).",
+      "theirs": "Both lists park an opaque header view 500pt above the content so the rubber-band area above the search bar is blue-grey (0xe4e9f0 in the contacts list, dialogListHeaderColor in the dialog list), never white.",
+      "citation": "Telegraph/Telegraph/TGContactsController.mm:503-509 (headerView at y=-500, height 500, layer background 0xe4e9f0); TelegraphKit/TelegraphKit/TGDialogListController.mm:490-494",
+      "fix": "Add a subview to the table at CGRectMake(0, -500, width, 500) with backgroundColor rgb(0xe4,0xe9,0xf0) and flexible width, matching the chat list."
+    },
+    {
+      "kind": "behaviour",
+      "visibility": "subtle",
+      "ours": "The 44pt toolbar is added to self.navigationController.view in -viewWillAppear: and removed in -viewWillDisappear:, so it floats above the whole navigation stack and pops in/out on every transition (src/TGForwardPicker.m:519-533).",
+      "theirs": "The toolbar container is added once to the controller's own view in -loadView and stays there; the list is a child view controller inserted at index 0 with parentInsets bottom = 44.",
+      "citation": "Telegraph/Telegraph/TGForwardTargetController.m:154-170 (toolbar added to self.view in loadView) and :197 (parentInsets bottom = toolbar height)",
+      "fix": "Add _toolbarContainerView to self.view once in -viewDidLoad and drop the viewWillAppear/viewWillDisappear add/remove pair; keep the existing 44pt bottom contentInset on the table."
+    },
+    {
+      "kind": "state",
+      "visibility": "subtle",
+      "ours": "One search bar and one query string are shared by both tabs, so text typed while on Chats still filters after switching to Contacts (src/TGForwardPicker.m:292-308, 509-517).",
+      "theirs": "Chats and Contacts are two separate child view controllers, each with its own TGSearchBar and its own search mixin state; switching tabs swaps controllers and leaves each list's search untouched.",
+      "citation": "Telegraph/Telegraph/TGForwardTargetController.m:230-242 (setCurrentViewController swaps _dialogListController / _contactsController); TGContactsController.mm:516-539 and TGDialogListController.mm:499-525 (each builds its own search bar)",
+      "fix": "Keep per-mode query state (two NSStrings) and restore the search bar text and scroll position when -groupButtonPressed: changes mode, rather than carrying one shared query across both lists."
+    },
+    {
+      "kind": "metric",
+      "visibility": "subtle",
+      "ours": "A subtitle-less row centres a fixed 24pt (compact) / 20pt (chat) title box in the row (src/TGForwardPicker.m:113-116).",
+      "theirs": "The contact cell centres on the font's own lineHeight and then nudges the result up by 1pt when an avatar is shown: titleLabelsY = (int)((int)((viewSize.height - titleFont.lineHeight) / 2) - 1).",
+      "citation": "Telegraph/Telegraph/TGContactCell.m:681-684",
+      "fix": "For the compact no-subtitle case use titleHeight = _title.font.lineHeight and y = (int)((int)((h - titleHeight) / 2) - 1)."
+    }
+  ]
+}

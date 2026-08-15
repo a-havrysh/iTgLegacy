@@ -1,0 +1,126 @@
+{
+  "screen": "Settings subscreens: Storage (TGStorageViewController.m, incl. TGStorageChatViewController), Devices/Sessions (TGSessionsViewController.m, incl. TGSessionDetailViewController), Device info (TGDeviceViewController.m)",
+  "originalCounterpart": "telegram-original-sources/extracted/telegram_iphone.src/Telegraph/Telegraph/TGPrivacySettingsController.m (grouped-table host: background, header/footer heights, row heights, cell backgrounds), TGSettingsController.m (titled sections), TGCommentMenuItemView.m + TGCommentMenuItem.m (caption/footer block), TGActionMenuItemCell.m, TGVariantMenuItemCell.m, TGButtonMenuItemCell.m, TGInterfaceAssets.mm",
+  "findings": [
+    {
+      "kind": "colour",
+      "visibility": "obvious",
+      "ours": "All three screens set the grouped table to a flat white/dark fill: TGStorageViewController.m:177, TGSessionsViewController.m:49, TGDeviceViewController.m:29 -> [[TGTheme shared] listBackgroundColour], which is plain [UIColor whiteColor] in the light theme (TGTheme.m:309-314).",
+      "theirs": "The grouped settings screens paint the view with the patterned linesBackground and leave the table itself transparent: self.view.backgroundColor = [[TGInterfaceAssets instance] linesBackground]; _tableView.backgroundColor = [UIColor clearColor]; _tableView.opaque = false; _tableView.backgroundView = nil. linesBackground is [UIColor colorWithPatternImage:[UIImage imageNamed:@\"SettingsBackground.png\"]].",
+      "citation": "TGPrivacySettingsController.m:122 and 136-139; TGInterfaceAssets.mm:143-151",
+      "fix": "In each of the three viewDidLoad methods set self.view.backgroundColor (or tableView.backgroundView) to [UIColor colorWithPatternImage:[UIImage imageNamed:@\"SettingsBackground.png\"]] - the asset already ships in images/SettingsBackground@2x.png and TGProfileViewController.m:150 already uses it - and set self.tableView.backgroundColor = [UIColor clearColor], tableView.opaque = NO, tableView.backgroundView = nil."
+    },
+    {
+      "kind": "asset",
+      "visibility": "obvious",
+      "ours": "Rows are plain UIKit grouped cells with a UIKit separator: TGStorageViewController.m:178 sets separatorColor, TGDeviceViewController.m:30 sets separatorColor, and no cell background art is applied anywhere (plainCellInTable, TGStorageViewController.m:531-552; ttlCellForTable/infoCellForTable in TGSessionsViewController.m:395-411, 815-834).",
+      "theirs": "Every grouped row gets a first/middle/last/single PNG as its backgroundView and a matching *_Selected PNG as selectedBackgroundView, and the table's own separators are switched off: _tableView.separatorStyle = UITableViewCellSeparatorStyleNone.",
+      "citation": "TGPrivacySettingsController.m:134 (separatorStyle none) and 371-403 (groupedCellSingle / groupedCellTop / groupedCellMiddle / groupedCellBottom + Highlighted); TGInterfaceAssets.mm:635-723",
+      "fix": "Add GroupedCellTop/Middle/Bottom/Single(.png and _Selected.png) to images/ - they are the only pieces of that set currently missing - and give each cell a UIImageView backgroundView/selectedBackgroundView chosen by position, stretched with stretchableImageWithLeftCapWidth:(w/2) topCapHeight:(h/2) as in TGInterfaceAssets.mm:14. Set separatorStyle = UITableViewCellSeparatorStyleNone on all three tables (Sessions already does, TGSessionsViewController.m:50)."
+    },
+    {
+      "kind": "type",
+      "visibility": "obvious",
+      "ours": "TGDeviceViewController.m:221-223 sets textLabel.font = boldSystemFontOfSize:17 and detailTextLabel.font = systemFontOfSize:16 and THEN calls [[TGTheme shared] styleCell:cell], which overwrites both with systemFontOfSize:15 (TGTheme.m:141-142). Every row on the Device screen therefore renders 15pt regular, not 17 bold.",
+      "theirs": "A grouped-table row title is boldSystemFontOfSize:17 black; the value beside it is systemFontOfSize:16 #356596.",
+      "citation": "TGActionMenuItemCell.m:33-36; TGVariantMenuItemCell.m:26-29 and 41-44",
+      "fix": "In TGDeviceViewController.m move the [[TGTheme shared] styleCell:cell] call above the two font assignments (the order Storage uses at TGStorageViewController.m:537-543), so the row ends up boldSystemFontOfSize:17 / systemFontOfSize:16."
+    },
+    {
+      "kind": "layout",
+      "visibility": "obvious",
+      "ours": "The red 'Terminate All Other Sessions' plate is laid out full-bleed and half a point down: button.frame = CGRectMake(0, 0.5f, bounds.size.width, 45) (TGSessionsViewController.m:464), inside a 46pt row (TGSessionsViewController.m:320).",
+      "theirs": "The red menu button is inset 9pt on each side and sits at y = 0: _button = [[UIButton alloc] initWithFrame:CGRectMake(9, 0, self.frame.size.width - 18, 45)].",
+      "citation": "TGButtonMenuItemCell.m:29",
+      "fix": "Use CGRectMake(9, 0, bounds.size.width - 18, 45) and make the row 45pt tall, exactly as TGStorageViewController.m:730/764 already does for 'Clear everything'."
+    },
+    {
+      "kind": "asset",
+      "visibility": "noticeable",
+      "ours": "Disclosure chevrons are the stock UIKit grey arrow: UITableViewCellAccessoryDisclosureIndicator at TGStorageViewController.m:654 (chat rows), TGSessionsViewController.m:408 (inactive-for row) and 448-450 (session rows).",
+      "theirs": "Grouped rows carry an explicit UIImageView built from MenuDisclosureIndicator.png with MenuDisclosureIndicator_Highlighted.png as the highlighted image, positioned at contentWidth - w - 11, y 14.",
+      "citation": "TGActionMenuItemCell.m:40-44; TGInterfaceAssets.mm:725-739",
+      "fix": "Both PNGs are already in images/ (MenuDisclosureIndicator@2x.png, MenuDisclosureIndicator_Highlighted@2x.png) and currently unused by these screens. Replace the accessoryType with cell.accessoryView = a UIImageView initWithImage:highlightedImage: from those two files, right-inset 11."
+    },
+    {
+      "kind": "type",
+      "visibility": "noticeable",
+      "ours": "The Devices screen draws its section titles as 14pt regular grey captions left-aligned at x=21, y=6: TGSessionsViewController.m:203 (systemFontOfSize:14) and 271-289, with header height = textHeight + 18 (line 268).",
+      "theirs": "A titled section in a grouped settings table gets a boldSystemFontOfSize:17 label in #697487 with a #DAE0E8 (0,+1) shadow, offset (21, 16) inside a 46pt header.",
+      "citation": "TGPrivacySettingsController.m:152-165 (label build) and 216-222 (46pt when titled); titled sections exist at TGSettingsController.m:65 and 109",
+      "fix": "Give TGSessionsViewController the same header builder Storage and Device already use (TGStorageViewController.m:440-453): boldSystemFontOfSize:17, #697487, shadow #DAE0E8 offset (0,1), CGRectOffset(frame, 21, 16), fixed 46pt header height."
+    },
+    {
+      "kind": "layout",
+      "visibility": "noticeable",
+      "ours": "Devices-screen captions under a group are left-aligned single-column text: label.frame = CGRectMake(21, 7, width - 42, height) with height = text + 14 (TGSessionsViewController.m:291-316). Session-detail uses UIKit's own titleForFooterInSection (TGSessionsViewController.m:805-813), which is left-aligned small grey UIKit text.",
+      "theirs": "A caption/footer is a centred comment row: label at CGRectMake(1, 7, contentWidth - 2, contentHeight - 14), textAlignment centre, numberOfLines 0, systemFontOfSize:14, #697487 on #DAE0E8 (0,+1); its height is textHeight(constrained to width - 12*2) + 7*2.",
+      "citation": "TGCommentMenuItemView.m:33-42; TGCommentMenuItem.m:41-44",
+      "fix": "Reuse the footer builder Storage already got right (TGStorageViewController.m:461-502): constrain to width - 24, height = text + 14, label frame (1, 7, width - 2, height - 14), centred. Apply it to sections 1 and 3 of TGSessionsViewController and replace the two titleForFooterInSection strings in TGSessionDetailViewController with the same view."
+    },
+    {
+      "kind": "colour",
+      "visibility": "noticeable",
+      "ours": "Row titles on the Devices screen and its detail screen are drawn in #516691: TGSessionsViewController.m:440, 404, 827, 851.",
+      "theirs": "A grouped-row title is [UIColor blackColor]; #516691 is used only when the row is showing a check indicator (a selected variant in a picker list).",
+      "citation": "TGActionMenuItemCell.m:35 (black) vs :77 (0x516691 only in setHideCheckIndicator:false); TGVariantMenuItemCell.m:28",
+      "fix": "Use [UIColor blackColor] in the light theme for these titles, as TGStorageViewController.m:540-541 already does."
+    },
+    {
+      "kind": "type",
+      "visibility": "noticeable",
+      "ours": "Right-hand values on the Devices screens are systemFontOfSize:17 in [[TGTheme shared] cellDetailColour]: TGSessionsViewController.m:406-407 and 829-830.",
+      "theirs": "The variant/value label is systemFontOfSize:16 in #356596, right-aligned, highlighted white.",
+      "citation": "TGVariantMenuItemCell.m:41-44",
+      "fix": "Set systemFontOfSize:16 and #356596 (light theme) with highlightedTextColor white - the exact treatment TGStorageViewController.m:543-546 uses."
+    },
+    {
+      "kind": "type",
+      "visibility": "subtle",
+      "ours": "The Terminate/Confirm Session rows use boldSystemFontOfSize:16 (TGSessionsViewController.m:870).",
+      "theirs": "16 bold does not appear in the grouped-table type scale; row titles and the button plate title are both boldSystemFontOfSize:17.",
+      "citation": "TGActionMenuItemCell.m:33; TGButtonMenuItemCell.m:34",
+      "fix": "Change to boldSystemFontOfSize:17."
+    },
+    {
+      "kind": "metric",
+      "visibility": "subtle",
+      "ours": "An untitled section header is 12pt: TGSessionsViewController.m:267, TGStorageViewController.m:348 (Everything section), TGStorageChatViewController at TGStorageViewController.m:1089.",
+      "theirs": "heightForHeaderInSection returns 14 when the section has no title view.",
+      "citation": "TGPrivacySettingsController.m:216-222 (return 46 when titled, 14 otherwise)",
+      "fix": "Return 14 instead of 12 for untitled headers on all three screens. Note for docs/design-language/layout-metrics.md section 5, which currently states '12 pt of pure spacing when there is no caption text' - the original's grouped-settings host returns 14; the 12 in the rulebook is wrong for this table and is being copied by every new screen."
+    },
+    {
+      "kind": "metric",
+      "visibility": "subtle",
+      "ours": "TGDeviceViewController.m:149-155 gives every footer height + 14 + 12, and returns 12 when there is no text; TGSessionsViewController.m:291-296 returns 1 for empty footers but text + 14 otherwise measured against width - 42.",
+      "theirs": "The comment block is textHeight(width - 24) + 14 exactly, and the section footer proper is always 1pt.",
+      "citation": "TGCommentMenuItem.m:41-44; TGPrivacySettingsController.m:229-232 (heightForFooterInSection returns 1)",
+      "fix": "Drop the extra +12 in TGDeviceViewController, measure against width - 24 rather than width - 20 / width - 42, and return 1 (not 12) for a footer with no text."
+    },
+    {
+      "kind": "wording",
+      "visibility": "subtle",
+      "ours": "TGSessionsViewController.m:387 and :542 - 'Terminate All Other Sessions'; TGSessionsViewController.m:244 - 'Tap a session to see its details, or swipe it away to terminate it.'",
+      "theirs": "The original's own string for the same operation is 'Clear other sessions', a single plain action row - no invented instruction caption alongside it.",
+      "citation": "TGSettingsController.m:103",
+      "fix": "Title the red plate 'Clear other sessions' and delete the how-to caption at TGSessionsViewController.m:244; the original never explains its own gestures in a footer."
+    },
+    {
+      "kind": "behaviour",
+      "visibility": "subtle",
+      "ours": "None of the three controllers supports the swipe-right-to-go-back gesture or deselects on reappear; TGSessionsViewController.m:52-57 instead adds a UIRefreshControl (pull-to-refresh), which no 2013 Telegram settings screen had.",
+      "theirs": "Grouped settings screens call [_tableView enableSwipeToLeftAction] and implement performSwipeToLeftAction -> performClose, and clear the selected row in viewWillAppear. There is no pull-to-refresh anywhere in these screens.",
+      "citation": "TGPrivacySettingsController.m:131 and 425-428 (swipe back); :191-193 (deselect in viewWillAppear)",
+      "fix": "Remove the UIRefreshControl from TGSessionsViewController and add the swipe-to-go-back handling plus a viewWillAppear deselect on all three screens."
+    },
+    {
+      "kind": "behaviour",
+      "visibility": "subtle",
+      "ours": "Nothing restricts orientation: the three controllers do not override shouldAutorotateToInterfaceOrientation, so upside-down is allowed on a device that supports it.",
+      "theirs": "return interfaceOrientation != UIInterfaceOrientationPortraitUpsideDown;",
+      "citation": "TGPrivacySettingsController.m:196-199",
+      "fix": "Add the same shouldAutorotateToInterfaceOrientation: override to TGStorageViewController, TGStorageChatViewController, TGSessionsViewController, TGSessionDetailViewController and TGDeviceViewController."
+    }
+  ]
+}

@@ -46,13 +46,48 @@ static const CGFloat kInputHeight = 43.0f;
 // padding is 15+1 on the tail side against 9+1 on the other, so the picture
 // hangs 6pt past the content box.
 static const CGFloat kBubbleTailOverhang = 6.0f;
+static const CGFloat kRetinaPixel = 0.5f;
 static const CGFloat kBubbleMinW = 40.0f;
 static const CGFloat kBubbleMinH = 31.0f;
 static const CGFloat kBubbleMaxW  = 240.0f;
 static const CGFloat kPadH        = 10.0f;
-static const CGFloat kAvatarSide  = 28.0f;   // sender avatar in groups
+static const CGFloat kAvatarSide  = 38.0f;   // sender avatar in groups
 static const CGFloat kPadV        = 7.0f;
 static const CGFloat kImageMax    = 200.0f;
+static const CGFloat kDayRowHeight    = 27.0f;
+static const CGFloat kUnreadRowHeight = 34.0f;
+static const CGFloat kSystemPlateHeight = 20.0f;
+
+static UIColor *TGSystemPlateColour(void) {
+	static UIColor *colour = nil;
+	if (!colour)
+		colour = [UIColor colorWithRed:70 / 255.0f green:99 / 255.0f
+								  blue:126 / 255.0f alpha:0.4f];
+	return colour;
+}
+
+static UIImage *TGUnreadArrowImage(void) {
+	static UIImage *image = nil;
+	if (image)
+		return image;
+	CGSize size = CGSizeMake(11, 8);
+	if (UIGraphicsBeginImageContextWithOptions != NULL)
+		UIGraphicsBeginImageContextWithOptions(size, NO, 0.0f);
+	else
+		UIGraphicsBeginImageContext(size);
+	CGContextRef ctx = UIGraphicsGetCurrentContext();
+	CGContextSetLineWidth(ctx, 2.0f);
+	CGContextSetLineCap(ctx, kCGLineCapRound);
+	CGContextSetLineJoin(ctx, kCGLineJoinRound);
+	CGContextSetRGBStrokeColor(ctx, 140 / 255.0f, 162 / 255.0f, 182 / 255.0f, 1.0f);
+	CGContextMoveToPoint(ctx, 1.5f, 1.5f);
+	CGContextAddLineToPoint(ctx, 5.5f, 6.0f);
+	CGContextAddLineToPoint(ctx, 9.5f, 1.5f);
+	CGContextStrokePath(ctx);
+	image = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return image;
+}
 // Their file block: an 80dp tile carrying a 42dp disc, 71 and 37 here.
 static const CGFloat kFileTile    = 71.0f;
 static const CGFloat kFileDisc    = 37.0f;
@@ -1037,6 +1072,15 @@ static const CGFloat kPhotoPageGap = 20.0f;
 /// Msg_In.png / Msg_Out.png stretched behind the content box.
 @property (nonatomic, strong) UIImageView *bubbleBg;
 @property (nonatomic, strong) UIImageView *checkView;
+@property (nonatomic, strong) UIView *dateBadge;
+@property (nonatomic, assign) CGFloat headerHeight;
+@property (nonatomic, strong) UIView *dayPlate;
+@property (nonatomic, strong) UILabel *dayLabel;
+@property (nonatomic, strong) UIView *unreadStrip;
+@property (nonatomic, strong) UIView *unreadTopLine;
+@property (nonatomic, strong) UIView *unreadBottomLine;
+@property (nonatomic, strong) UILabel *unreadLabel;
+@property (nonatomic, strong) UIImageView *unreadArrow;
 @end
 
 @implementation TGBubbleCell
@@ -1072,10 +1116,10 @@ static const CGFloat kPhotoPageGap = 20.0f;
 	[self.bubble addSubview:self.body];
 
 	self.sender = [[UILabel alloc] init];
-	self.sender.font = [UIFont boldSystemFontOfSize:12];
+	self.sender.font = [UIFont boldSystemFontOfSize:13];
 	self.sender.backgroundColor = [UIColor clearColor];
 	self.sender.hidden = YES;
-	[self.contentView addSubview:self.sender];
+	[self.bubble addSubview:self.sender];
 
 	self.disc = [[UIImageView alloc] init];
 	self.disc.hidden = YES;
@@ -1095,9 +1139,15 @@ static const CGFloat kPhotoPageGap = 20.0f;
 	self.senderAvatar.hidden = YES;
 	[self.contentView addSubview:self.senderAvatar];
 
+	self.dateBadge = [[UIView alloc] init];
+	self.dateBadge.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.55f];
+	self.dateBadge.layer.cornerRadius = 10.5f;
+	self.dateBadge.hidden = YES;
+	[self.contentView addSubview:self.dateBadge];
+
 	self.ticks = [[UIImageView alloc] init];
 	self.ticks.hidden = YES;
-	[self.bubble addSubview:self.ticks];
+	[self.contentView addSubview:self.ticks];
 
 	self.quoteBar = [[UIView alloc] init];
 	self.quoteBar.hidden = YES;
@@ -1150,13 +1200,125 @@ static const CGFloat kPhotoPageGap = 20.0f;
 	self.time.font = [UIFont systemFontOfSize:11];
 	self.time.backgroundColor = [UIColor clearColor];
 	self.time.textAlignment = NSTextAlignmentRight;
-	[self.bubble addSubview:self.time];
+	[self.contentView addSubview:self.time];
 
 	self.checkView = [[UIImageView alloc] initWithFrame:CGRectMake(2, 0, 26, 26)];
 	self.checkView.hidden = YES;
 	[self addSubview:self.checkView];
 
+	self.dayPlate = [[UIView alloc] init];
+	self.dayPlate.backgroundColor = TGSystemPlateColour();
+	self.dayPlate.layer.cornerRadius = kSystemPlateHeight / 2;
+	self.dayPlate.userInteractionEnabled = NO;
+	self.dayPlate.hidden = YES;
+	[self addSubview:self.dayPlate];
+
+	self.dayLabel = [[UILabel alloc] init];
+	self.dayLabel.font = [UIFont boldSystemFontOfSize:13];
+	self.dayLabel.textColor = [UIColor whiteColor];
+	self.dayLabel.textAlignment = NSTextAlignmentCenter;
+	self.dayLabel.backgroundColor = [UIColor clearColor];
+	self.dayLabel.userInteractionEnabled = NO;
+	self.dayLabel.hidden = YES;
+	[self addSubview:self.dayLabel];
+
+	self.unreadStrip = [[UIView alloc] init];
+	self.unreadStrip.userInteractionEnabled = NO;
+	self.unreadStrip.hidden = YES;
+	self.unreadStrip.clipsToBounds = YES;
+	[self addSubview:self.unreadStrip];
+
+	CAGradientLayer *strip = [CAGradientLayer layer];
+	strip.colors = [NSArray arrayWithObjects:
+			(id)[UIColor colorWithRed:250 / 255.0f green:253 / 255.0f
+								 blue:255 / 255.0f alpha:1.0f].CGColor,
+			(id)[UIColor colorWithRed:229 / 255.0f green:236 / 255.0f
+								 blue:243 / 255.0f alpha:1.0f].CGColor, nil];
+	[self.unreadStrip.layer insertSublayer:strip atIndex:0];
+
+	self.unreadTopLine = [[UIView alloc] init];
+	self.unreadTopLine.backgroundColor = [UIColor colorWithRed:0 green:35 / 255.0f
+														  blue:70 / 255.0f alpha:0.13f];
+	[self.unreadStrip addSubview:self.unreadTopLine];
+
+	self.unreadBottomLine = [[UIView alloc] init];
+	self.unreadBottomLine.backgroundColor = [UIColor colorWithRed:0 green:43 / 255.0f
+															 blue:86 / 255.0f alpha:0.26f];
+	[self.unreadStrip addSubview:self.unreadBottomLine];
+
+	self.unreadLabel = [[UILabel alloc] init];
+	self.unreadLabel.font = [UIFont boldSystemFontOfSize:13];
+	self.unreadLabel.textColor = [UIColor colorWithRed:0x50 / 255.0f green:0x6e / 255.0f
+												  blue:0x8d / 255.0f alpha:1.0f];
+	self.unreadLabel.shadowColor = [UIColor colorWithWhite:1.0f alpha:0.6f];
+	self.unreadLabel.shadowOffset = CGSizeMake(0, 1);
+	self.unreadLabel.textAlignment = NSTextAlignmentCenter;
+	self.unreadLabel.backgroundColor = [UIColor clearColor];
+	self.unreadLabel.userInteractionEnabled = NO;
+	self.unreadLabel.hidden = YES;
+	[self addSubview:self.unreadLabel];
+
+	self.unreadArrow = [[UIImageView alloc] initWithImage:TGUnreadArrowImage()];
+	self.unreadArrow.hidden = YES;
+	[self addSubview:self.unreadArrow];
+
 	return self;
+}
+
+- (void)setHeaderHeight:(CGFloat)headerHeight {
+	if (_headerHeight == headerHeight)
+		return;
+	_headerHeight = headerHeight;
+	[self setNeedsLayout];
+}
+
+- (void)layoutSubviews {
+	[super layoutSubviews];
+
+	CGRect content = self.contentView.bounds;
+	if (content.origin.y != -_headerHeight){
+		content.origin.y = -_headerHeight;
+		self.contentView.bounds = content;
+	}
+
+	CGFloat width = self.bounds.size.width;
+
+	if (!self.dayLabel.hidden){
+		[self.dayLabel sizeToFit];
+		CGRect label = self.dayLabel.frame;
+		label.origin = CGPointMake(floorf((width - label.size.width) / 2),
+								   floorf((kDayRowHeight - label.size.height) / 2) - 1);
+		self.dayLabel.frame = label;
+		self.dayPlate.frame = CGRectMake(label.origin.x - 10,
+										 floorf((kDayRowHeight - kSystemPlateHeight) / 2),
+										 label.size.width + 20, kSystemPlateHeight);
+		[self bringSubviewToFront:self.dayPlate];
+		[self bringSubviewToFront:self.dayLabel];
+	}
+
+	if (!self.unreadStrip.hidden){
+		CGFloat top = _headerHeight - kUnreadRowHeight;
+		self.unreadStrip.frame = CGRectMake(0, top + 3, width, 27);
+		CALayer *strip = [self.unreadStrip.layer.sublayers count]
+				? [self.unreadStrip.layer.sublayers objectAtIndex:0] : nil;
+		strip.frame = self.unreadStrip.bounds;
+		self.unreadTopLine.frame = CGRectMake(0, 0, width, kRetinaPixel);
+		self.unreadBottomLine.frame = CGRectMake(0, 27 - kRetinaPixel, width, kRetinaPixel);
+
+		[self.unreadLabel sizeToFit];
+		CGRect label = self.unreadLabel.frame;
+		label.origin = CGPointMake(floorf((width - label.size.width) / 2),
+								   top + floorf((kUnreadRowHeight - label.size.height) / 2) - 1);
+		self.unreadLabel.frame = label;
+
+		CGRect arrow = self.unreadArrow.frame;
+		arrow.origin = CGPointMake(width - arrow.size.width - 7, top + 13 + kRetinaPixel);
+		self.unreadArrow.frame = arrow;
+
+		[self bringSubviewToFront:self.unreadStrip];
+		[self bringSubviewToFront:self.unreadLabel];
+		[self bringSubviewToFront:self.unreadArrow];
+	}
 }
 
 @end
@@ -1218,6 +1380,12 @@ static const CGFloat kPhotoPageGap = 20.0f;
 @property (nonatomic, strong) NSArray *reportOptions;
 @property (nonatomic, assign) int64_t reportMessageId;
 @property (nonatomic, strong) UILabel *emptyLabel;
+@property (nonatomic, strong) UIView *emptyPlate;
+@property (nonatomic, strong) UIImageView *emptyGlyph;
+@property (nonatomic, assign) NSInteger unreadOnOpen;
+@property (nonatomic, assign) BOOL unreadOnOpenKnown;
+@property (nonatomic, assign) NSInteger cachedUnreadRow;
+@property (nonatomic, strong) NSArray *cachedUnreadKey;
 @property (nonatomic, strong) UIButton *scrollDownButton;
 @property (nonatomic, strong) NSDate *lastTypingSent;
 @property (nonatomic, assign) BOOL postingBlocked;
@@ -1272,6 +1440,17 @@ static const CGFloat kPhotoPageGap = 20.0f;
 	// frames and expect the old behaviour.
 	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
 		self.edgesForExtendedLayout = UIRectEdgeNone;
+
+	if (!self.unreadOnOpenKnown){
+		self.unreadOnOpenKnown = YES;
+		self.cachedUnreadRow = NSNotFound;
+		for (NSDictionary *chat in [[TGClient shared] chats]){
+			if ([chat[@"id"] longLongValue] == self.chatId){
+				self.unreadOnOpen = [chat[@"unread"] integerValue];
+				break;
+			}
+		}
+	}
 
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
 	[self buildTitleView];
@@ -2046,26 +2225,97 @@ static const CGFloat kPhotoPageGap = 20.0f;
 /// An empty conversation is otherwise a blank wallpaper with no explanation,
 /// which reads as a screen that failed to load.
 - (void)updateEmptyState {
-	if (!self.emptyLabel){
+	if (!self.emptyPlate){
 		CGRect b = self.view.bounds;
-		self.emptyLabel = [[UILabel alloc] initWithFrame:
-				CGRectMake(20, (b.size.height - kInputHeight) / 2 - 20,
-						   b.size.width - 40, 40)];
-		self.emptyLabel.numberOfLines = 2;
-		self.emptyLabel.textAlignment = NSTextAlignmentCenter;
-		self.emptyLabel.font = [UIFont systemFontOfSize:14];
-		self.emptyLabel.backgroundColor = [UIColor clearColor];
-		self.emptyLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+		self.emptyPlate = [[UIView alloc] initWithFrame:
+				CGRectMake(floorf((b.size.width - 122) / 2),
+						   floorf((b.size.height - kInputHeight - 116) / 2), 122, 116)];
+		self.emptyPlate.backgroundColor = TGSystemPlateColour();
+		self.emptyPlate.layer.cornerRadius = 10;
+		self.emptyPlate.userInteractionEnabled = NO;
+		self.emptyPlate.alpha = 0.0f;
+		self.emptyPlate.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin |
+										   UIViewAutoresizingFlexibleRightMargin |
 										   UIViewAutoresizingFlexibleTopMargin |
 										   UIViewAutoresizingFlexibleBottomMargin;
+		[self.view insertSubview:self.emptyPlate aboveSubview:self.wallpaperView];
+
+		UIImage *glyph = [UIImage imageNamed:@"ConversationIconPlain.png"];
+		if (!glyph)
+			glyph = [self plainConversationGlyph];
+		self.emptyGlyph = [[UIImageView alloc] initWithImage:glyph];
+		self.emptyGlyph.frame = CGRectMake(
+				floorf((122 - glyph.size.width) / 2), 23,
+				glyph.size.width, glyph.size.height);
+		[self.emptyPlate addSubview:self.emptyGlyph];
+
+		self.emptyLabel = [[UILabel alloc] init];
+		self.emptyLabel.numberOfLines = 0;
+		self.emptyLabel.lineBreakMode = NSLineBreakByWordWrapping;
+		self.emptyLabel.textAlignment = NSTextAlignmentCenter;
+		self.emptyLabel.font = [UIFont boldSystemFontOfSize:13];
+		self.emptyLabel.textColor = [UIColor whiteColor];
+		self.emptyLabel.backgroundColor = [UIColor clearColor];
 		self.emptyLabel.userInteractionEnabled = NO;
-		[self.view insertSubview:self.emptyLabel aboveSubview:self.wallpaperView];
+		[self.emptyPlate addSubview:self.emptyLabel];
 	}
-	self.emptyLabel.textColor = [[TGTheme shared] secondaryTextColour];
+
 	self.emptyLabel.text = self.chatSearchBar
 			? @"No messages found"
-			: @"No messages here yet.\nWrite something to start.";
-	self.emptyLabel.hidden = (self.messages.count > 0);
+			: @"No messages here yet...";
+	CGSize fits = [self.emptyLabel sizeThatFits:CGSizeMake(110, 1000)];
+	self.emptyLabel.frame = CGRectMake(floorf((122 - fits.width) / 2),
+									   116 - fits.height - 8, fits.width, fits.height);
+
+	BOOL wanted = (self.messages.count == 0);
+	if (wanted && self.emptyPlate.alpha < 1.0f){
+		self.emptyPlate.hidden = NO;
+		[UIView animateWithDuration:0.3 animations:^{
+			self.emptyPlate.alpha = 1.0f;
+		}];
+	} else if (!wanted){
+		self.emptyPlate.alpha = 0.0f;
+		self.emptyPlate.hidden = YES;
+	}
+}
+
+- (UIImage *)plainConversationGlyph {
+	CGSize size = CGSizeMake(47, 39);
+	if (UIGraphicsBeginImageContextWithOptions != NULL)
+		UIGraphicsBeginImageContextWithOptions(size, NO, 0.0f);
+	else
+		UIGraphicsBeginImageContext(size);
+	CGContextRef ctx = UIGraphicsGetCurrentContext();
+	CGContextSetRGBStrokeColor(ctx, 1.0f, 1.0f, 1.0f, 1.0f);
+	CGContextSetRGBFillColor(ctx, 1.0f, 1.0f, 1.0f, 1.0f);
+	CGContextSetLineWidth(ctx, 1.5f);
+	CGContextSetLineJoin(ctx, kCGLineJoinRound);
+
+	CGRect body = CGRectMake(1, 1, 45, 30);
+	CGFloat radius = 6;
+	CGContextBeginPath(ctx);
+	CGContextMoveToPoint(ctx, CGRectGetMinX(body) + radius, CGRectGetMinY(body));
+	CGContextAddArcToPoint(ctx, CGRectGetMaxX(body), CGRectGetMinY(body),
+						   CGRectGetMaxX(body), CGRectGetMaxY(body), radius);
+	CGContextAddArcToPoint(ctx, CGRectGetMaxX(body), CGRectGetMaxY(body),
+						   CGRectGetMinX(body), CGRectGetMaxY(body), radius);
+	CGContextAddArcToPoint(ctx, CGRectGetMinX(body), CGRectGetMaxY(body),
+						   CGRectGetMinX(body), CGRectGetMinY(body), radius);
+	CGContextAddArcToPoint(ctx, CGRectGetMinX(body), CGRectGetMinY(body),
+						   CGRectGetMaxX(body), CGRectGetMinY(body), radius);
+	CGContextClosePath(ctx);
+	CGContextStrokePath(ctx);
+
+	CGContextBeginPath(ctx);
+	CGContextMoveToPoint(ctx, 11, 30.5f);
+	CGContextAddLineToPoint(ctx, 23, 30.5f);
+	CGContextAddLineToPoint(ctx, 12, 38.5f);
+	CGContextClosePath(ctx);
+	CGContextFillPath(ctx);
+
+	UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return image;
 }
 
 /// Every client puts a way back to the newest message once you have scrolled
@@ -4907,8 +5157,14 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 	NSString *text = [self textOf:m] ?: @"";
 	if (!text.length)
 		return CGSizeZero;
+	// A group message keeps a 40pt avatar column beside it, so it has that
+	// much less room for its text.
+	CGFloat maxW = kBubbleMaxW - 2 * kPadH;
+	if (self.isGroup && ![m[@"outgoing"] boolValue] &&
+		[[TGClient shared] nameForUserId:[m[@"senderId"] longLongValue]])
+		maxW -= 40;
 	return [text sizeWithFont:[self bodyFontFor:m]
-			constrainedToSize:CGSizeMake(kBubbleMaxW - 2 * kPadH, 10000)
+			constrainedToSize:CGSizeMake(maxW, 10000)
 				lineBreakMode:NSLineBreakByWordWrapping];
 }
 
@@ -4930,7 +5186,71 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 	return CGSizeMake(floorf(img.size.width * scale), floorf(img.size.height * scale));
 }
 
+- (NSString *)dayStringForMessage:(NSDictionary *)m {
+	static NSDateFormatter *day = nil;
+	if (!day){
+		day = [[NSDateFormatter alloc] init];
+		NSString *format = nil;
+		if ([NSDateFormatter respondsToSelector:@selector(dateFormatFromTemplate:options:locale:)])
+			format = [NSDateFormatter dateFormatFromTemplate:@"MMMd" options:0
+													  locale:[NSLocale currentLocale]];
+		[day setDateFormat:format.length ? format : @"MMM d"];
+	}
+	return [day stringFromDate:
+			[NSDate dateWithTimeIntervalSince1970:[m[@"date"] doubleValue]]];
+}
+
+- (BOOL)rowOpensNewDay:(NSInteger)row {
+	if (row < 0 || row >= (NSInteger)self.messages.count)
+		return NO;
+	NSDictionary *m = self.messages[row];
+	if (![m[@"date"] doubleValue])
+		return NO;
+	if (row == 0)
+		return YES;
+	NSDictionary *prev = self.messages[row - 1];
+	if (![prev[@"date"] doubleValue])
+		return NO;
+	return ![[self dayStringForMessage:prev] isEqualToString:[self dayStringForMessage:m]];
+}
+
+- (NSInteger)unreadDividerRow {
+	if (self.chatSearchBar || self.unreadOnOpen <= 0)
+		return NSNotFound;
+	if (self.messages && self.cachedUnreadKey == self.messages)
+		return self.cachedUnreadRow;
+	NSInteger remaining = self.unreadOnOpen;
+	NSInteger row = NSNotFound;
+	for (NSInteger i = (NSInteger)self.messages.count - 1; i >= 0; i--){
+		NSDictionary *m = self.messages[i];
+		if ([m[@"outgoing"] boolValue] || [m[@"service"] boolValue])
+			continue;
+		row = i;
+		if (--remaining <= 0)
+			break;
+	}
+	if (row == NSNotFound || row == 0)
+		row = NSNotFound;
+	self.cachedUnreadKey = self.messages;
+	self.cachedUnreadRow = row;
+	return row;
+}
+
+- (CGFloat)headerHeightForRow:(NSInteger)row {
+	CGFloat h = 0;
+	if ([self rowOpensNewDay:row])
+		h += kDayRowHeight;
+	if (row == [self unreadDividerRow])
+		h += kUnreadRowHeight;
+	return h;
+}
+
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
+	return [self headerHeightForRow:indexPath.row] +
+			[self messageHeightForRowAtIndexPath:indexPath];
+}
+
+- (CGFloat)messageHeightForRowAtIndexPath:(NSIndexPath *)indexPath {
 	NSDictionary *m = self.messages[indexPath.row];
 
 	CGSize body = [self bodySizeFor:m];
@@ -4945,7 +5265,7 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 		return 148;
 
 	if ([m[@"service"] boolValue])
-		return 30;
+		return kDayRowHeight;
 
 	// Their media block is 80dp tall; a voice message needs only the disc and
 	// the bars, which comes to 54 on this screen.
@@ -4966,7 +5286,7 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 			([self stampFitsInlineFor:m] || [self stampSitsOnPictureFor:m] ? 0 : 14);
 	if (self.isGroup && ![m[@"outgoing"] boolValue] &&
 		[[TGClient shared] nameForUserId:[m[@"senderId"] longLongValue]])
-		h += 15;                                // room for the sender line
+		h += 17;                                // room for the sender line
 	if (pic.height > 0) h += pic.height + 4;
 	if (body.height > 0) h += body.height;
 	return MAX(h + 6, 40);
@@ -4974,16 +5294,84 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 
 /// Clients colour each participant's name; the same person keeps the same
 /// colour because it is derived from their id.
+static UIColor *TGMessageDateColour(void) {
+	static UIColor *colour = nil;
+	if (!colour)
+		colour = [UIColor colorWithRed:0x23 / 255.0f
+								 green:0x2d / 255.0f
+								  blue:0x37 / 255.0f alpha:1.0f];
+	return colour;
+}
+
 static UIColor *TGSenderColour(int64_t userId) {
 	static NSArray *palette = nil;
-	if (!palette)
-		palette = @[[UIColor colorWithRed:0.85f green:0.27f blue:0.27f alpha:1],
-					[UIColor colorWithRed:0.20f green:0.55f blue:0.85f alpha:1],
-					[UIColor colorWithRed:0.25f green:0.62f blue:0.35f alpha:1],
-					[UIColor colorWithRed:0.75f green:0.45f blue:0.15f alpha:1],
-					[UIColor colorWithRed:0.55f green:0.35f blue:0.75f alpha:1],
-					[UIColor colorWithRed:0.20f green:0.60f blue:0.62f alpha:1]];
+	if (!palette){
+		static const NSUInteger hexes[8] = {
+			0xee4928, 0x41a903, 0xe09602, 0x0f94ed,
+			0x8f3bf7, 0xfc4380, 0x00a1c4, 0xeb7002
+		};
+		NSMutableArray *built = [NSMutableArray arrayWithCapacity:8];
+		for (NSUInteger i = 0; i < 8; i++){
+			NSUInteger hex = hexes[i];
+			[built addObject:[UIColor colorWithRed:((hex >> 16) & 0xff) / 255.0f
+											 green:((hex >> 8) & 0xff) / 255.0f
+											  blue:(hex & 0xff) / 255.0f
+											 alpha:1.0f]];
+		}
+		palette = built;
+	}
 	return palette[(NSUInteger)llabs(userId) % palette.count];
+}
+
+/// Their conversation cell never put the stamp inside the bubble: the date
+/// label, its translucent plate and the delivery marks live on the cell beside
+/// the bubble - to its right when the message came in, to its left when it
+/// went out.
+- (void)placeDateBesideBubbleFor:(TGBubbleCell *)cell
+						 message:(NSDictionary *)m
+						outgoing:(BOOL)mine
+					  tableWidth:(CGFloat)tableWidth
+{
+	if (![cell.time.text length]){
+		cell.dateBadge.hidden = YES;
+		cell.time.hidden = YES;
+		return;
+	}
+
+	cell.time.hidden = NO;
+	CGRect box = cell.bubble.frame;
+	CGFloat dateW = ceilf([cell.time.text sizeWithFont:cell.time.font].width) + 1;
+	CGFloat dateX = mine ? (CGRectGetMinX(box) - 26 - kRetinaPixel - dateW)
+						 : (CGRectGetMaxX(box) + 12);
+	CGFloat dateY = CGRectGetMaxY(box) - 22;
+
+	CGRect badge = mine
+			? CGRectMake(dateX - 5, dateY - 3 - kRetinaPixel, dateW + 29, 21)
+			: CGRectMake(dateX - 10, dateY - 3 - kRetinaPixel, dateW + 16, 21);
+
+	CGFloat over = CGRectGetMaxX(badge) - (tableWidth - 2);
+	if (over > 0){ badge.origin.x -= over; dateX -= over; }
+	if (badge.origin.x < 2){ CGFloat back = 2 - badge.origin.x;
+		badge.origin.x += back; dateX += back; }
+
+	cell.dateBadge.hidden = NO;
+	cell.dateBadge.frame = badge;
+	cell.time.textAlignment = NSTextAlignmentLeft;
+	cell.time.textColor = TGMessageDateColour();
+	cell.time.frame = CGRectMake(dateX, dateY, dateW, 14);
+
+	if (mine){
+		cell.ticks.hidden = NO;
+		cell.ticks.image = [self statusGlyphForMessage:m white:NO];
+		cell.ticks.frame = CGRectMake(dateX + dateW + 4,
+									  CGRectGetMidY(badge) - 5, 15, 9);
+	} else {
+		cell.ticks.hidden = YES;
+	}
+
+	[cell.contentView bringSubviewToFront:cell.dateBadge];
+	[cell.contentView bringSubviewToFront:cell.time];
+	[cell.contentView bringSubviewToFront:cell.ticks];
 }
 
 #pragma mark - table
@@ -5039,6 +5427,25 @@ static UIColor *TGSenderColour(int64_t userId) {
 	BOOL mine = [m[@"outgoing"] boolValue];
 	NSString *kind = m[@"kind"];
 
+	BOOL opensDay = [self rowOpensNewDay:indexPath.row];
+	NSInteger dividerRow = [self unreadDividerRow];
+	CGFloat headerH = [self headerHeightForRow:indexPath.row];
+	cell.headerHeight = headerH;
+
+	cell.dayPlate.hidden = !opensDay;
+	cell.dayLabel.hidden = !opensDay;
+	if (opensDay)
+		cell.dayLabel.text = [self dayStringForMessage:m];
+
+	BOOL divides = (indexPath.row == dividerRow);
+	cell.unreadStrip.hidden = !divides;
+	cell.unreadLabel.hidden = !divides;
+	cell.unreadArrow.hidden = !divides;
+	if (divides)
+		cell.unreadLabel.text = [NSString stringWithFormat:@"%d unread message%@",
+				(int)self.unreadOnOpen, self.unreadOnOpen == 1 ? @"" : @"s"];
+	[cell setNeedsLayout];
+
 	BOOL picked = self.selecting && [m[@"id"] isKindOfClass:NSNumber.class] &&
 			[self.selectedIds containsObject:m[@"id"]];
 	self.drawingSelectedRow = picked;
@@ -5046,7 +5453,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 	if (!cell.checkView.hidden){
 		cell.checkView.image = [self selectionGlyphChecked:picked];
 		cell.checkView.frame = CGRectMake(2,
-				([self tableView:tableView heightForRowAtIndexPath:indexPath] - 26) / 2,
+				headerH + ([self messageHeightForRowAtIndexPath:indexPath] - 26) / 2,
 				26, 26);
 		[cell bringSubviewToFront:cell.checkView];
 	}
@@ -5061,6 +5468,10 @@ static UIColor *TGSenderColour(int64_t userId) {
 	cell.subtitle.hidden = YES;
 	cell.sender.hidden = YES;
 	cell.senderAvatar.hidden = YES;
+	cell.dateBadge.hidden = YES;
+	cell.ticks.hidden = YES;
+	cell.time.hidden = YES;
+	cell.time.text = @"";
 	cell.tail.hidden = YES;
 	cell.disc.hidden = YES;
 	cell.wave.hidden = YES;
@@ -5079,15 +5490,17 @@ static UIColor *TGSenderColour(int64_t userId) {
 		// Their service message is a plate the width of its own text, centred -
 		// not a bar across the chat. It sits over the wallpaper, so it is a
 		// wash with white text rather than grey on grey.
-		UIFont *font = [UIFont systemFontOfSize:12];
+		UIFont *font = [UIFont boldSystemFontOfSize:13];
 		CGFloat full = tableView.bounds.size.width;
 		CGFloat textW = MIN([line sizeWithFont:font].width, full - 60);
 		CGFloat plateW = textW + 20;
 
-		cell.bubble.frame = CGRectMake((full - plateW) / 2, 4, plateW, 21);
-		cell.bubble.backgroundColor = [serviceTheme serviceBubbleColour];
+		cell.bubble.frame = CGRectMake(floorf((full - plateW) / 2),
+									   floorf((kDayRowHeight - kSystemPlateHeight) / 2),
+									   plateW, kSystemPlateHeight);
+		cell.bubble.backgroundColor = TGSystemPlateColour();
 		cell.bubble.layer.borderWidth = 0;
-		cell.bubble.layer.cornerRadius = 10.5f;
+		cell.bubble.layer.cornerRadius = kSystemPlateHeight / 2;
 		cell.picture.hidden = YES;
 		cell.time.text = @"";
 		cell.body.hidden = NO;
@@ -5096,7 +5509,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 		cell.body.textAlignment = NSTextAlignmentCenter;
 		cell.body.textColor = [serviceTheme serviceTextColour];
 		cell.body.text = line;
-		cell.body.frame = CGRectMake(0, 2, plateW, 17);
+		cell.body.frame = CGRectMake(0, 1, plateW, kSystemPlateHeight - 2);
 		return cell;
 	}
 	cell.body.textAlignment = NSTextAlignmentLeft;
@@ -5224,15 +5637,8 @@ static UIColor *TGSenderColour(int64_t userId) {
 		cell.picture.hidden = YES;
 		cell.disc.hidden = YES;
 		cell.time.text = [self stampFor:m];
-		cell.time.textColor = [pollTheme timeColour];
-		CGFloat pollTimeW = [self timeWidthFor:m];
-		cell.time.frame = CGRectMake(width - pollTimeW - kPadH, height - 17,
-									 pollTimeW - (mine ? 18 : 0), 12);
-		cell.ticks.hidden = !mine;
-		if (mine){
-			cell.ticks.image = [self statusGlyphForMessage:m white:NO];
-			cell.ticks.frame = CGRectMake(width - kPadH - 15, height - 15, 15, 9);
-		}
+		[self placeDateBesideBubbleFor:cell message:m outgoing:mine
+							tableWidth:tableView.bounds.size.width];
 		return cell;
 	}
 
@@ -5348,16 +5754,8 @@ static UIColor *TGSenderColour(int64_t userId) {
 		cell.subtitle.frame = CGRectMake(textX, fwd + kPadV + 46, width - textX - kPadH, 17);
 
 		cell.time.text = [self stampFor:m];
-		cell.time.textColor = [cardTheme timeColour];
-		CGFloat fileTimeW = [self timeWidthFor:m];
-		CGFloat fileTicks = mine ? 18 : 0;
-		cell.time.frame = CGRectMake(width - fileTimeW - kPadH, height - 17,
-									 fileTimeW - fileTicks, 12);
-		cell.ticks.hidden = !mine;
-		if (mine){
-			cell.ticks.image = [self statusGlyphForMessage:m white:NO];
-			cell.ticks.frame = CGRectMake(width - kPadH - 15, height - 15, 15, 9);
-		}
+		[self placeDateBesideBubbleFor:cell message:m outgoing:mine
+							tableWidth:tableView.bounds.size.width];
 		cell.picture.hidden = YES;
 		return cell;
 	}
@@ -5387,10 +5785,28 @@ static UIColor *TGSenderColour(int64_t userId) {
 
 	if (isVoice)
 		contentW = 190;
+
+	// In a group you need to know who is speaking. Their layout puts the name
+	// inside the bubble as its first line and hangs the avatar beside it.
+	int64_t senderId = [m[@"senderId"] longLongValue];
+	NSString *senderName = (self.isGroup && !mine)
+			? [[TGClient shared] nameForUserId:senderId] : nil;
+	CGFloat senderH = 0;
+	CGFloat nameW = 0;
+	if (senderName.length){
+		senderH = 17;
+		nameW = ceilf([senderName sizeWithFont:cell.sender.font].width) + 4;
+		contentW = MAX(contentW, nameW);
+	}
+
+	CGFloat maxBubbleW = kBubbleMaxW + 2 * kPadH;
+	// The avatar column takes 40 out of the width an incoming bubble may use.
+	if (senderName.length)
+		maxBubbleW -= 40;
 	CGFloat bubbleW = MAX(contentW + 2 * kPadH, timeW + 2 * kPadH + 8);
-	bubbleW = MIN(bubbleW, kBubbleMaxW + 2 * kPadH);
+	bubbleW = MIN(bubbleW, maxBubbleW);
 	BOOL stampOnPicture = [self stampSitsOnPictureFor:m];
-	CGFloat bubbleH  = kPadV * 2 + (inlineStamp || stampOnPicture ? 0 : 14) +
+	CGFloat bubbleH  = senderH + kPadV * 2 + (inlineStamp || stampOnPicture ? 0 : 14) +
 			[self decorationHeightFor:m] +
 			(pic.height ? pic.height + 4 : 0) + body.height;
 	// The voice block has its own size: a 40pt disc with the bars beside it.
@@ -5402,10 +5818,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 	// a single post rather than a run of separate messages.
 	CGFloat top = [self continuesAlbumAtRow:indexPath.row] ? 0 : 3;
 
-	// In a group you need to know who is speaking.
-	int64_t senderId = [m[@"senderId"] longLongValue];
-	NSString *senderName = (self.isGroup && !mine)
-			? [[TGClient shared] nameForUserId:senderId] : nil;
+	CGFloat avatarX = x + 4;
 	if (senderName.length){
 		// The bubble shifts right to make room for the avatar beside it.
 		x += kAvatarSide + 4;
@@ -5415,14 +5828,14 @@ static UIColor *TGSenderColour(int64_t userId) {
 		cell.sender.hidden = NO;
 		cell.sender.text = senderName;
 		cell.sender.textColor = TGSenderColour(senderId);
-		cell.sender.frame = CGRectMake(x + kPadH, 2, tableView.bounds.size.width - x - 20, 14);
-		top = 18;
+		cell.sender.frame = CGRectMake(kPadH, kPadV + 2, bubbleW - 2 * kPadH, 16);
 	}
 
 	cell.bubble.frame = CGRectMake(x, top, bubbleW, bubbleH);
 
 	if (!cell.senderAvatar.hidden)
-		cell.senderAvatar.frame = CGRectMake(8, top + bubbleH - kAvatarSide,
+		cell.senderAvatar.frame = CGRectMake(avatarX,
+											 top + bubbleH - kAvatarSide - 1,
 											 kAvatarSide, kAvatarSide);
 
 	// Outgoing green, incoming white - the convention every client uses.
@@ -5471,8 +5884,8 @@ static UIColor *TGSenderColour(int64_t userId) {
 		if (!hmr){ hmr = [[NSDateFormatter alloc] init]; [hmr setDateFormat:@"HH:mm"]; }
 		cell.time.text = [hmr stringFromDate:
 				[NSDate dateWithTimeIntervalSince1970:[m[@"date"] doubleValue]]];
-		cell.time.textColor = [UIColor colorWithWhite:0.35f alpha:1.0f];
-		cell.time.frame = CGRectMake(side - 44, side, 44, 12);
+		[self placeDateBesideBubbleFor:cell message:m outgoing:mine
+							tableWidth:tableView.bounds.size.width];
 		return cell;
 	}
 
@@ -5497,11 +5910,11 @@ static UIColor *TGSenderColour(int64_t userId) {
 		if (!hmt){ hmt = [[NSDateFormatter alloc] init]; [hmt setDateFormat:@"HH:mm"]; }
 		cell.time.text = [hmt stringFromDate:
 				[NSDate dateWithTimeIntervalSince1970:[m[@"date"] doubleValue]]];
-		cell.time.textColor = [UIColor colorWithWhite:0.35f alpha:1.0f];
-		cell.time.frame = CGRectMake(side - 44, side, 44, 12);
+		[self placeDateBesideBubbleFor:cell message:m outgoing:mine
+							tableWidth:tableView.bounds.size.width];
 		return cell;
 	}
-	CGFloat y = kPadV;
+	CGFloat y = kPadV + senderH;
 
 	// "Forwarded from X", then the quote block, then the message itself.
 	cell.quoteBar.hidden = YES;
@@ -5595,9 +6008,6 @@ static UIColor *TGSenderColour(int64_t userId) {
 			cell.mediaStamp.text = stamp;
 			cell.mediaStamp.frame = CGRectMake(
 					kPadH + pic.width - plateW - 5, y + pic.height - 21, plateW, 16);
-			// The ticks were added to the bubble before the plate was, so
-			// without this they end up behind it.
-			[cell.bubble bringSubviewToFront:cell.ticks];
 		}
 		y += pic.height + 4;
 	} else {
@@ -5642,15 +6052,8 @@ static UIColor *TGSenderColour(int64_t userId) {
 
 		cell.picture.hidden = YES;
 		cell.time.text = [self stampFor:m];
-		cell.time.textColor = [voiceTheme timeColour];
-		CGFloat tickRoom = mine ? 18 : 0;
-		cell.time.frame = CGRectMake(bubbleW - timeW - kPadH, bubbleH - 20,
-									 timeW - tickRoom, 12);
-		cell.ticks.hidden = !mine;
-		if (mine){
-			cell.ticks.image = [self statusGlyphForMessage:m white:NO];
-			cell.ticks.frame = CGRectMake(bubbleW - kPadH - 15, bubbleH - 18, 15, 9);
-		}
+		[self placeDateBesideBubbleFor:cell message:m outgoing:mine
+							tableWidth:tableView.bounds.size.width];
 		return cell;
 	}
 
@@ -5742,22 +6145,17 @@ static UIColor *TGSenderColour(int64_t userId) {
 	BOOL onPicture = !cell.mediaStamp.hidden;
 	cell.time.text = (onPicture || [self albumContinuesAfterRow:indexPath.row])
 			? @"" : [self stampFor:m];
-	cell.time.textColor = [theme timeColour];
-	CGFloat tickW = mine ? 18 : 0;
-	CGFloat stampY = inlineStamp ? (y + body.height - 14) : (bubbleH - kPadV - 13);
-	cell.time.frame = CGRectMake(bubbleW - timeW - kPadH, stampY, timeW - tickW, 12);
+	[self placeDateBesideBubbleFor:cell message:m outgoing:mine
+						tableWidth:tableView.bounds.size.width];
 
-	cell.ticks.hidden = !mine;
 	if (mine && onPicture){
-		// Inside the plate the ticks need white; green would vanish into it.
+		// The stamp on a picture keeps its own plate inside the bubble, so its
+		// ticks stay there too - white, because green vanishes into the plate.
+		cell.ticks.hidden = NO;
 		cell.ticks.image = [self statusGlyphForMessage:m white:YES];
-		cell.ticks.frame = CGRectMake(CGRectGetMaxX(cell.mediaStamp.frame) - 20,
-									  CGRectGetMidY(cell.mediaStamp.frame) - 4, 15, 9);
-	} else if (mine){
-		// Checks sit on a pale bubble now, so they are drawn in their green
-		// rather than white.
-		cell.ticks.image = [self statusGlyphForMessage:m white:NO];
-		cell.ticks.frame = CGRectMake(bubbleW - kPadH - 15, stampY + 2, 15, 9);
+		cell.ticks.frame = CGRectMake(
+				x + CGRectGetMaxX(cell.mediaStamp.frame) - 20,
+				top + CGRectGetMidY(cell.mediaStamp.frame) - 4, 15, 9);
 	}
 
 	return cell;

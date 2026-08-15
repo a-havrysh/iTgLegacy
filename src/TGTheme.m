@@ -137,9 +137,8 @@ static NSString *const kFontKey   = @"messageFontSize";
 }
 
 - (void)styleCell:(UITableViewCell *)cell {
-	// Their settings row: 15/18 title in black, the value beside it in blue.
-	cell.textLabel.font = [UIFont systemFontOfSize:15];
-	cell.detailTextLabel.font = [UIFont systemFontOfSize:15];
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+	cell.detailTextLabel.font = [UIFont systemFontOfSize:16];
 	cell.detailTextLabel.textColor = [self cellDetailColour];
 
 	if (!_imported && !self.isDarkStyle){
@@ -209,25 +208,21 @@ static UIColor *rgb(int r, int g, int b) {
 	return [UIColor colorWithRed:r/255.0f green:g/255.0f blue:b/255.0f alpha:1.0f];
 }
 
-// Telegram's own palette, read out of their design system file. The names are
-// theirs. The file is drawn for Android at 360dp; the colours carry over
-// unchanged, the metrics are scaled to a 320pt screen where they appear.
-#define TG_BLUE_DARK4     rgb(0x51, 0x7D, 0xA2)   // the classic header blue
-#define TG_BLUE_LIGHT4    rgb(0x4C, 0xB3, 0xF5)   // send button, links
-#define TG_BLUE_MEDIUM8   rgb(0x3D, 0x95, 0xD4)   // unread badge
-#define TG_GREEN_LIGHT1   rgb(0xEF, 0xFE, 0xDD)   // outgoing bubble
-#define TG_GREEN_BRIGHT1  rgb(0x5A, 0xCD, 0x30)   // online dot, ticks
-#define TG_GRAY_LIGHT3    rgb(0xF7, 0xF7, 0xF7)   // bars, input strip
-#define TG_STEEL_LIGHT1   rgb(0xED, 0xEE, 0xF0)   // chat background
-#define TG_STEEL_LIGHT3   rgb(0xE1, 0xE4, 0xE9)   // separators
-#define TG_TEXT_PRIMARY   rgb(0x22, 0x22, 0x22)
-#define TG_TEXT_SECONDARY rgb(0x8D, 0x8E, 0x90)
-#define TG_TEXT_TIME      rgb(0x95, 0x99, 0x9A)
-#define TG_BLUE_SEMI8     rgb(0x51, 0xAE, 0xE7)   // the value on a settings row
-#define TG_GRAY_SECTION   rgb(0x69, 0x6A, 0x6F)   // a section caption
-#define TG_BLUE_DARK3     rgb(0x5A, 0x8E, 0xBD)   // behind a profile picture
+#define TG_BLUE_DARK4     rgb(0x51, 0x7D, 0xA2)
+#define TG_BLUE_LIGHT4    rgb(0x4C, 0xB3, 0xF5)
+#define TG_BLUE_MEDIUM8   rgb(0x3D, 0x95, 0xD4)
+#define TG_GREEN_LIGHT1   rgb(0xEF, 0xFE, 0xDD)
+#define TG_PRESENCE_TEXT  rgb(0x77, 0x86, 0x98)
+#define TG_GRAY_LIGHT3    rgb(0xF7, 0xF7, 0xF7)
+#define TG_STEEL_LIGHT1   rgb(0xED, 0xEE, 0xF0)
+#define TG_HAIRLINE       rgb(0xE5, 0xE5, 0xE5)
+#define TG_TEXT_PRIMARY   rgb(0x11, 0x11, 0x11)
+#define TG_TEXT_SECONDARY rgb(0x88, 0x88, 0x88)
+#define TG_MESSAGE_DATE   rgb(0x23, 0x2D, 0x37)
+#define TG_SETTINGS_VALUE rgb(0x35, 0x65, 0x96)
+#define TG_FOOTER_CAPTION rgb(0x69, 0x74, 0x87)
+#define TG_ACTION_TEXT    rgb(0x53, 0x6C, 0x8C)
 #define TG_BLUE_MEDIUM2   rgb(0x5E, 0xA7, 0xDE)   // the record button
-#define TG_BLUE_BLURPLE3  rgb(0x70, 0xAA, 0xEA)   // "typing..." in the chat list
 #define TG_STEEL_LIGHT6   rgb(0xC5, 0xC9, 0xCC)   // a muted chat's badge
 #define TG_STEEL_LIGHT13  rgb(0xA1, 0xAA, 0xB3)   // size and type under a file
 #define TG_FILE_TILE      rgb(0xEB, 0xF0, 0xF4)   // the square behind a file glyph
@@ -273,7 +268,15 @@ static UIColor *rgb(int r, int g, int b) {
 	UIColor *imported = [self importedColour:@"chatBackground"];
 	if (imported) return imported;
 	if (self.isDarkStyle) return TG_GRAY_DARK14;
-	return self.isFlat ? TG_STEEL_LIGHT1 : rgb(217, 222, 212);
+	if (self.isFlat) return TG_STEEL_LIGHT1;
+	static UIColor *linen = nil;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		UIImage *tile = [UIImage imageNamed:@"Linen.png"];
+		if (tile)
+			linen = [UIColor colorWithPatternImage:tile];
+	});
+	return linen ?: rgb(217, 222, 212);
 }
 
 
@@ -296,11 +299,6 @@ static UIColor *rgb(int r, int g, int b) {
 
 
 - (UIColor *)bubbleBorderColour {
-	// A drawn edge is what makes a skeuomorphic bubble sit on the surface;
-	// flat bubbles have none at all.
-	// black_alpha12 in their palette, and it applies to both styles: their
-	// bubbles carry a hairline whatever the era. On a dark surface a black
-	// hairline is invisible, so it turns into a faint white one.
 	if (self.isDark)
 		return [UIColor colorWithWhite:1.0f alpha:0.08f];
 	return [UIColor colorWithWhite:0.0f alpha:0.12f];
@@ -330,29 +328,36 @@ static UIColor *rgb(int r, int g, int b) {
 }
 
 
-/// An imported theme rarely names the composer separately, so it takes the
-/// bar colour - which is what the official clients do with it anyway.
 - (UIColor *)timeColour {
 	UIColor *imported = [self importedColour:@"secondaryText"];
 	if (imported) return imported;
-	return self.isDarkStyle ? TG_STEEL_DARK13 : TG_TEXT_TIME;
+	return self.isDarkStyle ? TG_STEEL_DARK13 : TG_MESSAGE_DATE;
 }
 
 - (UIColor *)cellDetailColour {
-	// Telegram puts the value of a setting in blue rather than grey, which is
-	// the one thing that makes their settings read as theirs.
 	UIColor *imported = [self importedColour:@"accent"];
-	return imported ?: TG_BLUE_SEMI8;
+	return imported ?: TG_SETTINGS_VALUE;
 }
 
 - (UIColor *)sectionHeaderColour {
 	UIColor *imported = [self importedColour:@"secondaryText"];
-	return imported ?: TG_GRAY_SECTION;
+	return imported ?: TG_FOOTER_CAPTION;
 }
 
 - (UIColor *)profileHeaderColour {
 	UIColor *imported = [self importedColour:@"bar"];
-	return imported ?: TG_BLUE_DARK3;
+	if (imported)
+		return imported;
+	if (self.isDark)
+		return TG_GRAY_DARK15;
+	static UIColor *lines = nil;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		UIImage *tile = [UIImage imageNamed:@"SettingsBackground.png"];
+		if (tile)
+			lines = [UIColor colorWithPatternImage:tile];
+	});
+	return lines ?: [UIColor whiteColor];
 }
 
 - (UIColor *)inputBarColour {
@@ -401,17 +406,17 @@ static UIColor *rgb(int r, int g, int b) {
 
 - (UIColor *)typingColour {
 	UIColor *imported = [self importedColour:@"accent"];
-	return imported ?: TG_BLUE_BLURPLE3;
+	return imported ?: TG_ACTION_TEXT;
 }
 
 - (UIColor *)onlineColour {
-	return TG_GREEN_BRIGHT1;
+	return TG_PRESENCE_TEXT;
 }
 
 - (UIColor *)separatorColour {
 	if (_imported)
 		return [self bubbleBorderColour];
-	return self.isDark ? TG_GRAY_DARK13 : TG_STEEL_LIGHT3;
+	return self.isDark ? TG_GRAY_DARK13 : TG_HAIRLINE;
 }
 
 #pragma mark - service messages

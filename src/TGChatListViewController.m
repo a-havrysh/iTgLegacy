@@ -30,8 +30,41 @@ static const CGFloat kTextLeft = 73.0f;
 
 static const CGFloat kSwipeButtonHeight = 31.0f;
 static const CGFloat kSwipeButtonMinWidth = 61.0f;
-static const CGFloat kSwipeEdgeDistance = 10.0f;
+static const CGFloat kSwipeEdgeDistance = 6.0f;
+static const CGFloat kSwipeButtonTop = 20.0f;
 static const CGFloat kSwipeButtonGap = 6.0f;
+
+static UIColor *TGChatListTitleColour(void) {
+	static UIColor *colour = nil;
+	if (!colour)
+		colour = [UIColor colorWithRed:0x11 / 255.0f green:0x11 / 255.0f
+								  blue:0x11 / 255.0f alpha:1.0f];
+	return colour;
+}
+
+static UIColor *TGChatListMessageColour(void) {
+	static UIColor *colour = nil;
+	if (!colour)
+		colour = [UIColor colorWithRed:0x88 / 255.0f green:0x88 / 255.0f
+								  blue:0x88 / 255.0f alpha:1.0f];
+	return colour;
+}
+
+static UIColor *TGChatListActionColour(void) {
+	static UIColor *colour = nil;
+	if (!colour)
+		colour = [UIColor colorWithRed:0x53 / 255.0f green:0x6c / 255.0f
+								  blue:0x8c / 255.0f alpha:1.0f];
+	return colour;
+}
+
+static UIColor *TGChatListAuthorColour(void) {
+	static UIColor *colour = nil;
+	if (!colour)
+		colour = [UIColor colorWithRed:0x34 / 255.0f green:0x5f / 255.0f
+								  blue:0x8f / 255.0f alpha:1.0f];
+	return colour;
+}
 
 static NSDictionary *TGReplyDictionary(id value) {
 	return [value isKindOfClass:[NSDictionary class]] ? (NSDictionary *)value : nil;
@@ -77,6 +110,7 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 @property (nonatomic, strong) UIImageView *avatar;
 @property (nonatomic, strong) UILabel *titleLabel;
 @property (nonatomic, strong) UILabel *previewLabel;
+@property (nonatomic, strong) UILabel *authorLabel;
 @property (nonatomic, strong) UILabel *draftLabel;
 @property (nonatomic, strong) UILabel *dateLabel;
 @property (nonatomic, strong) UIImageView *badgeBackground;
@@ -132,17 +166,28 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 
 	self.titleLabel = [[UILabel alloc] init];
 	self.titleLabel.font = [UIFont boldSystemFontOfSize:16];
-	self.titleLabel.textColor = [UIColor colorWithRed:0x11 / 255.0f green:0x11 / 255.0f blue:0x11 / 255.0f alpha:1.0f];
+	self.titleLabel.textColor = TGChatListTitleColour();
+	self.titleLabel.highlightedTextColor = [UIColor whiteColor];
 	// A long name has to stop at the date rather than slide under it.
 	self.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
 	[self.contentView addSubview:self.titleLabel];
 
 	self.previewLabel = [[UILabel alloc] init];
 	self.previewLabel.font = [UIFont systemFontOfSize:14];
-	self.previewLabel.textColor = [UIColor colorWithRed:0x88 / 255.0f green:0x88 / 255.0f blue:0x88 / 255.0f alpha:1.0f];
+	self.previewLabel.textColor = TGChatListMessageColour();
+	self.previewLabel.highlightedTextColor = [UIColor whiteColor];
 	self.previewLabel.numberOfLines = 2;
 	self.previewLabel.lineBreakMode = NSLineBreakByTruncatingTail;
 	[self.contentView addSubview:self.previewLabel];
+
+	self.authorLabel = [[UILabel alloc] init];
+	self.authorLabel.font = [UIFont boldSystemFontOfSize:14];
+	self.authorLabel.backgroundColor = [UIColor clearColor];
+	self.authorLabel.textColor = TGChatListAuthorColour();
+	self.authorLabel.highlightedTextColor = [UIColor whiteColor];
+	self.authorLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+	self.authorLabel.hidden = YES;
+	[self.contentView addSubview:self.authorLabel];
 
 	self.draftLabel = [[UILabel alloc] init];
 	self.draftLabel.font = [UIFont systemFontOfSize:14];
@@ -158,9 +203,11 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 	self.dateLabel.textColor = [UIColor colorWithRed:0x33 / 255.0f green:0x7a / 255.0f blue:0xcc / 255.0f alpha:1.0f];
 	self.dateLabel.textAlignment = NSTextAlignmentRight;
 	self.dateLabel.backgroundColor = [UIColor clearColor];
+	self.dateLabel.highlightedTextColor = [UIColor whiteColor];
 	[self.contentView addSubview:self.dateLabel];
 
-	self.badgeBackground = [[UIImageView alloc] initWithImage:TGDialogListBadgeImage(NO)];
+	self.badgeBackground = [[UIImageView alloc] initWithImage:TGDialogListBadgeImage(NO)
+											 highlightedImage:TGDialogListBadgeImage(YES)];
 	self.badgeBackground.hidden = YES;
 	[self.contentView addSubview:self.badgeBackground];
 
@@ -170,6 +217,8 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 	self.badge.backgroundColor = [UIColor clearColor];
 	self.badge.shadowColor = [UIColor colorWithRed:0x80 / 255.0f green:0x91 / 255.0f blue:0xa6 / 255.0f alpha:1.0f];
 	self.badge.shadowOffset = CGSizeMake(0, -1);
+	self.badge.highlightedTextColor = [UIColor colorWithRed:0x23 / 255.0f green:0x71 / 255.0f
+													   blue:0xc2 / 255.0f alpha:1.0f];
 	self.badge.textAlignment = NSTextAlignmentCenter;
 	self.badge.hidden = YES;
 	[self.contentView addSubview:self.badge];
@@ -203,7 +252,8 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 	self.groupIcon.hidden = YES;
 	[self.contentView addSubview:self.groupIcon];
 
-	self.arrow = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"DialogListArrow.png"]];
+	self.arrow = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"DialogListArrow.png"]
+								   highlightedImage:[UIImage imageNamed:@"DialogListArrow_Highlighted.png"]];
 	[self.contentView addSubview:self.arrow];
 
 	UIImage *plate = [[UIImage imageNamed:@"DialogListCell.png"]
@@ -307,7 +357,7 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 
 - (void)layoutSwipeButtonsCollapsed:(BOOL)collapsed {
 	CGFloat width = self.contentView.bounds.size.width;
-	CGFloat top = (int)((kRowHeight - kSwipeButtonHeight) / 2);
+	CGFloat top = kSwipeButtonTop;
 	CGFloat right = width - kSwipeEdgeDistance;
 	for (NSUInteger i = _swipeButtons.count; i > 0; i--){
 		UIButton *button = _swipeButtons[i - 1];
@@ -328,6 +378,7 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 	self.pin.alpha = alpha;
 	self.arrow.alpha = alpha;
 	self.previewLabel.alpha = alpha;
+	self.authorLabel.alpha = alpha;
 	self.draftLabel.alpha = alpha;
 }
 
@@ -364,7 +415,7 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 	__weak typeof(self) weakSelf = self;
 	NSArray *going = [_swipeButtons copy];
 	CGFloat collapsedX = self.contentView.bounds.size.width - kSwipeEdgeDistance - 2;
-	CGFloat collapsedY = (int)((kRowHeight - kSwipeButtonHeight) / 2);
+	CGFloat collapsedY = kSwipeButtonTop;
 	[_swipeButtons removeAllObjects];
 	void (^conceal)(void) = ^{
 		for (UIButton *button in going){
@@ -403,6 +454,23 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 	self.swipeActions = nil;
 	self.onSwipeOpen = nil;
 	self.onSwipeAction = nil;
+}
+
+- (void)applyBadgeShadowForHighlight:(BOOL)highlighted {
+	self.badge.shadowColor = highlighted
+			? [UIColor clearColor]
+			: [UIColor colorWithRed:0x80 / 255.0f green:0x91 / 255.0f
+							   blue:0xa6 / 255.0f alpha:1.0f];
+}
+
+- (void)setHighlighted:(BOOL)highlighted animated:(BOOL)animated {
+	[super setHighlighted:highlighted animated:animated];
+	[self applyBadgeShadowForHighlight:highlighted];
+}
+
+- (void)setSelected:(BOOL)selected animated:(BOOL)animated {
+	[super setSelected:selected animated:animated];
+	[self applyBadgeShadowForHighlight:selected || self.highlighted];
 }
 
 - (void)setEditing:(BOOL)editing animated:(BOOL)animated {
@@ -457,12 +525,21 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 		self.draftLabel.frame = CGRectMake(left, 29, draftWidth, 18);
 		previewLeft += draftWidth + 4;
 	}
-	self.previewLabel.frame = CGRectMake(previewLeft, 29,
+	CGRect previewFrame = CGRectMake(previewLeft, 29,
 			w - previewLeft - 10 - rightPadding, 40);
+	if (!self.authorLabel.hidden){
+		self.authorLabel.frame = CGRectMake(left, 29, w - left - 10 - rightPadding, 20);
+		previewFrame.origin.y += 9;
+		previewFrame.size.height -= 12;
+	}
+	self.previewLabel.frame = previewFrame;
 
 	// Your own last message is marked, the way it is in their chat item.
-	if (!self.tick.hidden)
-		self.tick.frame = CGRectMake(dateX - 15, 11 + retinaPixel, 13, 11);
+	if (!self.tick.hidden){
+		CGSize tickSize = self.tick.image ? self.tick.image.size : CGSizeMake(13, 11);
+		self.tick.frame = CGRectMake(dateX - tickSize.width - 2, 11 + retinaPixel,
+				tickSize.width, tickSize.height);
+	}
 
 	if (!self.pin.hidden)
 		self.pin.frame = CGRectMake(w - 28 - 16, 32, 16, 16);
@@ -891,7 +968,10 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 @property (nonatomic, strong) NSDictionary *actionChat; // long-pressed row
 @property (nonatomic, assign) int64_t chatPendingDeletion;
 @property (nonatomic, assign) CGFloat headerHeight;
-@property (nonatomic, strong) UILabel *emptyLabel;
+@property (nonatomic, strong) UIView *emptyContainer;
+@property (nonatomic, strong) UIImageView *emptyIcon;
+@property (nonatomic, strong) UILabel *emptyTitleLabel;
+@property (nonatomic, strong) UILabel *emptyTextLabel;
 @property (nonatomic, strong) id themeObserver;
 @property (nonatomic, strong) NSArray *sheetItems;
 @property (nonatomic, strong) NSDictionary *archiveSettings;
@@ -921,9 +1001,6 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	[super viewDidLoad];
 
 	self.title = [self defaultTitle];
-	UIButton *edit = [TGIcons headerButtonWithTitle:@"Edit" bold:NO
-											 target:self action:@selector(actionsTapped)];
-	self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:edit];
 	self.chats = @[];
 	self.avatars = [NSMutableDictionary dictionary];
 	self.avatarsRequested = [NSMutableSet set];
@@ -945,6 +1022,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	compose.frame = CGRectMake(0, 0, 30, 30);
 	[compose addTarget:self action:@selector(composeTapped) forControlEvents:UIControlEventTouchUpInside];
 	self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:compose];
+	[self updateEditingChrome];
 
 	// Search sits above the list, the way every client puts it - pull down or
 	// just start typing.
@@ -984,6 +1062,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 		[[TGTheme shared] styleTabBar:weakSelf.tabBarController.tabBar];
 		[weakSelf styleSearchBar];
 		[weakSelf applyTitleView];
+		[weakSelf updateEditingChrome];
 		[weakSelf rebuildTableHeader];
 		[weakSelf.tableView reloadData];
 	}];
@@ -991,19 +1070,34 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	if ([self.tabBarController isKindOfClass:[RootViewController class]])
 		[(RootViewController *)self.tabBarController updateUnreadBadge];
 
-	self.emptyLabel = [[UILabel alloc] initWithFrame:CGRectZero];
-	self.emptyLabel.backgroundColor = [UIColor clearColor];
-	self.emptyLabel.textAlignment = NSTextAlignmentCenter;
-	self.emptyLabel.font = [UIFont systemFontOfSize:15];
-	self.emptyLabel.numberOfLines = 2;
-	self.emptyLabel.textColor = [[TGTheme shared] secondaryTextColour];
-	self.emptyLabel.hidden = YES;
-	self.emptyLabel.userInteractionEnabled = NO;
-	[self.tableView addSubview:self.emptyLabel];
+	[self buildEmptyContainer];
 
 	[self applyTitleView];
 	[self installClientHandlers];
 	[self reload];
+}
+
+- (void)updateEditingChrome {
+	BOOL editing = self.tableView.editing;
+	UIButton *button = [TGIcons headerButtonWithTitle:(editing ? @"Done" : @"Edit")
+												 bold:editing
+											   target:self action:@selector(editTapped)];
+	[button addGestureRecognizer:[[UILongPressGestureRecognizer alloc]
+			initWithTarget:self action:@selector(editHeld:)]];
+	self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:button];
+	self.navigationItem.rightBarButtonItem.customView.alpha = editing ? 0.0f : 1.0f;
+}
+
+- (void)editTapped {
+	[self closeOpenSwipeCellAnimated:NO];
+	[self.tableView setEditing:!self.tableView.editing animated:YES];
+	[self updateEditingChrome];
+}
+
+- (void)editHeld:(UILongPressGestureRecognizer *)hold {
+	if (hold.state != UIGestureRecognizerStateBegan)
+		return;
+	[self actionsTapped];
 }
 
 - (void)installClientHandlers {
@@ -1124,7 +1218,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 }
 
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView {
-	if (self.emptyLabel && !self.emptyLabel.hidden)
+	if (self.emptyContainer && !self.emptyContainer.hidden)
 		[self updateEmptyState];
 	[self loadMoreIfNeeded];
 }
@@ -1134,38 +1228,95 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	[self updateEmptyState];
 }
 
-- (void)updateEmptyState {
-	if (!self.emptyLabel)
-		return;
+- (void)buildEmptyContainer {
+	UIColor *ink = [UIColor colorWithRed:0x8b / 255.0f green:0x97 / 255.0f
+									blue:0xa5 / 255.0f alpha:1.0f];
 
-	CGRect bounds = self.tableView.bounds;
-	self.emptyLabel.frame = CGRectMake(20,
-			bounds.origin.y + (int)(bounds.size.height / 2) - 40,
-			bounds.size.width - 40, 44);
+	self.emptyContainer = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 250, 0)];
+	self.emptyContainer.backgroundColor = [UIColor clearColor];
+	self.emptyContainer.userInteractionEnabled = NO;
+	self.emptyContainer.hidden = YES;
+
+	self.emptyIcon = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"NoMessages.png"]];
+	[self.emptyContainer addSubview:self.emptyIcon];
+
+	self.emptyTitleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	self.emptyTitleLabel.backgroundColor = [UIColor clearColor];
+	self.emptyTitleLabel.textColor = ink;
+	self.emptyTitleLabel.font = [UIFont boldSystemFontOfSize:15];
+	[self.emptyContainer addSubview:self.emptyTitleLabel];
+
+	self.emptyTextLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	self.emptyTextLabel.backgroundColor = [UIColor clearColor];
+	self.emptyTextLabel.textColor = ink;
+	self.emptyTextLabel.font = [UIFont systemFontOfSize:14];
+	self.emptyTextLabel.textAlignment = NSTextAlignmentCenter;
+	self.emptyTextLabel.lineBreakMode = NSLineBreakByWordWrapping;
+	self.emptyTextLabel.numberOfLines = 0;
+	[self.emptyContainer addSubview:self.emptyTextLabel];
+
+	[self.tableView addSubview:self.emptyContainer];
+}
+
+- (void)updateEmptyState {
+	if (!self.emptyContainer)
+		return;
 
 	NSInteger rows = [self visibleChats].count + [self headerRows].count;
 	if (rows > 0){
-		self.emptyLabel.hidden = YES;
+		self.emptyContainer.hidden = YES;
 		return;
 	}
 
-	NSString *text;
-	if (self.searchResults)
-		text = @"No results";
-	else if ([TGClient shared].connectionState != TGConnectionStateReady &&
-			 [TGClient shared].connectionState != TGConnectionStateUnknown)
-		text = @"Connecting…";
-	else if (self.showsArchive)
-		text = @"No archived chats";
-	else if (self.folderId != 0)
-		text = @"No chats in this folder";
-	else
-		text = @"No chats yet.\nTap the pencil to start one.";
+	NSString *title = @"You have no conversations yet";
+	NSString *text = @"Start messaging by pressing the pencil button in the "
+					  "top right corner or go to the Contacts section.";
+	if (self.searchResults){
+		title = @"No results";
+		text = @"";
+	} else if (self.showsArchive){
+		title = @"You have no archived conversations";
+		text = @"";
+	} else if (self.folderId != 0){
+		title = @"This folder has no conversations";
+		text = @"";
+	}
 
-	self.emptyLabel.textColor = [[TGTheme shared] secondaryTextColour];
-	self.emptyLabel.text = text;
-	self.emptyLabel.hidden = NO;
-	[self.tableView bringSubviewToFront:self.emptyLabel];
+	self.emptyTitleLabel.text = title;
+	self.emptyTextLabel.text = text;
+
+	CGFloat width = 250;
+	CGFloat top = 0;
+	self.emptyIcon.hidden = (self.emptyIcon.image == nil);
+	if (!self.emptyIcon.hidden){
+		CGSize icon = self.emptyIcon.image.size;
+		self.emptyIcon.frame = CGRectMake((int)((width - icon.width) / 2), 0,
+				icon.width, icon.height);
+		top = icon.height;
+	}
+
+	[self.emptyTitleLabel sizeToFit];
+	CGRect titleFrame = self.emptyTitleLabel.frame;
+	titleFrame.origin = CGPointMake((int)((width - titleFrame.size.width) / 2),
+			top + (top > 0 ? 21 : 0));
+	self.emptyTitleLabel.frame = titleFrame;
+	CGFloat height = CGRectGetMaxY(titleFrame);
+
+	if (text.length){
+		CGSize fits = [self.emptyTextLabel sizeThatFits:CGSizeMake(232, 1000)];
+		self.emptyTextLabel.frame = CGRectMake((int)((width - fits.width) / 2),
+				CGRectGetMaxY(titleFrame) + 8, fits.width, fits.height);
+		height = CGRectGetMaxY(self.emptyTextLabel.frame);
+		self.emptyTextLabel.hidden = NO;
+	} else {
+		self.emptyTextLabel.hidden = YES;
+	}
+
+	CGRect bounds = self.tableView.bounds;
+	self.emptyContainer.frame = CGRectMake((int)((bounds.size.width - width) / 2),
+			bounds.origin.y + (int)((bounds.size.height - height) / 2), width, height);
+	self.emptyContainer.hidden = NO;
+	[self.tableView bringSubviewToFront:self.emptyContainer];
 }
 
 - (void)dealloc {
@@ -2642,9 +2793,11 @@ static const NSInteger kChatActionsTag = 77;
 	cell.backgroundColor = [theme listBackgroundColour];
 	BOOL plainPlate = (!theme.isDark && theme.importedName == nil);
 	cell.backgroundView.hidden = !plainPlate;
-	cell.titleLabel.textColor = [theme primaryTextColour];
-	cell.previewLabel.textColor = [theme secondaryTextColour];
+	cell.titleLabel.textColor = plainPlate ? TGChatListTitleColour() : [theme primaryTextColour];
+	cell.previewLabel.textColor = plainPlate ? TGChatListMessageColour()
+											 : [theme secondaryTextColour];
 	cell.dateLabel.textColor = [theme accentColour];
+	cell.authorLabel.hidden = YES;
 	cell.onlineDot.hidden = YES;
 	cell.tick.hidden = YES;
 	cell.muteIcon.hidden = YES;
@@ -2696,7 +2849,8 @@ static const NSInteger kChatActionsTag = 77;
 	NSString *handshake = [self secretHandshakeTextForChat:c];
 	if (action.length){
 		cell.previewLabel.text = action;
-		cell.previewLabel.textColor = [theme typingColour];
+		cell.previewLabel.textColor = plainPlate ? TGChatListActionColour()
+												 : [theme typingColour];
 	} else if (handshake.length){
 		cell.previewLabel.text = handshake;
 		cell.previewLabel.textColor = TGSecretChatColour();
@@ -2704,13 +2858,22 @@ static const NSInteger kChatActionsTag = 77;
 		cell.draftLabel.hidden = NO;
 		cell.previewLabel.text = draft;
 	} else {
-		cell.previewLabel.text = TGReplyString(c[@"text"]) ?: @"";
+		NSString *preview = TGReplyString(c[@"text"]) ?: @"";
+		NSRange split = [c[@"isGroup"] boolValue] && !self.searchResults
+				? [preview rangeOfString:@": "] : NSMakeRange(NSNotFound, 0);
+		if (split.location != NSNotFound && split.location > 0 && split.location <= 40){
+			cell.authorLabel.text = [preview substringToIndex:split.location];
+			cell.authorLabel.hidden = NO;
+			preview = [preview substringFromIndex:split.location + split.length];
+		}
+		cell.previewLabel.text = preview;
 	}
 
 	cell.onlineDot.hidden = ![c[@"isOnline"] boolValue];
 	cell.tick.hidden = ![c[@"outgoing"] boolValue];
 	if (!cell.tick.hidden)
-		cell.tick.image = [UIImage imageNamed:@"DialogListSent"];
+		cell.tick.image = [UIImage imageNamed:([c[@"outgoingRead"] boolValue]
+				? @"DialogListRead" : @"DialogListSent")];
 
 	cell.muteIcon.hidden = ![c[@"isMuted"] boolValue];
 	cell.groupIcon.hidden = ![c[@"isGroup"] boolValue];

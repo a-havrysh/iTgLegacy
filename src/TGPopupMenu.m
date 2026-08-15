@@ -151,11 +151,10 @@ static NSTimeInterval sLastHideTime = 0;
 	if (!normalized.count)
 		return;
 
-	BOOL wasOpen = (sOpenMenu != nil);
-	[self dismiss];
-
-	if (!wasOpen && [NSDate timeIntervalSinceReferenceDate] - sLastHideTime < kMenuReopenSuppression)
+	if ([NSDate timeIntervalSinceReferenceDate] < sLastHideTime + kMenuReopenSuppression)
 		return;
+
+	[self dismiss];
 
 	CGRect hostBounds = host.bounds;
 	if (hostBounds.size.width < 20 || hostBounds.size.height < 20)
@@ -381,8 +380,6 @@ static NSTimeInterval sLastHideTime = 0;
 		frame.origin.x = 4;
 	if (frame.origin.x + frame.size.width > self.bounds.size.width - 4)
 		frame.origin.x = self.bounds.size.width - 4 - frame.size.width;
-	if (frame.origin.x < 4)
-		frame.origin.x = 4;
 
 	frame.origin.y = rect.origin.y - frame.size.height - 14;
 	if (frame.origin.y < 2){
@@ -552,14 +549,14 @@ static NSTimeInterval sLastHideTime = 0;
 		choice(index, title);
 }
 
-/// Anything outside the card closes the menu and chooses nothing.
-- (void)touchesEnded:(NSSet *)touches withEvent:(UIEvent *)event {
-	UITouch *touch = [touches anyObject];
-	if (!touch || _dismissed)
-		return;
-	CGPoint where = [touch locationInView:self];
-	if (!CGRectContainsPoint(CGRectInset(_card.frame, -4, -12), where))
-		[self externalDismiss];
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+	UIView *result = [super hitTest:point withEvent:event];
+	if (result == self || result == nil){
+		if (!_dismissed)
+			[self externalDismiss];
+		return nil;
+	}
+	return result;
 }
 
 @end

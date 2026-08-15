@@ -154,8 +154,6 @@ static TGActionsMenuView *sOpenMenu = nil;
 		if ([decorated isKindOfClass:[NSString class]] && decorated.length != 0)
 			result = decorated;
 	}
-	if (listId == _currentFolderId)
-		result = [@"✓ " stringByAppendingString:result];
 	return result;
 }
 
@@ -168,9 +166,10 @@ static TGActionsMenuView *sOpenMenu = nil;
 - (NSArray *)allFolderItems {
 	NSMutableArray *items = [[NSMutableArray alloc] init];
 
-	[items addObject:@{@"title"  : [self decoratedTitle:@"All Chats" forList:0],
-					   @"action" : TGActionsMenuSelectList,
-					   @"folder" : @0}];
+	[items addObject:@{@"title"   : [self decoratedTitle:@"All Chats" forList:0],
+					   @"action"  : TGActionsMenuSelectList,
+					   @"folder"  : @0,
+					   @"current" : [NSNumber numberWithBool:_currentFolderId == 0]}];
 
 	NSArray *folders = [[TGClient shared] folders];
 	if (![folders isKindOfClass:[NSArray class]])
@@ -184,9 +183,10 @@ static TGActionsMenuView *sOpenMenu = nil;
 		NSString *title = folder[@"title"];
 		if (![title isKindOfClass:[NSString class]] || title.length == 0)
 			title = @"Folder";
-		[items addObject:@{@"title"  : [self decoratedTitle:title forList:listId],
-						   @"action" : TGActionsMenuSelectList,
-						   @"folder" : [NSNumber numberWithInteger:listId]}];
+		[items addObject:@{@"title"   : [self decoratedTitle:title forList:listId],
+						   @"action"  : TGActionsMenuSelectList,
+						   @"folder"  : [NSNumber numberWithInteger:listId],
+						   @"current" : [NSNumber numberWithBool:listId == _currentFolderId]}];
 	}
 
 	[items addObject:@{@"title"  : folders.count != 0 ? @"Edit" : @"New Folder",
@@ -409,6 +409,9 @@ static TGActionsMenuView *sOpenMenu = nil;
 		[_card addSubview:button];
 		[_buttons addObject:button];
 
+		if ([[[_items objectAtIndex:i] objectForKey:@"current"] boolValue])
+			button.selected = YES;
+
 		if (i > 0){
 			UIImageView *separator = [[UIImageView alloc] initWithImage:separatorImage];
 			[_card addSubview:separator];
@@ -433,20 +436,23 @@ static TGActionsMenuView *sOpenMenu = nil;
 	CGRect rect = _anchorRect;
 
 	frame.origin.x = floorf(rect.origin.x + rect.size.width / 2 - frame.size.width / 2);
-	if (frame.origin.x + frame.size.width > self.bounds.size.width - kMenuEdgeMargin)
-		frame.origin.x = self.bounds.size.width - kMenuEdgeMargin - frame.size.width;
 	if (frame.origin.x < kMenuEdgeMargin)
 		frame.origin.x = kMenuEdgeMargin;
+	if (frame.origin.x + frame.size.width > self.bounds.size.width - kMenuEdgeMargin)
+		frame.origin.x = self.bounds.size.width - kMenuEdgeMargin - frame.size.width;
 
-	frame.origin.y = rect.origin.y + rect.size.height + kMenuGapBelow;
-	if (frame.origin.y + frame.size.height > self.bounds.size.height - kMenuGapAbove){
-		frame.origin.y = rect.origin.y - frame.size.height - kMenuGapAbove;
-		if (frame.origin.y < 2.0f)
+	frame.origin.y = rect.origin.y - frame.size.height - kMenuGapAbove;
+	if (frame.origin.y < 2.0f){
+		frame.origin.y = rect.origin.y + rect.size.height + kMenuGapBelow;
+		if (frame.origin.y + frame.size.height > self.bounds.size.height - kMenuGapAbove){
 			frame.origin.y = floorf((self.bounds.size.height - frame.size.height) / 2);
-		_arrowOnTop = NO;
+			_arrowOnTop = NO;
+		}
+		else
+			_arrowOnTop = YES;
 	}
 	else
-		_arrowOnTop = YES;
+		_arrowOnTop = NO;
 
 	_arrowLocation = floorf(rect.origin.x + rect.size.width / 2) - frame.origin.x;
 
@@ -642,13 +648,15 @@ static TGActionsMenuView *sOpenMenu = nil;
 		handler(action, folderId);
 }
 
-- (void)touchesEnded:(NSSet *)touches withEvent:(UIEvent *)event {
-	UITouch *touch = [touches anyObject];
-	if (touch == nil || _dismissed)
-		return;
-	CGPoint where = [touch locationInView:self];
-	if (!CGRectContainsPoint(CGRectInset(_card.frame, -4, -12), where))
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+	UIView *result = [super hitTest:point withEvent:event];
+	if (_dismissed)
+		return result;
+	if (result == self || result == nil){
 		[self externalDismiss];
+		return nil;
+	}
+	return result;
 }
 
 #pragma mark - entry
