@@ -41,6 +41,33 @@ static const NSInteger TGLoginAlertDeleteAccount = 102;
 
 @end
 
+@interface TGLoginToolbarButton : UIButton
+@property (nonatomic, assign) BOOL backSemantics;
+@end
+
+@implementation TGLoginToolbarButton
+
+- (CGRect)backgroundRectForBounds:(CGRect)bounds {
+    CGRect frame = [super backgroundRectForBounds:bounds];
+    if (_backSemantics) {
+        frame.origin.x -= 1;
+        frame.size.width += 1;
+        if ([UIScreen mainScreen].scale > 1.0f)
+            frame.origin.y += 0.5f;
+    }
+    return frame;
+}
+
+- (UIView *)hitTest:(CGPoint)point withEvent:(__unused UIEvent *)event {
+    if (self.alpha < 0.01f || self.hidden)
+        return nil;
+    if (CGRectContainsPoint(CGRectInset(self.bounds, -8, -8), point))
+        return self;
+    return nil;
+}
+
+@end
+
 @interface TGLoginViewController () <UIAlertViewDelegate, TGBackspaceTextFieldDelegate>
 
 @property (nonatomic, assign) TGLoginStep currentStep;
@@ -242,7 +269,8 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
                              paddingRight:(CGFloat)paddingRight
                                  minWidth:(CGFloat)minWidth
                                     isBack:(BOOL)isBack {
-    UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+    TGLoginToolbarButton *button = [TGLoginToolbarButton buttonWithType:UIButtonTypeCustom];
+    button.backSemantics = isBack;
     button.exclusiveTouch = YES;
     button.adjustsImageWhenDisabled = NO;
     button.adjustsImageWhenHighlighted = NO;
@@ -369,6 +397,7 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     label.shadowOffset = CGSizeMake(0, 1);
     label.textAlignment = NSTextAlignmentCenter;
     label.contentMode = UIViewContentModeCenter;
+    label.lineBreakMode = NSLineBreakByWordWrapping;
     label.numberOfLines = 0;
     label.backgroundColor = [UIColor clearColor];
     label.text = text;
@@ -432,6 +461,7 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     self.noticeLabel.shadowColor = tgRGB(0x323c4a);
     self.noticeLabel.shadowOffset = CGSizeMake(0, 1);
     self.noticeLabel.backgroundColor = [UIColor clearColor];
+    self.noticeLabel.lineBreakMode = NSLineBreakByWordWrapping;
     self.noticeLabel.textAlignment = NSTextAlignmentCenter;
     self.noticeLabel.contentMode = UIViewContentModeCenter;
     self.noticeLabel.numberOfLines = 0;
@@ -562,6 +592,7 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     self.timeoutLabel.shadowOffset = CGSizeMake(0, 1);
     self.timeoutLabel.textAlignment = NSTextAlignmentCenter;
     self.timeoutLabel.contentMode = UIViewContentModeCenter;
+    self.timeoutLabel.lineBreakMode = NSLineBreakByWordWrapping;
     self.timeoutLabel.numberOfLines = 0;
     self.timeoutLabel.backgroundColor = [UIColor clearColor];
     self.timeoutLabel.hidden = YES;
@@ -598,9 +629,7 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
 - (void)buildQrLinkLabel {
     self.qrLinkLabel = [[UILabel alloc] initWithFrame:CGRectZero];
     self.qrLinkLabel.font = [UIFont boldSystemFontOfSize:13];
-    self.qrLinkLabel.textColor = tgRGB(0xf0f0f0);
-    self.qrLinkLabel.shadowColor = tgRGB(0x25272b);
-    self.qrLinkLabel.shadowOffset = CGSizeMake(0, 1);
+    self.qrLinkLabel.textColor = [UIColor blackColor];
     self.qrLinkLabel.textAlignment = NSTextAlignmentCenter;
     self.qrLinkLabel.lineBreakMode = NSLineBreakByCharWrapping;
     self.qrLinkLabel.numberOfLines = 0;
@@ -770,10 +799,10 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
                                      UITextAttributeTextShadowColor : tgRGB(0x25272b),
                                      UITextAttributeTextShadowOffset : [NSValue valueWithUIOffset:UIOffsetMake(0, 1)] };
 
-    picker.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"Cancel"
-                                                                               style:UIBarButtonItemStyleBordered
-                                                                              target:self
-                                                                              action:@selector(dismissCountryPicker)];
+    UIButton *cancelButton = [self neutralLoginButtonWithTitle:@"Cancel"];
+    [self sizeLoginToolbarButton:cancelButton paddingLeft:7 paddingRight:7 minWidth:59];
+    [cancelButton addTarget:self action:@selector(dismissCountryPicker) forControlEvents:UIControlEventTouchUpInside];
+    picker.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:cancelButton];
 
     [self presentViewController:navigationController animated:YES completion:nil];
 }
@@ -903,21 +932,30 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
 }
 
 - (void)layoutQrStepForViewSize:(CGSize)viewSize {
+    CGFloat plateWidth = 288;
     self.countryButton.hidden = YES;
     self.countryCodeField.hidden = YES;
     self.inputDivider.hidden = YES;
-    self.inputBackgroundView.hidden = YES;
     self.inputField.hidden = YES;
+    self.inputBackgroundView.hidden = NO;
+    self.inputBackgroundView.image = self.plateImage;
     self.qrLinkLabel.hidden = NO;
 
     CGSize noticeSize = [self.noticeLabel sizeThatFits:CGSizeMake(280, 1024)];
     self.noticeLabel.frame = CGRectIntegral(CGRectMake((viewSize.width - noticeSize.width) / 2, 40, noticeSize.width, noticeSize.height));
     self.noticeLabel.alpha = 1.0f;
 
-    CGSize linkSize = [self.qrLinkLabel sizeThatFits:CGSizeMake(280, 1024)];
-    self.qrLinkLabel.frame = CGRectIntegral(CGRectMake((viewSize.width - linkSize.width) / 2,
-                                                       self.noticeLabel.frame.origin.y + self.noticeLabel.frame.size.height + 24,
-                                                       linkSize.width, linkSize.height));
+    CGSize linkSize = [self.qrLinkLabel sizeThatFits:CGSizeMake(plateWidth - 30, 1024)];
+    CGFloat plateHeight = linkSize.height + 21;
+    if (plateHeight < 43)
+        plateHeight = 43;
+
+    self.inputBackgroundView.frame = CGRectIntegral(CGRectMake((viewSize.width - plateWidth) / 2,
+                                                               self.noticeLabel.frame.origin.y + self.noticeLabel.frame.size.height + 24,
+                                                               plateWidth, plateHeight));
+    self.qrLinkLabel.frame = CGRectIntegral(CGRectMake(self.inputBackgroundView.frame.origin.x + 15,
+                                                       self.inputBackgroundView.frame.origin.y + (plateHeight - linkSize.height) / 2,
+                                                       plateWidth - 30, linkSize.height));
 
     self.timeoutLabel.hidden = YES;
     self.requestingCallLabel.hidden = YES;
@@ -931,15 +969,16 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
 
 - (void)layoutPhoneRowForViewSize:(CGSize)viewSize {
     CGFloat width = 290;
+    CGFloat retinaOffset = [UIScreen mainScreen].scale > 1.0f ? 0.5f : 0.0f;
     self.countryButton.hidden = NO;
     self.countryCodeField.hidden = NO;
     self.inputDivider.hidden = NO;
 
     self.countryButton.frame = CGRectMake((int)((viewSize.width - width) / 2),
-                                          (int)((viewSize.height - 68) / 2) + 4.5f,
+                                          (int)((viewSize.height - 68) / 2) + 4.0f + retinaOffset,
                                           width, self.countryButton.frame.size.height);
     self.inputBackgroundView.frame = CGRectIntegral(CGRectMake((viewSize.width - width) / 2,
-                                                               self.countryButton.frame.origin.y + self.countryButton.frame.size.height + 7.5f,
+                                                               self.countryButton.frame.origin.y + self.countryButton.frame.size.height + 7.0f + retinaOffset,
                                                                width, 47));
     self.inputDivider.frame = CGRectMake(60, 1, 1, self.inputBackgroundView.frame.size.height + 1);
     self.countryCodeField.frame = CGRectMake(self.inputBackgroundView.frame.origin.x + 4, self.inputBackgroundView.frame.origin.y + 12, 54, 22);
@@ -1019,6 +1058,9 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
 
 - (void)inputBackgroundTapped:(UITapGestureRecognizer *)recognizer {
     if (recognizer.state != UIGestureRecognizerStateRecognized)
+        return;
+
+    if (self.currentStep == TGLoginStepQrCode)
         return;
 
     if (!self.countryCodeField.hidden) {
@@ -2146,6 +2188,9 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
 }
 
 - (BOOL)textField:(UITextField *)textField shouldChangeCharactersInRange:(NSRange)range replacementString:(NSString *)string {
+    if (self.busy)
+        return NO;
+
     if (textField == self.countryCodeField) {
         NSString *result = [textField.text stringByReplacingCharactersInRange:range withString:string];
         return [self digitsOnly:result].length <= 4;

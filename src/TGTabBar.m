@@ -25,7 +25,6 @@
 		self.exclusiveTouch = true;
 		self.backgroundView = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"TabBarBackground"]];
 		self.backgroundView.frame = self.bounds;
-		self.backgroundView.opaque = NO;
 		[self addSubview:self.backgroundView];
 
 		UIImage *rawSelectedImage = [UIImage imageNamed:@"TabBarSelected"];

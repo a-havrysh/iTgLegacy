@@ -12,6 +12,20 @@ static UIColor *TGNewContactColour(int rgb, CGFloat alpha) {
 						   alpha:alpha];
 }
 
+static void TGNewContactApplyMinimumWidth(UIButton *button, CGFloat minimumWidth) {
+	if (!button || button.frame.size.width >= minimumWidth)
+		return;
+	CGRect frame = button.frame;
+	frame.size.width = minimumWidth;
+	button.frame = frame;
+	for (UIView *sub in button.subviews){
+		CGRect subFrame = sub.frame;
+		subFrame.origin.x = 0;
+		subFrame.size.width = minimumWidth;
+		sub.frame = subFrame;
+	}
+}
+
 static UIImage *TGNewContactStretchedImage(NSString *name) {
 	UIImage *raw = [UIImage imageNamed:name];
 	if (!raw)
@@ -19,10 +33,71 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 	return [raw stretchableImageWithLeftCapWidth:(int)(raw.size.width / 2) topCapHeight:0];
 }
 
+@interface TGPhoneLabelCell : UITableViewCell
+@property (nonatomic, strong) UILabel *titleView;
+@property (nonatomic, strong) UIImageView *checkIndicator;
+- (void)setHideCheckIndicator:(BOOL)hide;
+@end
+
+@implementation TGPhoneLabelCell
+
+- (id)initWithReuseIdentifier:(NSString *)reuseIdentifier {
+	self = [super initWithStyle:UITableViewCellStyleDefault reuseIdentifier:reuseIdentifier];
+	if (!self)
+		return nil;
+	self.titleView = [[UILabel alloc] initWithFrame:CGRectMake(11, 12, self.contentView.bounds.size.width - 30, 20)];
+	self.titleView.contentMode = UIViewContentModeLeft;
+	self.titleView.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	self.titleView.font = [UIFont boldSystemFontOfSize:17];
+	self.titleView.backgroundColor = [UIColor clearColor];
+	self.titleView.textColor = [UIColor blackColor];
+	self.titleView.highlightedTextColor = [UIColor whiteColor];
+	[self.contentView addSubview:self.titleView];
+	return self;
+}
+
+- (void)setHideCheckIndicator:(BOOL)hide {
+	if (hide){
+		self.checkIndicator.hidden = YES;
+		self.titleView.textColor = [[TGTheme shared] isDarkStyle]
+			? [[TGTheme shared] primaryTextColour] : [UIColor blackColor];
+		return;
+	}
+	if (!self.checkIndicator){
+		UIImage *check = [UIImage imageNamed:@"ListCheck.png"];
+		if (check){
+			self.checkIndicator = [[UIImageView alloc] initWithImage:check
+												   highlightedImage:[UIImage imageNamed:@"ListCheck_Highlighted.png"]];
+			self.checkIndicator.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+			self.checkIndicator.frame = CGRectMake(self.contentView.bounds.size.width - check.size.width - 9, 14,
+												   check.size.width, check.size.height);
+			[self.contentView addSubview:self.checkIndicator];
+		}
+	} else {
+		self.checkIndicator.hidden = NO;
+	}
+	self.titleView.textColor = TGNewContactColour(0x516691, 1.0f);
+	if (!self.checkIndicator)
+		self.accessoryType = UITableViewCellAccessoryCheckmark;
+}
+
+- (void)layoutSubviews {
+	[super layoutSubviews];
+	self.titleView.frame = CGRectMake(11, 12, self.contentView.bounds.size.width - 30, 20);
+	if (self.checkIndicator){
+		CGSize size = self.checkIndicator.image.size;
+		self.checkIndicator.frame = CGRectMake(self.contentView.bounds.size.width - size.width - 9, 14,
+											   size.width, size.height);
+	}
+}
+
+@end
+
 @interface TGPhoneLabelPickerController : UITableViewController
 @property (nonatomic, strong) NSArray *labels;
 @property (nonatomic, copy) NSString *selectedLabel;
 @property (nonatomic, copy) void (^onPick)(NSString *label);
+@property (nonatomic, copy) void (^onCancel)(void);
 @end
 
 @implementation TGPhoneLabelPickerController
@@ -40,6 +115,25 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
 	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
 	self.tableView.rowHeight = 44.0f;
+
+	UIButton *cancel = [TGIcons headerButtonWithTitle:@"Cancel" bold:NO
+											   target:self action:@selector(cancelPressed)];
+	TGNewContactApplyMinimumWidth(cancel, 59.0f);
+	self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:cancel];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+	[super viewWillAppear:animated];
+	NSUInteger index = self.selectedLabel ? [self.labels indexOfObject:self.selectedLabel] : NSNotFound;
+	if (index != NSNotFound){
+		[self.tableView scrollToRowAtIndexPath:[NSIndexPath indexPathForRow:(NSInteger)index inSection:0]
+							  atScrollPosition:UITableViewScrollPositionNone animated:NO];
+	}
+}
+
+- (void)cancelPressed {
+	if (self.onCancel)
+		self.onCancel();
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
@@ -48,14 +142,16 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
 	static NSString *reuse = @"TGPhoneLabelRow";
-	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
+	TGPhoneLabelCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
 	if (!cell)
-		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:reuse];
+		cell = [[TGPhoneLabelCell alloc] initWithReuseIdentifier:reuse];
 	NSString *label = [self.labels objectAtIndex:(NSUInteger)indexPath.row];
-	cell.textLabel.text = label;
-	cell.accessoryType = [label isEqualToString:self.selectedLabel]
-		? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
-	[[TGTheme shared] styleCell:cell];
+	cell.titleView.text = label;
+	cell.accessoryType = UITableViewCellAccessoryNone;
+	[cell setHideCheckIndicator:![label isEqualToString:self.selectedLabel]];
+	cell.backgroundColor = [UIColor clearColor];
+	if ([[TGTheme shared] isDarkStyle])
+		[[TGTheme shared] styleCell:cell];
 	return cell;
 }
 
@@ -64,13 +160,12 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 	NSString *label = [self.labels objectAtIndex:(NSUInteger)indexPath.row];
 	if (self.onPick)
 		self.onPick(label);
-	[self.navigationController popViewControllerAnimated:YES];
 }
 
 @end
 
 @interface TGNewContactPhoneCell : UITableViewCell
-@property (nonatomic, strong) UIButton *labelButton;
+@property (nonatomic, strong) UILabel *labelView;
 @property (nonatomic, strong) UIImageView *verticalSeparator;
 @property (nonatomic, strong) UITextField *field;
 @property (nonatomic, assign) BOOL lastInGroup;
@@ -82,13 +177,14 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 	self = [super initWithStyle:UITableViewCellStyleDefault reuseIdentifier:reuseIdentifier];
 	if (!self)
 		return nil;
-	self.selectionStyle = UITableViewCellSelectionStyleNone;
 
-	self.labelButton = [UIButton buttonWithType:UIButtonTypeCustom];
-	self.labelButton.titleLabel.font = [UIFont boldSystemFontOfSize:13];
-	self.labelButton.contentHorizontalAlignment = UIControlContentHorizontalAlignmentRight;
-	[self.labelButton setTitleColor:TGNewContactColour(0x5d708f, 1.0f) forState:UIControlStateNormal];
-	[self.contentView addSubview:self.labelButton];
+	self.labelView = [[UILabel alloc] initWithFrame:CGRectMake(4, 13, 62, 16)];
+	self.labelView.textAlignment = NSTextAlignmentRight;
+	self.labelView.font = [UIFont boldSystemFontOfSize:13];
+	self.labelView.backgroundColor = [[TGTheme shared] isDarkStyle] ? [UIColor clearColor] : [UIColor whiteColor];
+	self.labelView.textColor = TGNewContactColour(0x5d708f, 1.0f);
+	self.labelView.highlightedTextColor = [UIColor whiteColor];
+	[self.contentView addSubview:self.labelView];
 
 	UIImage *line = [UIImage imageNamed:@"GroupedCellVerticalSeparator.png"];
 	if (line){
@@ -115,7 +211,7 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 - (void)layoutSubviews {
 	[super layoutSubviews];
 	CGRect bounds = self.contentView.bounds;
-	self.labelButton.frame = CGRectMake(4, 13, 62, 16);
+	self.labelView.frame = CGRectMake(4, 13, 62, 16);
 	CGFloat lineHeight = bounds.size.height - (self.lastInGroup ? 1.0f : 0.0f);
 	self.verticalSeparator.frame = CGRectMake(72, 0, 1.0f, lineHeight);
 	self.field.font = [UIFont boldSystemFontOfSize:15];
@@ -196,13 +292,16 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
 	self.tableView.rowHeight = 44.0f;
 	self.tableView.sectionFooterHeight = 0.0f;
+	self.tableView.allowsSelectionDuringEditing = YES;
 
 	UIButton *cancel = [TGIcons headerButtonWithTitle:@"Cancel" bold:NO
 												target:self action:@selector(cancelTapped)];
+	TGNewContactApplyMinimumWidth(cancel, 59.0f);
 	self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:cancel];
 
 	self.doneButton = [TGIcons headerButtonWithTitle:@"Done" bold:YES
 											  target:self action:@selector(doneTapped)];
+	TGNewContactApplyMinimumWidth(self.doneButton, 51.0f);
 	self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:self.doneButton];
 
 	self.firstNameField = [self makeFieldWithPlaceholder:@"First" font:[UIFont boldSystemFontOfSize:16]];
@@ -223,7 +322,7 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 
 - (void)buildTableHeader {
 	CGFloat width = self.view.bounds.size.width > 0 ? self.view.bounds.size.width : 320.0f;
-	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, 116)];
+	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, 86)];
 	header.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	header.backgroundColor = [UIColor clearColor];
 	header.clipsToBounds = NO;
@@ -423,7 +522,11 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 - (void)updateDoneEnabled {
 	BOOL enabled = !self.saving && [self isFormValid];
 	self.doneButton.enabled = enabled;
-	self.doneButton.alpha = enabled ? 1.0f : 0.5f;
+	self.doneButton.alpha = 1.0f;
+	for (UIView *sub in self.doneButton.subviews){
+		if ([sub isKindOfClass:[UILabel class]])
+			sub.alpha = enabled ? 1.0f : 0.6f;
+	}
 }
 
 - (UITextField *)makeFieldWithPlaceholder:(NSString *)placeholder font:(UIFont *)font {
@@ -561,8 +664,7 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 	[picker dismissViewControllerAnimated:YES completion:nil];
 }
 
-- (void)labelTapped:(UIButton *)sender {
-	NSInteger row = sender.tag;
+- (void)presentLabelPickerForRow:(NSInteger)row {
 	if (row < 0 || row >= (NSInteger)self.phoneEntries.count)
 		return;
 	NSMutableDictionary *entry = [self.phoneEntries objectAtIndex:(NSUInteger)row];
@@ -573,18 +675,62 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 	__weak typeof(self) weakSelf = self;
 	picker.onPick = ^(NSString *label){
 		TGNewContactViewController *me = weakSelf;
-		if (!me || !label.length)
+		if (!me)
 			return;
-		[entry setObject:label forKey:@"label"];
+		if (label.length)
+			[entry setObject:label forKey:@"label"];
 		[me.tableView reloadData];
+		[me dismissViewControllerAnimated:YES completion:nil];
 	};
-	[self.navigationController pushViewController:picker animated:YES];
+	picker.onCancel = ^{
+		TGNewContactViewController *me = weakSelf;
+		[me dismissViewControllerAnimated:YES completion:nil];
+	};
+	UINavigationController *navigation = [[UINavigationController alloc] initWithRootViewController:picker];
+	[[TGTheme shared] styleNavigationBar:navigation.navigationBar];
+	[self presentViewController:navigation animated:YES completion:nil];
 }
 
 - (void)qrTapped {
 	[self.view endEditing:YES];
 	TGQRViewController *scanner = [[TGQRViewController alloc] init];
 	[self.navigationController pushViewController:scanner animated:YES];
+}
+
+- (void)textFieldDidBeginEditing:(UITextField *)textField {
+	__weak typeof(self) weakSelf = self;
+	dispatch_async(dispatch_get_main_queue(), ^{
+		[weakSelf pruneEmptyPhoneRowsAroundField:textField];
+	});
+}
+
+- (void)pruneEmptyPhoneRowsAroundField:(UITextField *)textField {
+	NSMutableDictionary *focused = [self entryForField:textField];
+	if (!focused)
+		return;
+	NSUInteger focusedIndex = [self.phoneEntries indexOfObject:focused];
+	NSUInteger lastIndex = self.phoneEntries.count - 1;
+	NSMutableArray *removedPaths = [[NSMutableArray alloc] init];
+	NSMutableArray *removedEntries = [[NSMutableArray alloc] init];
+	for (NSUInteger i = 0; i < self.phoneEntries.count; i++){
+		if (i == focusedIndex || i == lastIndex)
+			continue;
+		NSMutableDictionary *entry = [self.phoneEntries objectAtIndex:i];
+		if (!((UITextField *)[entry objectForKey:@"field"]).text.length){
+			[removedPaths addObject:[NSIndexPath indexPathForRow:(NSInteger)i inSection:0]];
+			[removedEntries addObject:entry];
+		}
+	}
+	if (!removedPaths.count)
+		return;
+	for (NSMutableDictionary *entry in removedEntries){
+		UITextField *field = [entry objectForKey:@"field"];
+		field.delegate = nil;
+		[field removeFromSuperview];
+		[self.phoneEntries removeObject:entry];
+	}
+	[self.tableView deleteRowsAtIndexPaths:removedPaths withRowAnimation:UITableViewRowAnimationFade];
+	[self updateDoneEnabled];
 }
 
 - (BOOL)textFieldShouldReturn:(UITextField *)textField {
@@ -620,6 +766,34 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 	return nil;
 }
 
+- (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
+	return indexPath.section == 0 ? 44.0f : 43.0f;
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
+	if (section == 0)
+		return self.tableView.isEditing ? (18.0f + 12.0f) : 12.0f;
+	return 10.0f;
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForFooterInSection:(NSInteger)section {
+	if (section == 0)
+		return 0.0f;
+	return 1.0f + ([UIScreen mainScreen].scale > 1.0f ? 0.5f : 1.0f);
+}
+
+- (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
+	UIView *view = [[UIView alloc] initWithFrame:CGRectZero];
+	view.backgroundColor = [UIColor clearColor];
+	return view;
+}
+
+- (UIView *)tableView:(UITableView *)tableView viewForFooterInSection:(NSInteger)section {
+	UIView *view = [[UIView alloc] initWithFrame:CGRectZero];
+	view.backgroundColor = [UIColor clearColor];
+	return view;
+}
+
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
 	if (indexPath.section == 0){
 		static NSString *reuse = @"TGNewContactPhone";
@@ -627,14 +801,11 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 		if (!cell)
 			cell = [[TGNewContactPhoneCell alloc] initWithReuseIdentifier:reuse];
 		NSMutableDictionary *entry = [self.phoneEntries objectAtIndex:(NSUInteger)indexPath.row];
-		[cell.labelButton setTitle:[entry objectForKey:@"label"] forState:UIControlStateNormal];
-		cell.labelButton.tag = indexPath.row;
-		[cell.labelButton removeTarget:self action:@selector(labelTapped:) forControlEvents:UIControlEventTouchUpInside];
-		[cell.labelButton addTarget:self action:@selector(labelTapped:) forControlEvents:UIControlEventTouchUpInside];
+		cell.labelView.text = [entry objectForKey:@"label"];
 		cell.field = [entry objectForKey:@"field"];
 		cell.lastInGroup = (indexPath.row == (NSInteger)self.phoneEntries.count - 1);
 		[[TGTheme shared] styleCell:cell];
-		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
 		[cell setNeedsLayout];
 		[cell layoutIfNeeded];
 		return cell;
@@ -670,8 +841,8 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 	UIButton *button = (UIButton *)[cell.contentView viewWithTag:0x51525254];
 	UIImage *plate = [UIImage imageNamed:@"GroupedActionButton.png"];
 	CGFloat buttonHeight = plate ? plate.size.height : 43.0f;
-	CGFloat width = tableView.bounds.size.width - 20.0f;
-	button.frame = CGRectMake(10, floorf((44.0f - buttonHeight) / 2), width, buttonHeight);
+	CGFloat width = tableView.bounds.size.width - 18.0f;
+	button.frame = CGRectMake(9, 0, width, buttonHeight);
 	if (!plate)
 		button.backgroundColor = [UIColor whiteColor];
 	return cell;
@@ -709,6 +880,8 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	if (indexPath.section == 0)
+		[self presentLabelPickerForRow:indexPath.row];
 }
 
 @end

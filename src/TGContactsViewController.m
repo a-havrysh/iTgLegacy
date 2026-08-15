@@ -39,20 +39,15 @@ static NSString *const TGContactActionNewGroup = @"newGroup";
 static NSString *const TGContactActionSync = @"sync";
 static NSString *const TGContactActionLink = @"link";
 
+static CGFloat TGContactsRetinaPixel(void) {
+	return ([UIScreen mainScreen].scale > 1.5f) ? 0.5f : 0.0f;
+}
+
 static UIColor *TGContactsRGB(int rgb) {
 	return [UIColor colorWithRed:((rgb >> 16) & 0xff) / 255.0f
 						   green:((rgb >> 8) & 0xff) / 255.0f
 							blue:(rgb & 0xff) / 255.0f
 						   alpha:1.0f];
-}
-
-static UIImage *TGContactsStretchable(NSString *name) {
-	UIImage *image = [UIImage imageNamed:name];
-	if (!image)
-		return nil;
-	if ([image respondsToSelector:@selector(resizableImageWithCapInsets:)])
-		return [image resizableImageWithCapInsets:UIEdgeInsetsZero];
-	return [image stretchableImageWithLeftCapWidth:1 topCapHeight:0];
 }
 
 static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
@@ -150,21 +145,13 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 
 	BOOL flat = [[TGTheme shared] isFlat];
 	if (!flat){
-		UIImage *background = TGContactsStretchable(@"Cell88") ?: TGContactsStretchable(@"Cell102");
-		UIImage *highlighted = TGContactsStretchable(@"CellHighlighted88")
-				?: TGContactsStretchable(@"CellHighlighted102");
-		if (background){
-			UIImageView *view = [[UIImageView alloc] initWithImage:background];
-			view.contentMode = UIViewContentModeTop;
-			view.clipsToBounds = YES;
-			self.backgroundView = view;
-		}
-		if (highlighted){
-			UIImageView *view = [[UIImageView alloc] initWithImage:highlighted];
-			view.contentMode = UIViewContentModeTop;
-			view.clipsToBounds = YES;
-			self.selectedBackgroundView = view;
-		}
+		UIImage *background = [UIImage imageNamed:@"Cell88"] ?: [UIImage imageNamed:@"Cell102"];
+		UIImage *highlighted = [UIImage imageNamed:@"CellHighlighted88"]
+				?: [UIImage imageNamed:@"CellHighlighted102"];
+		if (background)
+			self.backgroundView = [[UIImageView alloc] initWithImage:background];
+		if (highlighted)
+			self.selectedBackgroundView = [[UIImageView alloc] initWithImage:highlighted];
 	}
 	self.backgroundColor = [[TGTheme shared] listBackgroundColour];
 
@@ -201,6 +188,12 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 
 - (void)layoutSubviews {
 	[super layoutSubviews];
+	if (self.selectedBackgroundView){
+		CGRect selectedFrame = self.selectedBackgroundView.frame;
+		selectedFrame.origin.y = -1;
+		selectedFrame.size.height = self.frame.size.height + 1;
+		self.selectedBackgroundView.frame = selectedFrame;
+	}
 	CGFloat width = self.contentView.bounds.size.width;
 	CGSize arrow = self.disclosureIndicator.image.size;
 	if (arrow.width > 0)
@@ -218,7 +211,7 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 @property (nonatomic, strong) UILabel *secondTitleLabel;
 @property (nonatomic, strong) UILabel *subtitleLabel;
 @property (nonatomic, strong) UIImageView *premiumView;
-@property (nonatomic, strong) UILabel *verifiedLabel;
+@property (nonatomic, strong) UIImageView *verifiedLabel;
 @property (nonatomic, strong) UILabel *closeFriendLabel;
 - (void)resetForConfiguration;
 @end
@@ -232,8 +225,8 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 
 	BOOL flat = [[TGTheme shared] isFlat];
 	if (!flat){
-		UIImage *background = TGContactsStretchable(@"Cell102");
-		UIImage *highlighted = TGContactsStretchable(@"CellHighlighted102");
+		UIImage *background = [UIImage imageNamed:@"Cell102"];
+		UIImage *highlighted = [UIImage imageNamed:@"CellHighlighted102"];
 		if (background)
 			self.backgroundView = [[UIImageView alloc] initWithImage:background];
 		if (highlighted)
@@ -264,7 +257,7 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 
 	self.subtitleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
 	self.subtitleLabel.backgroundColor = [UIColor clearColor];
-	self.subtitleLabel.font = [UIFont systemFontOfSize:13.5f];
+	self.subtitleLabel.font = [UIFont systemFontOfSize:13.0f + TGContactsRetinaPixel()];
 	self.subtitleLabel.textColor = [UIColor colorWithWhite:0.0f alpha:0.53f];
 	self.subtitleLabel.highlightedTextColor = [UIColor whiteColor];
 	[self.contentView addSubview:self.subtitleLabel];
@@ -280,13 +273,10 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 	self.premiumView.hidden = YES;
 	[self.contentView addSubview:self.premiumView];
 
-	self.verifiedLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	self.verifiedLabel = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"ListCheck"]
+										  highlightedImage:[UIImage imageNamed:@"ListCheck_Highlighted"]];
 	self.verifiedLabel.backgroundColor = [UIColor clearColor];
-	self.verifiedLabel.font = [UIFont boldSystemFontOfSize:13];
-	self.verifiedLabel.textColor = TGContactsRGB(0x3aa3e3);
-	self.verifiedLabel.highlightedTextColor = [UIColor whiteColor];
-	self.verifiedLabel.textAlignment = NSTextAlignmentCenter;
-	self.verifiedLabel.text = @"✓";
+	self.verifiedLabel.contentMode = UIViewContentModeCenter;
 	self.verifiedLabel.hidden = YES;
 	[self.contentView addSubview:self.verifiedLabel];
 
@@ -347,6 +337,13 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 - (void)layoutSubviews {
 	[super layoutSubviews];
 
+	if (self.selectedBackgroundView){
+		CGRect selectedFrame = self.selectedBackgroundView.frame;
+		selectedFrame.origin.y = -1;
+		selectedFrame.size.height = self.frame.size.height + 1;
+		self.selectedBackgroundView.frame = selectedFrame;
+	}
+
 	CGSize viewSize = self.contentView.frame.size;
 	self.avatarView.frame = CGRectMake(kContactAvatarLeft, kContactAvatarTop,
 			kContactAvatar, kContactAvatar);
@@ -361,7 +358,7 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 			: (CGFloat)(int)((viewSize.height - titleHeight - subtitleHeight - 1) / 2);
 
 	CGFloat firstLimit = viewSize.width - kContactTextLeft - 5 - 14;
-	CGFloat firstWidth = titleWidth;
+	CGFloat firstWidth = MIN(titleWidth, firstLimit);
 	if (!self.secondTitleLabel.hidden){
 		CGSize firstSize = [self.titleLabel.text sizeWithFont:self.titleLabel.font];
 		firstWidth = MIN(firstSize.width, firstLimit);
@@ -386,8 +383,8 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 		self.subtitleLabel.frame = CGRectZero;
 		return;
 	}
-	self.subtitleLabel.frame = CGRectMake(kContactTextLeft + 1, titleY + titleHeight + 0.5f,
-			width, subtitleHeight);
+	self.subtitleLabel.frame = CGRectMake(kContactTextLeft + 1,
+			titleY + titleHeight + TGContactsRetinaPixel(), width, subtitleHeight);
 }
 
 @end
@@ -1265,7 +1262,7 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 	if (self.contactLink.length && [self contactLinkSecondsRemaining] <= 0
 			&& self.contactLinkExpiresIn > 0)
 		[self reloadContactLink];
-	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:link
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:[self contactLinkSubtitle]
 													   delegate:self
 											  cancelButtonTitle:nil
 										 destructiveButtonTitle:nil
@@ -3034,8 +3031,8 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 		container.backgroundColor = [[TGTheme shared] listBackgroundColour];
 		label.textColor = [[TGTheme shared] sectionHeaderColour];
 	} else {
-		UIImage *background = TGContactsStretchable(
-				section == 0 ? @"CategoryDividerFirst" : @"CategoryDivider");
+		UIImage *background = [UIImage imageNamed:
+				(section == 0 ? @"CategoryDividerFirst" : @"CategoryDivider")];
 		if (background){
 			UIImageView *backgroundView = [[UIImageView alloc] initWithImage:background];
 			backgroundView.frame = CGRectMake(0, -1, width, kContactSectionHeight + 1);
@@ -3096,10 +3093,12 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 		[cell setIconImage:[UIImage imageNamed:@"ListIconFriends"] at:CGPointMake(10, 12)];
 	} else if ([action isEqualToString:TGContactActionSync]){
 		cell.titleLabel.text = @"Sync Contacts";
-		[cell setIconImage:nil at:CGPointZero];
+		[cell setIconImage:[UIImage imageNamed:@"ListIconFriends"] at:CGPointMake(10, 12)];
+		cell.disclosureIndicator.hidden = YES;
 	} else {
-		cell.titleLabel.text = [self contactLinkSubtitle];
-		[cell setIconImage:nil at:CGPointZero];
+		cell.titleLabel.text = @"My Invite Link";
+		[cell setIconImage:[UIImage imageNamed:@"ListIconInvite"] at:CGPointMake(13, 12)];
+		cell.disclosureIndicator.hidden = YES;
 	}
 	[cell setNeedsLayout];
 	return cell;
@@ -3121,12 +3120,13 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 	NSString *last  = [u[@"last_name"] isKindOfClass:NSString.class] ? u[@"last_name"] : @"";
 	BOOL online = [u[@"isOnline"] boolValue];
 
-	cell.titleLabel.font = [UIFont systemFontOfSize:19];
 	if (first.length && last.length){
+		cell.titleLabel.font = [UIFont systemFontOfSize:19];
 		cell.titleLabel.text = first;
 		cell.secondTitleLabel.text = last;
 		cell.secondTitleLabel.hidden = NO;
 	} else {
+		cell.titleLabel.font = [UIFont boldSystemFontOfSize:19];
 		cell.titleLabel.text = TGContactName(u);
 		cell.secondTitleLabel.text = @"";
 		cell.secondTitleLabel.hidden = YES;
@@ -3155,11 +3155,12 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 	cell.closeFriendLabel.hidden = self.isPickerMode || ![self isCloseFriend:u];
 	if (!self.isPickerMode && [self hasBirthdayTodayForUser:u]){
 		cell.subtitleLabel.text = cell.subtitleLabel.text.length
-				? [NSString stringWithFormat:@"🎂 %@", cell.subtitleLabel.text]
-				: @"🎂 Birthday today";
+				? [NSString stringWithFormat:@"Birthday today · %@", cell.subtitleLabel.text]
+				: @"Birthday today";
+		cell.subtitleLabel.textColor = TGContactsRGB(0x0779d0);
 	}
 	if (flagged && !self.isPickerMode){
-		cell.subtitleLabel.textColor = TGContactsRGB(0xcc3333);
+		cell.subtitleLabel.textColor = TGContactsRGB(0xcc1e2c);
 		NSString *mark = [badges[@"isScam"] boolValue] ? @"SCAM" : @"FAKE";
 		cell.subtitleLabel.text = cell.subtitleLabel.text.length
 				? [NSString stringWithFormat:@"%@ · %@", mark, cell.subtitleLabel.text]

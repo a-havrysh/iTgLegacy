@@ -6,15 +6,21 @@
 #import "TGActionSheet.h"
 #import "TGAlertView.h"
 #import "TGTheme.h"
-#import "TGIcons.h"
+#import "TGDateUtils.h"
 #import "TGImageDecode.h"
 #import "TGReactionPickerView.h"
 
 static const CGFloat TGStoryStripHeight = 3.0f;
 static const CGFloat TGStoryStripInset = 4.0f;
 static const CGFloat TGStoryStripGap = 2.0f;
-static const CGFloat TGStoryStripTop = 2.0f;
-static const CGFloat TGStoryPhotoTop = 12.0f;
+static const CGFloat TGStoryStatusBarHeight = 20.0f;
+static const CGFloat TGStoryPanelHeight = 45.0f;
+static const CGFloat TGStoryPanelButtonSize = 40.0f;
+static const CGFloat TGStoryPanelButtonInset = 6.0f;
+static const CGFloat TGStoryPanelButtonTop = 2.0f;
+static const CGFloat TGStoryPlateHeight = 30.0f;
+static const CGFloat TGStoryPlateTop = 7.0f;
+static const CGFloat TGStoryPlateLeft = 5.0f;
 static const CGFloat TGStoryFooterHeight = 30.0f;
 static const CGFloat TGStoryFooterInset = 10.0f;
 static const CGFloat TGStoryFooterBottom = 10.0f;
@@ -40,14 +46,7 @@ static NSString *TGStoryAgeText(int date)
 {
 	if (date <= 0)
 		return @"";
-	NSTimeInterval delta = [[NSDate date] timeIntervalSince1970] - (NSTimeInterval)date;
-	if (delta < 60.0)
-		return @"just now";
-	if (delta < 3600.0)
-		return [NSString stringWithFormat:@"%d min ago", (int)(delta / 60.0)];
-	if (delta < 86400.0)
-		return [NSString stringWithFormat:@"%d h ago", (int)(delta / 3600.0)];
-	return [NSString stringWithFormat:@"%d d ago", (int)(delta / 86400.0)];
+	return [TGDateUtils stringForRelativeLastSeen:date];
 }
 
 static NSString *TGStoryString(NSDictionary *story, NSString *key)
@@ -1652,6 +1651,7 @@ typedef enum
 @property (nonatomic, assign) NSInteger pageIndex;
 @property (nonatomic, strong) NSNumber *itemId;
 @property (nonatomic, readonly) UIImage *image;
+@property (nonatomic, assign) CGFloat captionBottomInset;
 
 - (void)setStoryImage:(UIImage *)image animated:(BOOL)animated;
 - (void)setCaption:(NSString *)caption;
@@ -1730,6 +1730,14 @@ typedef enum
 	[self setNeedsLayout];
 }
 
+- (void)setCaptionBottomInset:(CGFloat)captionBottomInset
+{
+	if (_captionBottomInset == captionBottomInset)
+		return;
+	_captionBottomInset = captionBottomInset;
+	[self setNeedsLayout];
+}
+
 - (void)setAreas:(NSArray *)areas
 {
 	_areas = [areas isKindOfClass:[NSArray class]] ? [areas copy] : nil;
@@ -1796,9 +1804,11 @@ typedef enum
 							  drawWidth, drawHeight);
 	_imageView.frame = frame;
 
-	CGFloat plateHeight = MIN(TGStoryCaptionHeight, drawHeight);
+	CGFloat plateBottom = MIN(CGRectGetMaxY(frame), area.size.height - _captionBottomInset);
+	CGFloat available = MAX(0.0f, plateBottom - frame.origin.y);
+	CGFloat plateHeight = MIN(TGStoryCaptionHeight, available);
 	_captionPlate.frame = CGRectMake(frame.origin.x,
-									 CGRectGetMaxY(frame) - plateHeight,
+									 plateBottom - plateHeight,
 									 frame.size.width, plateHeight);
 	_captionLabel.frame = CGRectInset(_captionPlate.bounds, 8.0f, 6.0f);
 }
@@ -1827,8 +1837,15 @@ typedef enum
 	UIButton *_replyButton;
 	UIButton *_middleButton;
 	UIButton *_shareButton;
-	UILabel *_titleLabel;
-	UILabel *_subtitleLabel;
+	UIImageView *_topPanel;
+	UIImageView *_bottomPanel;
+	UILabel *_counterLabel;
+	UILabel *_authorLabel;
+	UILabel *_dateLabel;
+	UIButton *_closeButton;
+	UIButton *_actionButton;
+	UIButton *_deleteButton;
+	BOOL _navigationBarWasHidden;
 	NSString *_reportOptionId;
 
 	__weak TGReactionPickerView *_reactionPicker;
@@ -1949,21 +1966,8 @@ typedef enum
 	[super viewDidLoad];
 
 	self.view.backgroundColor = [UIColor blackColor];
-	self.wantsFullScreenLayout = NO;
-
-	[self buildTitleView];
-
-	UIButton *more = [TGIcons headerButtonWithTitle:@"More"
-											   bold:NO
-											 target:self
-											 action:@selector(morePressed)];
-	if (more != nil)
-		self.navigationItem.rightBarButtonItem =
-				[[UIBarButtonItem alloc] initWithCustomView:more];
-
-	_stripView = [[UIView alloc] initWithFrame:CGRectZero];
-	_stripView.backgroundColor = [UIColor clearColor];
-	[self.view addSubview:_stripView];
+	self.view.clipsToBounds = YES;
+	self.wantsFullScreenLayout = YES;
 
 	_visiblePages = [[NSMutableArray alloc] init];
 	_pageQueue = [[NSMutableArray alloc] init];
@@ -1981,6 +1985,14 @@ typedef enum
 	_pagingView.delegate = self;
 	[self.view addSubview:_pagingView];
 
+	[self buildTopPanel];
+
+	_stripView = [[UIView alloc] initWithFrame:CGRectZero];
+	_stripView.backgroundColor = [UIColor clearColor];
+	_stripView.userInteractionEnabled = NO;
+	[self.view addSubview:_stripView];
+
+	[self buildBottomPanel];
 	[self buildFooter];
 
 	UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc]
@@ -2006,33 +2018,185 @@ typedef enum
 	[self discoverPosters];
 }
 
-- (void)buildTitleView
+- (UILabel *)panelLabelWithFont:(UIFont *)font frame:(CGRect)frame
 {
-	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 200, 40)];
+	UILabel *label = [[UILabel alloc] initWithFrame:frame];
+	label.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin
+			| UIViewAutoresizingFlexibleRightMargin;
+	label.backgroundColor = [UIColor clearColor];
+	label.textColor = [UIColor whiteColor];
+	label.font = font;
+	label.shadowColor = [UIColor colorWithWhite:0.0f alpha:0.5f];
+	label.shadowOffset = CGSizeMake(0, -1);
+	label.textAlignment = NSTextAlignmentCenter;
+	label.lineBreakMode = NSLineBreakByTruncatingTail;
+	return label;
+}
 
-	_titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 2, 200, 19)];
-	_titleLabel.font = [UIFont boldSystemFontOfSize:16];
-	_titleLabel.textColor = [[TGTheme shared] barTitleColour];
-	_titleLabel.backgroundColor = [UIColor clearColor];
-	_titleLabel.textAlignment = NSTextAlignmentCenter;
-	if (![TGTheme shared].isFlat)
+- (UIButton *)platedButtonWithTitle:(NSString *)title
+						   minWidth:(CGFloat)minWidth
+							 action:(SEL)action
+{
+	UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+	button.exclusiveTouch = YES;
+	button.titleLabel.font = [UIFont boldSystemFontOfSize:12];
+	[button setTitle:title forState:UIControlStateNormal];
+	[button setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+	[button setTitleShadowColor:[UIColor colorWithWhite:0.0f alpha:0.5f]
+					   forState:UIControlStateNormal];
+	button.titleLabel.shadowOffset = CGSizeMake(0, -1);
+	button.adjustsImageWhenHighlighted = NO;
+
+	UIImage *plate = [UIImage imageNamed:@"GalleryDoneButton.png"];
+	UIImage *platePressed = [UIImage imageNamed:@"GalleryDoneButton_Highlighted.png"];
+	if (plate != nil)
 	{
-		_titleLabel.shadowColor = [UIColor colorWithWhite:0.0f alpha:0.4f];
-		_titleLabel.shadowOffset = CGSizeMake(0, -1);
+		[button setBackgroundImage:[plate stretchableImageWithLeftCapWidth:11 topCapHeight:0]
+						  forState:UIControlStateNormal];
 	}
-	_titleLabel.text = [self resolvedPosterName];
-	[header addSubview:_titleLabel];
+	if (platePressed != nil)
+	{
+		[button setBackgroundImage:[platePressed stretchableImageWithLeftCapWidth:11
+																	 topCapHeight:0]
+						  forState:UIControlStateHighlighted];
+	}
 
-	_subtitleLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 21, 200, 16)];
-	_subtitleLabel.font = [UIFont systemFontOfSize:13];
-	_subtitleLabel.textColor = [TGTheme shared].isFlat
-			? [[TGTheme shared] secondaryTextColour]
-			: [UIColor colorWithRed:0.878f green:0.933f blue:0.992f alpha:1.0f];
-	_subtitleLabel.backgroundColor = [UIColor clearColor];
-	_subtitleLabel.textAlignment = NSTextAlignmentCenter;
-	[header addSubview:_subtitleLabel];
+	CGFloat width = [title sizeWithFont:button.titleLabel.font].width + 14.0f;
+	if (width < minWidth)
+		width = minWidth;
+	button.frame = CGRectMake(0, 0, width, TGStoryPlateHeight);
+	[button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
+	return button;
+}
 
-	self.navigationItem.titleView = header;
+- (UIButton *)panelButtonWithImageNamed:(NSString *)name
+							 fallback:(NSString *)fallback
+							   action:(SEL)action
+{
+	UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+	button.exclusiveTouch = YES;
+	button.showsTouchWhenHighlighted = YES;
+	UIImage *icon = [UIImage imageNamed:name];
+	if (icon != nil)
+	{
+		[button setBackgroundImage:icon forState:UIControlStateNormal];
+	}
+	else
+	{
+		button.titleLabel.font = [UIFont boldSystemFontOfSize:12];
+		[button setTitle:fallback forState:UIControlStateNormal];
+		[button setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+		[button setTitleShadowColor:[UIColor colorWithWhite:0.0f alpha:0.5f]
+						   forState:UIControlStateNormal];
+		button.titleLabel.shadowOffset = CGSizeMake(0, -1);
+	}
+	[button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
+	return button;
+}
+
+- (void)buildTopPanel
+{
+	CGFloat width = self.view.bounds.size.width;
+
+	UIImage *panelImage = [UIImage imageNamed:@"GalleryTopPanel.png"];
+	CGFloat panelHeight = panelImage != nil ? panelImage.size.height : TGStoryPanelHeight;
+	_topPanel = [[UIImageView alloc] initWithFrame:
+			CGRectMake(0, TGStoryStatusBarHeight, width, panelHeight)];
+	_topPanel.image = panelImage;
+	if (panelImage == nil)
+		_topPanel.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.6f];
+	_topPanel.userInteractionEnabled = YES;
+	_topPanel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	[self.view addSubview:_topPanel];
+
+	UIImage *cornersImage = [UIImage imageNamed:@"NavigationBar_Corners.png"];
+	if (cornersImage != nil)
+	{
+		UIImageView *corners = [[UIImageView alloc] initWithImage:
+				[cornersImage stretchableImageWithLeftCapWidth:(int)(cornersImage.size.width / 2)
+												  topCapHeight:0]];
+		corners.frame = CGRectMake(0, -TGStoryStatusBarHeight, width, cornersImage.size.height);
+		corners.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+		[_topPanel addSubview:corners];
+	}
+
+	_closeButton = [self platedButtonWithTitle:@"Close"
+									  minWidth:55.0f
+										action:@selector(closeTapped)];
+	_closeButton.frame = CGRectMake(TGStoryPlateLeft, TGStoryPlateTop,
+									_closeButton.frame.size.width, TGStoryPlateHeight);
+	[_topPanel addSubview:_closeButton];
+
+	_counterLabel = [self panelLabelWithFont:[UIFont boldSystemFontOfSize:20]
+									   frame:CGRectMake((CGFloat)(int)((width - 140) / 2),
+														11, 140, 20)];
+	[_topPanel addSubview:_counterLabel];
+}
+
+- (void)buildBottomPanel
+{
+	CGRect bounds = self.view.bounds;
+
+	UIImage *panelImage = [UIImage imageNamed:@"GalleryBottomPanel.png"];
+	CGFloat panelHeight = panelImage != nil ? panelImage.size.height : TGStoryPanelHeight;
+	_bottomPanel = [[UIImageView alloc] initWithFrame:
+			CGRectMake(0, bounds.size.height - panelHeight, bounds.size.width, panelHeight)];
+	if (panelImage != nil)
+	{
+		_bottomPanel.image = [panelImage
+				stretchableImageWithLeftCapWidth:(int)(panelImage.size.width / 2)
+									topCapHeight:0];
+	}
+	else
+	{
+		_bottomPanel.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.6f];
+	}
+	_bottomPanel.userInteractionEnabled = YES;
+	_bottomPanel.autoresizingMask = UIViewAutoresizingFlexibleWidth
+			| UIViewAutoresizingFlexibleTopMargin;
+	[self.view addSubview:_bottomPanel];
+
+	_authorLabel = [self panelLabelWithFont:[UIFont boldSystemFontOfSize:14]
+									  frame:CGRectMake((CGFloat)(int)((bounds.size.width - 220) / 2),
+													   4, 220, 20)];
+	[_bottomPanel addSubview:_authorLabel];
+
+	_dateLabel = [self panelLabelWithFont:[UIFont systemFontOfSize:13]
+									frame:CGRectMake((CGFloat)(int)((bounds.size.width - 140) / 2),
+													 23, 140, 20)];
+	[_bottomPanel addSubview:_dateLabel];
+
+	_actionButton = [self panelButtonWithImageNamed:@"GalleryActionIcon.png"
+										   fallback:@"More"
+											 action:@selector(morePressed)];
+	_actionButton.frame = CGRectMake(TGStoryPanelButtonInset, TGStoryPanelButtonTop,
+									 TGStoryPanelButtonSize, TGStoryPanelButtonSize);
+	_actionButton.autoresizingMask = UIViewAutoresizingFlexibleTopMargin;
+	[_bottomPanel addSubview:_actionButton];
+
+	_deleteButton = [self panelButtonWithImageNamed:@"GalleryTrashIcon.png"
+										   fallback:@"Delete"
+											 action:@selector(deleteTapped)];
+	_deleteButton.frame = CGRectMake(bounds.size.width - TGStoryPanelButtonSize
+											- TGStoryPanelButtonInset,
+									 TGStoryPanelButtonTop,
+									 TGStoryPanelButtonSize, TGStoryPanelButtonSize);
+	_deleteButton.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+	_deleteButton.hidden = YES;
+	[_bottomPanel addSubview:_deleteButton];
+}
+
+- (void)closeTapped
+{
+	[self dismissViewer];
+}
+
+- (void)deleteTapped
+{
+	NSInteger storyId = [self currentStoryId];
+	if (storyId == 0)
+		return;
+	[self confirmDeleteStoryId:storyId];
 }
 
 - (UIButton *)footerButtonWithTitle:(NSString *)title action:(SEL)action
@@ -2116,39 +2280,53 @@ typedef enum
 	CGFloat width = bounds.size.width;
 	CGFloat height = bounds.size.height;
 
-	CGFloat footerY = height - TGStoryFooterBottom - TGStoryFooterHeight;
+	CGFloat topPanelHeight = _topPanel.frame.size.height;
+	_topPanel.frame = CGRectMake(0, TGStoryStatusBarHeight, width, topPanelHeight);
+
+	CGFloat bottomPanelHeight = _bottomPanel.frame.size.height;
+	_bottomPanel.frame = CGRectMake(0, height - bottomPanelHeight, width, bottomPanelHeight);
+
+	CGFloat footerY = height - bottomPanelHeight - TGStoryFooterBottom - TGStoryFooterHeight;
 	_footerView.frame = CGRectMake(TGStoryFooterInset, footerY,
 								   width - TGStoryFooterInset * 2.0f, TGStoryFooterHeight);
 	[self layoutFooter];
 
-	_stripView.frame = CGRectMake(0, TGStoryStripTop, width, TGStoryStripHeight);
+	_stripView.frame = CGRectMake(0, TGStoryStatusBarHeight + topPanelHeight,
+								  width, TGStoryStripHeight);
 	[self layoutStrip];
 
-	CGFloat areaTop = TGStoryPhotoTop;
-	CGFloat areaHeight = footerY - 8.0f - areaTop;
-	CGRect area = CGRectMake(0, areaTop, width, areaHeight);
+	CGRect area = CGRectMake(0, 0, width, height);
 	if (!CGRectEqualToRect(_pagingView.frame, area))
 	{
 		_pagingView.frame = area;
 		[self resetPagingGeometry];
 	}
+
+	CGFloat captionInset = height - footerY + TGStoryFooterBottom;
+	for (TGStoryPage *page in _visiblePages)
+		page.captionBottomInset = captionInset;
 }
 
 - (void)layoutFooter
 {
 	CGRect bounds = _footerView.bounds;
 	CGFloat total = bounds.size.width;
-	CGFloat seam = 2.0f;
-	CGFloat first = floorf((total - seam * 2.0f) / 3.0f) + 2.0f;
-	CGFloat middle = total - seam * 2.0f - first * 2.0f;
+	UIImage *divider = [UIImage imageNamed:@"ButtonGroupDivider.png"];
+	CGFloat seam = divider != nil ? divider.size.width : 2.0f;
+	CGFloat segment = (CGFloat)(int)((total - seam * 2.0f) / 3.0f);
 
-	_replyButton.frame = CGRectMake(0, 0, first, TGStoryFooterHeight);
+	CGFloat x = 0.0f;
+	_replyButton.frame = CGRectMake(x, 0, segment, TGStoryFooterHeight);
+	x += segment;
 	UIView *leftSeam = [_footerView viewWithTag:900];
-	leftSeam.frame = CGRectMake(first, 0, seam, TGStoryFooterHeight);
-	_middleButton.frame = CGRectMake(first + seam, 0, middle, TGStoryFooterHeight);
+	leftSeam.frame = CGRectMake(x, 0, seam, TGStoryFooterHeight);
+	x += seam;
+	_middleButton.frame = CGRectMake(x, 0, segment, TGStoryFooterHeight);
+	x += segment;
 	UIView *rightSeam = [_footerView viewWithTag:901];
-	rightSeam.frame = CGRectMake(first + seam + middle, 0, seam, TGStoryFooterHeight);
-	_shareButton.frame = CGRectMake(first + seam * 2.0f + middle, 0, first, TGStoryFooterHeight);
+	rightSeam.frame = CGRectMake(x, 0, seam, TGStoryFooterHeight);
+	x += seam;
+	_shareButton.frame = CGRectMake(x, 0, total - x, TGStoryFooterHeight);
 }
 
 - (void)layoutStrip
@@ -2291,6 +2469,8 @@ typedef enum
 - (void)viewWillAppear:(BOOL)animated
 {
 	[super viewWillAppear:animated];
+	_navigationBarWasHidden = self.navigationController.navigationBarHidden;
+	[self.navigationController setNavigationBarHidden:YES animated:animated];
 	if (_openStoryId == 0)
 	{
 		NSInteger storyId = [self currentStoryId];
@@ -2315,6 +2495,7 @@ typedef enum
 - (void)viewWillDisappear:(BOOL)animated
 {
 	[super viewWillDisappear:animated];
+	[self.navigationController setNavigationBarHidden:_navigationBarWasHidden animated:animated];
 	_onScreen = NO;
 	[self updateTimeline];
 	[TGReactionPickerView dismiss];
@@ -2451,6 +2632,9 @@ typedef enum
 
 		TGStoryPage *page = [self dequeuePage];
 		page.pageIndex = i;
+		page.captionBottomInset = _footerView.frame.origin.y > 0.0f
+				? (bounds.size.height - _footerView.frame.origin.y + TGStoryFooterBottom)
+				: 0.0f;
 		page.frame = [self frameForPageIndex:i];
 		page.itemId = [_storyIds objectAtIndex:(NSUInteger)i];
 		[_visiblePages addObject:page];
@@ -2838,7 +3022,7 @@ typedef enum
 	if (recognizer.state == UIGestureRecognizerStateBegan)
 	{
 		CGPoint point = [recognizer locationInView:self.view];
-		if (CGRectContainsPoint(_footerView.frame, point))
+		if ([self pointIsOnChrome:point])
 			return;
 		[self setHoldPaused:YES];
 		return;
@@ -2879,8 +3063,23 @@ typedef enum
 
 	if (_footerView != nil && [hit isDescendantOfView:_footerView])
 		return NO;
+	if (_topPanel != nil && [hit isDescendantOfView:_topPanel])
+		return NO;
+	if (_bottomPanel != nil && [hit isDescendantOfView:_bottomPanel])
+		return NO;
 
 	return YES;
+}
+
+- (BOOL)pointIsOnChrome:(CGPoint)point
+{
+	if (_footerView != nil && CGRectContainsPoint(_footerView.frame, point))
+		return YES;
+	if (_topPanel != nil && CGRectContainsPoint(_topPanel.frame, point))
+		return YES;
+	if (_bottomPanel != nil && CGRectContainsPoint(_bottomPanel.frame, point))
+		return YES;
+	return NO;
 }
 
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)recognizer
@@ -2895,13 +3094,14 @@ typedef enum
 {
 	NSDictionary *story = [self currentStory];
 
-	_titleLabel.text = [self resolvedPosterName];
-	NSString *position = [NSString stringWithFormat:@"%d of %d",
+	_counterLabel.text = [NSString stringWithFormat:@"%d of %d",
 			(int)(_index + 1), (int)_storyIds.count];
-	NSString *age = story != nil ? TGStoryAgeText((int)TGStoryNumber(story, @"date")) : @"";
-	_subtitleLabel.text = age.length > 0
-			? [NSString stringWithFormat:@"%@ · %@", position, age]
-			: position;
+	_authorLabel.text = [self resolvedPosterName];
+
+	int date = story != nil ? (int)TGStoryNumber(story, @"date") : 0;
+	_dateLabel.text = date > 0 ? [TGDateUtils stringForLastSeen:date] : @"";
+
+	_deleteButton.hidden = !(story != nil && TGStoryFlag(story, @"canDelete"));
 
 	if ([self isOwnStory] && (story == nil || TGStoryFlag(story, @"canGetViewers")))
 	{
@@ -2928,7 +3128,7 @@ typedef enum
 - (void)viewTapped:(UITapGestureRecognizer *)recognizer
 {
 	CGPoint point = [recognizer locationInView:self.view];
-	if (CGRectContainsPoint(_footerView.frame, point))
+	if ([self pointIsOnChrome:point])
 		return;
 
 	if (_reactionPicker != nil && _reactionPicker.superview != nil)

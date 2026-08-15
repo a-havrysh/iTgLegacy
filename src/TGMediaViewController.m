@@ -17,11 +17,23 @@
 static const CGFloat TGMediaTileSide    = 75.0f;
 static const CGFloat TGMediaTileSpacing = 4.0f;
 static const CGFloat TGMediaRowHeight   = 79.0f;
-static const CGFloat TGMediaBannerHeight = 44.0f;
+static const CGFloat TGMediaBannerHeight = 45.0f;
 static const NSInteger TGMediaPageSize  = 50;
 static const CGFloat TGMediaPageGap     = 40.0f;
-static const CGFloat TGMediaScopeHeight = 36.0f;
+static const CGFloat TGMediaScopeHeight = 44.0f;
+static const CGFloat TGMediaScopeButtonHeight = 30.0f;
+static const CGFloat TGMediaSearchBarHeight = 44.0f;
 static const CGFloat TGMediaListRowHeight = 56.0f;
+
+static UIColor *TGMediaPlaceholderColour(void) {
+	static UIColor *colour = nil;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		colour = [UIColor colorWithRed:0xdf / 255.0f green:0xe4 / 255.0f
+								  blue:0xeb / 255.0f alpha:1.0f];
+	});
+	return colour;
+}
 
 enum {
 	TGMediaScopeMedia = 0,
@@ -59,7 +71,7 @@ static UIImage *TGMediaTilePlaceholder(void) {
 			return;
 		CGSize size = CGSizeMake(TGMediaTileSide, TGMediaTileSide);
 		UIGraphicsBeginImageContextWithOptions(size, YES, 0.0f);
-		[[UIColor colorWithWhite:0.87f alpha:1.0f] setFill];
+		[TGMediaPlaceholderColour() setFill];
 		UIRectFill(CGRectMake(0, 0, size.width, size.height));
 		placeholder = UIGraphicsGetImageFromCurrentImageContext();
 		UIGraphicsEndImageContext();
@@ -377,7 +389,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 		self.contentMode = UIViewContentModeScaleAspectFill;
 		self.userInteractionEnabled = NO;
 		self.fadeTransition = true;
-		self.backgroundColor = [UIColor colorWithWhite:0.87f alpha:1.0f];
+		self.backgroundColor = TGMediaPlaceholderColour();
 
 		UIImage *shadow = [UIImage imageNamed:@"MediaGridImageShadow.png"];
 		if (shadow){
@@ -830,7 +842,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 							forState:UIControlStateHighlighted];
 	}
 	CGSize closeTitleSize = [@"Close" sizeWithFont:done.titleLabel.font];
-	CGFloat closeWidth = closeTitleSize.width + 22.0f;
+	CGFloat closeWidth = closeTitleSize.width + 7.0f + 7.0f;
 	if (closeWidth < 55.0f)
 		closeWidth = 55.0f;
 	done.frame = CGRectMake(5, 7, closeWidth, 30);
@@ -926,7 +938,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	[_bottomBar addSubview:_progressContainer];
 
 	_progressLabel = [[UILabel alloc] initWithFrame:
-			CGRectMake((CGFloat)(int)((bounds.size.width - 220) / 2), 12, 220, 20)];
+			CGRectMake((CGFloat)(int)((bounds.size.width - 220) / 2), 14, 220, 20)];
 	_progressLabel.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin
 			| UIViewAutoresizingFlexibleRightMargin;
 	_progressLabel.backgroundColor = [UIColor clearColor];
@@ -940,7 +952,6 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 
 	_progressSpinner = [[UIActivityIndicatorView alloc]
 			initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhite];
-	_progressSpinner.frame = CGRectMake(0, 3, 15, 15);
 	_progressSpinner.hidesWhenStopped = YES;
 	[_progressContainer addSubview:_progressSpinner];
 }
@@ -1314,11 +1325,18 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 		NSDictionary *item = [self currentItem];
 		_progressLabel.text = [item[@"isVideo"] boolValue]
 				? @"loading video..." : @"loading full image...";
-		CGSize textSize = [_progressLabel.text sizeWithFont:_progressLabel.font];
-		CGFloat textLeft = _progressLabel.frame.origin.x
-				+ (_progressLabel.frame.size.width - textSize.width) / 2.0f;
-		_progressSpinner.frame = CGRectMake((CGFloat)(int)(textLeft - 19.0f),
-											_progressLabel.frame.origin.y + 3.0f, 15, 15);
+		[_progressLabel sizeToFit];
+
+		CGFloat panelWidth = _bottomBar.frame.size.width;
+		CGFloat labelWidth = _progressLabel.frame.size.width;
+		CGFloat labelHeight = _progressLabel.frame.size.height;
+		CGFloat labelLeft = (CGFloat)floorf((panelWidth - labelWidth) / 2.0f) + 10.0f;
+		CGFloat labelTop = _authorLabel.text.length > 0 ? 23.0f : 14.0f;
+		CGFloat retinaPixel = ([UIScreen mainScreen].scale > 1.0f) ? 0.5f : 0.0f;
+
+		_progressLabel.frame = CGRectMake(labelLeft, labelTop, labelWidth, labelHeight);
+		_progressSpinner.center = CGPointMake(labelLeft - 19.0f + 7.5f,
+											  labelTop + 1.0f + retinaPixel + 7.5f);
 		[_progressSpinner startAnimating];
 	} else {
 		[_progressSpinner stopAnimating];
@@ -2215,11 +2233,13 @@ static const long long TGMediaExportLimit = 12 * 1024 * 1024;
 #pragma mark - shared media
 
 @interface TGMediaViewController ()
-		<TGMediaGridCellDelegate, UIDocumentInteractionControllerDelegate>
+		<TGMediaGridCellDelegate, UIDocumentInteractionControllerDelegate, UISearchBarDelegate>
 
 @property (nonatomic, assign) NSInteger scope;
 @property (nonatomic, assign) NSInteger loadToken;
 @property (nonatomic, strong) UIView *scopeBar;
+@property (nonatomic, strong) UISearchBar *searchBar;
+@property (nonatomic, copy) NSString *query;
 @property (nonatomic, strong) NSMutableArray *scopeButtons;
 @property (nonatomic, strong) UILabel *dateIndicator;
 @property (nonatomic, strong) UIDocumentInteractionController *documentController;
@@ -2276,6 +2296,8 @@ static const long long TGMediaExportLimit = 12 * 1024 * 1024;
 
 	[self buildMediaTableView];
 	[self buildScopeBar];
+	[self buildSearchBar];
+	[self updateSearchBarVisibility];
 	[self buildDownloadsBanner];
 	[self buildSpinnerAndEmptyView];
 	[self buildDateIndicator];
@@ -2301,14 +2323,27 @@ static const long long TGMediaExportLimit = 12 * 1024 * 1024;
 }
 
 - (void)buildScopeBar {
-	_scopeBar = [[UIView alloc] initWithFrame:
-			CGRectMake(0, 0, self.view.bounds.size.width, TGMediaScopeHeight)];
+	CGRect scopeFrame = CGRectMake(0, 0, self.view.bounds.size.width, TGMediaScopeHeight);
+	UIImage *scopeBackground = [UIImage imageNamed:@"SearchBarScopeBarBackground.png"];
+	if (scopeBackground){
+		UIImageView *barView = [[UIImageView alloc] initWithFrame:scopeFrame];
+		barView.image = scopeBackground;
+		barView.userInteractionEnabled = YES;
+		_scopeBar = barView;
+	} else {
+		_scopeBar = [[UIView alloc] initWithFrame:scopeFrame];
+		_scopeBar.backgroundColor = [TGTheme shared].isFlat
+				? [[TGTheme shared] listBackgroundColour]
+				: [UIColor colorWithRed:0xc3 / 255.0f green:0xcb / 255.0f
+									blue:0xd4 / 255.0f alpha:1.0f];
+		UIView *scopeLine = [[UIView alloc] initWithFrame:
+				CGRectMake(0, TGMediaScopeHeight - 1, scopeFrame.size.width, 1)];
+		scopeLine.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+		scopeLine.backgroundColor = [[TGTheme shared] separatorColour];
+		[_scopeBar addSubview:scopeLine];
+	}
 	_scopeBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	_scopeBar.clipsToBounds = YES;
-	_scopeBar.backgroundColor = [TGTheme shared].isFlat
-			? [[TGTheme shared] listBackgroundColour]
-			: [UIColor colorWithRed:0xc3 / 255.0f green:0xcb / 255.0f
-								blue:0xd4 / 255.0f alpha:1.0f];
 	[self.view addSubview:_scopeBar];
 
 	_scopeButtons = [NSMutableArray array];
@@ -2317,6 +2352,7 @@ static const long long TGMediaExportLimit = 12 * 1024 * 1024;
 		UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
 		button.tag = (NSInteger)i;
 		button.titleLabel.font = [UIFont boldSystemFontOfSize:12];
+		button.titleLabel.shadowOffset = CGSizeMake(0, -1);
 		[button setTitle:scopeTitles[i] forState:UIControlStateNormal];
 		[self styleScopeButton:button selected:(i == 0)];
 		[button addTarget:self action:@selector(scopeTapped:)
@@ -2324,12 +2360,17 @@ static const long long TGMediaExportLimit = 12 * 1024 * 1024;
 		[_scopeBar addSubview:button];
 		[_scopeButtons addObject:button];
 	}
+}
 
-	UIView *scopeLine = [[UIView alloc] initWithFrame:
-			CGRectMake(0, TGMediaScopeHeight - 1, self.view.bounds.size.width, 1)];
-	scopeLine.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-	scopeLine.backgroundColor = [[TGTheme shared] separatorColour];
-	[_scopeBar addSubview:scopeLine];
+- (void)buildSearchBar {
+	_searchBar = [[UISearchBar alloc] initWithFrame:
+			CGRectMake(0, 0, self.view.bounds.size.width, TGMediaSearchBarHeight)];
+	_searchBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	_searchBar.delegate = self;
+	_searchBar.placeholder = @"Search";
+	UIImage *searchBackground = [UIImage imageNamed:@"SearchBarBackground.png"];
+	if (searchBackground && [_searchBar respondsToSelector:@selector(setBackgroundImage:)])
+		[_searchBar setBackgroundImage:searchBackground];
 }
 
 - (void)buildDownloadsBanner {
@@ -2342,17 +2383,27 @@ static const long long TGMediaExportLimit = 12 * 1024 * 1024;
 	  forControlEvents:UIControlEventTouchUpInside];
 	[self.view addSubview:_banner];
 
-	_bannerTitle = [[UILabel alloc] initWithFrame:CGRectMake(12, 4, 200, 20)];
+	CGFloat retinaPixel = ([UIScreen mainScreen].scale > 1.0f) ? 0.5f : 0.0f;
+
+	_bannerTitle = [[UILabel alloc] initWithFrame:
+			CGRectMake(12 + retinaPixel, 2, self.view.bounds.size.width - 12 - 46, 18)];
+	_bannerTitle.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	_bannerTitle.backgroundColor = [UIColor clearColor];
 	_bannerTitle.font = [UIFont boldSystemFontOfSize:14];
-	_bannerTitle.textColor = [[TGTheme shared] primaryTextColour];
+	_bannerTitle.lineBreakMode = NSLineBreakByTruncatingTail;
+	_bannerTitle.textColor = [UIColor colorWithRed:0x36 / 255.0f green:0x3a / 255.0f
+											  blue:0x40 / 255.0f alpha:1.0f];
 	_bannerTitle.text = @"Downloads";
 	[_banner addSubview:_bannerTitle];
 
-	_bannerDetail = [[UILabel alloc] initWithFrame:CGRectMake(12, 22, 260, 18)];
+	_bannerDetail = [[UILabel alloc] initWithFrame:
+			CGRectMake(12 + retinaPixel, 21 + retinaPixel,
+					   self.view.bounds.size.width - 12 - 46, 18)];
+	_bannerDetail.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	_bannerDetail.backgroundColor = [UIColor clearColor];
-	_bannerDetail.font = [UIFont systemFontOfSize:12];
-	_bannerDetail.textColor = [[TGTheme shared] secondaryTextColour];
+	_bannerDetail.font = [UIFont systemFontOfSize:14];
+	_bannerDetail.lineBreakMode = NSLineBreakByTruncatingTail;
+	_bannerDetail.textColor = [UIColor blackColor];
 	[_banner addSubview:_bannerDetail];
 
 	UIView *bannerLine = [[UIView alloc] initWithFrame:
@@ -2394,7 +2445,8 @@ static const long long TGMediaExportLimit = 12 * 1024 * 1024;
 	[_emptyView addSubview:_emptyLabel];
 	_emptyImageView.hidden = !TGMediaScopeIsGrid(_scope);
 	_emptyView.alpha = 0.0f;
-	[self.view insertSubview:_emptyView belowSubview:_tableView];
+	_emptyView.userInteractionEnabled = NO;
+	[self.view insertSubview:_emptyView aboveSubview:_tableView];
 	[self layoutEmptyView];
 }
 
@@ -2402,7 +2454,7 @@ static const long long TGMediaExportLimit = 12 * 1024 * 1024;
 	_dateIndicator = [[UILabel alloc] initWithFrame:
 			CGRectMake(self.view.bounds.size.width - 140, TGMediaScopeHeight + 8, 128, 22)];
 	_dateIndicator.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
-	_dateIndicator.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.62f];
+	_dateIndicator.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.6f];
 	_dateIndicator.textColor = [UIColor whiteColor];
 	_dateIndicator.font = [UIFont boldSystemFontOfSize:12];
 	_dateIndicator.textAlignment = NSTextAlignmentCenter;
@@ -2437,9 +2489,10 @@ static const long long TGMediaExportLimit = 12 * 1024 * 1024;
 	_emptyVisible = visible;
 	[self layoutEmptyView];
 
+	BOOL keepTable = (self.query ?: @"").length > 0;
 	void (^apply)(void) = ^{
 		self.emptyView.alpha = visible ? 1.0f : 0.0f;
-		self.tableView.alpha = visible ? 0.0f : 1.0f;
+		self.tableView.alpha = (visible && !keepTable) ? 0.0f : 1.0f;
 	};
 	if (animated)
 		[UIView animateWithDuration:0.2 animations:apply];
@@ -2463,12 +2516,15 @@ static const long long TGMediaExportLimit = 12 * 1024 * 1024;
 
 	if (selected){
 		[button setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+		[button setTitleShadowColor:[UIColor colorWithRed:0x11 / 255.0f green:0x2e / 255.0f
+													 blue:0x5c / 255.0f alpha:0.2f]
+						   forState:UIControlStateNormal];
 	} else {
-		[button setTitleColor:([TGTheme shared].isFlat
-				? [[TGTheme shared] secondaryTextColour]
-				: [UIColor colorWithRed:0x5c / 255.0f green:0x70 / 255.0f
-									blue:0x8b / 255.0f alpha:1.0f])
+		[button setTitleColor:[UIColor colorWithRed:0x5c / 255.0f green:0x70 / 255.0f
+											   blue:0x8b / 255.0f alpha:1.0f]
 					 forState:UIControlStateNormal];
+		[button setTitleShadowColor:[UIColor colorWithWhite:1.0f alpha:0.25f]
+						   forState:UIControlStateNormal];
 	}
 }
 
@@ -2483,7 +2539,10 @@ static const long long TGMediaExportLimit = 12 * 1024 * 1024;
 	for (NSUInteger i = 0; i < count; i++){
 		UIButton *button = _scopeButtons[i];
 		CGFloat buttonWidth = (i == count - 1) ? (available - each * (count - 1)) : each;
-		button.frame = CGRectMake(6 + each * i, 3, buttonWidth, 30);
+		button.frame = CGRectMake(6 + each * i,
+								  (CGFloat)(int)((TGMediaScopeHeight
+										  - TGMediaScopeButtonHeight) / 2),
+								  buttonWidth, TGMediaScopeButtonHeight);
 	}
 }
 
@@ -2495,6 +2554,11 @@ static const long long TGMediaExportLimit = 12 * 1024 * 1024;
 	_loadToken++;
 	for (UIButton *other in _scopeButtons)
 		[self styleScopeButton:other selected:(other.tag == _scope)];
+
+	self.query = @"";
+	_searchBar.text = @"";
+	[_searchBar resignFirstResponder];
+	[self updateSearchBarVisibility];
 
 	[_items removeAllObjects];
 	_lastMessageId = 0;
@@ -2518,6 +2582,49 @@ static const long long TGMediaExportLimit = 12 * 1024 * 1024;
 	[_tableView reloadData];
 	[_tableView setContentOffset:CGPointZero animated:NO];
 	[self loadNextPage];
+}
+
+- (void)updateSearchBarVisibility {
+	_tableView.tableHeaderView = TGMediaScopeIsGrid(_scope) ? nil : _searchBar;
+}
+
+- (void)reloadFromStart {
+	_loadToken++;
+	[_items removeAllObjects];
+	_lastMessageId = 0;
+	_canLoadMore = YES;
+	_loadedOnce = NO;
+	_loading = NO;
+	[self setEmptyVisible:NO animated:NO];
+	[_recycler removeAllViews];
+	[_tableView reloadData];
+	[self loadNextPage];
+}
+
+- (void)searchBarTextDidBeginEditing:(UISearchBar *)searchBar {
+	[searchBar setShowsCancelButton:YES animated:YES];
+}
+
+- (void)searchBarTextDidEndEditing:(UISearchBar *)searchBar {
+	[searchBar setShowsCancelButton:NO animated:YES];
+}
+
+- (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {
+	[searchBar resignFirstResponder];
+	NSString *text = searchBar.text ?: @"";
+	if ([text isEqualToString:self.query ?: @""])
+		return;
+	self.query = text;
+	[self reloadFromStart];
+}
+
+- (void)searchBarCancelButtonClicked:(UISearchBar *)searchBar {
+	searchBar.text = @"";
+	[searchBar resignFirstResponder];
+	if ((self.query ?: @"").length == 0)
+		return;
+	self.query = @"";
+	[self reloadFromStart];
 }
 
 - (void)viewDidLoad {
@@ -2583,7 +2690,7 @@ static const long long TGMediaExportLimit = 12 * 1024 * 1024;
 	NSDictionary *request = @{
 		@"@type"           : @"searchChatMessages",
 		@"chat_id"         : @(self.chatId),
-		@"query"           : @"",
+		@"query"           : self.query ?: @"",
 		@"from_message_id" : @(_lastMessageId),
 		@"offset"          : @(0),
 		@"limit"           : @(TGMediaPageSize),

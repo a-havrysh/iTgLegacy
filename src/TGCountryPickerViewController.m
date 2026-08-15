@@ -380,9 +380,9 @@ static NSArray *TGPhoneCountries(void) {
 	self.tableView.rowHeight = 44;
 	self.tableView.tableFooterView = [[UIView alloc] initWithFrame:CGRectZero];
 
-	if (!flat){
-		[self installCancelButton];
+	[self installCancelButton];
 
+	if (!flat){
 		UIView *overscroll = [[UIView alloc] initWithFrame:
 				CGRectMake(0, -500, self.tableView.bounds.size.width, 500)];
 		overscroll.backgroundColor = TGCountryPickerColour(0xe4e9f0);
@@ -393,6 +393,7 @@ static NSArray *TGPhoneCountries(void) {
 
 	self.searchBar = [[UISearchBar alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 44)];
 	self.searchBar.delegate = self;
+	self.searchBar.placeholder = @"Search";
 	if (!flat && [self.searchBar respondsToSelector:@selector(setBackgroundImage:)]){
 		UIImage *background = [UIImage imageNamed:@"SearchBarBackground.png"];
 		if (background)
@@ -459,8 +460,13 @@ static NSArray *TGPhoneCountries(void) {
 - (void)installCancelButton {
 	UIImage *plate = [[UIImage imageNamed:@"HeaderButton_Login.png"] stretchableImageWithLeftCapWidth:11 topCapHeight:0];
 	UIImage *pressed = [[UIImage imageNamed:@"HeaderButton_Login_Pressed.png"] stretchableImageWithLeftCapWidth:11 topCapHeight:0];
-	if (!plate)
+	if (!plate || [[TGTheme shared] isFlat]){
+		self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc]
+				initWithBarButtonSystemItem:UIBarButtonSystemItemCancel
+									 target:self
+									 action:@selector(cancelButtonPressed)];
 		return;
+	}
 
 	UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
 	[button setBackgroundImage:plate forState:UIControlStateNormal];
@@ -495,8 +501,26 @@ static NSArray *TGPhoneCountries(void) {
 		_searchFieldStyled = YES;
 		[self.searchBar layoutIfNeeded];
 		[self styleSearchInputField:self.searchBar];
+		[self applyPlaceholderColour:self.searchBar];
 		[self hideStripe:self.searchBar];
 	}
+}
+
+- (void)applyPlaceholderColour:(UIView *)view {
+	if ([view isKindOfClass:[UITextField class]]){
+		UITextField *field = (UITextField *)view;
+		if (!field.placeholder.length)
+			return;
+		if (![field respondsToSelector:@selector(setAttributedPlaceholder:)])
+			return;
+		UIColor *colour = TGCountryPickerColour(0x8d9298);
+		field.attributedPlaceholder = [[NSAttributedString alloc]
+				initWithString:field.placeholder
+					attributes:@{NSForegroundColorAttributeName : colour}];
+		return;
+	}
+	for (UIView *child in view.subviews)
+		[self applyPlaceholderColour:child];
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
@@ -705,6 +729,8 @@ static NSArray *TGPhoneCountries(void) {
 }
 
 - (void)searchBarTextDidEndEditing:(UISearchBar *)searchBar {
+	if (searchBar.text.length)
+		return;
 	[searchBar setShowsCancelButton:NO animated:YES];
 	[self setSearchActive:NO animated:YES];
 }
@@ -713,6 +739,8 @@ static NSArray *TGPhoneCountries(void) {
 	searchBar.text = @"";
 	self.filtered = nil;
 	[searchBar resignFirstResponder];
+	[searchBar setShowsCancelButton:NO animated:YES];
+	[self setSearchActive:NO animated:YES];
 	[self.tableView reloadData];
 }
 

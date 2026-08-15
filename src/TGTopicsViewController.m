@@ -8,6 +8,9 @@
 #import "TGIcons.h"
 #import "TGActionSheet.h"
 #import "TGPopupMenu.h"
+#import "TGDateUtils.h"
+#import "TGDateLabel.h"
+#import "UIView+SafeTint.h"
 #import <QuartzCore/QuartzCore.h>
 
 static const CGFloat kTopicRowHeight = 73.0f;
@@ -25,23 +28,20 @@ static UIImage *TGTopicBadgeImage(void) {
 	return normal;
 }
 
+static UIImage *TGTopicBadgeHighlightedImage(void) {
+	static UIImage *highlighted = nil;
+	if (!highlighted){
+		UIImage *raw = [UIImage imageNamed:@"DialogListUnreadBadge_Highlighted.png"];
+		highlighted = [raw stretchableImageWithLeftCapWidth:(int)(raw.size.width / 2)
+											   topCapHeight:(int)(raw.size.height / 2)];
+	}
+	return highlighted;
+}
+
 static NSString *TGTopicDate(NSTimeInterval unix) {
 	if (unix <= 0)
 		return @"";
-
-	NSDate *date = [NSDate dateWithTimeIntervalSince1970:unix];
-	NSTimeInterval age = -[date timeIntervalSinceNow];
-
-	static NSDateFormatter *time = nil, *weekday = nil, *full = nil;
-	if (!time){
-		time = [[NSDateFormatter alloc] init];    [time setDateFormat:@"HH:mm"];
-		weekday = [[NSDateFormatter alloc] init]; [weekday setDateFormat:@"EEE"];
-		full = [[NSDateFormatter alloc] init];    [full setDateFormat:@"dd.MM.yy"];
-	}
-
-	if (age < 24 * 3600)     return [time stringFromDate:date];
-	if (age < 7 * 24 * 3600) return [weekday stringFromDate:date];
-	return [full stringFromDate:date];
+	return [TGDateUtils stringForMessageListDate:(int)unix] ?: @"";
 }
 
 static BOOL TGTopicFlag(NSDictionary *topic, NSString *key) {
@@ -90,12 +90,20 @@ static UIColor *TGTopicRGB(NSInteger rgb) {
 						   alpha:1.0f];
 }
 
+static CGFloat TGTopicAvatarCornerRadius(CGFloat side) {
+	if (fabs(side - 70) < 0.5f) return 9;
+	if (fabs(side - 56) < 0.5f) return 5;
+	if (fabs(side - 40) < 0.5f) return 4;
+	if (fabs(side - 30) < 0.5f) return 3;
+	return roundf(side * 0.09f);
+}
+
 static UIImage *TGTopicDrawAvatar(NSString *initials, CGFloat size, NSInteger rgb) {
 	UIGraphicsBeginImageContextWithOptions(CGSizeMake(size, size), NO, 0);
 	CGContextRef ctx = UIGraphicsGetCurrentContext();
 
 	UIBezierPath *shape = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, size, size)
-													cornerRadius:size * 0.12f];
+													cornerRadius:TGTopicAvatarCornerRadius(size)];
 	CGContextSetRGBFillColor(ctx,
 			((rgb >> 16) & 0xff) / 255.0f,
 			((rgb >> 8) & 0xff) / 255.0f,
@@ -103,15 +111,9 @@ static UIImage *TGTopicDrawAvatar(NSString *initials, CGFloat size, NSInteger rg
 	CGContextAddPath(ctx, shape.CGPath);
 	CGContextFillPath(ctx);
 
-	if (![TGTheme shared].isFlat){
-		CGContextSaveGState(ctx);
-		CGContextAddPath(ctx, shape.CGPath);
-		CGContextClip(ctx);
-		CGContextSetRGBFillColor(ctx, 1, 1, 1, 0.20f);
-		CGContextFillEllipseInRect(ctx,
-				CGRectMake(-size * 0.2f, -size * 0.55f, size * 1.4f, size * 0.95f));
-		CGContextRestoreGState(ctx);
-	}
+	CGContextSaveGState(ctx);
+	CGContextAddPath(ctx, shape.CGPath);
+	CGContextClip(ctx);
 
 	NSString *text = initials.length ? initials : @"?";
 	UIFont *font = [UIFont boldSystemFontOfSize:size * 0.4f];
@@ -120,6 +122,7 @@ static UIImage *TGTopicDrawAvatar(NSString *initials, CGFloat size, NSInteger rg
 	[text drawAtPoint:CGPointMake((size - textSize.width) / 2,
 								  (size - textSize.height) / 2)
 			 withFont:font];
+	CGContextRestoreGState(ctx);
 
 	UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
 	UIGraphicsEndImageContext();
@@ -155,12 +158,13 @@ static UIImage *TGTopicAvatarImage(NSString *initials, CGFloat size, NSInteger r
 @property (nonatomic, strong) UIImageView *avatar;
 @property (nonatomic, strong) UILabel *titleLabel;
 @property (nonatomic, strong) UILabel *previewLabel;
-@property (nonatomic, strong) UILabel *dateLabel;
+@property (nonatomic, strong) TGDateLabel *dateLabel;
 @property (nonatomic, strong) UIImageView *badgeBackground;
 @property (nonatomic, strong) UILabel *badge;
 @property (nonatomic, strong) UIImageView *arrow;
 @property (nonatomic, strong) UIImageView *pinIcon;
 @property (nonatomic, strong) UIImageView *muteIcon;
+- (void)applyBadgeShadowForHighlight:(BOOL)highlighted;
 @end
 
 @implementation TGTopicCell
@@ -172,8 +176,6 @@ static UIImage *TGTopicAvatarImage(NSString *initials, CGFloat size, NSInteger r
 
 	self.avatar = [[UIImageView alloc] initWithFrame:
 			CGRectMake(kTopicAvatarLeft, 8, kTopicAvatar, kTopicAvatar)];
-	self.avatar.layer.cornerRadius = 5.0f;
-	self.avatar.clipsToBounds = YES;
 	self.avatar.backgroundColor = [UIColor clearColor];
 	self.avatar.contentMode = UIViewContentModeScaleAspectFill;
 	[self.contentView addSubview:self.avatar];
@@ -193,20 +195,28 @@ static UIImage *TGTopicAvatarImage(NSString *initials, CGFloat size, NSInteger r
 	self.previewLabel.lineBreakMode = NSLineBreakByTruncatingTail;
 	[self.contentView addSubview:self.previewLabel];
 
-	self.dateLabel = [[UILabel alloc] init];
+	self.dateLabel = [[TGDateLabel alloc] init];
+	self.dateLabel.amWidth = 19;
+	self.dateLabel.pmWidth = 19;
+	self.dateLabel.dstOffset = 2;
+	self.dateLabel.dateFont = [UIFont systemFontOfSize:13];
+	self.dateLabel.dateTextFont = [UIFont boldSystemFontOfSize:13];
+	self.dateLabel.dateLabelFont = [UIFont systemFontOfSize:11];
 	self.dateLabel.font = [UIFont systemFontOfSize:13];
 	self.dateLabel.textColor = [UIColor colorWithRed:0x33 / 255.0f green:0x7a / 255.0f blue:0xcc / 255.0f alpha:1.0f];
-	self.dateLabel.textAlignment = NSTextAlignmentRight;
+	self.dateLabel.highlightedTextColor = [UIColor whiteColor];
 	self.dateLabel.backgroundColor = [UIColor clearColor];
 	[self.contentView addSubview:self.dateLabel];
 
-	self.badgeBackground = [[UIImageView alloc] initWithImage:TGTopicBadgeImage()];
+	self.badgeBackground = [[UIImageView alloc] initWithImage:TGTopicBadgeImage()
+											 highlightedImage:TGTopicBadgeHighlightedImage()];
 	self.badgeBackground.hidden = YES;
 	[self.contentView addSubview:self.badgeBackground];
 
 	self.badge = [[UILabel alloc] init];
 	self.badge.font = [UIFont boldSystemFontOfSize:14];
 	self.badge.textColor = [UIColor whiteColor];
+	self.badge.highlightedTextColor = [UIColor colorWithRed:0x23 / 255.0f green:0x71 / 255.0f blue:0xc2 / 255.0f alpha:1.0f];
 	self.badge.backgroundColor = [UIColor clearColor];
 	self.badge.shadowColor = [UIColor colorWithRed:0x80 / 255.0f green:0x91 / 255.0f blue:0xa6 / 255.0f alpha:1.0f];
 	self.badge.shadowOffset = CGSizeMake(0, -1);
@@ -214,10 +224,12 @@ static UIImage *TGTopicAvatarImage(NSString *initials, CGFloat size, NSInteger r
 	self.badge.hidden = YES;
 	[self.contentView addSubview:self.badge];
 
-	self.arrow = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"DialogListArrow.png"]];
+	self.arrow = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"DialogListArrow.png"]
+								   highlightedImage:[UIImage imageNamed:@"DialogListArrow_Highlighted.png"]];
 	[self.contentView addSubview:self.arrow];
 
-	self.pinIcon = [[UIImageView alloc] initWithImage:[TGIcons menuGlyphNamed:@"pin"]];
+	self.pinIcon = [[UIImageView alloc] init];
+	self.pinIcon.contentMode = UIViewContentModeScaleAspectFit;
 	self.pinIcon.hidden = YES;
 	[self.contentView addSubview:self.pinIcon];
 
@@ -237,8 +249,34 @@ static UIImage *TGTopicAvatarImage(NSString *initials, CGFloat size, NSInteger r
 	return self;
 }
 
+- (void)applyBadgeShadowForHighlight:(BOOL)highlighted {
+	self.badge.shadowColor = highlighted
+			? [UIColor clearColor]
+			: [UIColor colorWithRed:0x80 / 255.0f green:0x91 / 255.0f blue:0xa6 / 255.0f alpha:1.0f];
+}
+
+- (void)adjustSelectedBackgroundFrame {
+	UIView *selected = self.selectedBackgroundView;
+	if (selected)
+		selected.frame = CGRectMake(0, -1, self.bounds.size.width, self.bounds.size.height + 1);
+}
+
+- (void)setHighlighted:(BOOL)highlighted animated:(BOOL)animated {
+	[super setHighlighted:highlighted animated:animated];
+	[self applyBadgeShadowForHighlight:highlighted || self.selected];
+	[self adjustSelectedBackgroundFrame];
+}
+
+- (void)setSelected:(BOOL)selected animated:(BOOL)animated {
+	[super setSelected:selected animated:animated];
+	[self applyBadgeShadowForHighlight:selected || self.highlighted];
+	[self adjustSelectedBackgroundFrame];
+}
+
 - (void)layoutSubviews {
 	[super layoutSubviews];
+	[self adjustSelectedBackgroundFrame];
+
 	CGFloat w = self.contentView.bounds.size.width;
 	CGFloat left = kTopicTextLeft;
 	CGFloat rightPadding = 16;
@@ -253,29 +291,28 @@ static UIImage *TGTopicAvatarImage(NSString *initials, CGFloat size, NSInteger r
 	if (!self.badge.hidden)
 		rightPadding += badgeWidth + 7;
 
-	CGFloat dateWidth = (int)[self.dateLabel.text sizeWithFont:self.dateLabel.font].width;
-	CGFloat dateX = w - dateWidth - 9;
-	self.dateLabel.frame = CGRectMake(dateX - (75 - dateWidth), 9, 75, 15);
-
-	CGSize pinSize = self.pinIcon.image ? self.pinIcon.image.size : CGSizeZero;
-	if (!self.pinIcon.hidden && pinSize.width > 0){
-		self.pinIcon.frame = CGRectMake(dateX - pinSize.width - 5,
-				9 + (15 - pinSize.height) / 2.0f, pinSize.width, pinSize.height);
-		dateX -= pinSize.width + 5;
+	if (!self.pinIcon.hidden){
+		self.pinIcon.frame = CGRectMake(w - 28 - 16, 32, 16, 16);
+		rightPadding += 16 + 7;
 	}
 
-	CGSize muteSize = (!self.muteIcon.hidden && self.muteIcon.image)
-			? self.muteIcon.image.size : CGSizeZero;
+	CGFloat dateWidth = (int)[self.dateLabel measureTextSize].width;
+	CGFloat dateX = w - dateWidth - 9;
+	self.dateLabel.frame = CGRectMake(dateX, 9, 75, 15);
 
-	CGFloat titleWidth = (int)(dateX - 4 - left - 18 - (muteSize.width ? muteSize.width + 3 : 0));
+	BOOL muted = (!self.muteIcon.hidden && self.muteIcon.image != nil);
+
+	CGFloat titleWidth = (int)(dateX - 4 - left - 18 - (muted ? 12 : 0));
 	titleWidth = MIN(titleWidth, [self.titleLabel.text sizeWithFont:self.titleLabel.font].width);
 	if (titleWidth < 0)
 		titleWidth = 0;
 	self.titleLabel.frame = CGRectMake(left, 6, titleWidth, 20);
 
-	if (muteSize.width > 0)
+	if (muted){
+		CGSize muteSize = self.muteIcon.image.size;
 		self.muteIcon.frame = CGRectMake(left + titleWidth + 3, 12,
 				muteSize.width, muteSize.height);
+	}
 
 	self.previewLabel.frame = CGRectMake(left, 29, w - left - 10 - rightPadding, 40);
 
@@ -705,8 +742,11 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 @property (nonatomic, assign) BOOL rightsLoaded;
 @property (nonatomic, assign) NSInteger pendingColour;
 @property (nonatomic, copy) NSString *pendingName;
+@property (nonatomic, strong) UIView *emptyContainer;
+@property (nonatomic, strong) UIImageView *emptyIcon;
 @property (nonatomic, strong) UILabel *emptyLabel;
 @property (nonatomic, strong) UILabel *emptyText;
+@property (nonatomic, assign) BOOL searchFieldStyled;
 @property (nonatomic, strong) UILabel *subtitleLabel;
 @property (nonatomic, strong) NSDictionary *nextOffset;
 @property (nonatomic, assign) NSInteger totalCount;
@@ -777,29 +817,33 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 	background.backgroundColor = [[TGTheme shared] listBackgroundColour];
 	background.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
 
-	self.emptyLabel = [[UILabel alloc] initWithFrame:
-			CGRectMake(0, 150, background.bounds.size.width, 20)];
-	self.emptyLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-	self.emptyLabel.backgroundColor = [UIColor clearColor];
-	self.emptyLabel.textAlignment = NSTextAlignmentCenter;
-	self.emptyLabel.font = [UIFont boldSystemFontOfSize:15];
-	self.emptyLabel.textColor = TGTopicRGB(0x8b97a5);
-	self.emptyLabel.text = @"No Topics Yet";
-	self.emptyLabel.hidden = YES;
-	[background addSubview:self.emptyLabel];
+	UIColor *ink = TGTopicRGB(0x8b97a5);
 
-	self.emptyText = [[UILabel alloc] initWithFrame:
-			CGRectMake(35, 178, background.bounds.size.width - 70, 40)];
-	self.emptyText.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	self.emptyContainer = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 250, 0)];
+	self.emptyContainer.backgroundColor = [UIColor clearColor];
+	self.emptyContainer.userInteractionEnabled = NO;
+	self.emptyContainer.hidden = YES;
+	[background addSubview:self.emptyContainer];
+
+	self.emptyIcon = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"NoMessages.png"]];
+	[self.emptyContainer addSubview:self.emptyIcon];
+
+	self.emptyLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	self.emptyLabel.backgroundColor = [UIColor clearColor];
+	self.emptyLabel.font = [UIFont boldSystemFontOfSize:15];
+	self.emptyLabel.textColor = ink;
+	self.emptyLabel.text = @"No Topics Yet";
+	[self.emptyContainer addSubview:self.emptyLabel];
+
+	self.emptyText = [[UILabel alloc] initWithFrame:CGRectZero];
 	self.emptyText.backgroundColor = [UIColor clearColor];
 	self.emptyText.textAlignment = NSTextAlignmentCenter;
 	self.emptyText.numberOfLines = 0;
 	self.emptyText.lineBreakMode = NSLineBreakByWordWrapping;
 	self.emptyText.font = [UIFont systemFontOfSize:14];
-	self.emptyText.textColor = TGTopicRGB(0x8b97a5);
+	self.emptyText.textColor = ink;
 	self.emptyText.text = @"Topics keep separate conversations in one group.";
-	self.emptyText.hidden = YES;
-	[background addSubview:self.emptyText];
+	[self.emptyContainer addSubview:self.emptyText];
 
 	self.spinner = [[UIActivityIndicatorView alloc]
 			initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleGray];
@@ -829,7 +873,92 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 	self.searchBar.placeholder = @"Search";
 	self.searchBar.autocorrectionType = UITextAutocorrectionTypeNo;
 	self.searchBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	[self styleSearchBar];
 	self.tableView.tableHeaderView = self.searchBar;
+}
+
+- (BOOL)usesPlainPlate {
+	TGTheme *theme = [TGTheme shared];
+	return (!theme.isDark && theme.importedName == nil);
+}
+
+- (void)styleSearchBar {
+	TGTheme *theme = [TGTheme shared];
+	self.searchBar.barStyle = theme.isDark ? UIBarStyleBlack : UIBarStyleDefault;
+	if ([self.searchBar respondsToSelector:@selector(setBackgroundImage:)]){
+		[self.searchBar setBackgroundImage:([self usesPlainPlate]
+				? [UIImage imageNamed:@"SearchBarBackground.png"] : nil)];
+	}
+	if ([self.searchBar respondsToSelector:@selector(setBarTintColor:)]){
+		self.searchBar.barTintColor = [theme listBackgroundColour];
+		[self.searchBar tg_setTintColor:[theme accentColour]];
+	} else {
+		[self.searchBar tg_setTintColor:[UIColor colorWithWhite:0.68f alpha:1.0f]];
+	}
+}
+
+- (void)styleSearchInputField:(UIView *)view {
+	if ([view isKindOfClass:[UITextField class]]){
+		UITextField *field = (UITextField *)view;
+		field.borderStyle = UITextBorderStyleNone;
+		field.background = nil;
+		field.font = [UIFont systemFontOfSize:14];
+		field.clipsToBounds = NO;
+		field.textColor = [TGTheme shared].isFlat
+				? [[TGTheme shared] primaryTextColour]
+				: [UIColor blackColor];
+
+		if (field.placeholder.length
+				&& [field respondsToSelector:@selector(setAttributedPlaceholder:)]){
+			NSDictionary *attributes = @{
+				NSForegroundColorAttributeName : TGTopicRGB(0x8d9298),
+				NSFontAttributeName : field.font
+			};
+			field.attributedPlaceholder = [[NSAttributedString alloc]
+					initWithString:field.placeholder attributes:attributes];
+		}
+
+		UIView *leftView = field.leftView;
+		if ([leftView isKindOfClass:[UIImageView class]]){
+			UIImage *icon = [UIImage imageNamed:@"SearchBarIcon.png"];
+			if (icon){
+				((UIImageView *)leftView).image = icon;
+				[leftView sizeToFit];
+			}
+		}
+
+		UIImage *inputImage = [UIImage imageNamed:@"SearchInputField.png"];
+		if (inputImage){
+			inputImage = [inputImage stretchableImageWithLeftCapWidth:
+					(int)(inputImage.size.width / 2) topCapHeight:0];
+			UIImageView *inputImageView = [[UIImageView alloc] initWithFrame:
+					CGRectMake(0, 0.5f, field.frame.size.width, inputImage.size.height)];
+			inputImageView.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+			inputImageView.image = inputImage;
+			[field insertSubview:inputImageView atIndex:0];
+		}
+
+		SEL clearButtonSelector = NSSelectorFromString([[NSString alloc]
+				initWithFormat:@"%sBu%s", "clear", "tton"]);
+		if ([field respondsToSelector:clearButtonSelector]){
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+			UIButton *clearButton = [field performSelector:clearButtonSelector];
+#pragma clang diagnostic pop
+			if ([clearButton isKindOfClass:[UIButton class]]){
+				UIImage *clear = [UIImage imageNamed:@"ClearInput.png"];
+				UIImage *clearPressed = [UIImage imageNamed:@"ClearInput_Pressed.png"];
+				if (clear)
+					[clearButton setImage:clear forState:UIControlStateNormal];
+				if (clearPressed)
+					[clearButton setImage:clearPressed forState:UIControlStateHighlighted];
+			}
+		}
+		return;
+	}
+
+	for (UIView *child in view.subviews)
+		[self styleSearchInputField:child];
 }
 
 - (void)dealloc {
@@ -844,8 +973,19 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
+	if (!self.searchFieldStyled && [self usesPlainPlate]){
+		self.searchFieldStyled = YES;
+		[self.searchBar layoutIfNeeded];
+		[self styleSearchInputField:self.searchBar];
+	}
 	if (self.loadedOnce)
 		[self reloadTopics];
+}
+
+- (void)viewDidLayoutSubviews {
+	[super viewDidLayoutSubviews];
+	if (self.emptyContainer && !self.emptyContainer.hidden)
+		[self layoutEmptyContent];
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
@@ -857,25 +997,32 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 }
 
 - (void)buildTitleView {
-	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 200, 40)];
+	TGTheme *theme = [TGTheme shared];
+	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 200, 44)];
+	header.clipsToBounds = NO;
 
-	UILabel *name = [[UILabel alloc] initWithFrame:CGRectMake(0, 1, 200, 20)];
+	UILabel *name = [[UILabel alloc] initWithFrame:CGRectMake(0, -2, 200, 19)];
 	name.text = self.chatTitle.length ? self.chatTitle : @"Topics";
-	name.font = [UIFont boldSystemFontOfSize:17];
-	name.textColor = [[TGTheme shared] barTitleColour];
+	name.font = [UIFont boldSystemFontOfSize:16];
+	name.textColor = [theme barTitleColour];
 	name.backgroundColor = [UIColor clearColor];
 	name.textAlignment = NSTextAlignmentCenter;
-	if (![TGTheme shared].isFlat){
-		name.shadowColor = [UIColor colorWithWhite:0.0f alpha:0.4f];
+	name.lineBreakMode = NSLineBreakByTruncatingTail;
+	if (!theme.isFlat){
+		name.shadowColor = TGTopicRGB(0x3d5c81);
 		name.shadowOffset = CGSizeMake(0, -1);
 	}
 	[header addSubview:name];
 
-	self.subtitleLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 21, 200, 14)];
-	self.subtitleLabel.font = [UIFont systemFontOfSize:12];
-	self.subtitleLabel.textColor = [TGTheme shared].isFlat
-			? [[TGTheme shared] secondaryTextColour]
-			: [UIColor colorWithWhite:1.0f alpha:0.75f];
+	self.subtitleLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 26, 200, 15)];
+	self.subtitleLabel.font = [UIFont boldSystemFontOfSize:12];
+	self.subtitleLabel.textColor = theme.isFlat
+			? [theme secondaryTextColour]
+			: TGTopicRGB(0xe0eefd);
+	if (!theme.isFlat){
+		self.subtitleLabel.shadowColor = TGTopicRGB(0x3d5c81);
+		self.subtitleLabel.shadowOffset = CGSizeMake(0, -1);
+	}
 	self.subtitleLabel.backgroundColor = [UIColor clearColor];
 	self.subtitleLabel.textAlignment = NSTextAlignmentCenter;
 	[header addSubview:self.subtitleLabel];
@@ -900,8 +1047,10 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 	self.tableView.backgroundColor = [theme listBackgroundColour];
 	self.tableView.separatorColor = [theme separatorColour];
 	self.tableView.backgroundView.backgroundColor = [theme listBackgroundColour];
+	[self styleSearchBar];
 	[self buildTitleView];
 	[self updateSubtitle];
+	[self updateEmptyState];
 	BOOL plainPlate = (!theme.isDark && theme.importedName == nil);
 	self.tableView.separatorStyle = plainPlate
 			? UITableViewCellSeparatorStyleNone
@@ -1046,8 +1195,7 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 	self.loading = YES;
 
 	if (!self.loadedOnce){
-		self.emptyLabel.hidden = YES;
-		self.emptyText.hidden = YES;
+		self.emptyContainer.hidden = YES;
 		[self.spinner startAnimating];
 	}
 
@@ -1108,18 +1256,65 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 }
 
 - (void)updateEmptyState {
-	if (self.searchResults){
-		BOOL empty = (self.searchResults.count == 0);
-		self.emptyLabel.text = @"No Topics Found";
-		self.emptyLabel.hidden = !empty;
-		self.emptyText.hidden = YES;
+	if (!self.emptyContainer)
 		return;
+
+	BOOL empty;
+	NSString *title;
+	NSString *text;
+
+	if (self.searchResults){
+		empty = (self.searchResults.count == 0);
+		title = @"No Topics Found";
+		text = @"";
+	} else {
+		empty = (self.topics.count == 0 && self.loadedOnce);
+		title = @"No Topics Yet";
+		text = @"Topics keep separate conversations in one group.";
 	}
 
-	self.emptyLabel.text = @"No Topics Yet";
-	BOOL empty = (self.topics.count == 0 && self.loadedOnce);
-	self.emptyLabel.hidden = !empty;
-	self.emptyText.hidden = !empty;
+	self.emptyContainer.hidden = !empty;
+	if (!empty)
+		return;
+
+	self.emptyLabel.text = title;
+	self.emptyText.text = text;
+	[self layoutEmptyContent];
+}
+
+- (void)layoutEmptyContent {
+	CGFloat width = 250;
+	CGFloat top = 0;
+
+	self.emptyIcon.hidden = (self.emptyIcon.image == nil);
+	if (!self.emptyIcon.hidden){
+		CGSize icon = self.emptyIcon.image.size;
+		self.emptyIcon.frame = CGRectMake((int)((width - icon.width) / 2), 0,
+				icon.width, icon.height);
+		top = icon.height;
+	}
+
+	[self.emptyLabel sizeToFit];
+	CGRect titleFrame = self.emptyLabel.frame;
+	titleFrame.origin = CGPointMake((int)((width - titleFrame.size.width) / 2),
+			top + (top > 0 ? 21 : 0));
+	self.emptyLabel.frame = titleFrame;
+	CGFloat height = CGRectGetMaxY(titleFrame);
+
+	if (self.emptyText.text.length){
+		CGSize fits = [self.emptyText sizeThatFits:CGSizeMake(232, 1000)];
+		self.emptyText.frame = CGRectMake((int)((width - fits.width) / 2),
+				CGRectGetMaxY(titleFrame) + 8, fits.width, fits.height);
+		self.emptyText.hidden = NO;
+		height = CGRectGetMaxY(self.emptyText.frame);
+	} else {
+		self.emptyText.hidden = YES;
+	}
+
+	UIView *background = self.tableView.backgroundView;
+	CGRect bounds = background ? background.bounds : self.tableView.bounds;
+	self.emptyContainer.frame = CGRectMake((int)((bounds.size.width - width) / 2),
+			(int)((bounds.size.height - height) / 2), width, height);
 }
 
 - (void)loadMoreTopics {
@@ -1229,7 +1424,13 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 		cell.previewLabel.text = preview;
 	}
 	cell.dateLabel.text = TGTopicDate(TGTopicDouble(t, @"date"));
-	cell.pinIcon.hidden = !TGTopicFlag(t, @"isPinned");
+
+	NSInteger mentions = TGTopicInteger(t, @"unreadMentions");
+	cell.pinIcon.hidden = !(TGTopicFlag(t, @"isPinned") && unread <= 0 && mentions <= 0);
+	if (!cell.pinIcon.hidden){
+		cell.pinIcon.image = [TGIcons menuGlyphNamed:@"pin"];
+		[cell.pinIcon tg_setTintColor:[theme secondaryTextColour]];
+	}
 
 	if (plainPlate)
 		[self applyPlateToCell:cell unread:unread closed:closed];
@@ -1243,7 +1444,7 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 
 	cell.muteIcon.hidden = ![self topicIsMuted:t];
 
-	[self applyBadgeToCell:cell unread:unread mentions:TGTopicInteger(t, @"unreadMentions")];
+	[self applyBadgeToCell:cell unread:unread mentions:mentions];
 
 	[cell setNeedsLayout];
 	return cell;
@@ -1262,19 +1463,13 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 	cell.badgeBackground.hidden = YES;
 	cell.pinIcon.hidden = YES;
 	cell.muteIcon.hidden = YES;
+	[cell applyBadgeShadowForHighlight:(cell.highlighted || cell.selected)];
 }
 
 - (void)applyPlateToCell:(TGTopicCell *)cell unread:(NSInteger)unread closed:(BOOL)closed {
 	UIImageView *plate = (UIImageView *)cell.backgroundView;
-	if (unread > 0){
-		plate.image = nil;
-		plate.backgroundColor = TGTopicRGB(0xebf0f5);
-		if (!closed)
-			cell.previewLabel.textColor = TGTopicRGB(0x5b646e);
-	} else {
-		plate.image = TGTopicPlateImage();
-		plate.backgroundColor = [UIColor clearColor];
-	}
+	plate.image = TGTopicPlateImage();
+	plate.backgroundColor = [UIColor clearColor];
 }
 
 - (void)applyBadgeToCell:(TGTopicCell *)cell unread:(NSInteger)unread mentions:(NSInteger)mentions {
@@ -1661,13 +1856,40 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 	return self.reordering && !self.searchResults && indexPath.row < [self pinnedCount];
 }
 
+- (BOOL)canDeleteTopicAtRow:(NSInteger)row {
+	if (!self.canDeleteTopics)
+		return NO;
+	NSArray *rows = [self displayedTopics];
+	if (row < 0 || row >= (NSInteger)rows.count)
+		return NO;
+	return !TGTopicFlag(rows[row], @"isGeneral");
+}
+
 - (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
-	return self.reordering;
+	if (self.reordering)
+		return YES;
+	return [self canDeleteTopicAtRow:indexPath.row];
 }
 
 - (UITableViewCellEditingStyle)tableView:(UITableView *)tableView
 		   editingStyleForRowAtIndexPath:(NSIndexPath *)indexPath {
-	return UITableViewCellEditingStyleNone;
+	if (self.reordering)
+		return UITableViewCellEditingStyleNone;
+	return [self canDeleteTopicAtRow:indexPath.row]
+			? UITableViewCellEditingStyleDelete
+			: UITableViewCellEditingStyleNone;
+}
+
+- (void)tableView:(UITableView *)tableView
+		commitEditingStyle:(UITableViewCellEditingStyle)style
+		 forRowAtIndexPath:(NSIndexPath *)indexPath {
+	if (style != UITableViewCellEditingStyleDelete || self.reordering)
+		return;
+	NSArray *rows = [self displayedTopics];
+	if (indexPath.row >= (NSInteger)rows.count)
+		return;
+	[tableView setEditing:NO animated:YES];
+	[self confirmDeleteTopic:rows[indexPath.row]];
 }
 
 - (BOOL)tableView:(UITableView *)tableView

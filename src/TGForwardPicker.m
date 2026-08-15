@@ -16,32 +16,43 @@ static const CGFloat kGroupButtonWidth = 80.0f;
 static const CGFloat kGroupSeparatorWidth = 2.0f;
 static const CGFloat kGroupButtonHeight = 30.0f;
 
+static NSString *TGForwardWeekdayShort(int wday) {
+	static NSString *names[] = {@"Mon", @"Tue", @"Wed", @"Thu", @"Fri", @"Sat", @"Sun"};
+	if (wday < 0)
+		wday = 0;
+	if (wday > 6)
+		wday = 6;
+	if (wday == 0)
+		wday = 6;
+	else
+		wday--;
+	return names[wday];
+}
+
 static NSString *TGForwardDateString(NSTimeInterval unix) {
 	if (unix <= 0)
 		return @"";
 
-	NSDate *date = [NSDate dateWithTimeIntervalSince1970:unix];
-	NSTimeInterval age = -[date timeIntervalSinceNow];
+	time_t t = (time_t)unix;
+	struct tm timeinfo;
+	localtime_r(&t, &timeinfo);
 
-	static NSDateFormatter *time = nil, *weekday = nil, *full = nil;
-	if (!time){
-		NSLocale *fixed = [[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"];
-		time = [[NSDateFormatter alloc] init];
-		[time setLocale:fixed];
-		[time setDateFormat:@"HH:mm"];
-		weekday = [[NSDateFormatter alloc] init];
-		[weekday setLocale:fixed];
-		[weekday setDateFormat:@"EEE"];
-		full = [[NSDateFormatter alloc] init];
-		[full setLocale:fixed];
-		[full setDateFormat:@"dd.MM.yy"];
-	}
+	time_t now;
+	time(&now);
+	struct tm nowinfo;
+	localtime_r(&now, &nowinfo);
 
-	if (age < 24 * 3600)
-		return [time stringFromDate:date];
-	if (age < 7 * 24 * 3600)
-		return [weekday stringFromDate:date];
-	return [full stringFromDate:date];
+	if (timeinfo.tm_year != nowinfo.tm_year)
+		return [NSString stringWithFormat:@"%d.%02d.%02d", timeinfo.tm_mday,
+										  timeinfo.tm_mon + 1, timeinfo.tm_year - 100];
+
+	int dayDiff = timeinfo.tm_yday - nowinfo.tm_yday;
+	if (dayDiff == 0)
+		return [NSString stringWithFormat:@"%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min];
+	if (dayDiff > -7 && dayDiff <= -1)
+		return TGForwardWeekdayShort(timeinfo.tm_wday);
+	return [NSString stringWithFormat:@"%d.%02d.%02d", timeinfo.tm_mday,
+									  timeinfo.tm_mon + 1, timeinfo.tm_year - 100];
 }
 
 static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
@@ -100,7 +111,7 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 
 	_date = [[UILabel alloc] init];
 	_date.backgroundColor = [UIColor clearColor];
-	_date.font = [UIFont boldSystemFontOfSize:13];
+	_date.font = [UIFont systemFontOfSize:13];
 	_date.textAlignment = NSTextAlignmentRight;
 	_date.textColor = [UIColor colorWithRed:0x33 / 255.0f green:0x7a / 255.0f
 									   blue:0xcc / 255.0f alpha:1.0f];
@@ -124,14 +135,20 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 }
 
 - (void)applyStyle {
+	CGFloat retinaPixel = ([UIScreen mainScreen].scale > 1.0f) ? 0.5f : 0.0f;
 	if (_compact) {
 		self.title.font = [UIFont systemFontOfSize:19];
 		self.titleSecond.font = [UIFont boldSystemFontOfSize:19];
-		self.preview.font = [UIFont systemFontOfSize:13];
+		self.title.textColor = [UIColor blackColor];
+		self.titleSecond.textColor = [UIColor blackColor];
+		self.preview.font = [UIFont systemFontOfSize:13 + retinaPixel];
 		self.preview.numberOfLines = 1;
 	} else {
 		self.title.font = [UIFont boldSystemFontOfSize:16];
 		self.titleSecond.font = self.title.font;
+		self.title.textColor = [UIColor colorWithRed:0x11 / 255.0f green:0x11 / 255.0f
+												blue:0x11 / 255.0f alpha:1.0f];
+		self.titleSecond.textColor = self.title.textColor;
 		self.preview.font = [UIFont systemFontOfSize:14];
 		self.preview.numberOfLines = 2;
 	}
@@ -180,8 +197,10 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 			titleY = (CGFloat)(int)((CGFloat)(int)((h - titleHeight) / 2) - 1);
 			_preview.frame = CGRectZero;
 		} else {
+			CGFloat retinaPixel = ([UIScreen mainScreen].scale > 1.0f) ? 0.5f : 0.0f;
 			titleY = (CGFloat)(int)((h - titleHeight - subtitleHeight - 1) / 2);
-			_preview.frame = CGRectMake(left + 1, titleY + titleHeight, width, subtitleHeight);
+			_preview.frame = CGRectMake(left + 1, titleY + titleHeight + retinaPixel,
+					width, subtitleHeight);
 		}
 
 		CGFloat firstWidth = width;
@@ -193,7 +212,7 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 			if (firstWidth > cap)
 				firstWidth = cap;
 			CGFloat secondX = left + firstWidth + 4;
-			CGFloat secondWidth = w - secondX - 5;
+			CGFloat secondWidth = w - secondX;
 			if (secondWidth < 0)
 				secondWidth = 0;
 			_titleSecond.frame = CGRectMake(secondX, titleY, secondWidth, titleHeight);
@@ -224,7 +243,11 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 	if (titleWidth < 0)
 		titleWidth = 0;
 	_title.frame = CGRectMake(left + iconWidth, 6, titleWidth, 20);
-	_preview.frame = CGRectMake(left, 29, width, 40);
+
+	CGFloat previewWidth = w - 73 - 10 - 16;
+	if (previewWidth < 0)
+		previewWidth = 0;
+	_preview.frame = CGRectMake(left, 29, previewWidth, 40);
 }
 
 @end
@@ -247,6 +270,7 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 @property (nonatomic, strong) NSMutableDictionary *avatars;
 @property (nonatomic, strong) NSMutableSet *avatarsRequested;
 @property (nonatomic, strong) UIView *emptyContainer;
+@property (nonatomic, strong) UIImageView *emptyIcon;
 @property (nonatomic, strong) UILabel *emptyTitle;
 @property (nonatomic, strong) UILabel *emptyText;
 @property (nonatomic, strong) UIView *toolbarContainerView;
@@ -288,6 +312,7 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 	self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:cancel];
 
 	self.searchBar = [[UISearchBar alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 44)];
+	self.searchBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	self.searchBar.delegate = self;
 	self.searchBar.placeholder = @"Search";
 	UIImage *searchBackground = [UIImage imageNamed:@"SearchBarBackground.png"];
@@ -295,7 +320,10 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 		[self.searchBar setBackgroundImage:searchBackground];
 	else
 		[self.searchBar tg_setTintColor:[UIColor colorWithWhite:0.68f alpha:1.0f]];
+	[self dressSearchField:self.searchBar];
+	[self hideStripe:self.searchBar];
 	self.tableView.tableHeaderView = self.searchBar;
+	self.tableView.tableFooterView = [[UIView alloc] init];
 
 	UIView *background = [[UIView alloc] initWithFrame:self.tableView.bounds];
 	background.backgroundColor = [[TGTheme shared] listBackgroundColour];
@@ -304,7 +332,7 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 	self.tableView.backgroundView = background;
 
 	UIView *overscroll = [[UIView alloc] initWithFrame:
-			CGRectMake(0, -500, self.tableView.bounds.size.width, 500)];
+			CGRectMake(0, -480, self.tableView.bounds.size.width, 480)];
 	overscroll.backgroundColor = [UIColor colorWithRed:0xe4 / 255.0f green:0xe9 / 255.0f
 												  blue:0xf0 / 255.0f alpha:1.0f];
 	overscroll.autoresizingMask = UIViewAutoresizingFlexibleWidth;
@@ -331,6 +359,59 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 	[self refreshRows];
 }
 
+- (void)hideStripe:(UIView *)view {
+	if ([view isKindOfClass:UIImageView.class] && view.frame.size.height == 1)
+		view.hidden = YES;
+	for (UIView *child in view.subviews)
+		[self hideStripe:child];
+}
+
+- (void)dressSearchField:(UIView *)view {
+	if ([view isKindOfClass:UITextField.class]){
+		UITextField *field = (UITextField *)view;
+		[field setBackground:nil];
+		field.clipsToBounds = NO;
+
+		UIImage *inputImage = [UIImage imageNamed:@"SearchInputField.png"];
+		if (inputImage){
+			inputImage = [inputImage stretchableImageWithLeftCapWidth:
+					(int)(inputImage.size.width / 2) topCapHeight:0];
+			UIImageView *inputView = [[UIImageView alloc] initWithFrame:
+					CGRectMake(0, ([UIScreen mainScreen].scale > 1.0f) ? 0.5f : 0.0f,
+							field.frame.size.width, inputImage.size.height)];
+			inputView.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+			inputView.image = inputImage;
+			[field addSubview:inputView];
+			[field sendSubviewToBack:inputView];
+		}
+
+		UIImage *icon = [UIImage imageNamed:@"SearchBarIcon.png"];
+		if ([field.leftView isKindOfClass:UIImageView.class] && icon){
+			UIImageView *iconView = (UIImageView *)field.leftView;
+			iconView.image = icon;
+			[iconView sizeToFit];
+		}
+
+		SEL clearSelector = NSSelectorFromString([NSString stringWithFormat:@"%sBu%s",
+				"clear", "tton"]);
+		if ([field respondsToSelector:clearSelector]){
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+			UIButton *clear = [field performSelector:clearSelector];
+#pragma clang diagnostic pop
+			if ([clear isKindOfClass:UIButton.class]){
+				[clear setImage:[UIImage imageNamed:@"ClearInput.png"]
+					   forState:UIControlStateNormal];
+				[clear setImage:[UIImage imageNamed:@"ClearInput_Pressed.png"]
+					   forState:UIControlStateHighlighted];
+			}
+		}
+		return;
+	}
+	for (UIView *child in view.subviews)
+		[self dressSearchField:child];
+}
+
 - (void)buildEmptyContainer {
 	UIView *background = self.tableView.backgroundView;
 	if (!background)
@@ -345,6 +426,10 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 	self.emptyContainer.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin
 			| UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin
 			| UIViewAutoresizingFlexibleBottomMargin;
+
+	self.emptyIcon = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"NoMessages.png"]];
+	self.emptyIcon.hidden = YES;
+	[self.emptyContainer addSubview:self.emptyIcon];
 
 	self.emptyTitle = [[UILabel alloc] init];
 	self.emptyTitle.backgroundColor = [UIColor clearColor];
@@ -364,14 +449,23 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 	[background addSubview:self.emptyContainer];
 }
 
-- (void)showEmptyTitle:(NSString *)title text:(NSString *)text {
+- (void)showEmptyTitle:(NSString *)title text:(NSString *)text icon:(BOOL)icon {
 	if (!self.emptyContainer)
 		return;
+
+	CGFloat titleTop = 0;
+	self.emptyIcon.hidden = !(icon && self.emptyIcon.image);
+	if (!self.emptyIcon.hidden){
+		CGSize iconSize = self.emptyIcon.image.size;
+		self.emptyIcon.frame = CGRectMake((CGFloat)(int)((250 - iconSize.width) / 2), 0,
+				iconSize.width, iconSize.height);
+		titleTop = iconSize.height + 21;
+	}
 
 	self.emptyTitle.text = title;
 	[self.emptyTitle sizeToFit];
 	CGRect titleFrame = self.emptyTitle.frame;
-	titleFrame.origin = CGPointMake((CGFloat)(int)((250 - titleFrame.size.width) / 2), 0);
+	titleFrame.origin = CGPointMake((CGFloat)(int)((250 - titleFrame.size.width) / 2), titleTop);
 	self.emptyTitle.frame = titleFrame;
 
 	self.emptyText.text = text ?: @"";
@@ -483,15 +577,17 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 
 	if (self.visibleRows.count == 0){
 		if (query.length > 0)
-			[self showEmptyTitle:@"No results" text:@""];
+			[self showEmptyTitle:@"No results" text:@"" icon:NO];
 		else if (self.mode == 1)
 			[self showEmptyTitle:self.contactsLoaded ? @"You have no contacts yet" : @"Loading"
 							text:self.contactsLoaded
 					? @"People from your address book who use Telegram show up here."
-					: @""];
+					: @""
+							icon:NO];
 		else
 			[self showEmptyTitle:@"You have no conversations yet"
-							text:@"Start messaging by picking someone from the Contacts section."];
+							text:@"Start messaging by picking someone from the Contacts section."
+							icon:YES];
 	} else {
 		self.emptyContainer.hidden = YES;
 	}

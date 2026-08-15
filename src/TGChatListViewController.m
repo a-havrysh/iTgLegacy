@@ -221,11 +221,16 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 @property (nonatomic, readonly) BOOL swipeActionsVisible;
 
 - (void)setSwipeActionsVisible:(BOOL)visible animated:(BOOL)animated;
+- (void)setDateText:(NSString *)text suffix:(NSString *)suffix bold:(BOOL)bold;
 @end
 
 @implementation TGChatCell {
 	NSMutableArray *_swipeButtons;
 	BOOL _swipeActionsVisible;
+	CGFloat _dateWidth;
+	NSString *_dateMain;
+	NSString *_dateSuffix;
+	BOOL _dateBold;
 }
 
 static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
@@ -407,7 +412,7 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 		[button removeFromSuperview];
 	[_swipeButtons removeAllObjects];
 
-	UIFont *font = [UIFont boldSystemFontOfSize:14];
+	UIFont *font = [UIFont boldSystemFontOfSize:13];
 	for (NSUInteger i = 0; i < self.swipeActions.count; i++){
 		NSDictionary *action = self.swipeActions[i];
 		BOOL destructive = [action[@"destructive"] boolValue];
@@ -434,7 +439,9 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 								   forState:UIControlStateNormal];
 				button.titleLabel.shadowOffset = CGSizeMake(0, 1);
 			} else {
-				[button setTitleShadowColor:[UIColor colorWithWhite:0.0f alpha:0.3f]
+				[button setTitleShadowColor:[UIColor colorWithRed:0xa3 / 255.0f
+															green:0x0f / 255.0f
+															 blue:0x0a / 255.0f alpha:0.2f]
 								   forState:UIControlStateNormal];
 				button.titleLabel.shadowOffset = CGSizeMake(0, -1);
 			}
@@ -575,11 +582,15 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 - (void)setHighlighted:(BOOL)highlighted animated:(BOOL)animated {
 	[super setHighlighted:highlighted animated:animated];
 	[self applyBadgeShadowForHighlight:highlighted];
+	if (_dateSuffix.length)
+		[self applyDateAppearance];
 }
 
 - (void)setSelected:(BOOL)selected animated:(BOOL)animated {
 	[super setSelected:selected animated:animated];
 	[self applyBadgeShadowForHighlight:selected || self.highlighted];
+	if (_dateSuffix.length)
+		[self applyDateAppearance];
 }
 
 - (void)setEditing:(BOOL)editing animated:(BOOL)animated {
@@ -588,12 +599,44 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 	[super setEditing:editing animated:animated];
 }
 
+- (void)applyDateAppearance {
+	UIFont *main = _dateBold ? [UIFont boldSystemFontOfSize:13] : [UIFont systemFontOfSize:13];
+	self.dateLabel.font = main;
+	NSString *text = _dateMain ?: @"";
+	UIColor *ink = (self.highlighted || self.selected) && self.dateLabel.highlightedTextColor
+			? self.dateLabel.highlightedTextColor : self.dateLabel.textColor;
+
+	if (!_dateSuffix.length || ![self.dateLabel respondsToSelector:@selector(setAttributedText:)]){
+		self.dateLabel.text = text;
+		_dateWidth = (int)[text sizeWithFont:main].width;
+		return;
+	}
+
+	NSString *whole = [text stringByAppendingString:_dateSuffix];
+	NSMutableAttributedString *line = [[NSMutableAttributedString alloc] initWithString:whole];
+	[line addAttribute:NSFontAttributeName value:main range:NSMakeRange(0, text.length)];
+	[line addAttribute:NSFontAttributeName value:[UIFont systemFontOfSize:11]
+				 range:NSMakeRange(text.length, _dateSuffix.length)];
+	if (ink)
+		[line addAttribute:NSForegroundColorAttributeName value:ink
+					 range:NSMakeRange(0, whole.length)];
+	self.dateLabel.attributedText = line;
+	_dateWidth = (int)ceilf([line size].width);
+}
+
+- (void)setDateText:(NSString *)text suffix:(NSString *)suffix bold:(BOOL)bold {
+	_dateMain = [text copy];
+	_dateSuffix = [suffix copy];
+	_dateBold = bold;
+	[self applyDateAppearance];
+}
+
 - (CGFloat)layoutBadgeInWidth:(CGFloat)w {
 	CGFloat countWidth = (int)[self.badge.text sizeWithFont:self.badge.font].width;
 	CGFloat badgeWidth = MAX(27, countWidth + 10);
 	CGRect badgeFrame = CGRectMake(w - 28 - badgeWidth, 29, badgeWidth, 21);
 	self.badgeBackground.frame = badgeFrame;
-	self.badge.frame = badgeFrame;
+	self.badge.frame = CGRectMake(badgeFrame.origin.x, badgeFrame.origin.y, badgeWidth, 20);
 	return self.badge.hidden ? 0 : badgeWidth + 7;
 }
 
@@ -614,7 +657,7 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 
 	rightPadding += [self layoutBadgeInWidth:w];
 
-	CGFloat dateWidth = (int)[self.dateLabel.text sizeWithFont:self.dateLabel.font].width;
+	CGFloat dateWidth = _dateWidth;
 	CGFloat dateX = w - dateWidth - 9;
 	self.dateLabel.frame = CGRectMake(dateX - (75 - dateWidth), 9, 75, 15);
 
@@ -646,6 +689,11 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 		self.authorLabel.frame = CGRectMake(left, 29, w - left - 10 - rightPadding, 20);
 		previewFrame.origin.y += 9;
 		previewFrame.size.height -= 12;
+		CGSize fits = [self.previewLabel.text sizeWithFont:self.previewLabel.font
+										 constrainedToSize:previewFrame.size
+											 lineBreakMode:NSLineBreakByTruncatingTail];
+		if (fits.height < 20)
+			previewFrame.origin.y += 9;
 	}
 	self.previewLabel.frame = previewFrame;
 
@@ -679,7 +727,7 @@ static const NSInteger TGChatListFolderStyleStrip = 1;
 static const CGFloat kStoryTrayHeight = 82.0f;
 static const CGFloat kStoryCellWidth = 68.0f;
 static const CGFloat kStoryAvatar = 56.0f;
-static const CGFloat kFolderStripHeight = 36.0f;
+static const CGFloat kFolderStripHeight = 44.0f;
 static const CGFloat kLoginBannerHeight = 76.0f;
 static const CGFloat kFolderBannerHeight = 62.0f;
 static const NSUInteger kRowDetailCacheLimit = 200;
@@ -692,6 +740,18 @@ static BOOL TGStoriesTrayEnabled(void) {
 static NSInteger TGChatListFolderStyle(void) {
 	id stored = [[NSUserDefaults standardUserDefaults] objectForKey:TGChatListFolderStyleKey];
 	return stored ? [stored integerValue] : TGChatListFolderStyleStrip;
+}
+
+static UIImage *TGScopeBarBackgroundImage(void) {
+	static UIImage *plate = nil;
+	static BOOL looked = NO;
+	if (!looked){
+		looked = YES;
+		UIImage *raw = [UIImage imageNamed:@"SearchBarScopeBarBackground.png"];
+		if (raw)
+			plate = [raw stretchableImageWithLeftCapWidth:1 topCapHeight:0];
+	}
+	return plate;
 }
 
 static UIImage *TGTitleCaretImage(void) {
@@ -1107,6 +1167,10 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 @property (nonatomic, assign) NSInteger storyProbesPending;
 @property (nonatomic, assign) NSTimeInterval lastStorySweep;
 @property (nonatomic, strong) UILabel *titleLabelView;
+@property (nonatomic, strong) UIView *titleStatusContainer;
+@property (nonatomic, strong) UILabel *titleStatusLabel;
+@property (nonatomic, strong) UIActivityIndicatorView *titleStatusIndicator;
+@property (nonatomic, copy) NSString *connectionText;
 @property (nonatomic, weak) TGChatCell *openSwipeCell;
 @property (nonatomic, strong) NSMutableDictionary *secretStatuses;
 @property (nonatomic, strong) NSMutableSet *secretStatusesRequested;
@@ -1269,10 +1333,10 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 		[me.tableView reloadData];
 	};
 	[TGClient shared].onConnectionState = ^(TGConnectionState state, NSString *text){
-		// Clients put this in the title bar rather than hiding it in a flag.
 		TGChatListViewController *me = weakSelf;
 		NSString *line = TGReplyString(text);
-		me.title = line.length ? line : [me defaultTitle];
+		me.connectionText = line.length ? line : nil;
+		[me applyTitleView];
 		[me updateEmptyState];
 	};
 }
@@ -1308,8 +1372,49 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 		   TGChatListFolderStyle() == TGChatListFolderStyleChooser;
 }
 
+- (UIView *)titleStatusView {
+	if (!self.titleStatusContainer){
+		self.titleStatusContainer = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 200, 30)];
+		self.titleStatusContainer.clipsToBounds = NO;
+
+		self.titleStatusLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+		self.titleStatusLabel.backgroundColor = [UIColor clearColor];
+		self.titleStatusLabel.font = [UIFont boldSystemFontOfSize:15];
+		self.titleStatusLabel.textColor = [UIColor whiteColor];
+		self.titleStatusLabel.shadowColor = [UIColor colorWithRed:0x41 / 255.0f
+															green:0x5a / 255.0f
+															 blue:0x7e / 255.0f alpha:1.0f];
+		self.titleStatusLabel.shadowOffset = CGSizeMake(0, -1);
+		[self.titleStatusContainer addSubview:self.titleStatusLabel];
+
+		self.titleStatusIndicator = [[UIActivityIndicatorView alloc]
+				initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhite];
+		[self.titleStatusContainer addSubview:self.titleStatusIndicator];
+	}
+
+	self.titleStatusLabel.text = self.connectionText ?: @"";
+	[self.titleStatusLabel sizeToFit];
+	CGRect holder = self.titleStatusContainer.bounds;
+	CGRect label = self.titleStatusLabel.frame;
+	CGRect spinner = self.titleStatusIndicator.frame;
+	label.origin = CGPointMake((int)((holder.size.width - label.size.width
+					+ spinner.size.width + 5) / 2),
+			(int)((holder.size.height - label.size.height) / 2) - 1);
+	self.titleStatusLabel.frame = label;
+	self.titleStatusIndicator.frame = CGRectMake(label.origin.x - spinner.size.width - 5,
+			label.origin.y + 3, spinner.size.width, spinner.size.height);
+	[self.titleStatusIndicator startAnimating];
+	return self.titleStatusContainer;
+}
+
 - (void)applyTitleView {
 	self.title = [self defaultTitle];
+	if (self.connectionText.length){
+		self.navigationItem.titleView = [self titleStatusView];
+		return;
+	}
+	if (self.titleStatusIndicator)
+		[self.titleStatusIndicator stopAnimating];
 	if (![self usesFolderChooser]){
 		self.navigationItem.titleView = nil;
 		self.titleLabelView = nil;
@@ -1493,9 +1598,6 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 			: UITableViewCellSeparatorStyleSingleLine;
 }
 
-/// The search bar and, when there is one, the archive: both above the first
-/// chat and both scrolled out of sight to begin with. Pulling the list down is
-/// what brings them back, which is how Telegram hides them.
 - (void)rebuildTableHeader {
 	CGFloat width = self.tableView.bounds.size.width ?: 320;
 	NSUInteger archivedCount = TGReplyArray([TGClient shared].archivedChats).count;
@@ -1538,24 +1640,8 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 		[header addSubview:hair];
 	}
 
-	CGFloat wasHidingHeader = self.headerHeight;
 	self.tableView.tableHeaderView = header;
 	self.headerHeight = height;
-	[self hideHeaderAboveFrom:wasHidingHeader];
-}
-
-/// Scroll the header off the top without animating, so the list opens on the
-/// first chat. The archive arrives after the first layout, which makes the
-/// header taller, so "still at the top" means the old height as well as zero -
-/// otherwise the row appears and stays on screen.
-- (void)hideHeaderAboveFrom:(CGFloat)previousHeight {
-	if (self.tableView.contentSize.height <= self.tableView.bounds.size.height)
-		return;
-	CGFloat hidden = MIN(44.0f, self.headerHeight);
-	CGFloat y = self.tableView.contentOffset.y;
-	if (y > 0.5f && fabs(y - MIN(44.0f, previousHeight)) > 0.5f)
-		return;   // the user has scrolled somewhere of their own; leave it
-	self.tableView.contentOffset = CGPointMake(0, hidden);
 }
 
 - (UIView *)archiveHeaderRowWithWidth:(CGFloat)width top:(CGFloat)top count:(NSUInteger)archivedCount {
@@ -1928,10 +2014,9 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 /// gave its scope buttons.
 - (UIView *)folderStripWithWidth:(CGFloat)width top:(CGFloat)top {
 	UIView *strip = [[UIView alloc] initWithFrame:CGRectMake(0, top, width, kFolderStripHeight)];
-	UIImage *background = [UIImage imageNamed:@"SearchBarBackground.png"];
+	UIImage *background = TGScopeBarBackgroundImage();
 	if (background){
-		UIImageView *plate = [[UIImageView alloc] initWithImage:
-				[background stretchableImageWithLeftCapWidth:1 topCapHeight:0]];
+		UIImageView *plate = [[UIImageView alloc] initWithImage:background];
 		plate.frame = strip.bounds;
 		[strip addSubview:plate];
 	} else {
@@ -1961,13 +2046,20 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 		[scroller addSubview:button];
 		x += button.frame.size.width + 4;
 	}
-	scroller.contentSize = CGSizeMake(x + 4, kFolderStripHeight);
 
-	UIView *hair = [[UIView alloc] initWithFrame:
-			CGRectMake(0, kFolderStripHeight - 0.5f, width, 0.5f)];
-	hair.backgroundColor = [UIColor colorWithRed:0xD5 / 255.0f green:0xDE / 255.0f
-											blue:0xE5 / 255.0f alpha:1.0f];
-	[strip addSubview:hair];
+	UIButton *options = [self folderStripOptionsButtonWithFont:font
+														  left:(x + 4)
+												   normalPlate:normalPlate];
+	[scroller addSubview:options];
+	x += 4 + options.frame.size.width + 4;
+	scroller.contentSize = CGSizeMake(x, kFolderStripHeight);
+
+	if (!background){
+		UIView *hair = [[UIView alloc] initWithFrame:
+				CGRectMake(0, kFolderStripHeight - 0.5f, width, 0.5f)];
+		hair.backgroundColor = [[TGTheme shared] separatorColour];
+		[strip addSubview:hair];
+	}
 	return strip;
 }
 
@@ -1995,7 +2087,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 
 	CGFloat buttonWidth = (int)[caption sizeWithFont:font].width + 24;
 	UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
-	button.frame = CGRectMake(left, 3, buttonWidth, 30);
+	button.frame = CGRectMake(left, (int)((kFolderStripHeight - 30) / 2), buttonWidth, 30);
 	[button setBackgroundImage:(selected ? selectedPlate : normalPlate)
 					  forState:UIControlStateNormal];
 	[button setTitle:caption forState:UIControlStateNormal];
@@ -2006,6 +2098,22 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	 forControlEvents:UIControlEventTouchUpInside];
 	[button addGestureRecognizer:[[UILongPressGestureRecognizer alloc]
 			initWithTarget:self action:@selector(folderButtonHeld:)]];
+	return button;
+}
+
+- (UIButton *)folderStripOptionsButtonWithFont:(UIFont *)font
+										   left:(CGFloat)left
+									normalPlate:(UIImage *)normalPlate {
+	NSString *caption = @"Edit Folders…";
+	CGFloat buttonWidth = (int)[caption sizeWithFont:font].width + 24;
+	UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+	button.frame = CGRectMake(left, (int)((kFolderStripHeight - 30) / 2), buttonWidth, 30);
+	[button setBackgroundImage:normalPlate forState:UIControlStateNormal];
+	[button setTitle:caption forState:UIControlStateNormal];
+	button.titleLabel.font = font;
+	[self styleFolderStripButton:button selected:NO];
+	[button addTarget:self action:@selector(listOptionsTapped)
+	 forControlEvents:UIControlEventTouchUpInside];
 	return button;
 }
 
@@ -2072,13 +2180,23 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 /// one, so an account with no stories keeps the 2013 screen exactly as it was.
 - (UIView *)storyTrayWithWidth:(CGFloat)width top:(CGFloat)top {
 	TGTheme *theme = [TGTheme shared];
-	UIScrollView *tray = [[UIScrollView alloc] initWithFrame:
-			CGRectMake(0, top, width, kStoryTrayHeight)];
+	UIView *band = [[UIView alloc] initWithFrame:CGRectMake(0, top, width, kStoryTrayHeight)];
+	UIImage *plateImage = theme.isDark ? nil : TGScopeBarBackgroundImage();
+	if (plateImage){
+		UIImageView *plate = [[UIImageView alloc] initWithImage:plateImage];
+		plate.frame = band.bounds;
+		[band addSubview:plate];
+	} else {
+		band.backgroundColor = theme.isDark
+				? [UIColor colorWithWhite:0.11f alpha:1.0f]
+				: [UIColor colorWithRed:0xE4 / 255.0f green:0xE9 / 255.0f
+								   blue:0xF0 / 255.0f alpha:1.0f];
+	}
+
+	UIScrollView *tray = [[UIScrollView alloc] initWithFrame:band.bounds];
+	tray.backgroundColor = [UIColor clearColor];
 	tray.showsHorizontalScrollIndicator = NO;
-	tray.backgroundColor = theme.isDark
-			? [UIColor colorWithWhite:0.11f alpha:1.0f]
-			: [UIColor colorWithRed:0xE4 / 255.0f green:0xE9 / 255.0f
-							   blue:0xF0 / 255.0f alpha:1.0f];
+	[band addSubview:tray];
 
 	CGFloat x = 8;
 	for (NSUInteger i = 0; i < self.storyPosters.count; i++){
@@ -2088,12 +2206,13 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	}
 	tray.contentSize = CGSizeMake(x + 8, kStoryTrayHeight);
 
-	UIView *hair = [[UIView alloc] initWithFrame:
-			CGRectMake(0, kStoryTrayHeight - 0.5f, width, 0.5f)];
-	hair.backgroundColor = [UIColor colorWithRed:0xD5 / 255.0f green:0xDE / 255.0f
-											blue:0xE5 / 255.0f alpha:1.0f];
-	[tray addSubview:hair];
-	return tray;
+	if (!plateImage){
+		UIView *hair = [[UIView alloc] initWithFrame:
+				CGRectMake(0, kStoryTrayHeight - 0.5f, width, 0.5f)];
+		hair.backgroundColor = [[TGTheme shared] separatorColour];
+		[band addSubview:hair];
+	}
+	return band;
 }
 
 - (UIView *)storyTrayCellForPoster:(NSDictionary *)poster index:(NSUInteger)index left:(CGFloat)x {
@@ -2248,6 +2367,11 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 - (void)styleSearchBar {
 	TGTheme *theme = [TGTheme shared];
 	self.searchBar.barStyle = theme.isDark ? UIBarStyleBlack : UIBarStyleDefault;
+	if ([self.searchBar respondsToSelector:@selector(setBackgroundImage:)]){
+		BOOL plainPlate = (!theme.isDark && theme.importedName == nil);
+		[self.searchBar setBackgroundImage:(plainPlate
+				? [UIImage imageNamed:@"SearchBarBackground.png"] : nil)];
+	}
 	if ([self.searchBar respondsToSelector:@selector(setBarTintColor:)]){
 		self.searchBar.barTintColor = [theme listBackgroundColour];
 		[self.searchBar tg_setTintColor:[theme accentColour]];
@@ -2469,6 +2593,8 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	NSArray *folders = [self folderList];
 	self.sheetItems = @[
 		@{@"kind" : @"markAllRead", @"title" : @"Mark All as Read"},
+		@{@"kind" : @"addStory", @"title" : @"Add Story"},
+		@{@"kind" : @"folderLink", @"title" : @"Add Folder from Link…"},
 		@{@"kind" : @"editFolders",
 		  @"title" : (folders.count ? @"Edit Folders" : @"Create a Folder")},
 	];
@@ -2604,6 +2730,8 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 		[self markCurrentListAsRead];
 	} else if ([kind isEqualToString:@"editFolders"]){
 		[self openFolderManagement];
+	} else if ([kind isEqualToString:@"addStory"]){
+		[self addStory];
 	} else if ([kind isEqualToString:@"folderLink"]){
 		[self askFolderInviteLink];
 	} else if ([kind isEqualToString:@"archiveSettings"]){
@@ -2742,8 +2870,8 @@ static UIImage *TGAvatarThumbnail(UIImage *source, CGFloat sidePoints) {
 static UIColor *TGSecretChatColour(void) {
 	static UIColor *colour = nil;
 	if (!colour)
-		colour = [UIColor colorWithRed:0x00 / 255.0f green:0xA6 / 255.0f
-								  blue:0x2A / 255.0f alpha:1.0f];
+		colour = [UIColor colorWithRed:0x22 / 255.0f green:0x9a / 255.0f
+								  blue:0x0a / 255.0f alpha:1.0f];
 	return colour;
 }
 
@@ -2775,24 +2903,53 @@ static UIColor *TGSecretChatColour(void) {
 	return nil;
 }
 
-/// Today shows the time, this week the weekday, older the date - as clients do.
-static NSString *TGChatDate(NSTimeInterval unix) {
+static BOOL TGChatDateUses12Hour(void) {
+	static BOOL twelve = NO;
+	static BOOL asked = NO;
+	if (!asked){
+		asked = YES;
+		NSString *shape = [NSDateFormatter dateFormatFromTemplate:@"j"
+														  options:0
+														   locale:[NSLocale currentLocale]];
+		twelve = ([shape rangeOfString:@"a"].location != NSNotFound);
+	}
+	return twelve;
+}
+
+static NSString *TGChatDateParts(NSTimeInterval unix, NSString **suffix, BOOL *bold) {
+	if (suffix)
+		*suffix = nil;
+	if (bold)
+		*bold = NO;
 	if (unix <= 0)
 		return @"";
 
 	NSDate *date = [NSDate dateWithTimeIntervalSince1970:unix];
 	NSTimeInterval age = -[date timeIntervalSinceNow];
 
-	static NSDateFormatter *time = nil, *weekday = nil, *full = nil;
+	static NSDateFormatter *time = nil, *hour12 = nil, *marker = nil;
+	static NSDateFormatter *weekday = nil, *full = nil;
 	if (!time){
 		NSLocale *fixed = [[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"];
 		time = [[NSDateFormatter alloc] init];    [time setLocale:fixed];    [time setDateFormat:@"HH:mm"];
+		hour12 = [[NSDateFormatter alloc] init];  [hour12 setLocale:fixed];  [hour12 setDateFormat:@"h:mm"];
+		marker = [[NSDateFormatter alloc] init];  [marker setLocale:fixed];  [marker setDateFormat:@"a"];
 		weekday = [[NSDateFormatter alloc] init]; [weekday setLocale:fixed]; [weekday setDateFormat:@"EEE"];
 		full = [[NSDateFormatter alloc] init];    [full setLocale:fixed];    [full setDateFormat:@"dd.MM.yy"];
 	}
 
-	if (age < 24 * 3600)     return [time stringFromDate:date];
-	if (age < 7 * 24 * 3600) return [weekday stringFromDate:date];
+	if (age < 24 * 3600){
+		if (!TGChatDateUses12Hour())
+			return [time stringFromDate:date];
+		if (suffix)
+			*suffix = [@" " stringByAppendingString:[marker stringFromDate:date]];
+		return [hour12 stringFromDate:date];
+	}
+	if (age < 7 * 24 * 3600){
+		if (bold)
+			*bold = YES;
+		return [weekday stringFromDate:date];
+	}
 	return [full stringFromDate:date];
 }
 
@@ -3487,7 +3644,7 @@ static const NSInteger kChatActionsTag = 77;
 	cell.badge.hidden = YES;
 	cell.badgeBackground.hidden = YES;
 	cell.badge.text = @"";
-	cell.dateLabel.text = @"";
+	[cell setDateText:@"" suffix:nil bold:NO];
 	cell.previewLabel.text = @"";
 	cell.titleLabel.text = @"";
 	cell.authorLabel.text = @"";
@@ -3503,7 +3660,7 @@ static const NSInteger kChatActionsTag = 77;
 			? [NSString stringWithFormat:@"%lu chats",
 					(unsigned long)TGReplyArray([TGClient shared].archivedChats).count]
 			: @"Your own notes and forwards";
-	cell.dateLabel.text = @"";
+	[cell setDateText:@"" suffix:nil bold:NO];
 	cell.badge.hidden = YES;
 	cell.badgeBackground.hidden = YES;
 	cell.avatar.image = isArchive
@@ -3530,7 +3687,8 @@ static const NSInteger kChatActionsTag = 77;
 												 : [theme typingColour];
 	} else if (handshake.length){
 		cell.previewLabel.text = handshake;
-		cell.previewLabel.textColor = TGSecretChatColour();
+		cell.previewLabel.textColor = plainPlate ? TGChatListActionColour()
+												 : [theme typingColour];
 	} else if (draft.length && !self.searchResults){
 		cell.draftLabel.hidden = NO;
 		cell.previewLabel.text = draft;
@@ -3631,11 +3789,19 @@ static const NSInteger kChatActionsTag = 77;
 
 	NSDictionary *c = rows[indexPath.row - header.count];
 	cell.titleLabel.text = TGReplyString(c[@"title"]) ?: @"";
-	cell.dateLabel.text = [c[@"sponsored"] boolValue]
-			? @"Sponsored"
-			: TGChatDate([c[@"date"] doubleValue]);
+	if (!self.searchResults && [c[@"id"] longLongValue] &&
+		[[TGClient shared] secretChatIdForChat:[c[@"id"] longLongValue]] != 0)
+		cell.titleLabel.textColor = TGSecretChatColour();
 	cell.dateLabel.textColor = [c[@"sponsored"] boolValue]
 			? [theme secondaryTextColour] : [theme accentColour];
+	if ([c[@"sponsored"] boolValue]){
+		[cell setDateText:@"Sponsored" suffix:nil bold:NO];
+	} else {
+		NSString *marker = nil;
+		BOOL bold = NO;
+		NSString *stamp = TGChatDateParts([c[@"date"] doubleValue], &marker, &bold);
+		[cell setDateText:stamp suffix:marker bold:bold];
+	}
 
 	[self configurePreviewInCell:cell chat:c plain:plainPlate];
 

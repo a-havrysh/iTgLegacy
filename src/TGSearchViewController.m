@@ -290,7 +290,7 @@ static const CGFloat kSearchTagStripHeight = 34.0f;
 	} else {
 		y = (CGFloat)(int)((viewSize.height - titleHeight - subtitleHeight - 1) / 2);
 		_subtitleLabel.frame = CGRectMake(kSearchTextLeft + 1, y + titleHeight,
-				viewSize.width - kSearchTextLeft - kSearchTextRight - 1, subtitleHeight);
+				viewSize.width - kSearchTextLeft - kSearchTextRight, subtitleHeight);
 	}
 	_subtitleLabel.hidden = !hasSubtitle;
 	if (_titleLabelSecond.hidden){
@@ -317,6 +317,7 @@ static const CGFloat kSearchTagStripHeight = 34.0f;
 @interface TGSearchMessageCell : UITableViewCell
 @property (nonatomic, strong) UIImageView *avatarView;
 @property (nonatomic, strong) UILabel *titleLabel;
+@property (nonatomic, strong) UILabel *authorLabel;
 @property (nonatomic, strong) UILabel *textLabel_;
 @property (nonatomic, strong) UILabel *dateLabel;
 @end
@@ -347,6 +348,17 @@ static const CGFloat kSearchTagStripHeight = 34.0f;
 		_titleLabel.highlightedTextColor = [UIColor whiteColor];
 		[self.contentView addSubview:_titleLabel];
 
+		_authorLabel = [[UILabel alloc] init];
+		_authorLabel.backgroundColor = [UIColor clearColor];
+		_authorLabel.font = [UIFont boldSystemFontOfSize:14];
+		_authorLabel.textColor = [TGTheme shared].isFlat
+				? [[TGTheme shared] accentColour]
+				: [UIColor colorWithRed:0x34 / 255.0f green:0x5f / 255.0f
+									blue:0x8f / 255.0f alpha:1.0f];
+		_authorLabel.highlightedTextColor = [UIColor whiteColor];
+		_authorLabel.hidden = YES;
+		[self.contentView addSubview:_authorLabel];
+
 		_textLabel_ = [[UILabel alloc] init];
 		_textLabel_.backgroundColor = [UIColor clearColor];
 		_textLabel_.font = [UIFont systemFontOfSize:14];
@@ -371,7 +383,7 @@ static const CGFloat kSearchTagStripHeight = 34.0f;
 
 		_avatarView = [[UIImageView alloc] initWithFrame:
 				CGRectMake(8, 8, kSearchMessageAvatar, kSearchMessageAvatar)];
-		_avatarView.layer.cornerRadius = 6;
+		_avatarView.layer.cornerRadius = 5;
 		_avatarView.clipsToBounds = YES;
 		[self.contentView addSubview:_avatarView];
 	}
@@ -407,8 +419,25 @@ static const CGFloat kSearchTagStripHeight = 34.0f;
 	if (titleWidth < 0)
 		titleWidth = 0;
 	_titleLabel.frame = CGRectMake(kSearchMessageTextLeft, 6, titleWidth, 20);
-	_textLabel_.frame = CGRectMake(kSearchMessageTextLeft, 29,
-			viewSize.width - kSearchMessageTextLeft - 10, 40);
+
+	CGFloat textWidth = viewSize.width - kSearchMessageTextLeft - 10;
+	if (textWidth < 0)
+		textWidth = 0;
+	CGRect messageFrame = CGRectMake(kSearchMessageTextLeft, 29, textWidth, 40);
+
+	BOOL hasAuthor = _authorLabel.text.length != 0;
+	_authorLabel.hidden = !hasAuthor;
+	if (hasAuthor){
+		_authorLabel.frame = CGRectMake(kSearchMessageTextLeft, 29, textWidth, 20);
+		messageFrame.origin.y += 9;
+		messageFrame.size.height -= 12;
+		CGSize fitted = [_textLabel_.text sizeWithFont:_textLabel_.font
+									 constrainedToSize:messageFrame.size
+										 lineBreakMode:NSLineBreakByTruncatingTail];
+		if (fitted.height < 20)
+			messageFrame.origin.y += 9;
+	}
+	_textLabel_.frame = messageFrame;
 }
 
 @end
@@ -482,10 +511,6 @@ static const NSInteger kSheetCalls = 5;
 
 static const NSInteger kScopeFiles = 3;
 static const NSInteger kScopeCalls = 6;
-
-static const CGFloat kSearchPeerStripHeight = 84.0f;
-static const CGFloat kSearchPeerWidth = 66.0f;
-static const CGFloat kSearchPeerAvatar = 54.0f;
 
 + (NSArray *)chatTypeTitles {
 	return @[@"All Chats", @"Private Chats", @"Groups", @"Channels"];
@@ -1804,11 +1829,10 @@ static const CGFloat kSearchPeerAvatar = 54.0f;
 		NSString *title = inChat
 				? (sender.length ? sender : (chatTitle.length ? chatTitle : @"Message"))
 				: (chatTitle.length ? chatTitle : (sender.length ? sender : @"Chat"));
-		NSString *subtitle = text;
-		if (!inChat && sender.length && text.length)
-			subtitle = [NSString stringWithFormat:@"%@: %@", sender, text];
+		NSString *author = (!inChat && sender.length && chatTitle.length) ? sender : @"";
 		[rows addObject:@{@"title": title,
-						  @"subtitle": subtitle,
+						  @"subtitle": text,
+						  @"author": author,
 						  @"date": [self shortDateFor:m[@"date"]],
 						  @"chatId": @(chatId),
 						  @"isGroup": @([m[@"isGroup"] boolValue]),
@@ -2193,7 +2217,7 @@ static const CGFloat kSearchPeerAvatar = 54.0f;
 	}
 	if (![self hasActiveQuery]){
 		if (self.topPeers.count)
-			[built addObject:@{@"title": @"People", @"rows": @[@{}], @"peers": @YES}];
+			[built addObject:@{@"title": @"People", @"rows": self.topPeers}];
 
 		NSMutableArray *rows = [NSMutableArray array];
 		NSMutableSet *seen = [NSMutableSet set];
@@ -2464,100 +2488,14 @@ static const CGFloat kSearchPeerAvatar = 54.0f;
 	return [((NSDictionary *)self.sections[section])[@"messages"] boolValue];
 }
 
-- (BOOL)sectionIsPeers:(NSInteger)section {
-	if (section < 0 || section >= (NSInteger)self.sections.count)
-		return NO;
-	return [((NSDictionary *)self.sections[section])[@"peers"] boolValue];
-}
-
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
-	if ([self sectionIsPeers:indexPath.section])
-		return kSearchPeerStripHeight;
 	return [self sectionIsMessages:indexPath.section]
 			? kSearchMessageRowHeight : kSearchRowHeight;
-}
-
-- (UITableViewCell *)peerStripCellForTable:(UITableView *)tableView {
-	static NSString *reuse = @"TGSearchPeersCell";
-	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
-	if (!cell){
-		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
-									  reuseIdentifier:reuse];
-		cell.selectionStyle = UITableViewCellSelectionStyleNone;
-		cell.backgroundColor = [UIColor clearColor];
-		UIScrollView *strip = [[UIScrollView alloc] initWithFrame:
-				CGRectMake(0, 0, tableView.bounds.size.width, kSearchPeerStripHeight)];
-		strip.tag = 7001;
-		strip.backgroundColor = [UIColor clearColor];
-		strip.showsHorizontalScrollIndicator = NO;
-		strip.showsVerticalScrollIndicator = NO;
-		strip.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-		[cell.contentView addSubview:strip];
-	}
-
-	UIScrollView *strip = (UIScrollView *)[cell.contentView viewWithTag:7001];
-	for (UIView *child in [strip.subviews copy])
-		[child removeFromSuperview];
-
-	CGFloat x = 4;
-	for (NSUInteger i = 0; i < self.topPeers.count; i++){
-		NSDictionary *peer = self.topPeers[i];
-		NSString *title = [peer[@"title"] isKindOfClass:NSString.class] ? peer[@"title"] : @"";
-		int64_t chatId = [peer[@"chatId"] longLongValue];
-
-		UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
-		button.tag = (NSInteger)i;
-		button.frame = CGRectMake(x, 2, kSearchPeerWidth, kSearchPeerStripHeight - 6);
-		[button addTarget:self action:@selector(peerTapped:)
-		 forControlEvents:UIControlEventTouchUpInside];
-
-		UIImageView *avatar = [[UIImageView alloc] initWithFrame:CGRectMake(
-				(CGFloat)(int)((kSearchPeerWidth - kSearchPeerAvatar) / 2), 2,
-				kSearchPeerAvatar, kSearchPeerAvatar)];
-		avatar.layer.cornerRadius = 6;
-		avatar.clipsToBounds = YES;
-		avatar.userInteractionEnabled = NO;
-		avatar.image = [self avatarForChat:chatId
-									 title:title
-									fileId:([peer[@"fileId"] isKindOfClass:NSNumber.class]
-											? peer[@"fileId"] : nil)
-									  size:kSearchPeerAvatar];
-		[button addSubview:avatar];
-
-		UILabel *name = [[UILabel alloc] initWithFrame:CGRectMake(
-				0, kSearchPeerAvatar + 5, kSearchPeerWidth, 14)];
-		name.backgroundColor = [UIColor clearColor];
-		name.font = [UIFont systemFontOfSize:11];
-		name.textAlignment = NSTextAlignmentCenter;
-		name.userInteractionEnabled = NO;
-		name.textColor = [[TGTheme shared] primaryTextColour];
-		name.text = title;
-		[button addSubview:name];
-
-		[strip addSubview:button];
-		x += kSearchPeerWidth;
-	}
-	strip.contentSize = CGSizeMake(x + 4, kSearchPeerStripHeight);
-	return cell;
-}
-
-- (void)peerTapped:(UIButton *)button {
-	if (button.tag < 0 || button.tag >= (NSInteger)self.topPeers.count)
-		return;
-	NSDictionary *peer = self.topPeers[button.tag];
-	[self.bar resignFirstResponder];
-	[self rememberRecent:peer];
-	[self openChat:[peer[@"chatId"] longLongValue]
-			 title:([peer[@"title"] isKindOfClass:NSString.class] ? peer[@"title"] : @"")
-		   isGroup:[peer[@"isGroup"] boolValue]];
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
 		 cellForRowAtIndexPath:(NSIndexPath *)indexPath
 {
-	if ([self sectionIsPeers:indexPath.section])
-		return [self peerStripCellForTable:tableView];
-
 	NSDictionary *messageRow = [self rowAtIndexPath:indexPath];
 	if ([self sectionIsMessages:indexPath.section]){
 		static NSString *messageReuse = @"TGSearchMessageCell";
@@ -2569,6 +2507,8 @@ static const CGFloat kSearchPeerAvatar = 54.0f;
 		NSString *messageTitle = [messageRow[@"title"] isKindOfClass:NSString.class]
 				? messageRow[@"title"] : @"";
 		cell.titleLabel.text = messageTitle;
+		cell.authorLabel.text = [messageRow[@"author"] isKindOfClass:NSString.class]
+				? messageRow[@"author"] : @"";
 		cell.textLabel_.text = [messageRow[@"subtitle"] isKindOfClass:NSString.class]
 				? messageRow[@"subtitle"] : @"";
 		cell.dateLabel.text = [messageRow[@"date"] isKindOfClass:NSString.class]

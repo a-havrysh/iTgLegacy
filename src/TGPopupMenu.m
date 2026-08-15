@@ -116,6 +116,8 @@ static NSTimeInterval sLastHideTime = 0;
 	UIImageView *_arrowBottomView;
 	CGFloat _arrowLocation;
 	BOOL _arrowOnTop;
+	NSMutableArray *_rowOfButton;
+	NSUInteger _rowCount;
 	CGSize _hostSize;
 	BOOL _dismissed;
 	void (^_choice)(NSInteger, NSString *);
@@ -227,6 +229,24 @@ static NSTimeInterval sLastHideTime = 0;
 	}
 }
 
+- (NSUInteger)rowOfIndex:(NSUInteger)index {
+	if (index >= _rowOfButton.count)
+		return 0;
+	return [[_rowOfButton objectAtIndex:index] unsignedIntegerValue];
+}
+
+- (BOOL)isFirstInRow:(NSUInteger)index {
+	if (index == 0)
+		return YES;
+	return [self rowOfIndex:index - 1] != [self rowOfIndex:index];
+}
+
+- (BOOL)isLastInRow:(NSUInteger)index {
+	if (index + 1 >= _rowOfButton.count)
+		return YES;
+	return [self rowOfIndex:index + 1] != [self rowOfIndex:index];
+}
+
 - (void)buildWithItems:(NSArray *)items atPoint:(CGPoint)point {
 	_items = items;
 	_buttons = [[NSMutableArray alloc] init];
@@ -268,28 +288,68 @@ static NSTimeInterval sLastHideTime = 0;
 	CGFloat maximumWidth = MAX(60.0f, self.bounds.size.width - 8.0f);
 
 	NSMutableArray *widths = [[NSMutableArray alloc] init];
-	CGFloat naturalWidth = 0;
 	for (NSUInteger i = 0; i < items.count; i++){
 		NSString *title = [items[i] objectForKey:@"title"];
-		CGFloat width = [title sizeWithFont:titleFont].width + kMenuTitlePadding;
-		if (i == 0 || i == items.count - 1)
-			width += 1;
-		width = floorf(width);
-		naturalWidth += width;
+		CGFloat width = floorf([title sizeWithFont:titleFont].width + kMenuTitlePadding);
+		if (width > maximumWidth - 2)
+			width = maximumWidth - 2;
 		[widths addObject:[NSNumber numberWithFloat:width]];
 	}
 
-	if (naturalWidth > maximumWidth){
-		CGFloat scale = maximumWidth / naturalWidth;
-		CGFloat used = 0;
+	_rowOfButton = [[NSMutableArray alloc] init];
+	NSUInteger row = 0;
+	CGFloat rowWidth = 0;
+	for (NSUInteger i = 0; i < widths.count; i++){
+		CGFloat width = [[widths objectAtIndex:i] floatValue];
+		if (rowWidth > 0 && rowWidth + width + 2 > maximumWidth){
+			row++;
+			rowWidth = 0;
+		}
+		rowWidth += width;
+		[_rowOfButton addObject:[NSNumber numberWithUnsignedInteger:row]];
+	}
+	_rowCount = row + 1;
+
+	for (NSUInteger i = 0; i < widths.count; i++){
+		CGFloat width = [[widths objectAtIndex:i] floatValue];
+		if ([self isFirstInRow:i])
+			width += 1;
+		if ([self isLastInRow:i])
+			width += 1;
+		[widths replaceObjectAtIndex:i withObject:[NSNumber numberWithFloat:width]];
+	}
+
+	CGFloat cardWidth = 0;
+	for (NSUInteger r = 0; r < _rowCount; r++){
+		CGFloat sum = 0;
 		for (NSUInteger i = 0; i < widths.count; i++){
-			CGFloat width = floorf([[widths objectAtIndex:i] floatValue] * scale);
-			if (width < 24)
-				width = 24;
-			if (i == widths.count - 1 && used + width < maximumWidth)
-				width = floorf(maximumWidth - used);
-			used += width;
-			[widths replaceObjectAtIndex:i withObject:[NSNumber numberWithFloat:width]];
+			if ([[_rowOfButton objectAtIndex:i] unsignedIntegerValue] == r)
+				sum += [[widths objectAtIndex:i] floatValue];
+		}
+		if (sum > cardWidth)
+			cardWidth = sum;
+	}
+
+	for (NSUInteger r = 0; r < _rowCount; r++){
+		NSMutableArray *indexes = [[NSMutableArray alloc] init];
+		CGFloat sum = 0;
+		for (NSUInteger i = 0; i < widths.count; i++){
+			if ([[_rowOfButton objectAtIndex:i] unsignedIntegerValue] == r){
+				[indexes addObject:[NSNumber numberWithUnsignedInteger:i]];
+				sum += [[widths objectAtIndex:i] floatValue];
+			}
+		}
+		if (!indexes.count || sum >= cardWidth)
+			continue;
+		CGFloat slack = cardWidth - sum;
+		CGFloat share = floorf(slack / indexes.count);
+		CGFloat used = 0;
+		for (NSUInteger k = 0; k < indexes.count; k++){
+			NSUInteger i = [[indexes objectAtIndex:k] unsignedIntegerValue];
+			CGFloat extra = (k == indexes.count - 1) ? (slack - used) : share;
+			used += extra;
+			[widths replaceObjectAtIndex:i
+							  withObject:[NSNumber numberWithFloat:[[widths objectAtIndex:i] floatValue] + extra]];
 		}
 	}
 
@@ -330,12 +390,12 @@ static NSTimeInterval sLastHideTime = 0;
 
 		UIEdgeInsets titleInset = UIEdgeInsetsMake(0, 0, 0, 0);
 
-		if (i == 0){
+		if ([self isFirstInRow:i]){
 			button.leftView.image = leftImage;
 			button.leftView.highlightedImage = leftHighlightedImage;
 			titleInset.left += 2;
 		}
-		if (i == items.count - 1){
+		if ([self isLastInRow:i]){
 			button.rightView.image = rightImage;
 			button.rightView.highlightedImage = rightHighlightedImage;
 			titleInset.right += 2;
@@ -348,7 +408,10 @@ static NSTimeInterval sLastHideTime = 0;
 
 		CGFloat width = [[widths objectAtIndex:i] floatValue];
 
-		button.frame = CGRectMake(totalWidth, 0, width, kMenuHeight);
+		if ([self isFirstInRow:i])
+			totalWidth = 0;
+
+		button.frame = CGRectMake(totalWidth, [self rowOfIndex:i] * kMenuHeight, width, kMenuHeight);
 		totalWidth += width;
 
 		[_card addSubview:button];
@@ -356,13 +419,15 @@ static NSTimeInterval sLastHideTime = 0;
 
 		if (i > 0){
 			UIImageView *separator = [[UIImageView alloc] initWithImage:separatorImage];
+			separator.hidden = [self isFirstInRow:i];
 			[_card addSubview:separator];
 			[_separators addObject:separator];
 		}
 	}
 
 	CGRect cardFrame = _card.frame;
-	cardFrame.size.width = totalWidth;
+	cardFrame.size.width = cardWidth;
+	cardFrame.size.height = _rowCount * kMenuHeight;
 	_card.frame = cardFrame;
 
 	[_card bringSubviewToFront:_arrowTopView];
@@ -401,12 +466,20 @@ static NSTimeInterval sLastHideTime = 0;
 	_card.frame = frame;
 }
 
+- (NSUInteger)arrowRow {
+	if (_arrowOnTop || _rowCount == 0)
+		return 0;
+	return _rowCount - 1;
+}
+
 - (BOOL)buttonContainsArrow:(TGPopupMenuButton *)button atIndex:(NSUInteger)index {
+	if ([self rowOfIndex:index] != [self arrowRow])
+		return NO;
 	BOOL containsArrow = _arrowLocation >= button.frame.origin.x &&
 						 _arrowLocation < button.frame.origin.x + button.frame.size.width;
-	if (index == 0 && _arrowLocation < button.frame.size.width)
+	if ([self isFirstInRow:index] && _arrowLocation < button.frame.origin.x + button.frame.size.width)
 		containsArrow = YES;
-	if (index == _buttons.count - 1 && _arrowLocation >= button.frame.origin.x)
+	if ([self isLastInRow:index] && _arrowLocation >= button.frame.origin.x)
 		containsArrow = YES;
 	return containsArrow;
 }
@@ -428,39 +501,45 @@ static NSTimeInterval sLastHideTime = 0;
 
 - (void)layoutCard {
 	NSUInteger count = _buttons.count;
+	CGFloat cardHeight = _rowCount * kMenuHeight;
 
 	for (NSUInteger index = 0; index < count; index++){
 		TGPopupMenuButton *button = _buttons[index];
 		[button layoutSubviews];
+
+		BOOL firstInRow = [self isFirstInRow:index];
+		BOOL lastInRow = [self isLastInRow:index];
+		CGFloat rowTop = [self rowOfIndex:index] * kMenuHeight;
 
 		CGFloat linePosition = 0.0f;
 		CGFloat lineWidth = button.frame.size.width;
 
 		if (index > 0){
 			UIImageView *separator = _separators[index - 1];
-			separator.frame = CGRectMake(button.frame.origin.x - 1, 2, separator.image.size.width, 36);
+			separator.frame = CGRectMake(button.frame.origin.x - 1, rowTop + 2,
+										 separator.image.size.width, 36);
 		}
 
 		BOOL containsArrow = [self buttonContainsArrow:button atIndex:index];
 
-		if (index == 0){
+		if (firstInRow){
 			linePosition += kMenuLineInset;
 			lineWidth -= kMenuLineInset;
 		}
-		if (index == count - 1)
+		if (lastInRow)
 			lineWidth -= kMenuLineInset;
 
 		CGFloat arrowWidth = _arrowTopView.image.size.width;
 
 		if (containsArrow){
-			CGFloat minArrowX = button.frame.origin.x + (index == 0 ? kMenuLineInset : 0);
+			CGFloat minArrowX = button.frame.origin.x + (firstInRow ? kMenuLineInset : 0);
 			CGFloat maxArrowX = button.frame.origin.x + button.frame.size.width - arrowWidth +
-								(index == count - 1 ? (-kMenuLineInset) : 0);
+								(lastInRow ? (-kMenuLineInset) : 0);
 			CGFloat arrowX = floorf(_arrowLocation - arrowWidth / 2);
 			arrowX = MIN(MAX(minArrowX, arrowX), maxArrowX);
 
 			_arrowTopView.frame = CGRectMake(arrowX, -9, arrowWidth, _arrowTopView.image.size.height);
-			_arrowBottomView.frame = CGRectMake(arrowX, kMenuHeight - 4, _arrowBottomView.image.size.width,
+			_arrowBottomView.frame = CGRectMake(arrowX, cardHeight - 4, _arrowBottomView.image.size.width,
 												_arrowBottomView.image.size.height);
 		}
 

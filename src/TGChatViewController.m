@@ -50,14 +50,29 @@ static const CGFloat kBubbleTailOverhang = 6.0f;
 static const CGFloat kRetinaPixel = 0.5f;
 static const CGFloat kBubbleMinW = 40.0f;
 static const CGFloat kBubbleMinH = 31.0f;
-static const CGFloat kBubbleMaxW  = 240.0f;
+static const CGFloat kBubbleMaxW  = 244.0f;
+static const CGFloat kBubbleOutgoingTrim = 12.0f;
+static const CGFloat kBubbleAvatarTrim   = 40.0f;
 static const CGFloat kPadH        = 10.0f;
-static const CGFloat kAvatarSide  = 38.0f;   // sender avatar in groups
-static const CGFloat kPadV        = 7.0f;
+static const CGFloat kAvatarSide  = 38.0f;
+static const CGFloat kPadV        = 5.0f;
+
+static CGFloat TGMessageBaseFontSize(void) {
+	CGFloat size = [TGTheme shared].messageFontSize;
+	return size > 0 ? size : 16.0f;
+}
+
+static UIColor *TGMessageBodyColour(void) {
+	static UIColor *colour = nil;
+	if (!colour)
+		colour = [UIColor colorWithRed:20 / 255.0f green:22 / 255.0f
+								  blue:23 / 255.0f alpha:1.0f];
+	return colour;
+}
 static const CGFloat kImageMax    = 200.0f;
 static const CGFloat kDayRowHeight    = 27.0f;
 static const CGFloat kUnreadRowHeight = 34.0f;
-static const CGFloat kSystemPlateHeight = 20.0f;
+static const CGFloat kSystemPlateHeight = 21.0f;
 
 static UIColor *TGSystemPlateColour(void) {
 	static UIColor *colour = nil;
@@ -65,6 +80,18 @@ static UIColor *TGSystemPlateColour(void) {
 		colour = [UIColor colorWithRed:70 / 255.0f green:99 / 255.0f
 								  blue:126 / 255.0f alpha:0.4f];
 	return colour;
+}
+
+static UIImage *TGUnreadDividerImage(void) {
+	static UIImage *image = nil;
+	static BOOL looked = NO;
+	if (!looked){
+		looked = YES;
+		UIImage *raw = [UIImage imageNamed:@"ConversationNewMessagesDivider"];
+		if (raw)
+			image = [raw stretchableImageWithLeftCapWidth:1 topCapHeight:0];
+	}
+	return image;
 }
 
 static UIImage *TGUnreadArrowImage(void) {
@@ -1135,7 +1162,7 @@ static const CGFloat kPhotoPageGap = 20.0f;
 
 	self.body = [[UILabel alloc] init];
 	self.body.numberOfLines = 0;
-	self.body.font = [UIFont systemFontOfSize:[TGTheme shared].messageFontSize];
+	self.body.font = [UIFont systemFontOfSize:TGMessageBaseFontSize()];
 	self.body.backgroundColor = [UIColor clearColor];
 	[self.bubble addSubview:self.body];
 
@@ -1208,7 +1235,7 @@ static const CGFloat kPhotoPageGap = 20.0f;
 	[self.bubble addSubview:self.lottie];
 
 	self.forwardLabel = [[UILabel alloc] init];
-	self.forwardLabel.font = [UIFont systemFontOfSize:12];
+	self.forwardLabel.font = [UIFont systemFontOfSize:13];
 	self.forwardLabel.backgroundColor = [UIColor clearColor];
 	self.forwardLabel.hidden = YES;
 	[self.bubble addSubview:self.forwardLabel];
@@ -1256,29 +1283,38 @@ static const CGFloat kPhotoPageGap = 20.0f;
 }
 
 - (void)buildUnreadViews {
-	self.unreadStrip = [[UIView alloc] init];
-	self.unreadStrip.userInteractionEnabled = NO;
-	self.unreadStrip.hidden = YES;
-	self.unreadStrip.clipsToBounds = YES;
-	[self addSubview:self.unreadStrip];
+	UIImage *dividerArt = TGUnreadDividerImage();
+	if (dividerArt){
+		UIImageView *plate = [[UIImageView alloc] initWithImage:dividerArt];
+		plate.userInteractionEnabled = NO;
+		plate.hidden = YES;
+		[self addSubview:plate];
+		self.unreadStrip = plate;
+	} else {
+		self.unreadStrip = [[UIView alloc] init];
+		self.unreadStrip.userInteractionEnabled = NO;
+		self.unreadStrip.hidden = YES;
+		self.unreadStrip.clipsToBounds = YES;
+		[self addSubview:self.unreadStrip];
 
-	CAGradientLayer *strip = [CAGradientLayer layer];
-	strip.colors = [NSArray arrayWithObjects:
-			(id)[UIColor colorWithRed:250 / 255.0f green:253 / 255.0f
-								 blue:255 / 255.0f alpha:1.0f].CGColor,
-			(id)[UIColor colorWithRed:229 / 255.0f green:236 / 255.0f
-								 blue:243 / 255.0f alpha:1.0f].CGColor, nil];
-	[self.unreadStrip.layer insertSublayer:strip atIndex:0];
+		CAGradientLayer *strip = [CAGradientLayer layer];
+		strip.colors = [NSArray arrayWithObjects:
+				(id)[UIColor colorWithRed:250 / 255.0f green:253 / 255.0f
+									 blue:255 / 255.0f alpha:1.0f].CGColor,
+				(id)[UIColor colorWithRed:229 / 255.0f green:236 / 255.0f
+									 blue:243 / 255.0f alpha:1.0f].CGColor, nil];
+		[self.unreadStrip.layer insertSublayer:strip atIndex:0];
 
-	self.unreadTopLine = [[UIView alloc] init];
-	self.unreadTopLine.backgroundColor = [UIColor colorWithRed:0 green:35 / 255.0f
-														  blue:70 / 255.0f alpha:0.13f];
-	[self.unreadStrip addSubview:self.unreadTopLine];
+		self.unreadTopLine = [[UIView alloc] init];
+		self.unreadTopLine.backgroundColor = [UIColor colorWithRed:0 green:35 / 255.0f
+															  blue:70 / 255.0f alpha:0.13f];
+		[self.unreadStrip addSubview:self.unreadTopLine];
 
-	self.unreadBottomLine = [[UIView alloc] init];
-	self.unreadBottomLine.backgroundColor = [UIColor colorWithRed:0 green:43 / 255.0f
-															 blue:86 / 255.0f alpha:0.26f];
-	[self.unreadStrip addSubview:self.unreadBottomLine];
+		self.unreadBottomLine = [[UIView alloc] init];
+		self.unreadBottomLine.backgroundColor = [UIColor colorWithRed:0 green:43 / 255.0f
+																 blue:86 / 255.0f alpha:0.26f];
+		[self.unreadStrip addSubview:self.unreadBottomLine];
+	}
 
 	self.unreadLabel = [[UILabel alloc] init];
 	self.unreadLabel.font = [UIFont boldSystemFontOfSize:13];
@@ -1338,7 +1374,7 @@ static const CGFloat kPhotoPageGap = 20.0f;
 								   floorf((kDayRowHeight - label.size.height) / 2) - 1);
 		self.dayLabel.frame = label;
 		self.dayPlate.frame = CGRectMake(label.origin.x - 10,
-										 floorf((kDayRowHeight - kSystemPlateHeight) / 2),
+										 label.origin.y - 2,
 										 label.size.width + 20, kSystemPlateHeight);
 		[self bringSubviewToFront:self.dayPlate];
 		[self bringSubviewToFront:self.dayLabel];
@@ -1346,12 +1382,17 @@ static const CGFloat kPhotoPageGap = 20.0f;
 
 	if (!self.unreadStrip.hidden){
 		CGFloat top = _headerHeight - kUnreadRowHeight;
-		self.unreadStrip.frame = CGRectMake(0, top + 3, width, 27);
-		CALayer *strip = [self.unreadStrip.layer.sublayers count]
-				? [self.unreadStrip.layer.sublayers objectAtIndex:0] : nil;
-		strip.frame = self.unreadStrip.bounds;
-		self.unreadTopLine.frame = CGRectMake(0, 0, width, kRetinaPixel);
-		self.unreadBottomLine.frame = CGRectMake(0, 27 - kRetinaPixel, width, kRetinaPixel);
+		CGFloat stripH = TGUnreadDividerImage()
+				? TGUnreadDividerImage().size.height : 27.0f;
+		self.unreadStrip.frame = CGRectMake(0, top + 3, width, stripH);
+		if (self.unreadTopLine){
+			CALayer *strip = [self.unreadStrip.layer.sublayers count]
+					? [self.unreadStrip.layer.sublayers objectAtIndex:0] : nil;
+			strip.frame = self.unreadStrip.bounds;
+			self.unreadTopLine.frame = CGRectMake(0, 0, width, kRetinaPixel);
+			self.unreadBottomLine.frame =
+					CGRectMake(0, stripH - kRetinaPixel, width, kRetinaPixel);
+		}
 
 		[self.unreadLabel sizeToFit];
 		CGRect label = self.unreadLabel.frame;
@@ -7202,24 +7243,14 @@ static const NSInteger kStickerLinkAlertTag = 102;
 	return w;
 }
 
-/// Telegram puts the stamp at the end of the last line when it fits there,
-/// and only drops it to its own line when it does not. Anything else leaves a
-/// gap under short messages, which is what looked wrong.
-- (BOOL)stampFitsInlineFor:(NSDictionary *)m {
-	NSString *text = [self textOf:m] ?: @"";
-	if (!text.length || [text rangeOfString:@"\n"].location != NSNotFound)
-		return NO;
-	if ([self previewSizeFor:m].height > 0)
-		return NO;
-	if ([self largeEmojiCountFor:m] > 0)
-		return NO;
-
-	CGFloat oneLine = [text sizeWithFont:
-			[UIFont systemFontOfSize:[TGTheme shared].messageFontSize]].width;
-	if (oneLine > kBubbleMaxW - 2 * kPadH)
-		return NO;   // it wraps, so there is no short last line to share
-
-	return (oneLine + 6 + [self timeWidthFor:m]) <= (kBubbleMaxW - 2 * kPadH);
+- (CGFloat)maxBubbleWidthFor:(NSDictionary *)m {
+	CGFloat w = kBubbleMaxW;
+	if ([m[@"outgoing"] boolValue])
+		w -= kBubbleOutgoingTrim;
+	else if (self.isGroup &&
+			 [[TGClient shared] nameForUserId:[m[@"senderId"] longLongValue]])
+		w -= kBubbleAvatarTrim;
+	return w;
 }
 
 /// Their forwarded line: "Forwarded from" in grey with the name after it in
@@ -7236,7 +7267,11 @@ static const NSInteger kStickerLinkAlertTag = 102;
 		return 0;
 	}
 
-	TGTheme *theme = [TGTheme shared];
+	BOOL mine = [m[@"outgoing"] boolValue];
+	UIColor *titleColour = mine ? TGChatHexColour(0x3a8e26)
+								: TGChatHexColour(0x0e7acd);
+	UIColor *nameColour  = mine ? TGChatHexColour(0x169600)
+								: TGChatHexColour(0x0e7acd);
 	cell.forwardLabel.hidden = NO;
 	cell.forwardLabel.frame = CGRectMake(kPadH, kPadV, width - 2 * kPadH, 16);
 
@@ -7245,17 +7280,17 @@ static const NSInteger kStickerLinkAlertTag = 102;
 		NSMutableAttributedString *styled =
 				[[NSMutableAttributedString alloc] initWithString:line];
 		[styled addAttribute:NSForegroundColorAttributeName
-					   value:[theme secondaryTextColour]
+					   value:titleColour
 					   range:NSMakeRange(0, line.length)];
 		[styled addAttribute:NSForegroundColorAttributeName
-					   value:[theme accentColour]
+					   value:nameColour
 					   range:NSMakeRange(15, from.length)];
 		[styled addAttribute:NSFontAttributeName
-					   value:[UIFont boldSystemFontOfSize:12]
+					   value:[UIFont boldSystemFontOfSize:13]
 					   range:NSMakeRange(15, from.length)];
 		cell.forwardLabel.attributedText = styled;
 	} else {
-		cell.forwardLabel.textColor = [theme accentColour];
+		cell.forwardLabel.textColor = nameColour;
 		cell.forwardLabel.text = line;
 	}
 	return 18;
@@ -7381,7 +7416,7 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 		case 1:  return [UIFont systemFontOfSize:52];
 		case 2:  return [UIFont systemFontOfSize:42];
 		case 3:  return [UIFont systemFontOfSize:34];
-		default: return [UIFont systemFontOfSize:[TGTheme shared].messageFontSize];
+		default: return [UIFont systemFontOfSize:TGMessageBaseFontSize()];
 	}
 }
 
@@ -7389,12 +7424,7 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 	NSString *text = [self textOf:m] ?: @"";
 	if (!text.length)
 		return CGSizeZero;
-	// A group message keeps a 40pt avatar column beside it, so it has that
-	// much less room for its text.
-	CGFloat maxW = kBubbleMaxW - 2 * kPadH;
-	if (self.isGroup && ![m[@"outgoing"] boolValue] &&
-		[[TGClient shared] nameForUserId:[m[@"senderId"] longLongValue]])
-		maxW -= 40;
+	CGFloat maxW = [self maxBubbleWidthFor:m] - 2 * kPadH;
 	return [text sizeWithFont:[self bodyFontFor:m]
 			constrainedToSize:CGSizeMake(maxW, 10000)
 				lineBreakMode:NSLineBreakByWordWrapping];
@@ -7490,10 +7520,10 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 	CGFloat forwarded = [m[@"forward"] length] ? 18 : 0;
 
 	if ([m[@"kind"] isEqualToString:@"messageVideoNote"] && pic.height > 0)
-		return MIN(MIN(pic.width, pic.height), 178) + 20;
+		return MIN(MIN(pic.width, pic.height), 178) + 17;
 
 	if ([m[@"docName"] isEqualToString:@"tgs"] && self.lottiePaths[m[@"docId"]])
-		return 148;
+		return 145;
 
 	if ([m[@"service"] boolValue])
 		return kDayRowHeight;
@@ -7501,26 +7531,28 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 	// Their media block is 80dp tall; a voice message needs only the disc and
 	// the bars, which comes to 54 on this screen.
 	if ([m[@"kind"] isEqualToString:@"messageVoiceNote"])
-		return 62 + forwarded;
+		return 59 + forwarded;
 
 	if ([m[@"kind"] isEqualToString:@"messagePoll"])
-		return [self pollHeightFor:m] + 6;
+		return [self pollHeightFor:m] + 3;
 
 	if ([m[@"kind"] isEqualToString:@"messageCall"])
-		return 50 + forwarded;
+		return 47 + forwarded;
 
 	if ([m[@"kind"] isEqualToString:@"messageDocument"] ||
 		[m[@"kind"] isEqualToString:@"messageContact"])
-		return kFileTile + 2 * kPadV + 6 + forwarded;
+		return kFileTile + 2 * kPadV + 3 + forwarded;
 
-	CGFloat h = kPadV * 2 + [self decorationHeightFor:m] +
-			([self stampFitsInlineFor:m] || [self stampSitsOnPictureFor:m] ? 0 : 14);
+	CGFloat h = kPadV * 2 + [self decorationHeightFor:m];
 	if (self.isGroup && ![m[@"outgoing"] boolValue] &&
 		[[TGClient shared] nameForUserId:[m[@"senderId"] longLongValue]])
-		h += 17;                                // room for the sender line
+		h += 17;
 	if (pic.height > 0) h += pic.height + 4;
 	if (body.height > 0) h += body.height;
-	return MAX(h + 6, 40);
+	h = MAX(h, kBubbleMinH);
+	if ([self continuesAlbumAtRow:indexPath.row])
+		return h;
+	return h + 3;
 }
 
 /// Clients colour each participant's name; the same person keeps the same
@@ -7694,7 +7726,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 	CGFloat width = kBubbleMaxW;
 	CGFloat x = mine ? (tableView.bounds.size.width - width - 8) : 8;
 	CGFloat height = [self pollHeightFor:m];
-	cell.bubble.frame = CGRectMake(x, 3, width, height);
+	cell.bubble.frame = CGRectMake(x, 0, width, height);
 	cell.bubble.backgroundColor = mine ? [pollTheme bubbleMineColour]
 									   : [pollTheme bubbleTheirsColour];
 	cell.bubble.layer.borderWidth = [pollTheme bubbleBorderWidth];
@@ -7814,7 +7846,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 	CGFloat fwd = [self layoutForwardIn:cell message:m width:width];
 	CGFloat height = 44 + fwd;
 	CGFloat x = mine ? (tableView.bounds.size.width - width - 8) : 8;
-	cell.bubble.frame = CGRectMake(x, 3, width, height);
+	cell.bubble.frame = CGRectMake(x, 0, width, height);
 	cell.bubble.backgroundColor = mine ? [callTheme bubbleMineColour]
 									   : [callTheme bubbleTheirsColour];
 	cell.bubble.layer.borderWidth = [callTheme bubbleBorderWidth];
@@ -7861,7 +7893,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 	CGFloat fwd = [self layoutForwardIn:cell message:m width:width];
 	CGFloat height = kFileTile + 2 * kPadV + fwd;
 	CGFloat x = mine ? (tableView.bounds.size.width - width - 8) : 8;
-	cell.bubble.frame = CGRectMake(x, 3, width, height);
+	cell.bubble.frame = CGRectMake(x, 0, width, height);
 	cell.bubble.backgroundColor = mine ? [cardTheme bubbleMineColour]
 									   : [cardTheme bubbleTheirsColour];
 	cell.bubble.layer.borderWidth = [cardTheme bubbleBorderWidth];
@@ -7931,7 +7963,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 	cell.bubble.backgroundColor = [UIColor clearColor];
 	cell.bubble.layer.borderWidth = 0;
 	cell.bubble.frame = CGRectMake(mine ? (tableView.bounds.size.width - side - 8) : 8,
-			3, side, side + 14);
+			0, side, side + 14);
 	cell.picture.hidden = YES;
 	cell.body.hidden = YES;
 	cell.lottie.hidden = NO;
@@ -7959,7 +7991,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 	cell.bubble.backgroundColor = [UIColor clearColor];
 	cell.bubble.layer.borderWidth = 0;
 	cell.bubble.frame = CGRectMake(mine ? (tableView.bounds.size.width - side - 8) : 8,
-			3, side, side + 14);
+			0, side, side + 14);
 	cell.picture.hidden = NO;
 	cell.picture.image = [self imageFor:m];
 	cell.picture.frame = CGRectMake(0, 0, side, side);
@@ -8257,8 +8289,6 @@ static UIColor *TGSenderColour(int64_t userId) {
 	// The bubble has to fit whichever is widest: the text, a picture, the
 	// quoted message, or the timestamp. Sizing it on the text alone squeezed
 	// quotes down to an ellipsis.
-	BOOL inlineStamp = [self stampFitsInlineFor:m];
-	CGFloat timeW = [self timeWidthFor:m];
 	CGFloat contentW = MAX(body.width, pic.width);
 	if ([self quoteTextFor:m] || [m[@"forward"] length])
 		contentW = MAX(contentW, [self quoteThumbnailFor:m] ? 200 : 170);
@@ -8267,8 +8297,6 @@ static UIColor *TGSenderColour(int64_t userId) {
 	CGSize previewSize = [self previewSizeFor:m];
 	if (previewSize.height > 0)
 		contentW = MAX(contentW, previewSize.width);
-	if (inlineStamp)
-		contentW = MAX(contentW, body.width + 6 + timeW);   // they share the last line
 
 	if (isVoice)
 		contentW = 190;
@@ -8286,26 +8314,21 @@ static UIColor *TGSenderColour(int64_t userId) {
 		contentW = MAX(contentW, nameW);
 	}
 
-	CGFloat maxBubbleW = kBubbleMaxW + 2 * kPadH;
-	// The avatar column takes 40 out of the width an incoming bubble may use.
-	if (senderName.length)
-		maxBubbleW -= 40;
-	CGFloat bubbleW = MAX(contentW + 2 * kPadH, timeW + 2 * kPadH + 8);
+	CGFloat maxBubbleW = [self maxBubbleWidthFor:m];
+	CGFloat bubbleW = MAX(contentW + 2 * kPadH, kBubbleMinW - kBubbleTailOverhang);
 	bubbleW = MIN(bubbleW, maxBubbleW);
-	BOOL stampOnPicture = [self stampSitsOnPictureFor:m];
-	CGFloat bubbleH  = senderH + kPadV * 2 + (inlineStamp || stampOnPicture ? 0 : 14) +
+	CGFloat bubbleH  = senderH + kPadV * 2 +
 			[self decorationHeightFor:m] +
 			(pic.height ? pic.height + 4 : 0) + body.height;
+	bubbleH = MAX(bubbleH, kBubbleMinH);
 	// The voice block has its own size: a 40pt disc with the bars beside it.
 	if (isVoice)
 		bubbleH = 56 + ([m[@"forward"] length] ? 18 : 0);
 
 	CGFloat x = mine ? (tableView.bounds.size.width - bubbleW - 8) : 8;
-	// Photos of one album sit flush against each other, so the block reads as
-	// a single post rather than a run of separate messages.
-	CGFloat top = [self continuesAlbumAtRow:indexPath.row] ? 0 : 3;
+	CGFloat top = 0;
 
-	CGFloat avatarX = x + 4;
+	CGFloat avatarX = x - kBubbleTailOverhang + 4;
 	if (senderName.length){
 		// The bubble shifts right to make room for the avatar beside it.
 		x += kAvatarSide + 4;
@@ -8344,10 +8367,19 @@ static UIColor *TGSenderColour(int64_t userId) {
 	cell.bubble.layer.borderWidth = isSticker ? 0.0f : [theme bubbleBorderWidth];
 	cell.bubble.layer.borderColor = [theme bubbleBorderColour].CGColor;
 	cell.bubble.layer.cornerRadius = [theme bubbleCornerRadius];
-	if (!isSticker)
+	BOOL bareMedia = [self stampSitsOnPictureFor:m] &&
+			[self decorationHeightFor:m] < 0.5f;
+	if (bareMedia){
+		cell.bubble.backgroundColor = [UIColor clearColor];
+		cell.bubble.layer.borderWidth = 0.0f;
+		cell.bubble.layer.cornerRadius = 0.0f;
+		cell.bubbleBg.hidden = YES;
+		cell.tail.hidden = YES;
+	} else if (!isSticker){
 		[self applyBubbleArtworkTo:cell outgoing:mine];
-	// A flat outgoing bubble is a solid accent colour, so its text inverts.
-	cell.body.textColor = [theme primaryTextColour];
+	}
+	cell.body.textColor = [theme isDark] ? [theme primaryTextColour]
+										 : TGMessageBodyColour();
 
 	// A video note is a circle, with no bubble around it - that is how every
 	// client draws them.
@@ -8391,9 +8423,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 										 y + (pic.height - disc) / 2, disc, disc);
 		}
 
-		// With no caption under it the stamp has nowhere grey to sit, so it
-		// goes on the picture itself, on a plate.
-		if (!body.height){
+		if (!body.height && !bareMedia){
 			NSString *stamp = [self stampFor:m];
 			CGFloat plateW = [stamp sizeWithFont:cell.mediaStamp.font].width +
 					(mine ? 30 : 14);

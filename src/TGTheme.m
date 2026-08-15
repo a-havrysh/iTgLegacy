@@ -40,7 +40,7 @@ static NSString *const kFontKey   = @"messageFontSize";
 
 - (CGFloat)messageFontSize {
 	CGFloat stored = [NSUserDefaults.standardUserDefaults floatForKey:kFontKey];
-	return stored > 0 ? stored : 15.0f;
+	return stored > 0 ? MIN(60.0f, stored) : 16.0f;
 }
 
 - (void)setMessageFontSize:(CGFloat)size {
@@ -186,10 +186,15 @@ static UIColor *rgb(int r, int g, int b) {
 	return [UIColor colorWithRed:r/255.0f green:g/255.0f blue:b/255.0f alpha:1.0f];
 }
 
-#define TG_BLUE_DARK4     rgb(0x51, 0x7D, 0xA2)
-#define TG_BLUE_LIGHT4    rgb(0x4C, 0xB3, 0xF5)
-#define TG_BLUE_MEDIUM8   rgb(0x3D, 0x95, 0xD4)
-#define TG_GREEN_LIGHT1   rgb(0xEF, 0xFE, 0xDD)
+#define TG_BAR_BLUE       rgb(0x54, 0x7A, 0xA1)
+#define TG_ACTION_BLUE    rgb(0x07, 0x79, 0xD0)
+#define TG_BADGE_STEEL    rgb(0x92, 0x9F, 0xB0)
+#define TG_BUBBLE_OUT     rgb(0xD3, 0xFB, 0xB1)
+#define TG_BUBBLE_IN      rgb(0xFB, 0xFB, 0xFB)
+#define TG_LINEN          rgb(0xDB, 0xE4, 0xED)
+#define TG_SETTINGS_GROUND rgb(0xC9, 0xD1, 0xDB)
+#define TG_INPUT_PANEL    rgb(0xE7, 0xEB, 0xF0)
+#define TG_MUTE_GREY      rgb(0xBA, 0xBA, 0xBA)
 #define TG_PRESENCE_TEXT  rgb(0x77, 0x86, 0x98)
 #define TG_GRAY_LIGHT3    rgb(0xF7, 0xF7, 0xF7)
 #define TG_STEEL_LIGHT1   rgb(0xED, 0xEE, 0xF0)
@@ -200,29 +205,22 @@ static UIColor *rgb(int r, int g, int b) {
 #define TG_SETTINGS_VALUE rgb(0x35, 0x65, 0x96)
 #define TG_FOOTER_CAPTION rgb(0x69, 0x74, 0x87)
 #define TG_ACTION_TEXT    rgb(0x53, 0x6C, 0x8C)
-#define TG_BLUE_MEDIUM2   rgb(0x5E, 0xA7, 0xDE)   // the record button
-#define TG_STEEL_LIGHT6   rgb(0xC5, 0xC9, 0xCC)   // a muted chat's badge
-#define TG_STEEL_LIGHT13  rgb(0xA1, 0xAA, 0xB3)   // size and type under a file
-#define TG_FILE_TILE      rgb(0xEB, 0xF0, 0xF4)   // the square behind a file glyph
-#define TG_MEDIA_CIRCLE   rgb(0x72, 0xB5, 0xE9)   // the disc inside it
-#define TG_FILE_NAME      rgb(0x4E, 0x9A, 0xD4)
+#define TG_ATTACH_TITLE   rgb(0x62, 0x76, 0x8A)
+#define TG_ATTACH_META    rgb(0x72, 0x87, 0x9B)
 
-// The dark half of their palette, read from the same file. Their greys are
-// numbered from light to dark, so the surfaces a dark theme needs are the tail
-// of gray_dark and the middle of steel-gray.
-#define TG_GRAY_DARK16    rgb(0x20, 0x20, 0x20)   // bars
-#define TG_GRAY_DARK15    rgb(0x21, 0x21, 0x21)   // lists
-#define TG_GRAY_DARK14    rgb(0x23, 0x23, 0x23)   // chat background
-#define TG_GRAY_DARK13    rgb(0x33, 0x33, 0x33)   // incoming bubble, separators
-#define TG_GRAY_DARK6     rgb(0x99, 0x99, 0x99)   // secondary text
-#define TG_STEEL_DARK13   rgb(0x7D, 0x84, 0x8A)   // the stamp in a dark bubble
-#define TG_BLUE_DARK6     rgb(0x1B, 0x5A, 0x7D)   // outgoing bubble when dark
+#define TG_DARK_BAR       rgb(0x19, 0x19, 0x19)
+#define TG_DARK_LIST      rgb(0x1F, 0x1F, 0x1F)
+#define TG_DARK_LINEN     rgb(0x53, 0x58, 0x62)
+#define TG_DARK_EDGE      rgb(0x0C, 0x0C, 0x0C)
+#define TG_DARK_SECONDARY rgb(0x99, 0x99, 0x99)
+#define TG_DARK_STAMP     rgb(0xC9, 0xDC, 0xF2)
+#define TG_DARK_BUBBLE_OUT rgb(0x16, 0x96, 0x00)
 
 - (UIColor *)barColour {
 	UIColor *imported = [self importedColour:@"bar"];
 	if (imported) return imported;
-	if (self.isDarkStyle) return TG_GRAY_DARK16;
-	return self.isFlat ? TG_GRAY_LIGHT3 : TG_BLUE_DARK4;
+	if (self.isDarkStyle) return TG_DARK_BAR;
+	return self.isFlat ? TG_GRAY_LIGHT3 : TG_BAR_BLUE;
 }
 
 - (UIColor *)barTitleColour {
@@ -235,14 +233,13 @@ static UIColor *rgb(int r, int g, int b) {
 - (UIColor *)accentColour {
 	UIColor *imported = [self importedColour:@"accent"];
 	if (imported) return imported;
-	if (self.isDarkStyle) return TG_BLUE_LIGHT4;
-	return self.isFlat ? TG_BLUE_LIGHT4 : TG_BLUE_DARK4;
+	return TG_ACTION_BLUE;
 }
 
 - (UIColor *)chatBackgroundColour {
 	UIColor *imported = [self importedColour:@"chatBackground"];
 	if (imported) return imported;
-	if (self.isDarkStyle) return TG_GRAY_DARK14;
+	if (self.isDarkStyle) return TG_DARK_LINEN;
 	if (self.isFlat) return TG_STEEL_LIGHT1;
 	static UIColor *linen = nil;
 	static dispatch_once_t once;
@@ -251,35 +248,34 @@ static UIColor *rgb(int r, int g, int b) {
 		if (tile)
 			linen = [UIColor colorWithPatternImage:tile];
 	});
-	return linen ?: rgb(217, 222, 212);
+	return linen ?: TG_LINEN;
 }
 
 - (UIColor *)bubbleMineColour {
 	UIColor *imported = [self importedColour:@"bubbleMine"];
 	if (imported) return imported;
-	// Their pale green would glow on a dark surface; blue_dark6 is the darkest
-	// blue they draw, and it is what the outgoing bubble becomes.
-	if (self.isDarkStyle) return TG_BLUE_DARK6;
-	return TG_GREEN_LIGHT1;
+	if (self.isDarkStyle) return TG_DARK_BUBBLE_OUT;
+	return TG_BUBBLE_OUT;
 }
 
 - (UIColor *)bubbleTheirsColour {
 	UIColor *imported = [self importedColour:@"bubbleTheirs"];
 	if (imported) return imported;
-	if (self.isDarkStyle) return TG_GRAY_DARK13;
-	return [UIColor whiteColor];
+	if (self.isDarkStyle) return TG_DARK_LIST;
+	return TG_BUBBLE_IN;
 }
 
 - (UIColor *)bubbleBorderColour {
 	if (self.isDark)
-		return [UIColor colorWithWhite:1.0f alpha:0.08f];
-	return [UIColor colorWithWhite:0.0f alpha:0.12f];
+		return [UIColor colorWithWhite:1.0f alpha:52.0f / 255.0f];
+	return [UIColor colorWithRed:0x01 / 255.0f green:0x29 / 255.0f
+							blue:0x68 / 255.0f alpha:52.0f / 255.0f];
 }
 
 - (UIColor *)listBackgroundColour {
 	UIColor *imported = [self importedColour:@"listBackground"];
 	if (imported) return imported;
-	if (self.isDarkStyle) return TG_GRAY_DARK15;
+	if (self.isDarkStyle) return TG_DARK_LIST;
 	return [UIColor whiteColor];
 }
 
@@ -293,14 +289,14 @@ static UIColor *rgb(int r, int g, int b) {
 - (UIColor *)secondaryTextColour {
 	UIColor *imported = [self importedColour:@"secondaryText"];
 	if (imported) return imported;
-	if (self.isDarkStyle) return TG_GRAY_DARK6;
+	if (self.isDarkStyle) return TG_DARK_SECONDARY;
 	return TG_TEXT_SECONDARY;
 }
 
 - (UIColor *)timeColour {
 	UIColor *imported = [self importedColour:@"secondaryText"];
 	if (imported) return imported;
-	return self.isDarkStyle ? TG_STEEL_DARK13 : TG_MESSAGE_DATE;
+	return self.isDarkStyle ? TG_DARK_STAMP : TG_MESSAGE_DATE;
 }
 
 - (UIColor *)cellDetailColour {
@@ -318,7 +314,7 @@ static UIColor *rgb(int r, int g, int b) {
 	if (imported)
 		return imported;
 	if (self.isDark)
-		return TG_GRAY_DARK15;
+		return TG_DARK_LIST;
 	static UIColor *lines = nil;
 	static dispatch_once_t once;
 	dispatch_once(&once, ^{
@@ -326,34 +322,35 @@ static UIColor *rgb(int r, int g, int b) {
 		if (tile)
 			lines = [UIColor colorWithPatternImage:tile];
 	});
-	return lines ?: [UIColor whiteColor];
+	return lines ?: TG_SETTINGS_GROUND;
 }
 
 - (UIColor *)inputBarColour {
 	if (_imported)
 		return [self barColour];
-	return self.isDarkStyle ? TG_GRAY_DARK16 : TG_GRAY_LIGHT3;
+	if (self.isDarkStyle)
+		return TG_DARK_BAR;
+	return self.isFlat ? TG_GRAY_LIGHT3 : TG_INPUT_PANEL;
 }
 
 #pragma mark - media and file blocks
 
-/// These four are the file block from their design system, and they are the
-/// same blue in every theme: it is the block's own colour, not the accent.
 - (UIColor *)fileTileColour {
-	return self.isDark ? TG_GRAY_DARK13 : TG_FILE_TILE;
+	return self.isDark ? TG_DARK_LIST : [UIColor whiteColor];
 }
 
 - (UIColor *)mediaCircleColour {
-	return TG_MEDIA_CIRCLE;
+	return [UIColor colorWithRed:0x60 / 255.0f green:0x78 / 255.0f
+							blue:0x99 / 255.0f alpha:140.0f / 255.0f];
 }
 
 - (UIColor *)fileNameColour {
 	UIColor *imported = [self importedColour:@"accent"];
-	return imported ?: TG_FILE_NAME;
+	return imported ?: TG_ATTACH_TITLE;
 }
 
 - (UIColor *)fileMetaColour {
-	return self.isDark ? TG_GRAY_DARK6 : TG_STEEL_LIGHT13;
+	return self.isDark ? TG_DARK_SECONDARY : TG_ATTACH_META;
 }
 
 /// The stamp over a picture has to read against whatever the picture is, so it
@@ -366,11 +363,11 @@ static UIColor *rgb(int r, int g, int b) {
 
 - (UIColor *)badgeColour {
 	UIColor *imported = [self importedColour:@"accent"];
-	return imported ?: TG_BLUE_MEDIUM8;
+	return imported ?: TG_BADGE_STEEL;
 }
 
 - (UIColor *)mutedBadgeColour {
-	return self.isDark ? rgb(0x55, 0x55, 0x55) : TG_STEEL_LIGHT6;
+	return TG_MUTE_GREY;
 }
 
 - (UIColor *)typingColour {
@@ -385,16 +382,14 @@ static UIColor *rgb(int r, int g, int b) {
 - (UIColor *)separatorColour {
 	if (_imported)
 		return [self bubbleBorderColour];
-	return self.isDark ? TG_GRAY_DARK13 : TG_HAIRLINE;
+	return self.isDark ? TG_DARK_EDGE : TG_HAIRLINE;
 }
 
 #pragma mark - service messages
 
-/// A narrow plate centred on the wallpaper. Because it sits over a picture as
-/// often as over a colour, it is drawn as a wash rather than a fixed grey.
 - (UIColor *)serviceBubbleColour {
-	return self.isDark ? [UIColor colorWithWhite:1.0f alpha:0.12f]
-							: [UIColor colorWithWhite:0.0f alpha:0.30f];
+	return self.isDark ? [UIColor colorWithWhite:1.0f alpha:0.29f]
+							: [UIColor colorWithWhite:0.0f alpha:0.29f];
 }
 
 - (UIColor *)serviceTextColour {
@@ -405,7 +400,6 @@ static UIColor *rgb(int r, int g, int b) {
 #pragma mark - bubble metrics
 
 - (CGFloat)bubbleCornerRadius {
-	// Their bubble is a 6pt tail on a softly rounded box, not a capsule.
 	return self.isFlat ? 12.0f : 10.0f;
 }
 
@@ -428,7 +422,8 @@ static UIColor *rgb(int r, int g, int b) {
 	cell.textLabel.textColor = [self primaryTextColour];
 	// A selection flash of white would be worse than none.
 	UIView *selected = [[UIView alloc] init];
-	selected.backgroundColor = [self bubbleTheirsColour];
+	selected.backgroundColor = (!_imported && self.isDarkStyle)
+			? TG_DARK_EDGE : [self bubbleTheirsColour];
 	cell.selectedBackgroundView = selected;
 }
 

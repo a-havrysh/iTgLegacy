@@ -87,7 +87,7 @@
 @property (nonatomic, assign) int64_t chatId;
 @property (nonatomic, assign) int64_t userId;
 @property (nonatomic, strong) NSString *name;
-@property (nonatomic, strong) NSArray *details;   // label/value pairs
+@property (nonatomic, strong) NSArray *details;
 @property (nonatomic, assign) NSInteger photoCount;
 @property (nonatomic, assign) NSInteger fileCount;
 @property (nonatomic, strong) NSArray *members;
@@ -99,7 +99,7 @@
 @property (nonatomic, assign) BOOL muted;
 @property (nonatomic, strong) NSString *phoneNumber;
 @property (nonatomic, strong) UIImage *avatarImage;
-@property (nonatomic, strong) UIButton *muteButton;
+@property (nonatomic, strong) UISwitch *notificationsSwitch;
 @property (nonatomic, strong) UILabel *nameLabel;
 @property (nonatomic, assign) BOOL isContact;
 @property (nonatomic, strong) NSString *firstName;
@@ -275,23 +275,23 @@ static UIImage *TGProfileStretched(NSString *name) {
 		self.backgroundView.backgroundColor = [UIColor clearColor];
 		_leftButton = [self makeButton];
 		_rightButton = [self makeButton];
-		[self addSubview:_leftButton];
-		[self addSubview:_rightButton];
+		[self.contentView addSubview:_leftButton];
+		[self.contentView addSubview:_rightButton];
 	}
 	return self;
 }
 
 - (void)layoutSubviews {
 	[super layoutSubviews];
-	CGFloat contentWidth = self.bounds.size.width - kGroupedInset * 2;
+	CGFloat contentWidth = self.contentView.bounds.size.width;
 	CGFloat height = kButtonsRowHeight;
 	if (!_leftButton.hidden && !_rightButton.hidden){
 		CGFloat buttonWidth = floorf((contentWidth - kButtonGutter) / 2);
-		_leftButton.frame = CGRectMake(kGroupedInset, 0, buttonWidth, height);
-		_rightButton.frame = CGRectMake(kGroupedInset + contentWidth - buttonWidth, 0,
+		_leftButton.frame = CGRectMake(0, 0, buttonWidth, height);
+		_rightButton.frame = CGRectMake(contentWidth - buttonWidth, 0,
 										buttonWidth, height);
 	} else if (!_leftButton.hidden){
-		_leftButton.frame = CGRectMake(kGroupedInset, 0, contentWidth, height);
+		_leftButton.frame = CGRectMake(0, 0, contentWidth, height);
 	}
 }
 
@@ -878,13 +878,15 @@ static UIImage *TGProfileStretched(NSString *name) {
 		if (self.isContact)
 			[items addObject:@{@"title" : @"Share Contact", @"action" : @"share"}];
 		else
-			[items addObject:@{@"title" : @"Add Contact", @"action" : @"add"}];
+			[items addObject:@{@"title" : @"Add Contact", @"action" : @"add",
+							   @"disabled" : @(self.phoneNumber.length == 0)}];
 		[items addObject:@{@"title" : @"Call",       @"action" : @"call"}];
 		[items addObject:@{@"title" : @"Video Call", @"action" : @"video"}];
+	} else if (self.chatId){
+		if (self.canListMembers)
+			[items addObject:@{@"title" : @"Add Member", @"action" : @"addmember"}];
+		[items addObject:@{@"title" : @"Leave Group", @"action" : @"leave"}];
 	}
-	if (self.chatId)
-		[items addObject:@{@"title" : (self.muted ? @"Unmute" : @"Mute"),
-						   @"action" : @"mute"}];
 	if (self.onSearchTapped && self.chatId)
 		[items addObject:@{@"title" : @"Search Messages", @"action" : @"search"}];
 	[items addObject:@{@"title" : @"More", @"action" : @"more"}];
@@ -924,8 +926,6 @@ static UIImage *TGProfileStretched(NSString *name) {
 		button.tag = index;
 		[button addTarget:self action:@selector(actionTileTapped:)
 		 forControlEvents:UIControlEventTouchUpInside];
-		if ([item[@"action"] isEqualToString:@"mute"])
-			self.muteButton = button;
 	}
 	[cell setNeedsLayout];
 	return cell;
@@ -949,16 +949,22 @@ static UIImage *TGProfileStretched(NSString *name) {
 		return;
 	}
 
+	if ([action isEqualToString:@"addmember"]){
+		if (self.navigationController)
+			[self pushGroupMembersInto:self.navigationController adminsFirst:NO];
+		return;
+	}
+	if ([action isEqualToString:@"leave"]){
+		[self confirmLeaveGroup];
+		return;
+	}
+
 	if ([action isEqualToString:@"call"] || [action isEqualToString:@"video"]){
 		if (!self.userId)
 			return;
 		[TGCallViewController presentForUserId:self.userId
 										  name:self.name
 									  outgoing:YES];
-	} else if ([action hasSuffix:@"mute"]){
-		self.muted = !self.muted;
-		[[TGClient shared] setChat:self.chatId muted:self.muted];
-		[self updateMuteButton];
 	} else if ([action isEqualToString:@"search"]){
 		if (self.onSearchTapped) self.onSearchTapped();
 	} else {
@@ -967,14 +973,14 @@ static UIImage *TGProfileStretched(NSString *name) {
 }
 
 - (void)updateMuteButton {
-	NSString *title = self.muted ? @"Unmute" : @"Mute";
-	NSMutableArray *names = [self.actionNames mutableCopy];
-	for (NSUInteger i = 0; i < names.count; i++){
-		if ([names[i][@"action"] isEqualToString:@"mute"])
-			names[i] = @{@"title" : title, @"action" : @"mute"};
-	}
-	self.actionNames = names;
-	[self.muteButton setTitle:title forState:UIControlStateNormal];
+	[self.notificationsSwitch setOn:!self.muted animated:NO];
+}
+
+- (void)notificationsToggled:(UISwitch *)toggle {
+	if (!self.chatId)
+		return;
+	self.muted = !toggle.on;
+	[[TGClient shared] setChat:self.chatId muted:self.muted];
 }
 
 - (void)openConversation {
@@ -1074,8 +1080,6 @@ static UIImage *TGProfileStretched(NSString *name) {
 	}];
 }
 
-/// The "more" menu from the current client, minus what this app cannot do:
-/// no secret chats, no gifts.
 - (void)showMoreMenuFrom:(UIView *)tile {
 	NSMutableArray *items = [NSMutableArray array];
 	if (self.userId){
@@ -1093,9 +1097,6 @@ static UIImage *TGProfileStretched(NSString *name) {
 		[items addObject:@{@"title" : @"Auto-delete messages", @"icon" : @"delete"}];
 	if (self.chatId)
 		[items addObject:@{@"title" : @"Clear history", @"icon" : @"delete"}];
-	if (!self.userId && self.chatId)
-		[items addObject:@{@"title" : @"Leave group", @"icon" : @"delete",
-						   @"destructive" : @YES}];
 	if (self.userId)
 		[items addObject:@{@"title" : (self.blocked ? @"Unblock user" : @"Block user"),
 						   @"icon" : @"privacy", @"destructive" : @YES}];
@@ -1143,11 +1144,6 @@ static UIImage *TGProfileStretched(NSString *name) {
 		return;
 	}
 
-	if ([title isEqualToString:@"Leave group"]){
-		[self confirmLeaveGroup];
-		return;
-	}
-
 	if ([title isEqualToString:@"Share contact"]){
 		[self pushContactForwardPicker];
 		return;
@@ -1188,7 +1184,7 @@ static UIImage *TGProfileStretched(NSString *name) {
 }
 
 - (void)confirmLeaveGroup {
-	UIAlertView *confirm = [[UIAlertView alloc] initWithTitle:@"Leave group"
+	UIAlertView *confirm = [[UIAlertView alloc] initWithTitle:@"Leave Group"
 			message:@"You will stop receiving messages from this group."
 		   delegate:self cancelButtonTitle:@"Cancel" otherButtonTitles:@"Leave", nil];
 	confirm.tag = 72;
@@ -1577,10 +1573,6 @@ static UIImage *TGProfileStretched(NSString *name) {
 	return self.sectionKinds[section];
 }
 
-/// The administration rows a group or channel gets: who is in it, the links
-/// that let people in, what happened lately, and the things an admin may
-/// change about the chat itself. Anything the server says we may not do is
-/// simply not offered.
 - (void)loadManagement {
 	if (self.userId || !self.chatId)
 		return;
@@ -2738,8 +2730,6 @@ static UIImage *TGProfileStretched(NSString *name) {
 		weakSelf.members = [members isKindOfClass:[NSArray class]] ? members : @[];
 		[weakSelf.tableView reloadData];
 	}];
-	// A group has a description, a size and a link, none of which this
-	// screen used to ask for.
 	[[TGClient shared] chatProfile:self.chatId completion:^(NSDictionary *info){
 		if (![info isKindOfClass:[NSDictionary class]])
 			return;
@@ -2833,9 +2823,6 @@ static UIImage *TGProfileStretched(NSString *name) {
 		[rows addObject:@[@"username", [@"@" stringByAppendingString:username]]];
 }
 
-/// The bio, the birthday and how many groups you share live in the full
-/// record, which this screen never asked for - so "about" was missing
-/// from a profile that has one.
 - (void)loadFullUserProfile {
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] userProfile:self.userId completion:^(NSDictionary *info){
@@ -2850,7 +2837,6 @@ static UIImage *TGProfileStretched(NSString *name) {
 	}];
 }
 
-/// updateUser does not always carry a photo; getUser does.
 - (void)loadAvatarFromUserRecord:(NSDictionary *)user {
 	id photo = user[@"profile_photo"];
 	id small = [photo isKindOfClass:[NSDictionary class]] ? photo[@"small"] : nil;
@@ -2981,8 +2967,6 @@ static UIImage *TGProfileStretched(NSString *name) {
 					 completion:^(BOOL done){ [toast removeFromSuperview]; }];
 }
 
-/// Settings has its own navigation controller, and nothing was styling
-/// its bar - an imported theme stopped at the top of the screen.
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
@@ -3018,13 +3002,19 @@ static UIImage *TGProfileStretched(NSString *name) {
 	if ([kind isEqualToString:@"members"]) return self.members.count;
 	if ([kind isEqualToString:@"actions"]) return [self actionRowCount];
 	if ([kind isEqualToString:@"delete"]) return 1;
+	if ([kind isEqualToString:@"media"]) return self.chatId ? 2 : 1;
 	return 1;
+}
+
+- (BOOL)mediaSectionHasNotificationsRow {
+	return self.chatId != 0;
 }
 
 - (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell
 		forRowAtIndexPath:(NSIndexPath *)indexPath {
 	NSString *kind = [self kindForSection:indexPath.section];
-	if (![kind isEqualToString:@"actions"] && ![kind isEqualToString:@"delete"])
+	if (![kind isEqualToString:@"actions"] && ![kind isEqualToString:@"delete"]
+			&& ![kind isEqualToString:@"story"])
 		return;
 	cell.backgroundColor = [UIColor clearColor];
 	cell.backgroundView = [[UIView alloc] initWithFrame:cell.bounds];
@@ -3056,7 +3046,8 @@ static UIImage *TGProfileStretched(NSString *name) {
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
 	NSString *kind = [self kindForSection:indexPath.section];
 	if ([kind isEqualToString:@"members"]) return kMemberRowHeight;
-	if ([kind isEqualToString:@"actions"]) return kButtonsRowHeight;
+	if ([kind isEqualToString:@"actions"] || [kind isEqualToString:@"story"])
+		return kButtonsRowHeight;
 	if ([kind isEqualToString:@"delete"]) return kActionButtonHeight;
 	return 44;
 }
@@ -3073,8 +3064,11 @@ static UIImage *TGProfileStretched(NSString *name) {
 	if ([kind isEqualToString:@"delete"])
 		return [self deleteContactCell:tableView];
 
-	if ([kind isEqualToString:@"media"])
+	if ([kind isEqualToString:@"media"]){
+		if ([self mediaSectionHasNotificationsRow] && indexPath.row == 0)
+			return [self notificationsCell:tableView];
 		return [self sharedMediaCell:tableView];
+	}
 
 	if ([kind isEqualToString:@"manage"])
 		return [self manageCell:tableView row:indexPath.row];
@@ -3089,18 +3083,19 @@ static UIImage *TGProfileStretched(NSString *name) {
 }
 
 - (UITableViewCell *)storyCell:(UITableView *)tableView {
-	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"story"];
-	if (!cell)
-		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
-									  reuseIdentifier:@"story"];
-	[[TGTheme shared] styleCell:cell];
-	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
-	cell.accessoryType = UITableViewCellAccessoryNone;
-	cell.imageView.image = nil;
-	cell.textLabel.textAlignment = NSTextAlignmentCenter;
-	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
-	cell.textLabel.textColor = TGProfileColour(0x316ea1);
-	cell.textLabel.text = @"Post a Story";
+	TGProfileButtonsCell *cell = (TGProfileButtonsCell *)
+			[tableView dequeueReusableCellWithIdentifier:@"storybutton"];
+	if (![cell isKindOfClass:[TGProfileButtonsCell class]])
+		cell = [[TGProfileButtonsCell alloc] initWithStyle:UITableViewCellStyleDefault
+										   reuseIdentifier:@"storybutton"];
+	cell.rightButton.hidden = YES;
+	cell.leftButton.hidden = NO;
+	[cell.leftButton setTitle:@"Post a Story" forState:UIControlStateNormal];
+	[cell.leftButton removeTarget:self action:NULL
+				 forControlEvents:UIControlEventTouchUpInside];
+	[cell.leftButton addTarget:self action:@selector(postStoryTapped)
+			  forControlEvents:UIControlEventTouchUpInside];
+	[cell setNeedsLayout];
 	return cell;
 }
 
@@ -3215,13 +3210,23 @@ static UIImage *TGProfileStretched(NSString *name) {
 		count.textColor = TGProfileColour(0x415d7f);
 		count.highlightedTextColor = [UIColor whiteColor];
 		[cell.contentView addSubview:count];
+
+		UILabel *title = [[UILabel alloc] initWithFrame:
+				CGRectMake(11, 12, cell.contentView.bounds.size.width - 30, 21)];
+		title.tag = 22;
+		title.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+		title.font = [UIFont boldSystemFontOfSize:17];
+		title.backgroundColor = [UIColor clearColor];
+		title.highlightedTextColor = [UIColor whiteColor];
+		title.text = @"Shared Media";
+		[cell.contentView addSubview:title];
 	}
 	[[TGTheme shared] styleCell:cell];
 	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
-	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
-	cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
-	cell.textLabel.text = @"Shared Media";
+	cell.textLabel.text = nil;
 	cell.imageView.image = nil;
+	((UILabel *)[cell.contentView viewWithTag:22]).textColor =
+			[[TGTheme shared] primaryTextColour];
 
 	UILabel *count = (UILabel *)[cell.contentView viewWithTag:21];
 	BOOL loaded = self.photosLoaded && self.filesLoaded;
@@ -3238,6 +3243,46 @@ static UIImage *TGProfileStretched(NSString *name) {
 		[spinner startAnimating];
 		cell.accessoryView = spinner;
 	}
+	return cell;
+}
+
+- (UITableViewCell *)notificationsCell:(UITableView *)tableView {
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"notifications"];
+	if (!cell){
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+									  reuseIdentifier:@"notifications"];
+		UISwitch *toggle = [[UISwitch alloc] init];
+		toggle.tag = 23;
+		toggle.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+		toggle.frame = CGRectMake(cell.contentView.bounds.size.width
+						- toggle.frame.size.width - 9, 8,
+				toggle.frame.size.width, toggle.frame.size.height);
+		[toggle addTarget:self action:@selector(notificationsToggled:)
+		 forControlEvents:UIControlEventValueChanged];
+		[cell.contentView addSubview:toggle];
+
+		UILabel *title = [[UILabel alloc] initWithFrame:
+				CGRectMake(11, 12, cell.contentView.bounds.size.width - 28
+						- toggle.frame.size.width, 20)];
+		title.tag = 24;
+		title.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+		title.font = [UIFont boldSystemFontOfSize:17];
+		title.backgroundColor = [UIColor clearColor];
+		title.highlightedTextColor = [UIColor whiteColor];
+		title.text = @"Notifications";
+		[cell.contentView addSubview:title];
+	}
+	[[TGTheme shared] styleCell:cell];
+	cell.selectionStyle = UITableViewCellSelectionStyleNone;
+	cell.accessoryType = UITableViewCellAccessoryNone;
+	cell.accessoryView = nil;
+	cell.textLabel.text = nil;
+	cell.imageView.image = nil;
+	((UILabel *)[cell.contentView viewWithTag:24]).textColor =
+			[[TGTheme shared] primaryTextColour];
+	UISwitch *toggle = (UISwitch *)[cell.contentView viewWithTag:23];
+	self.notificationsSwitch = toggle;
+	[toggle setOn:!self.muted animated:NO];
 	return cell;
 }
 
@@ -3275,11 +3320,6 @@ static UIImage *TGProfileStretched(NSString *name) {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
 	NSString *kind = [self kindForSection:indexPath.section];
 
-	if ([kind isEqualToString:@"story"]){
-		[self postStoryTapped];
-		return;
-	}
-
 	if ([kind isEqualToString:@"manage"]){
 		[self openManageRow:indexPath.row];
 		return;
@@ -3296,7 +3336,8 @@ static UIImage *TGProfileStretched(NSString *name) {
 	}
 
 	if ([kind isEqualToString:@"media"]){
-		[self openSharedMedia];
+		if (![self mediaSectionHasNotificationsRow] || indexPath.row == 1)
+			[self openSharedMedia];
 		return;
 	}
 
@@ -4943,4 +4984,3 @@ static UIImage *TGStatsStretch(NSString *name, int leftCap) {
 
 @end
 
-// vim:ft=objc

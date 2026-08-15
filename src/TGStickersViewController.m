@@ -84,6 +84,57 @@ static UIImage *TGStickersStretch(NSString *name, int leftCap) {
 	return [raw stretchableImageWithLeftCapWidth:leftCap topCapHeight:0];
 }
 
+static UIImage *TGStickersPlate(NSString *name) {
+	UIImage *raw = [UIImage imageNamed:name];
+	if (!raw)
+		return nil;
+	return [raw stretchableImageWithLeftCapWidth:(int)(raw.size.width / 2) topCapHeight:0];
+}
+
+static CGFloat TGStickersPlateHeight(NSString *name, CGFloat fallback) {
+	UIImage *raw = [UIImage imageNamed:name];
+	return raw ? raw.size.height : fallback;
+}
+
+static UIColor *TGStickersRGBA(int rgb, CGFloat alpha) {
+	return [UIColor colorWithRed:((rgb >> 16) & 0xff) / 255.0f
+						   green:((rgb >> 8) & 0xff) / 255.0f
+							blue:(rgb & 0xff) / 255.0f alpha:alpha];
+}
+
+static UIColor *TGStickersGreenShadow(void) {
+	return TGStickersRGBA(0x124606, 0.3f);
+}
+
+static UIColor *TGStickersRedShadow(void) {
+	return TGStickersRGBA(0xa10603, 0.5f);
+}
+
+static UIImageView *TGStickersDisclosureView(void) {
+	UIImage *arrow = [UIImage imageNamed:@"MenuDisclosureIndicator.png"];
+	if (!arrow)
+		return nil;
+	return [[UIImageView alloc] initWithImage:arrow
+							 highlightedImage:[UIImage imageNamed:
+									 @"MenuDisclosureIndicator_Highlighted.png"]];
+}
+
+static void TGStickersApplyDisclosure(UITableViewCell *cell) {
+	UIImageView *arrow = [[TGTheme shared] isFlat] || [[TGTheme shared] isDark]
+			? nil : TGStickersDisclosureView();
+	if (!arrow){
+		cell.accessoryView = nil;
+		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+		return;
+	}
+	cell.accessoryType = UITableViewCellAccessoryNone;
+	cell.accessoryView = arrow;
+}
+
+static const CGFloat kGroupedInset = 9.0f;
+static const CGFloat kActionRowHeight = 45.0f;
+static const CGFloat kGroupSpacerHeight = 12.0f;
+
 static CGFloat TGStickersRetinaPixel(void) {
 	return [UIScreen mainScreen].scale > 1.0f ? 0.5f : 0.0f;
 }
@@ -308,10 +359,10 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
 									  reuseIdentifier:@"emoji"];
 	[[TGTheme shared] styleCell:cell];
+	cell.accessoryView = nil;
 	cell.accessoryType = UITableViewCellAccessoryNone;
 	cell.detailTextLabel.font = [UIFont systemFontOfSize:16];
 	cell.detailTextLabel.textColor = [[TGTheme shared] cellDetailColour];
-	cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
 
 	if (self.category){
 		NSArray *emojis = [self categoryEmojis];
@@ -328,10 +379,10 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 			return cell;
 		NSDictionary *category = self.categories[indexPath.row];
 		NSInteger count = (NSInteger)[category[@"emojis"] count];
-		cell.textLabel.font = [UIFont systemFontOfSize:19];
+		cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
 		cell.textLabel.text = category[@"name"];
 		cell.detailTextLabel.text = count ? [NSString stringWithFormat:@"%d", (int)count] : @"";
-		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+		TGStickersApplyDisclosure(cell);
 		return cell;
 	}
 
@@ -412,11 +463,6 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	self.selectionStyle = UITableViewCellSelectionStyleNone;
 	self.tiles = [NSMutableArray array];
 
-	if (![[TGTheme shared] isFlat]){
-		UIImage *plate = TGStickersStretch(@"Cell102.png", 1);
-		if (plate)
-			self.backgroundView = [[UIImageView alloc] initWithImage:plate];
-	}
 	self.backgroundColor = [[TGTheme shared] isDark]
 			? [[TGTheme shared] listBackgroundColour] : [UIColor whiteColor];
 	return self;
@@ -487,13 +533,14 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	self.addButton.titleLabel.shadowOffset = CGSizeMake(0, -1);
 	[self.addButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
 	[self.addButton setTitleColor:TGStickersRGB(0x8b97a5) forState:UIControlStateDisabled];
-	[self.addButton setTitleShadowColor:
-			[UIColor colorWithRed:0.05f green:0.15f blue:0.30f alpha:0.4f]
-						 forState:UIControlStateNormal];
-	[self.addButton setBackgroundImage:TGStickersStretch(@"GroupedActionButtonGreen.png", 33)
+	[self.addButton setTitleShadowColor:TGStickersGreenShadow()
+							   forState:UIControlStateNormal];
+	[self.addButton setTitleShadowColor:TGStickersGreenShadow()
+							   forState:UIControlStateHighlighted];
+	[self.addButton setBackgroundImage:TGStickersPlate(@"GroupedActionButtonGreen.png")
 							  forState:UIControlStateNormal];
 	[self.addButton setBackgroundImage:
-			TGStickersStretch(@"GroupedActionButtonGreen_Highlighted.png", 33)
+			TGStickersPlate(@"GroupedActionButtonGreen_Highlighted.png")
 							  forState:UIControlStateHighlighted];
 	[self.contentView addSubview:self.addButton];
 	return self;
@@ -503,7 +550,8 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	[super layoutSubviews];
 	CGFloat width = self.contentView.bounds.size.width;
 
-	self.addButton.frame = CGRectMake(width - 80, 7, 70, 30);
+	CGFloat plate = TGStickersPlateHeight(@"GroupedActionButtonGreen.png", 43.0f);
+	self.addButton.frame = CGRectMake(width - 80, 7, 70, plate);
 	self.packTitleLabel.frame = CGRectMake(10, 6, width - 100, 20);
 	self.packCountLabel.frame = CGRectMake(10, 24, width - 100, 16);
 
@@ -614,7 +662,8 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 }
 
 - (BOOL)showsSearchBar {
-	return [self isMaskPage] || (NSInteger)self.page == TGStickersPageEmojiTrending;
+	return [self isMaskPage] || self.page == TGStickersPageRoot ||
+			[self isTrendingPage];
 }
 
 - (NSInteger)setsSection {
@@ -698,7 +747,12 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 			CGRectMake(0, 0, self.view.bounds.size.width, kSearchBarHeight)];
 	self.searchBar.delegate = self;
 	self.searchBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-	self.searchBar.placeholder = [self isMaskPage] ? @"Search Masks" : @"Search Emoji Sets";
+	if ([self isMaskPage])
+		self.searchBar.placeholder = @"Search Masks";
+	else if ((NSInteger)self.page == TGStickersPageEmojiTrending)
+		self.searchBar.placeholder = @"Search Emoji Sets";
+	else
+		self.searchBar.placeholder = @"Search Sticker Sets";
 	self.table.tableHeaderView = self.searchBar;
 }
 
@@ -857,7 +911,7 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 
 	self.bottomButton = [UIButton buttonWithType:UIButtonTypeCustom];
 	self.bottomButton.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-	self.bottomButton.titleLabel.font = [UIFont boldSystemFontOfSize:14];
+	self.bottomButton.titleLabel.font = [UIFont boldSystemFontOfSize:17];
 	self.bottomButton.titleLabel.shadowOffset = CGSizeMake(0, -1);
 	[self.bottomButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
 	[self.bottomButton addTarget:self action:@selector(bottomButtonTapped)
@@ -874,17 +928,15 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 
 	BOOL installed = [self currentSetInstalled];
 	NSString *asset = installed ? @"MenuRedButton" : @"GroupedActionButtonGreen";
-	int cap = installed ? 12 : 33;
 	[self.bottomButton setBackgroundImage:
-			TGStickersStretch([asset stringByAppendingString:@".png"], cap)
+			TGStickersPlate([asset stringByAppendingString:@".png"])
 								 forState:UIControlStateNormal];
 	[self.bottomButton setBackgroundImage:
-			TGStickersStretch([asset stringByAppendingString:@"_Highlighted.png"], cap)
+			TGStickersPlate([asset stringByAppendingString:@"_Highlighted.png"])
 								 forState:UIControlStateHighlighted];
-	UIColor *shadow = installed
-			? [UIColor colorWithRed:0.64f green:0.06f blue:0.04f alpha:0.2f]
-			: [UIColor colorWithRed:0.05f green:0.15f blue:0.30f alpha:0.4f];
+	UIColor *shadow = installed ? TGStickersRedShadow() : TGStickersGreenShadow();
 	[self.bottomButton setTitleShadowColor:shadow forState:UIControlStateNormal];
+	[self.bottomButton setTitleShadowColor:shadow forState:UIControlStateHighlighted];
 
 	NSInteger count = (NSInteger)self.stickers.count;
 	if (count == 0)
@@ -914,9 +966,11 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	self.bottomBar.frame = CGRectMake(0, height - kBottomBarHeight, width, kBottomBarHeight);
 	self.bottomBarLine.frame = CGRectMake(0, 0, width, 1.0f / [UIScreen mainScreen].scale);
 
-	CGFloat buttonHeight = [self currentSetInstalled] ? 45 : 43;
-	CGFloat buttonWidth = width - 20;
-	self.bottomButton.frame = CGRectMake(10,
+	CGFloat buttonHeight = [self currentSetInstalled]
+			? TGStickersPlateHeight(@"MenuRedButton.png", 45.0f)
+			: TGStickersPlateHeight(@"GroupedActionButtonGreen.png", 43.0f);
+	CGFloat buttonWidth = width - kGroupedInset * 2;
+	self.bottomButton.frame = CGRectMake(kGroupedInset,
 			floorf((kBottomBarHeight - buttonHeight) / 2), buttonWidth, buttonHeight);
 
 	UIEdgeInsets insets = self.table.contentInset;
@@ -926,23 +980,18 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 }
 
 - (void)buildPlaceholder {
-	self.placeholder = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 260, 70)];
+	self.placeholder = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 232, 70)];
 	self.placeholder.backgroundColor = [UIColor clearColor];
 	self.placeholder.hidden = YES;
 
-	BOOL plain = ![[TGTheme shared] isFlat] && ![[TGTheme shared] isDark];
 	UIColor *colour = [[TGTheme shared] isDark] ? [[TGTheme shared] sectionHeaderColour]
-												: TGStickersRGB(0x8694a4);
+												: TGStickersRGB(0x8b97a5);
 
 	self.placeholderTitle = [[UILabel alloc] initWithFrame:CGRectZero];
 	self.placeholderTitle.backgroundColor = [UIColor clearColor];
-	self.placeholderTitle.font = [UIFont boldSystemFontOfSize:14];
+	self.placeholderTitle.font = [UIFont boldSystemFontOfSize:15];
 	self.placeholderTitle.textColor = colour;
 	self.placeholderTitle.textAlignment = NSTextAlignmentCenter;
-	if (plain){
-		self.placeholderTitle.shadowColor = [UIColor colorWithWhite:1.0f alpha:0.5f];
-		self.placeholderTitle.shadowOffset = CGSizeMake(0, 1);
-	}
 	[self.placeholder addSubview:self.placeholderTitle];
 
 	self.placeholderBody = [[UILabel alloc] initWithFrame:CGRectZero];
@@ -952,10 +1001,6 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	self.placeholderBody.textAlignment = NSTextAlignmentCenter;
 	self.placeholderBody.lineBreakMode = NSLineBreakByWordWrapping;
 	self.placeholderBody.numberOfLines = 0;
-	if (plain){
-		self.placeholderBody.shadowColor = [UIColor colorWithWhite:1.0f alpha:0.5f];
-		self.placeholderBody.shadowOffset = CGSizeMake(0, 1);
-	}
 	[self.placeholder addSubview:self.placeholderBody];
 
 	[self.view addSubview:self.placeholder];
@@ -987,7 +1032,7 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	self.spinner.center = CGPointMake(floorf(width / 2), floorf(height / 2));
 
 	if (!self.placeholder.hidden){
-		CGFloat containerWidth = 260;
+		CGFloat containerWidth = 232;
 		CGSize titleSize = [self.placeholderTitle.text
 				sizeWithFont:self.placeholderTitle.font];
 		CGSize bodySize = [self.placeholderBody.text
@@ -996,8 +1041,9 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 			   lineBreakMode:NSLineBreakByWordWrapping];
 
 		self.placeholderTitle.frame = CGRectMake(0, 0, containerWidth, titleSize.height);
-		self.placeholderBody.frame = CGRectMake(0, 26, containerWidth, bodySize.height);
-		CGFloat containerHeight = 26 + bodySize.height;
+		self.placeholderBody.frame = CGRectMake(0, titleSize.height + 8,
+				containerWidth, bodySize.height);
+		CGFloat containerHeight = titleSize.height + 8 + bodySize.height;
 		self.placeholder.frame = CGRectMake(floorf((width - containerWidth) / 2),
 				floorf((height - containerHeight) / 2), containerWidth, containerHeight);
 	}
@@ -2325,6 +2371,11 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	if ([self isMaskPage])
 		[[TGClient shared] searchInstalledMaskStickerSets:query limit:kSearchLimit
 											   completion:done];
+	else if (self.page == TGStickersPageRoot)
+		[[TGClient shared] searchInstalledStickerSets:query limit:kSearchLimit
+										   completion:done];
+	else if (self.page == TGStickersPageTrending)
+		[[TGClient shared] searchStickerSets:query completion:done];
 	else
 		[[TGClient shared] searchEmojiStickerSets:query completion:done];
 }
@@ -2414,6 +2465,11 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 				? @"The mask sets you have installed. Hold Edit to reorder, swipe to remove."
 				: @"The custom emoji sets you have installed. Hold Edit to reorder, swipe to remove.";
 	}
+	if (self.page == TGStickersPageRoot && self.searching){
+		if (section != kRootSectionSets)
+			return nil;
+		return self.sets.count ? nil : @"No installed set matches that name.";
+	}
 	if (self.page == TGStickersPageRoot){
 		if (section == kRootSectionSettings)
 			return @"Type a single emoji and matching stickers are offered above the input.";
@@ -2428,9 +2484,11 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		return @"Archived sets are kept out of the panel until you add them back.";
 	if ([self isTrendingPage] && section == 0){
 		if (self.searching)
-			return self.sets.count ? nil : @"No public emoji sets match that name.";
+			return self.sets.count ? nil : @"No public sets match that name.";
 		if (self.sets.count)
 			return @"Sets other people are using right now. Tap one to see its stickers before you add it.";
+		if (self.loaded)
+			return @"There is nothing featured right now. Come back later.";
 	}
 	return nil;
 }
@@ -2500,6 +2558,8 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		return section == 0 ? (NSInteger)[self subpageRows].count : (NSInteger)self.sets.count;
 	if (self.page != TGStickersPageRoot)
 		return (NSInteger)self.sets.count;
+	if (self.searching)
+		return section == kRootSectionSets ? (NSInteger)self.sets.count : 0;
 	if (section == kRootSectionSettings)
 		return 3;
 	if (section == kRootSectionPages)
@@ -2518,13 +2578,17 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		return indexPath.section == 0 ? kPlainRowHeight : kSetRowHeight;
 	if (self.page != TGStickersPageRoot)
 		return kSetRowHeight;
-	return indexPath.section == kRootSectionSets ? kSetRowHeight : kPlainRowHeight;
+	if (indexPath.section == kRootSectionSets)
+		return kSetRowHeight;
+	if (indexPath.section == kRootSectionRecent)
+		return kActionRowHeight;
+	return kPlainRowHeight;
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
 	if ([self isGridPage])
 		return 0;
-	return [self headerTitleForSection:section] ? 46 : 14;
+	return [self headerTitleForSection:section] ? 46 : kGroupSpacerHeight;
 }
 
 - (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
@@ -2538,11 +2602,12 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	label.textColor = [[TGTheme shared] isDark] ? [[TGTheme shared] sectionHeaderColour]
 												: TGStickersRGB(0x697487);
 	if (![[TGTheme shared] isFlat] && ![[TGTheme shared] isDark]){
-		label.shadowColor = TGStickersRGB(0xdae0e8);
+		label.shadowColor = [UIColor colorWithWhite:1.0f alpha:0.3f];
 		label.shadowOffset = CGSizeMake(0, 1);
 	}
 	[label sizeToFit];
-	label.frame = CGRectMake(21, 16, label.frame.size.width, label.frame.size.height);
+	label.frame = CGRectMake(kGroupedInset + 11, 16,
+			label.frame.size.width, label.frame.size.height);
 
 	UIView *container = [[UIView alloc] initWithFrame:
 			CGRectMake(0, 0, tableView.bounds.size.width, 46)];
@@ -2571,7 +2636,7 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	container.backgroundColor = [UIColor clearColor];
 	UILabel *label = [self commentLabel];
 	label.text = title;
-	label.frame = CGRectMake(10, 7 + TGStickersRetinaPixel(), width, height);
+	label.frame = CGRectMake(kGroupedInset + 1, 7, width, height);
 	[container addSubview:label];
 	return container;
 }
@@ -2606,18 +2671,18 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 
 - (UIButton *)addButton {
 	UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
-	button.frame = CGRectMake(0, 0,
-			[self isArchivePage] ? 86 : 70, 30);
+	button.frame = CGRectMake(0, 0, [self isArchivePage] ? 86 : 70,
+			TGStickersPlateHeight(@"GroupedActionButtonGreen.png", 43.0f));
 	button.titleLabel.font = [UIFont boldSystemFontOfSize:14];
 	button.titleLabel.shadowOffset = CGSizeMake(0, -1);
 	[button setTitle:[self addButtonTitle] forState:UIControlStateNormal];
 	[button setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
 	[button setTitleColor:TGStickersRGB(0x8b97a5) forState:UIControlStateDisabled];
-	[button setTitleShadowColor:[UIColor colorWithRed:0.05f green:0.15f blue:0.30f alpha:0.4f]
-					   forState:UIControlStateNormal];
-	[button setBackgroundImage:TGStickersStretch(@"GroupedActionButtonGreen.png", 33)
+	[button setTitleShadowColor:TGStickersGreenShadow() forState:UIControlStateNormal];
+	[button setTitleShadowColor:TGStickersGreenShadow() forState:UIControlStateHighlighted];
+	[button setBackgroundImage:TGStickersPlate(@"GroupedActionButtonGreen.png")
 					  forState:UIControlStateNormal];
-	[button setBackgroundImage:TGStickersStretch(@"GroupedActionButtonGreen_Highlighted.png", 33)
+	[button setBackgroundImage:TGStickersPlate(@"GroupedActionButtonGreen_Highlighted.png")
 					  forState:UIControlStateHighlighted];
 	[button addTarget:self action:@selector(addButtonTapped:)
 	 forControlEvents:UIControlEventTouchUpInside];
@@ -2631,7 +2696,7 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		[button setBackgroundImage:nil forState:UIControlStateNormal];
 		[button setTitle:@"ADDED" forState:UIControlStateDisabled];
 	} else {
-		[button setBackgroundImage:TGStickersStretch(@"GroupedActionButtonGreen.png", 33)
+		[button setBackgroundImage:TGStickersPlate(@"GroupedActionButtonGreen.png")
 						  forState:UIControlStateNormal];
 		[button setTitle:[self addButtonTitle] forState:UIControlStateNormal];
 	}
@@ -2654,9 +2719,8 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 									  reuseIdentifier:@"plain"];
 	[[TGTheme shared] styleCell:cell];
 	cell.accessoryView = nil;
-	cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-	cell.textLabel.font = [UIFont systemFontOfSize:19];
-	cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
+	TGStickersApplyDisclosure(cell);
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
 	cell.detailTextLabel.font = [UIFont systemFontOfSize:16];
 	cell.detailTextLabel.textColor = [[TGTheme shared] cellDetailColour];
 	cell.imageView.image = nil;
@@ -2696,7 +2760,7 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 
 	if ([self isReorderPage]){
 		cell.accessoryView = nil;
-		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+		TGStickersApplyDisclosure(cell);
 	} else {
 		UIButton *add = [self addButton];
 		[self configureAddButton:add forRow:indexPath.row
@@ -2747,22 +2811,49 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	if (!cell){
 		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
 									  reuseIdentifier:@"clear"];
-		cell.textLabel.font = [UIFont systemFontOfSize:19];
-		cell.textLabel.textAlignment = NSTextAlignmentCenter;
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		cell.backgroundColor = [UIColor clearColor];
+		cell.backgroundView = [[UIView alloc] initWithFrame:CGRectZero];
+		cell.backgroundView.backgroundColor = [UIColor clearColor];
+
+		UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+		button.tag = 7701;
+		button.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+		button.titleLabel.font = [UIFont boldSystemFontOfSize:17];
+		button.titleLabel.shadowOffset = CGSizeMake(0, -1);
+		[button setTitle:@"Clear Recent Stickers" forState:UIControlStateNormal];
+		[button setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+		[button setTitleColor:[UIColor whiteColor] forState:UIControlStateHighlighted];
+		[button setTitleShadowColor:TGStickersRedShadow() forState:UIControlStateNormal];
+		[button setTitleShadowColor:TGStickersRedShadow() forState:UIControlStateHighlighted];
+		[button setBackgroundImage:TGStickersPlate(@"MenuRedButton.png")
+						  forState:UIControlStateNormal];
+		[button setBackgroundImage:TGStickersPlate(@"MenuRedButton_Highlighted.png")
+						  forState:UIControlStateHighlighted];
+		[button addTarget:self action:@selector(clearRecentTapped)
+		 forControlEvents:UIControlEventTouchUpInside];
+		[cell addSubview:button];
 	}
-	[[TGTheme shared] styleCell:cell];
-	cell.accessoryView = nil;
-	cell.accessoryType = UITableViewCellAccessoryNone;
-	cell.imageView.image = nil;
-	cell.textLabel.font = [UIFont systemFontOfSize:19];
-	cell.textLabel.text = @"Clear Recent Stickers";
-	cell.textLabel.textColor = TGStickersRGB(0xd0021b);
+	UIButton *button = (UIButton *)[cell viewWithTag:7701];
+	button.frame = CGRectMake(kGroupedInset, 0,
+			tableView.bounds.size.width - kGroupedInset * 2,
+			TGStickersPlateHeight(@"MenuRedButton.png", kActionRowHeight));
 	return cell;
+}
+
+- (void)clearRecentTapped {
+	NSArray *actions = @[
+		[[TGActionSheetAction alloc] initWithTitle:@"Clear Recent Stickers"
+											action:@"clearRecent"
+											  type:TGActionSheetActionTypeDestructive],
+		[[TGActionSheetAction alloc] initWithTitle:@"Cancel" action:@"cancel"
+											  type:TGActionSheetActionTypeCancel]
+	];
+	[self presentSheetWithTitle:nil actions:actions];
 }
 
 - (UITableViewCell *)settingsCellForTable:(UITableView *)tableView row:(NSInteger)row {
 	UITableViewCell *cell = [self plainCellForTable:tableView];
-	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
 
 	if (row == 0){
 		cell.textLabel.text = @"Suggest by Emoji";
@@ -2781,6 +2872,7 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	cell.textLabel.text = @"Loop Animated Stickers";
 	cell.detailTextLabel.text = @"";
 	cell.accessoryType = UITableViewCellAccessoryNone;
+	cell.accessoryView = nil;
 	UISwitch *toggle = [[UISwitch alloc] init];
 	toggle.on = [[NSUserDefaults standardUserDefaults] boolForKey:TGStickerLoopAnimatedKey];
 	[toggle addTarget:self action:@selector(loopAnimatedToggled:)
@@ -2879,14 +2971,7 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		return;
 	}
 
-	NSArray *actions = @[
-		[[TGActionSheetAction alloc] initWithTitle:@"Clear Recent Stickers"
-											action:@"clearRecent"
-											  type:TGActionSheetActionTypeDestructive],
-		[[TGActionSheetAction alloc] initWithTitle:@"Cancel" action:@"cancel"
-											  type:TGActionSheetActionTypeCancel]
-	];
-	[self presentSheetWithTitle:nil actions:actions];
+	[self clearRecentTapped];
 }
 
 - (void)tableView:(UITableView *)tableView

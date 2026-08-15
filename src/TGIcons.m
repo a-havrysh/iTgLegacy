@@ -16,10 +16,43 @@ static NSMutableDictionary *sCache = nil;
 static NSCache *sAvatarCache = nil;
 
 static CGFloat TGAvatarCornerRadius(CGFloat side) {
+	if (fabs(side - 70) < 0.5f) return 9;
 	if (fabs(side - 56) < 0.5f) return 5;
 	if (fabs(side - 40) < 0.5f) return 4;
-	if (fabs(side - 30) < 0.5f) return 5;
+	if (fabs(side - 30) < 0.5f) return 3;
 	return roundf(side * 0.09f);
+}
+
+static UIImage *TGArtwork(NSString *name) {
+	return [UIImage imageNamed:name];
+}
+
+static UIImage *TGArtworkTemplate(NSString *name) {
+	UIImage *image = [UIImage imageNamed:name];
+	if (image && [image respondsToSelector:@selector(imageWithRenderingMode:)])
+		image = [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+	return image;
+}
+
+static UIImage *TGArtworkMasked(NSString *name, UIColor *colour, CGSize target) {
+	UIImage *src = [UIImage imageNamed:name];
+	if (!src || src.size.width < 1 || src.size.height < 1)
+		return nil;
+
+	CGSize size = target.width > 0 && target.height > 0 ? target : src.size;
+	UIGraphicsBeginImageContextWithOptions(size, NO, 0);
+	CGContextRef ctx = UIGraphicsGetCurrentContext();
+	CGRect rect = CGRectMake(0, 0, size.width, size.height);
+
+	CGContextTranslateCTM(ctx, 0, size.height);
+	CGContextScaleCTM(ctx, 1, -1);
+	CGContextClipToMask(ctx, rect, src.CGImage);
+	[colour set];
+	CGContextFillRect(ctx, rect);
+
+	UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return image;
 }
 
 static BOOL TGInitialsAreName(NSString *initials) {
@@ -100,6 +133,9 @@ static NSCache *TGAvatarCache(void) {
 + (UIButton *)headerButtonWithTitle:(NSString *)title bold:(BOOL)bold
 							  target:(id)target action:(SEL)action {
 	UIButton *button = [[TGHeaderButton alloc] initWithFrame:CGRectZero];
+	button.exclusiveTouch = YES;
+	button.adjustsImageWhenDisabled = NO;
+	button.adjustsImageWhenHighlighted = NO;
 	[self styleHeaderButton:button done:bold];
 	[button addTarget:target action:action forControlEvents:UIControlEventTouchUpInside];
 
@@ -107,7 +143,9 @@ static NSCache *TGAvatarCache(void) {
 	CGSize size = [title sizeWithFont:font];
 	button.frame = CGRectMake(0, 0, size.width + 14, 30);
 
-	UILabel *label = [[UILabel alloc] initWithFrame:button.bounds];
+	CGFloat retinaPixel = [UIScreen mainScreen].scale > 1.5f ? 0.5f : 0.0f;
+	UILabel *label = [[UILabel alloc] initWithFrame:
+			CGRectOffset(button.bounds, 0, -2 * retinaPixel)];
 	label.text = title;
 	label.textColor = [UIColor whiteColor];
 	label.shadowColor = bold
@@ -169,6 +207,9 @@ static NSCache *TGAvatarCache(void) {
 #pragma mark - tab bar
 
 + (UIImage *)chats {
+	UIImage *art = TGArtworkTemplate(@"TabIconMessages");
+	if (art)
+		return art;
 	return [self iconNamed:@"chats" draw:^(CGContextRef ctx, CGFloat s){
 		// a speech bubble with a tail, sized to match the other tab glyphs
 		CGRect body = CGRectMake(2, 3, s - 4, s - 9);
@@ -183,6 +224,9 @@ static NSCache *TGAvatarCache(void) {
 }
 
 + (UIImage *)contacts {
+	UIImage *art = TGArtworkTemplate(@"TabIconContacts");
+	if (art)
+		return art;
 	return [self iconNamed:@"contacts" draw:^(CGContextRef ctx, CGFloat s){
 		// head and shoulders
 		CGContextFillEllipseInRect(ctx, CGRectMake(s/2 - 5, 4, 10, 10));
@@ -194,6 +238,9 @@ static NSCache *TGAvatarCache(void) {
 }
 
 + (UIImage *)settings {
+	UIImage *art = TGArtworkTemplate(@"TabIconSettings");
+	if (art)
+		return art;
 	return [self iconNamed:@"settings" draw:^(CGContextRef ctx, CGFloat s){
 		CGPoint center = CGPointMake(s / 2, s / 2);
 		CGFloat outerRadius = s * 0.46f;
@@ -228,6 +275,9 @@ static NSCache *TGAvatarCache(void) {
 /// previous one drew the sheet as two bare strokes meeting at a right angle,
 /// which read as a stray corner rather than paper.
 + (UIImage *)compose {
+	UIImage *art = TGArtworkTemplate(@"ComposeMessageIcon");
+	if (art)
+		return art;
 	return [self iconNamed:@"compose" draw:^(CGContextRef ctx, CGFloat s){
 		// The sheet: three sides, left open where the pencil crosses it.
 		CGContextSetLineWidth(ctx, 1.8f);
@@ -253,6 +303,9 @@ static NSCache *TGAvatarCache(void) {
 }
 
 + (UIImage *)send {
+	UIImage *art = TGArtwork(@"Send");
+	if (art)
+		return art;
 	return [self iconNamed:@"send" draw:^(CGContextRef ctx, CGFloat s){
 		// paper plane
 		CGContextMoveToPoint(ctx, 3, s/2);
@@ -265,6 +318,9 @@ static NSCache *TGAvatarCache(void) {
 }
 
 + (UIImage *)attach {
+	UIImage *art = TGArtwork(@"AttachBtn");
+	if (art)
+		return art;
 	return [self iconNamed:@"attach" draw:^(CGContextRef ctx, CGFloat s){
 		// plus
 		CGContextSetLineWidth(ctx, 3);
@@ -681,6 +737,12 @@ static NSSet *TGKnownMenuGlyphNames(void) {
 	if (![TGKnownMenuGlyphNames() containsObject:name])
 		return nil;
 
+	if ([name isEqualToString:@"search"]){
+		UIImage *art = TGArtworkTemplate(@"SearchBarIcon");
+		if (art)
+			return art;
+	}
+
 	NSString *key = [@"menu-" stringByAppendingString:name];
 	return [self iconNamed:key draw:^(CGContextRef ctx, CGFloat s){
 		CGContextSetLineWidth(ctx, 1.8f);
@@ -919,6 +981,18 @@ static NSSet *TGKnownMenuGlyphNames(void) {
 }
 
 + (UIImage *)ticksWhite:(BOOL)white {
+	static UIImage *green = nil;
+	static UIImage *pale = nil;
+	static dispatch_once_t ticksOnce;
+	dispatch_once(&ticksOnce, ^{
+		green = TGArtwork(@"DialogListRead");
+		pale = TGArtworkMasked(@"DialogListRead", [UIColor whiteColor], CGSizeZero);
+	});
+	if (white && pale)
+		return pale;
+	if (!white && green)
+		return green;
+
 	CGSize size = CGSizeMake(16, 10);
 	UIGraphicsBeginImageContextWithOptions(size, NO, 0);
 	CGContextRef ctx = UIGraphicsGetCurrentContext();
@@ -995,24 +1069,40 @@ static UIImage *TGGlyphAvatar(CGFloat side, void (^draw)(CGContextRef ctx, CGFlo
 
 + (UIImage *)inviteFriendsAvatarOfSide:(CGFloat)side {
 	return TGGlyphAvatar(side, ^(CGContextRef ctx, CGFloat s){
-		// A person - the same head-and-shoulders mark as a plain contact.
-		CGContextFillEllipseInRect(ctx, CGRectMake(s/2 - s * 0.18f, s * 0.16f, s * 0.36f, s * 0.36f));
-		CGRect shoulders = CGRectMake(s/2 - s * 0.32f, s * 0.56f, s * 0.64f, s * 0.4f);
-		UIBezierPath *p = [UIBezierPath bezierPathWithRoundedRect:shoulders cornerRadius:s * 0.32f];
-		CGContextAddPath(ctx, p.CGPath);
-		CGContextFillPath(ctx);
+		UIImage *art = [UIImage imageNamed:@"ListIconInvite"];
+		if (art && art.size.width > 0 && art.size.height > 0){
+			CGFloat w = roundf(s * 0.56f);
+			CGFloat h = roundf(w * art.size.height / art.size.width);
+			CGRect box = CGRectMake(roundf((s - w) / 2), roundf((s - h) / 2), w, h);
+			UIImage *mark = TGArtworkMasked(@"ListIconInvite", [UIColor whiteColor], box.size);
+			if (mark){
+				[mark drawInRect:box];
+				return;
+			}
+		}
+
+		CGContextFillEllipseInRect(ctx, CGRectMake(s * 0.357f, s * 0.170f, s * 0.268f, s * 0.339f));
+		CGRect shoulders = CGRectMake(s * 0.143f, s * 0.595f, s * 0.714f, s * 0.40f);
+		CGContextSaveGState(ctx);
+		CGContextClipToRect(ctx, CGRectMake(0, 0, s, s * 0.795f));
+		CGContextFillEllipseInRect(ctx, shoulders);
+		CGContextRestoreGState(ctx);
 	});
 }
 
-static void TGDrawAvatarSilhouette(CGContextRef ctx, CGFloat size) {
-	UIBezierPath *person = [UIBezierPath bezierPathWithOvalInRect:
-			CGRectMake(size * 0.315f, size * 0.14f, size * 0.37f, size * 0.40f)];
-	[person appendPath:[UIBezierPath bezierPathWithRoundedRect:
-			CGRectMake(size * 0.14f, size * 0.55f, size * 0.72f, size * 0.62f)
-												 cornerRadius:size * 0.31f]];
-	CGContextSetRGBFillColor(ctx, 0, 0, 0, 0.28f);
-	CGContextAddPath(ctx, person.CGPath);
-	CGContextFillPath(ctx);
+static void TGDrawAvatarSilhouette(CGContextRef ctx, CGFloat size, uint32_t ink) {
+	CGContextSetRGBFillColor(ctx,
+			((ink >> 16) & 0xff) / 255.0f,
+			((ink >> 8) & 0xff) / 255.0f,
+			(ink & 0xff) / 255.0f, 1.0f);
+
+	CGContextSaveGState(ctx);
+	CGContextClipToRect(ctx, CGRectMake(0, 0, size, size * 0.795f));
+	CGContextFillEllipseInRect(ctx, CGRectMake(size * 0.357f, size * 0.170f,
+											   size * 0.268f, size * 0.339f));
+	CGContextFillEllipseInRect(ctx, CGRectMake(size * 0.143f, size * 0.595f,
+											   size * 0.714f, size * 0.400f));
+	CGContextRestoreGState(ctx);
 }
 
 static void TGDrawAvatarInitials(NSString *text, CGFloat size) {
@@ -1028,18 +1118,16 @@ static void TGDrawAvatarInitials(NSString *text, CGFloat size) {
                            size:(CGFloat)size
                        colourId:(int64_t)colourId
 {
-	static NSArray *palette = nil;
-	if (!palette)
-		palette = @[@[@0xee, @0x49, @0x28],
-					@[@0x41, @0xa9, @0x03],
-					@[@0xe0, @0x96, @0x02],
-					@[@0x0f, @0x94, @0xed],
-					@[@0x8f, @0x3b, @0xf7],
-					@[@0xfc, @0x43, @0x80],
-					@[@0x00, @0xa1, @0xc4],
-					@[@0xeb, @0x70, @0x02]];
+	static const uint32_t plate[8] = {
+		0xed650b, 0x4abc0d, 0xffc600, 0x2f92e9,
+		0xa054fe, 0xfb2e6a, 0x06a6c8, 0xde3f12
+	};
+	static const uint32_t ink[8] = {
+		0xaf3600, 0x088202, 0xe36008, 0x0854b7,
+		0x6915b7, 0xad0055, 0x006785, 0x8a1e00
+	};
 	NSUInteger slot = (NSUInteger)(llabs(colourId) % 8);
-	NSArray *c = palette[slot];
+	uint32_t fill = plate[slot];
 
 	NSString *cacheKey = [NSString stringWithFormat:@"%@-%d-%u-%d",
 			TGInitialsAreName(initials) ? @"*" : initials, (int)(size * 100),
@@ -1053,8 +1141,9 @@ static void TGDrawAvatarInitials(NSString *text, CGFloat size) {
 
 	UIBezierPath *shape = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, size, size)
 													  cornerRadius:TGAvatarCornerRadius(size)];
-	CGContextSetRGBFillColor(ctx, [c[0] floatValue] / 255.0f, [c[1] floatValue] / 255.0f,
-								  [c[2] floatValue] / 255.0f, 1.0f);
+	CGContextSetRGBFillColor(ctx, ((fill >> 16) & 0xff) / 255.0f,
+								  ((fill >> 8) & 0xff) / 255.0f,
+								  (fill & 0xff) / 255.0f, 1.0f);
 	CGContextAddPath(ctx, shape.CGPath);
 	CGContextFillPath(ctx);
 
@@ -1063,7 +1152,7 @@ static void TGDrawAvatarInitials(NSString *text, CGFloat size) {
 	CGContextClip(ctx);
 
 	if (TGInitialsAreName(initials))
-		TGDrawAvatarSilhouette(ctx, size);
+		TGDrawAvatarSilhouette(ctx, size, ink[slot]);
 	else
 		TGDrawAvatarInitials(initials, size);
 	CGContextRestoreGState(ctx);

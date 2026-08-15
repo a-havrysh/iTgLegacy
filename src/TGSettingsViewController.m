@@ -68,6 +68,7 @@ enum {
 
 enum {
 	TGSettingsRootKindSuggestions = 0,
+	TGSettingsRootKindPhoto,
 	TGSettingsRootKindGeneral,
 	TGSettingsRootKindAccount,
 	TGSettingsRootKindSettings,
@@ -1010,6 +1011,8 @@ static NSString *TGSettingsDuration(double seconds) {
 @property (nonatomic, assign) BOOL savedSoundsLoaded;
 @property (nonatomic, strong) NSDictionary *pressedSound;
 @property (nonatomic, assign) NSInteger activeProxyId;
+@property (nonatomic, assign) BOOL pickingProfilePhoto;
+@property (nonatomic, strong) NSArray *photoSheetActions;
 + (NSString *)pollVoteSource;
 - (void)writeReactionSource:(NSString *)source
 			 pollVoteSource:(NSString *)pollVoteSource
@@ -1277,12 +1280,17 @@ static NSString *TGSettingsDuration(double seconds) {
 					account:(NSDictionary *)me {
 	self.avatarView = [[UIImageView alloc] initWithFrame:
 			CGRectMake(9, 14, kHeaderAvatar, kHeaderAvatar)];
-	self.avatarView.layer.cornerRadius = 6.0f;
+	self.avatarView.layer.cornerRadius = 10.0f;
 	self.avatarView.clipsToBounds = YES;
 	self.avatarView.contentMode = UIViewContentModeScaleAspectFill;
 	self.avatarView.image = [TGIcons avatarWithInitials:[self initialsForName:name]
 												   size:kHeaderAvatar
 											   colourId:[me[@"id"] longLongValue]];
+	self.avatarView.userInteractionEnabled = YES;
+	self.avatarView.exclusiveTouch = YES;
+	[self.avatarView addGestureRecognizer:
+			[[UITapGestureRecognizer alloc] initWithTarget:self
+													action:@selector(changePhotoButtonPressed)]];
 	[header addSubview:self.avatarView];
 }
 
@@ -1411,22 +1419,62 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 
 - (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
 	if (self.page == TGSettingsPageRoot)
-		return 12;
+		return [self rootKindForSection:section] == TGSettingsRootKindPhoto
+				&& self.tableView.isEditing ? (18 + 12) : 12;
 	return UITableViewAutomaticDimension;
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForFooterInSection:(NSInteger)section {
 	if (self.page == TGSettingsPageRoot){
 		NSString *caption = [self tableView:tableView titleForFooterInSection:section];
-		if (caption.length){
-			CGSize size = [caption sizeWithFont:[UIFont systemFontOfSize:14]
-							  constrainedToSize:CGSizeMake(280, 300)
-								  lineBreakMode:NSLineBreakByWordWrapping];
-			return size.height + 16;
-		}
+		if (caption.length)
+			return [self commentHeightForCaption:caption];
 		return 1 + TGSettingsRetinaPixel();
 	}
 	return UITableViewAutomaticDimension;
+}
+
+- (CGFloat)commentHeightForCaption:(NSString *)caption {
+	CGFloat width = self.tableView.bounds.size.width ?: 320;
+	CGSize size = [caption sizeWithFont:[UIFont systemFontOfSize:14]
+					  constrainedToSize:CGSizeMake(width - 12 * 2, 1000)
+						  lineBreakMode:NSLineBreakByWordWrapping];
+	return size.height + 7 * 2;
+}
+
+- (UIView *)tableView:(UITableView *)tableView viewForFooterInSection:(NSInteger)section {
+	if (self.page != TGSettingsPageRoot)
+		return nil;
+	NSString *caption = [self tableView:tableView titleForFooterInSection:section];
+	if (!caption.length)
+		return nil;
+
+	CGFloat width = self.tableView.bounds.size.width ?: 320;
+	UIView *container = [[UIView alloc] initWithFrame:
+			CGRectMake(0, 0, width, [self commentHeightForCaption:caption])];
+	container.backgroundColor = [UIColor clearColor];
+	container.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+
+	UILabel *label = [[UILabel alloc] initWithFrame:
+			CGRectMake(12, 7, width - 24, container.bounds.size.height - 14)];
+	label.autoresizingMask = UIViewAutoresizingFlexibleWidth
+			| UIViewAutoresizingFlexibleHeight;
+	label.contentMode = UIViewContentModeCenter;
+	label.textAlignment = NSTextAlignmentCenter;
+	label.font = [UIFont systemFontOfSize:14];
+	label.backgroundColor = [UIColor clearColor];
+	label.numberOfLines = 0;
+	label.lineBreakMode = NSLineBreakByWordWrapping;
+	label.text = caption;
+	if ([[TGTheme shared] isDark]){
+		label.textColor = [[TGTheme shared] secondaryTextColour];
+	} else {
+		label.textColor = TGSettingsRGB(0x697487);
+		label.shadowColor = TGSettingsRGB(0xdae0e8);
+		label.shadowOffset = CGSizeMake(0, 1);
+	}
+	[container addSubview:label];
+	return container;
 }
 
 #pragma mark - loading
@@ -2129,7 +2177,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	if ((NSInteger)self.page == TGSettingsPageNotificationSounds)
 		return 1;
 	if (self.page == TGSettingsPageRoot)
-		return ([self showsSuggestions] ? 8 : 7)
+		return ([self showsSuggestions] ? 9 : 8)
 				+ (self.tableView.isEditing ? 1 : 0);
 	switch (self.page){
 		case TGSettingsPageAppearance:    return 3;
@@ -2216,6 +2264,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 - (NSInteger)rootRowsInSection:(NSInteger)section {
 	switch ([self rootKindForSection:section]){
 		case TGSettingsRootKindSuggestions: return (NSInteger)self.suggestions.count;
+		case TGSettingsRootKindPhoto:       return 1;
 		case TGSettingsRootKindGeneral:
 			return (NSInteger)[TGSettingsViewController generalRows].count;
 		case TGSettingsRootKindAccount:     return 3;
@@ -2424,6 +2473,8 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 {
 	if (self.page == TGSettingsPageRoot){
 		NSInteger kind = [self rootKindForSection:indexPath.section];
+		if (kind == TGSettingsRootKindPhoto)
+			return [self profilePhotoCellInTable:tableView];
 		if (kind == TGSettingsRootKindAccount)
 			return [self accountCellInTable:tableView at:indexPath];
 		if (kind == TGSettingsRootKindLogout)
@@ -2432,10 +2483,15 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 			return [self suggestionCellInTable:tableView at:indexPath];
 	}
 
-	static NSString *reuse = @"TGSettingsCell";
+	NSString *reuse = @"TGSettingsCell";
+	UITableViewCellStyle style = UITableViewCellStyleSubtitle;
+	if (self.page == TGSettingsPageRoot){
+		reuse = @"TGSettingsRootRowCell";
+		style = UITableViewCellStyleValue1;
+	}
 	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
 	if (!cell)
-		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+		cell = [[UITableViewCell alloc] initWithStyle:style
 									  reuseIdentifier:reuse];
 	cell.accessoryType = UITableViewCellAccessoryNone;
 	cell.accessoryView = nil;
@@ -2650,6 +2706,131 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	return cell;
 }
 
+- (UITableViewCell *)profilePhotoCellInTable:(UITableView *)tableView {
+	static NSString *reuse = @"TGSettingsPhotoButtonCell";
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
+	if (!cell){
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+									  reuseIdentifier:reuse];
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		cell.backgroundColor = [UIColor clearColor];
+		cell.backgroundView = [[UIView alloc] initWithFrame:CGRectZero];
+		cell.backgroundView.backgroundColor = [UIColor clearColor];
+		cell.contentView.backgroundColor = [UIColor clearColor];
+
+		UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+		button.tag = 772;
+		button.frame = CGRectMake(9, 0, cell.contentView.bounds.size.width - 18, 45);
+		button.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+		button.titleLabel.font = [UIFont boldSystemFontOfSize:17];
+		button.titleLabel.shadowOffset = CGSizeMake(0, 1);
+		button.adjustsImageWhenHighlighted = NO;
+		button.adjustsImageWhenDisabled = NO;
+		button.exclusiveTouch = YES;
+		[button setTitle:@"Set Profile Photo" forState:UIControlStateNormal];
+		[button setTitleColor:TGSettingsRGB(0x4a6587) forState:UIControlStateNormal];
+		[button setTitleColor:[UIColor whiteColor] forState:UIControlStateHighlighted];
+		[button setTitleShadowColor:[UIColor colorWithWhite:1.0f alpha:0.45f]
+						   forState:UIControlStateNormal];
+		[button setTitleShadowColor:[UIColor clearColor]
+						   forState:UIControlStateHighlighted];
+
+		UIImage *raw = [UIImage imageNamed:@"GroupedActionButton.png"];
+		UIImage *rawHighlighted =
+				[UIImage imageNamed:@"GroupedActionButton_Highlighted.png"];
+		if (raw)
+			[button setBackgroundImage:[raw stretchableImageWithLeftCapWidth:
+					(int)(raw.size.width / 2) topCapHeight:0]
+							  forState:UIControlStateNormal];
+		if (rawHighlighted)
+			[button setBackgroundImage:[rawHighlighted stretchableImageWithLeftCapWidth:
+					(int)(rawHighlighted.size.width / 2) topCapHeight:0]
+							  forState:UIControlStateHighlighted];
+		if (!raw)
+			button.backgroundColor = TGSettingsRGB(0xdfe3e8);
+		[button addTarget:self action:@selector(changePhotoButtonPressed)
+		 forControlEvents:UIControlEventTouchUpInside];
+		[cell.contentView addSubview:button];
+	}
+	UIView *button = [cell.contentView viewWithTag:772];
+	button.frame = CGRectMake(9, 0, cell.contentView.bounds.size.width - 18, 45);
+	return cell;
+}
+
+- (void)changePhotoButtonPressed {
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
+			delegate:self cancelButtonTitle:nil destructiveButtonTitle:nil
+	  otherButtonTitles:nil];
+	NSMutableArray *actions = [NSMutableArray array];
+	if ([UIImagePickerController isSourceTypeAvailable:
+			UIImagePickerControllerSourceTypeCamera]){
+		[sheet addButtonWithTitle:@"Take Photo"];
+		[actions addObject:@"camera"];
+	}
+	if ([UIImagePickerController isSourceTypeAvailable:
+			UIImagePickerControllerSourceTypePhotoLibrary]){
+		[sheet addButtonWithTitle:@"Choose from Library"];
+		[actions addObject:@"library"];
+	}
+	if (!actions.count){
+		UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Profile Photo"
+				message:@"There is no camera and no photo library on this device."
+			   delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+		[alert show];
+		return;
+	}
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = 160;
+	self.photoSheetActions = actions;
+	[sheet showInView:self.view];
+}
+
+- (void)presentProfilePhotoPickerFromSource:(UIImagePickerControllerSourceType)source {
+	self.pickingProfilePhoto = YES;
+	UIImagePickerController *picker = [[UIImagePickerController alloc] init];
+	picker.sourceType = source;
+	picker.delegate = self;
+	[self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)takeProfilePhoto:(UIImage *)image {
+	CGSize size = image.size;
+	CGFloat limit = 640.0f;
+	CGFloat scale = MIN(1.0f, MIN(limit / MAX(size.width, 1.0f),
+								  limit / MAX(size.height, 1.0f)));
+	UIImage *sized = image;
+	if (scale < 1.0f){
+		CGSize target = CGSizeMake(floorf(size.width * scale),
+								   floorf(size.height * scale));
+		UIGraphicsBeginImageContextWithOptions(target, YES, 1.0f);
+		[image drawInRect:CGRectMake(0, 0, target.width, target.height)];
+		sized = UIGraphicsGetImageFromCurrentImageContext() ?: image;
+		UIGraphicsEndImageContext();
+	}
+	NSData *jpeg = UIImageJPEGRepresentation(sized, 0.8f);
+	NSString *path = [NSTemporaryDirectory()
+			stringByAppendingPathComponent:@"tg-profile-photo.jpg"];
+	if (!jpeg || ![jpeg writeToFile:path atomically:YES]){
+		UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Profile Photo"
+				message:@"The picture could not be prepared."
+			   delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+		[alert show];
+		return;
+	}
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] setProfilePhotoAtPath:path completion:^(BOOL ok){
+		[[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
+		if (!ok){
+			UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Profile Photo"
+					message:@"Telegram would not take that picture."
+				   delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+			[alert show];
+			return;
+		}
+		[weakSelf refreshHeader];
+	}];
+}
+
 - (UITableViewCell *)logoutCellInTable:(UITableView *)tableView {
 	static NSString *reuse = @"TGSettingsLogoutCell";
 	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
@@ -2701,7 +2882,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
 	if (self.page == TGSettingsPageRoot){
 		NSInteger kind = [self rootKindForSection:indexPath.section];
-		if (kind == TGSettingsRootKindLogout)
+		if (kind == TGSettingsRootKindLogout || kind == TGSettingsRootKindPhoto)
 			return 45;
 		if (kind == TGSettingsRootKindSuggestions)
 			return 64;
@@ -3043,10 +3224,17 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 
 	UIButton *close = [UIButton buttonWithType:UIButtonTypeCustom];
 	close.frame = CGRectMake(0, 0, 34, 34);
-	close.titleLabel.font = [UIFont boldSystemFontOfSize:17];
-	[close setTitle:@"✕" forState:UIControlStateNormal];
-	[close setTitleColor:[[TGTheme shared] secondaryTextColour]
-				forState:UIControlStateNormal];
+	UIImage *clear = [UIImage imageNamed:@"ClearInput.png"];
+	if (clear){
+		[close setImage:clear forState:UIControlStateNormal];
+		[close setImage:([UIImage imageNamed:@"ClearInput_Pressed.png"] ?: clear)
+			   forState:UIControlStateHighlighted];
+	} else {
+		close.titleLabel.font = [UIFont boldSystemFontOfSize:17];
+		[close setTitle:@"x" forState:UIControlStateNormal];
+		[close setTitleColor:[[TGTheme shared] secondaryTextColour]
+					forState:UIControlStateNormal];
+	}
 	close.tag = indexPath.row;
 	[close addTarget:self action:@selector(suggestionDismissTapped:)
 	 forControlEvents:UIControlEventTouchUpInside];
@@ -3766,6 +3954,9 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		return;
 	}
 
+	if (kind == TGSettingsRootKindPhoto)
+		return;
+
 	if (kind == TGSettingsRootKindAccount){
 		UIViewController *profile = [[TGEditProfileViewController alloc] init];
 		[self.navigationController pushViewController:profile animated:YES];
@@ -4472,6 +4663,16 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		return;
 	}
 
+	if (sheet.tag == 160){
+		if ((NSUInteger)index >= self.photoSheetActions.count)
+			return;
+		[self presentProfilePhotoPickerFromSource:
+				[self.photoSheetActions[index] isEqualToString:@"camera"]
+						? UIImagePickerControllerSourceTypeCamera
+						: UIImagePickerControllerSourceTypePhotoLibrary];
+		return;
+	}
+
 	if (sheet.tag == 155){
 		[self deletePressedSound];
 		return;
@@ -4732,6 +4933,12 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		didFinishPickingMediaWithInfo:(NSDictionary *)info {
 	[picker dismissViewControllerAnimated:YES completion:nil];
 	UIImage *image = info[UIImagePickerControllerOriginalImage];
+	if (self.pickingProfilePhoto){
+		self.pickingProfilePhoto = NO;
+		if (image)
+			[self takeProfilePhoto:image];
+		return;
+	}
 	if (image){
 		self.wallpaperOriginal = [self wallpaperSizedImage:image];
 		[self installWallpaperFromOriginal];
@@ -4838,6 +5045,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 }
 
 - (void)imagePickerControllerDidCancel:(UIImagePickerController *)picker {
+	self.pickingProfilePhoto = NO;
 	[picker dismissViewControllerAnimated:YES completion:nil];
 }
 

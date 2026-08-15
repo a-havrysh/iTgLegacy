@@ -36,6 +36,7 @@
 @property (nonatomic, strong) NSMutableArray *problemButtons;
 @property (nonatomic, strong) NSArray *problemKeys;
 @property (nonatomic, strong) UITextField *commentField;
+@property (nonatomic, strong) UIImageView *commentBackgroundView;
 @property (nonatomic, strong) UILabel *ratingTitleLabel;
 @property (nonatomic, strong) UIButton *sendButton;
 @property (nonatomic, strong) UIButton *laterButton;
@@ -87,6 +88,15 @@
 		self.view.backgroundColor = [UIColor colorWithRed:0x2f / 255.0f green:0x39 / 255.0f
 													 blue:0x48 / 255.0f alpha:1.0f];
 
+	UIImage *shadowImage = [UIImage imageNamed:@"LoginShadow.png"];
+	if (shadowImage != nil){
+		UIImageView *shadowView = [[UIImageView alloc] initWithFrame:self.view.bounds];
+		shadowView.image = shadowImage;
+		shadowView.autoresizingMask = UIViewAutoresizingFlexibleWidth
+				| UIViewAutoresizingFlexibleHeight;
+		[self.view addSubview:shadowView];
+	}
+
 	CGRect b = self.view.bounds;
 	CGFloat side = 90;
 	CGFloat avatarY = (CGFloat)(int)(b.size.height * 0.16f);
@@ -98,8 +108,8 @@
 												   size:side colourId:self.userId];
 	[self.view addSubview:self.avatarView];
 
-	UIColor *chromeShadow = [UIColor colorWithRed:0x0e / 255.0f green:0x28 / 255.0f
-											 blue:0x4d / 255.0f alpha:0.4f];
+	UIColor *chromeShadow = [UIColor colorWithRed:0x32 / 255.0f green:0x3c / 255.0f
+											 blue:0x4a / 255.0f alpha:1.0f];
 
 	self.nameLabel = [[UILabel alloc] initWithFrame:
 			CGRectMake(9, avatarY + side + 18 + retinaPixel, b.size.width - 18, 24)];
@@ -110,7 +120,7 @@
 	self.nameLabel.font = [UIFont boldSystemFontOfSize:19];
 	self.nameLabel.textColor = [UIColor whiteColor];
 	self.nameLabel.shadowColor = chromeShadow;
-	self.nameLabel.shadowOffset = CGSizeMake(0, -1);
+	self.nameLabel.shadowOffset = CGSizeMake(0, 1);
 	self.nameLabel.textAlignment = NSTextAlignmentCenter;
 	self.nameLabel.backgroundColor = [UIColor clearColor];
 	[self.view addSubview:self.nameLabel];
@@ -118,9 +128,10 @@
 	self.statusLabel = [[UILabel alloc] initWithFrame:
 			CGRectMake(9, CGRectGetMaxY(self.nameLabel.frame) + 4, b.size.width - 18, 24)];
 	self.statusLabel.font = [UIFont systemFontOfSize:14];
-	self.statusLabel.textColor = [UIColor colorWithWhite:1.0f alpha:0.65f];
+	self.statusLabel.textColor = [UIColor colorWithRed:0xc0 / 255.0f green:0xc5 / 255.0f
+												  blue:0xcc / 255.0f alpha:1.0f];
 	self.statusLabel.shadowColor = chromeShadow;
-	self.statusLabel.shadowOffset = CGSizeMake(0, -1);
+	self.statusLabel.shadowOffset = CGSizeMake(0, 1);
 	self.statusLabel.textAlignment = NSTextAlignmentCenter;
 	self.statusLabel.backgroundColor = [UIColor clearColor];
 	[self.view addSubview:self.statusLabel];
@@ -129,7 +140,7 @@
 	CGFloat baseline = b.size.height - 20;
 	CGRect leftFrame = CGRectMake(9, baseline - 43, buttonWidth, 43);
 	CGRect rightFrame = CGRectMake(b.size.width - 9 - buttonWidth, baseline - 45, buttonWidth, 45);
-	CGRect speakerFrame = CGRectMake(9, baseline - 43 - 51, b.size.width - 18, 43);
+	CGRect speakerFrame = CGRectMake(9, baseline - 43 - 45, b.size.width - 18, 43);
 
 	self.speakerButton = [self buttonWithTitle:@"Speaker"
 										 asset:@"GroupedActionButton"
@@ -278,14 +289,15 @@
 		button.titleLabel.font = [UIFont boldSystemFontOfSize:14];
 		button.titleLabel.shadowOffset = CGSizeMake(0, 1);
 	} else {
-		UIColor *shadow = [asset isEqualToString:@"GroupedActionButtonGreen"]
+		BOOL green = [asset isEqualToString:@"GroupedActionButtonGreen"];
+		UIColor *shadow = green
 				? [UIColor colorWithRed:0x12 / 255.0f green:0x46 / 255.0f blue:0x06 / 255.0f alpha:0.3f]
 				: [UIColor colorWithRed:0xa1 / 255.0f green:0x06 / 255.0f blue:0x03 / 255.0f alpha:0.5f];
 		[button setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
 		[button setTitleColor:[UIColor whiteColor] forState:UIControlStateHighlighted];
 		[button setTitleShadowColor:shadow forState:UIControlStateNormal];
 		[button setTitleShadowColor:shadow forState:UIControlStateHighlighted];
-		button.titleLabel.font = [UIFont boldSystemFontOfSize:16];
+		button.titleLabel.font = [UIFont boldSystemFontOfSize:green ? 16 : 17];
 		button.titleLabel.shadowOffset = CGSizeMake(0, -1);
 	}
 
@@ -633,8 +645,8 @@ static NSData *TGCallToneWrap(NSData *samples, double rate) {
 	self.ratingPanel.alpha = 0.0f;
 	[self.view addSubview:self.ratingPanel];
 
-	UIColor *chromeShadow = [UIColor colorWithRed:0x0e / 255.0f green:0x28 / 255.0f
-											 blue:0x4d / 255.0f alpha:0.4f];
+	UIColor *chromeShadow = [UIColor colorWithRed:0x32 / 255.0f green:0x3c / 255.0f
+											 blue:0x4a / 255.0f alpha:1.0f];
 
 	self.ratingTitleLabel = [[UILabel alloc] initWithFrame:CGRectMake(9, 0, b.size.width - 18, 40)];
 	self.ratingTitleLabel.numberOfLines = 2;
@@ -642,7 +654,7 @@ static NSData *TGCallToneWrap(NSData *samples, double rate) {
 	self.ratingTitleLabel.font = [UIFont boldSystemFontOfSize:17];
 	self.ratingTitleLabel.textColor = [UIColor whiteColor];
 	self.ratingTitleLabel.shadowColor = chromeShadow;
-	self.ratingTitleLabel.shadowOffset = CGSizeMake(0, -1);
+	self.ratingTitleLabel.shadowOffset = CGSizeMake(0, 1);
 	self.ratingTitleLabel.textAlignment = NSTextAlignmentCenter;
 	self.ratingTitleLabel.backgroundColor = [UIColor clearColor];
 	[self.ratingPanel addSubview:self.ratingTitleLabel];
@@ -681,21 +693,32 @@ static NSData *TGCallToneWrap(NSData *samples, double rate) {
 	CGFloat cellWidth = (CGFloat)(int)((b.size.width - 9 * 2 - 10) / 2);
 	for (NSUInteger i = 0; i < [titles count]; i++){
 		CGFloat px = (i % 2 == 0) ? 9 : (b.size.width - 9 - cellWidth);
-		CGFloat py = y + (CGFloat)(int)(i / 2) * 34;
+		CGFloat py = y + (CGFloat)(int)(i / 2) * 45;
 		UIButton *chip = [self ratingButtonWithTitle:[titles objectAtIndex:i]
 											   asset:@"GroupedActionButton"
-											   frame:CGRectMake(px, py, cellWidth, 30)
+											   frame:CGRectMake(px, py, cellWidth, 43)
 											  action:@selector(problemPressed:)];
 		chip.tag = (NSInteger)i;
-		chip.titleLabel.font = [UIFont boldSystemFontOfSize:13];
+		chip.titleLabel.font = [UIFont boldSystemFontOfSize:14];
 		chip.hidden = YES;
 		[self.problemButtons addObject:chip];
 	}
 
+	CGRect plateFrame = CGRectMake(9, y + 3 * 45 + 4, b.size.width - 18, 43);
+	UIImage *rawInput = [UIImage imageNamed:@"LoginInput.png"];
+	self.commentBackgroundView = [[UIImageView alloc] initWithImage:
+			[rawInput stretchableImageWithLeftCapWidth:(NSInteger)(rawInput.size.width / 2)
+										  topCapHeight:0]];
+	self.commentBackgroundView.frame = plateFrame;
+	self.commentBackgroundView.hidden = YES;
+	[self.ratingPanel addSubview:self.commentBackgroundView];
+
 	self.commentField = [[UITextField alloc] initWithFrame:
-			CGRectMake(9, y + 3 * 34 + 4, b.size.width - 18, 31)];
-	self.commentField.borderStyle = UITextBorderStyleRoundedRect;
-	self.commentField.font = [UIFont systemFontOfSize:14];
+			CGRectMake(plateFrame.origin.x + 9, plateFrame.origin.y + 10,
+					plateFrame.size.width - 20, 22)];
+	self.commentField.borderStyle = UITextBorderStyleNone;
+	self.commentField.backgroundColor = [UIColor colorWithWhite:0xf5 / 255.0f alpha:1.0f];
+	self.commentField.font = [UIFont systemFontOfSize:16];
 	self.commentField.placeholder = @"Write a comment...";
 	self.commentField.returnKeyType = UIReturnKeyDone;
 	self.commentField.autocorrectionType = UITextAutocorrectionTypeDefault;
@@ -713,7 +736,7 @@ static NSData *TGCallToneWrap(NSData *samples, double rate) {
 	self.sendButton = [self ratingButtonWithTitle:@"Submit"
 											asset:@"GroupedActionButtonGreen"
 											frame:CGRectMake(b.size.width - 9 - buttonWidth,
-													baseline - 45, buttonWidth, 45)
+													baseline - 43, buttonWidth, 43)
 										   action:@selector(submitRating)];
 	self.sendButton.enabled = NO;
 	self.sendButton.alpha = 0.7f;
@@ -749,6 +772,7 @@ static NSData *TGCallToneWrap(NSData *samples, double rate) {
 	for (UIButton *chip in self.problemButtons)
 		chip.hidden = !detail;
 	self.commentField.hidden = !detail;
+	self.commentBackgroundView.hidden = !detail;
 
 	self.commentField.placeholder = (self.stars > 0 && self.stars < 4)
 			? @"What went wrong?" : @"Write a comment...";
@@ -838,7 +862,8 @@ static NSData *TGCallToneWrap(NSData *samples, double rate) {
 	if (self.keyboardShift > 0)
 		return;
 	CGFloat needed = CGRectGetMaxY(self.view.bounds) - 216
-			- (self.ratingPanel.frame.origin.y + CGRectGetMaxY(self.commentField.frame) + 8);
+			- (self.ratingPanel.frame.origin.y
+					+ CGRectGetMaxY(self.commentBackgroundView.frame) + 8);
 	if (needed >= 0)
 		return;
 	self.keyboardShift = -needed;
