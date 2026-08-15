@@ -16,6 +16,7 @@ static const CGFloat kCoverSide = 40.0f;
 static const CGFloat kTileSide = 64.0f;
 static const NSInteger kArchivedPageSize = 20;
 static const NSInteger kTrendingPageSize = 20;
+static const NSInteger kSetPageSize = 40;
 
 static const CGFloat kBottomBarHeight = 48.0f;
 
@@ -33,7 +34,7 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 }
 
 @interface TGStickersViewController () <UITableViewDataSource, UITableViewDelegate,
-		UIScrollViewDelegate, UISearchBarDelegate>
+		UIScrollViewDelegate>
 
 @property (nonatomic, strong) UITableView *table;
 @property (nonatomic, strong) UIScrollView *grid;
@@ -47,11 +48,19 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 @property (nonatomic, strong) NSMutableDictionary *covers;
 @property (nonatomic, strong) NSMutableSet *coversInFlight;
 @property (nonatomic, strong) NSMutableArray *tiles;
+@property (nonatomic, strong) NSArray *allStickers;
+@property (nonatomic, strong) UIView *bottomBar;
+@property (nonatomic, strong) UIView *bottomBarLine;
+@property (nonatomic, strong) UIButton *bottomButton;
+@property (nonatomic, strong) NSArray *orderBeforeEdit;
+@property (nonatomic, copy) void (^setStateChanged)(BOOL installed);
 
 @property (nonatomic, assign) NSInteger favouriteCount;
 @property (nonatomic, assign) NSInteger archivedCount;
 @property (nonatomic, assign) NSInteger trendingNewCount;
 @property (nonatomic, assign) NSInteger totalRemote;
+@property (nonatomic, assign) NSInteger trendingOffset;
+@property (nonatomic, assign) NSInteger visibleStickerCount;
 
 @property (nonatomic, assign) BOOL loaded;
 @property (nonatomic, assign) BOOL failed;
@@ -111,6 +120,9 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 	else
 		[self buildTable];
 
+	if ([self showsBottomBar])
+		[self buildBottomBar];
+
 	[self buildPlaceholder];
 
 	self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:
@@ -120,8 +132,10 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 
 	if (self.page == TGStickersPageRoot)
 		[self installEditButton];
-	if (self.page == TGStickersPageSet)
+	if (self.page == TGStickersPageSet){
 		[self refreshSetBarButton];
+		[self refreshBottomBar];
+	}
 
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
 	[self reload];
@@ -147,8 +161,7 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 }
 
 - (void)viewDidLayoutSubviews {
-	if ([super respondsToSelector:@selector(viewDidLayoutSubviews)])
-		[super viewDidLayoutSubviews];
+	[super viewDidLayoutSubviews];
 	[self layoutChrome];
 }
 
@@ -193,6 +206,97 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 	[self.view addSubview:self.grid];
 }
 
+- (BOOL)showsBottomBar {
+	return self.page == TGStickersPageSet;
+}
+
+- (BOOL)currentSetInstalled {
+	return [self.set[@"installed"] boolValue];
+}
+
+- (void)buildBottomBar {
+	self.bottomBar = [[UIView alloc] initWithFrame:CGRectZero];
+	self.bottomBar.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+			UIViewAutoresizingFlexibleTopMargin;
+	self.bottomBar.backgroundColor = [[TGTheme shared] isDark]
+			? [[TGTheme shared] listBackgroundColour] : TGStickersRGB(0xf7f7f7);
+
+	self.bottomBarLine = [[UIView alloc] initWithFrame:CGRectZero];
+	self.bottomBarLine.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	self.bottomBarLine.backgroundColor = [[TGTheme shared] separatorColour];
+	[self.bottomBar addSubview:self.bottomBarLine];
+
+	self.bottomButton = [UIButton buttonWithType:UIButtonTypeCustom];
+	self.bottomButton.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	self.bottomButton.titleLabel.font = [UIFont boldSystemFontOfSize:14];
+	self.bottomButton.titleLabel.shadowOffset = CGSizeMake(0, -1);
+	[self.bottomButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+	[self.bottomButton addTarget:self action:@selector(bottomButtonTapped)
+				forControlEvents:UIControlEventTouchUpInside];
+	[self.bottomBar addSubview:self.bottomButton];
+
+	self.bottomBar.hidden = YES;
+	[self.view addSubview:self.bottomBar];
+}
+
+- (void)refreshBottomBar {
+	if (!self.bottomBar)
+		return;
+
+	BOOL installed = [self currentSetInstalled];
+	NSString *asset = installed ? @"MenuRedButton" : @"GroupedActionButtonGreen";
+	CGFloat cap = installed ? 12 : 33;
+	UIImage *plate = [[UIImage imageNamed:[asset stringByAppendingString:@".png"]]
+			stretchableImageWithLeftCapWidth:(NSInteger)cap topCapHeight:0];
+	UIImage *platePressed = [[UIImage imageNamed:
+			[asset stringByAppendingString:@"_Highlighted.png"]]
+			stretchableImageWithLeftCapWidth:(NSInteger)cap topCapHeight:0];
+	[self.bottomButton setBackgroundImage:plate forState:UIControlStateNormal];
+	[self.bottomButton setBackgroundImage:platePressed forState:UIControlStateHighlighted];
+	UIColor *shadow = installed
+			? [UIColor colorWithRed:0.64f green:0.06f blue:0.04f alpha:0.2f]
+			: [UIColor colorWithRed:0.05f green:0.15f blue:0.30f alpha:0.4f];
+	[self.bottomButton setTitleShadowColor:shadow forState:UIControlStateNormal];
+
+	NSInteger count = (NSInteger)self.allStickers.count;
+	if (count == 0)
+		count = [self.set[@"count"] integerValue];
+	NSString *noun = count == 1 ? @"Sticker" : @"Stickers";
+	NSString *title;
+	if (count > 0)
+		title = [NSString stringWithFormat:@"%@ %d %@", installed ? @"Remove" : @"Add",
+				(int)count, noun];
+	else
+		title = installed ? @"Remove Stickers" : @"Add Stickers";
+	[self.bottomButton setTitle:title forState:UIControlStateNormal];
+
+	self.bottomBar.hidden = !self.loaded || self.grid.hidden;
+	[self layoutChrome];
+}
+
+- (void)bottomButtonTapped {
+	[self toggleCurrentSet];
+}
+
+- (void)layoutBottomBar {
+	if (!self.bottomBar)
+		return;
+	CGFloat width = self.view.bounds.size.width;
+	CGFloat height = self.view.bounds.size.height;
+	self.bottomBar.frame = CGRectMake(0, height - kBottomBarHeight, width, kBottomBarHeight);
+	self.bottomBarLine.frame = CGRectMake(0, 0, width, 1.0f / [UIScreen mainScreen].scale);
+
+	CGFloat buttonHeight = [self currentSetInstalled] ? 45 : 43;
+	CGFloat buttonWidth = width - 20;
+	self.bottomButton.frame = CGRectMake(10,
+			floorf((kBottomBarHeight - buttonHeight) / 2), buttonWidth, buttonHeight);
+
+	UIEdgeInsets insets = self.grid.contentInset;
+	insets.bottom = self.bottomBar.hidden ? 0 : kBottomBarHeight;
+	self.grid.contentInset = insets;
+	self.grid.scrollIndicatorInsets = insets;
+}
+
 - (void)buildPlaceholder {
 	self.placeholder = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 250, 0)];
 	self.placeholder.backgroundColor = [UIColor clearColor];
@@ -227,7 +331,7 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 }
 
 - (void)refreshSetBarButton {
-	BOOL installed = [self.set[@"installed"] boolValue] || self.installedHere;
+	BOOL installed = [self currentSetInstalled];
 	UIButton *button = [TGIcons headerButtonWithTitle:(installed ? @"Remove" : @"Add")
 												 bold:!installed
 											   target:self
@@ -259,6 +363,8 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 				floorf((height - containerHeight) / 2), containerWidth, containerHeight);
 	}
 
+	[self layoutBottomBar];
+
 	if ([self isGridPage])
 		[self layoutTiles];
 }
@@ -280,6 +386,7 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 	self.placeholder.hidden = NO;
 	self.table.hidden = YES;
 	self.grid.hidden = YES;
+	self.bottomBar.hidden = YES;
 	[self layoutChrome];
 }
 
@@ -288,6 +395,7 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 	self.placeholder.hidden = YES;
 	self.table.hidden = NO;
 	self.grid.hidden = NO;
+	self.bottomBar.hidden = ![self showsBottomBar];
 	[self layoutChrome];
 }
 
@@ -383,7 +491,9 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 			return;
 		}
 		strongSelf.sets = [NSMutableArray arrayWithArray:sets];
-		strongSelf.exhausted = (sets.count == 0 || (NSInteger)sets.count >= total);
+		strongSelf.trendingOffset = (NSInteger)sets.count;
+		strongSelf.exhausted = ((NSInteger)sets.count < kTrendingPageSize ||
+				(total > 0 && strongSelf.trendingOffset >= total));
 		if (strongSelf.sets.count == 0){
 			[strongSelf showTitle:@"No Trending Stickers"
 							 body:@"There is nothing featured right now. Come back later."];
@@ -395,9 +505,54 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 	}];
 }
 
+- (void)loadMoreTrending {
+	if (self.loadingMore || self.exhausted || self.sets.count == 0)
+		return;
+	self.loadingMore = YES;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] trendingStickerSetsWithOffset:self.trendingOffset limit:kTrendingPageSize
+										  completion:^(NSArray *sets, NSInteger total){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		strongSelf.loadingMore = NO;
+		if (total > 0)
+			strongSelf.totalRemote = total;
+		if (sets.count == 0){
+			strongSelf.exhausted = YES;
+			return;
+		}
+
+		NSMutableSet *known = [NSMutableSet set];
+		for (NSDictionary *existing in strongSelf.sets)
+			if (existing[@"id"])
+				[known addObject:existing[@"id"]];
+		NSMutableArray *fresh = [NSMutableArray array];
+		for (NSDictionary *set in sets)
+			if (!set[@"id"] || ![known containsObject:set[@"id"]])
+				[fresh addObject:set];
+
+		strongSelf.trendingOffset += (NSInteger)sets.count;
+		strongSelf.exhausted = ((NSInteger)sets.count < kTrendingPageSize ||
+				(total > 0 && strongSelf.trendingOffset >= total));
+		if (fresh.count == 0){
+			[strongSelf loadMoreTrending];
+			return;
+		}
+		[strongSelf.sets addObjectsFromArray:fresh];
+		[strongSelf.table reloadData];
+		[strongSelf markSetsViewed:fresh];
+	}];
+}
+
 - (void)markShownSetsViewed {
+	[self markSetsViewed:self.sets];
+}
+
+- (void)markSetsViewed:(NSArray *)sets {
 	NSMutableArray *ids = [NSMutableArray array];
-	for (NSDictionary *set in self.sets)
+	for (NSDictionary *set in sets)
 		if (![set[@"viewed"] boolValue] && set[@"id"])
 			[ids addObject:set[@"id"]];
 	if (ids.count)
@@ -496,16 +651,25 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 			[strongSelf showFailure];
 			return;
 		}
-		strongSelf.set = set;
+		NSMutableDictionary *merged = [NSMutableDictionary dictionaryWithDictionary:set];
+		if (strongSelf.installedHere)
+			merged[@"installed"] = @YES;
+		strongSelf.set = merged;
 		strongSelf.title = [strongSelf pageTitle];
-		strongSelf.stickers = set[@"stickers"];
+		strongSelf.allStickers = set[@"stickers"];
+		strongSelf.visibleStickerCount = MIN((NSInteger)strongSelf.allStickers.count,
+				kSetPageSize);
+		strongSelf.stickers = [strongSelf.allStickers
+				subarrayWithRange:NSMakeRange(0, (NSUInteger)strongSelf.visibleStickerCount)];
 		[strongSelf refreshSetBarButton];
-		if (strongSelf.stickers.count == 0){
+		if (strongSelf.allStickers.count == 0){
 			[strongSelf showTitle:@"Empty Set" body:@"This sticker set has no stickers in it."];
+			[strongSelf refreshBottomBar];
 			return;
 		}
 		[strongSelf showContent];
 		[strongSelf rebuildTiles];
+		[strongSelf refreshBottomBar];
 	}];
 }
 
@@ -680,9 +844,26 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 	}
 }
 
+- (void)growSetPageIfNeeded {
+	if (self.page != TGStickersPageSet)
+		return;
+	if (self.visibleStickerCount >= (NSInteger)self.allStickers.count)
+		return;
+	CGFloat bottom = self.grid.contentOffset.y + self.grid.bounds.size.height;
+	if (bottom < self.grid.contentSize.height - kTileSide * 2)
+		return;
+	self.visibleStickerCount = MIN((NSInteger)self.allStickers.count,
+			self.visibleStickerCount + kSetPageSize);
+	self.stickers = [self.allStickers
+			subarrayWithRange:NSMakeRange(0, (NSUInteger)self.visibleStickerCount)];
+	[self rebuildTiles];
+}
+
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView {
-	if (scrollView == self.grid)
-		[self loadVisibleTiles];
+	if (scrollView != self.grid)
+		return;
+	[self growSetPageIfNeeded];
+	[self loadVisibleTiles];
 }
 
 - (void)tileTapped:(UIButton *)tile {
@@ -726,6 +907,8 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 
 	if ([action isEqualToString:@"archiveSet"] && set)
 		[self archiveSet:set];
+	else if ([action isEqualToString:@"restoreSet"] && set)
+		[self restoreArchivedSet:set];
 	else if ([action isEqualToString:@"removeSet"] && set)
 		[self uninstallSet:set];
 	else if ([action isEqualToString:@"clearRecent"])
@@ -752,26 +935,41 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 }
 
 - (void)uninstallSet:(NSDictionary *)set {
-	NSInteger index = [self.sets indexOfObject:set];
+	NSUInteger index = [self.sets indexOfObject:set];
 	if (index == NSNotFound)
 		return;
-	[self.sets removeObjectAtIndex:index];
-	[self.table reloadData];
-	[self installEditButton];
+	if (self.page == TGStickersPageArchived){
+		[self removeArchivedRow:(NSInteger)index];
+	} else {
+		[self.sets removeObjectAtIndex:index];
+		[self.table reloadData];
+		[self installEditButton];
+	}
 	[[TGClient shared] uninstallStickerSet:[set[@"id"] longLongValue] completion:^(BOOL ok){
 		if (!ok)
 			return;
 	}];
 }
 
-- (void)installSet:(NSDictionary *)set fromRow:(NSInteger)row {
+- (void)installSet:(NSDictionary *)set fromRow:(NSInteger)row button:(UIButton *)button {
 	__weak typeof(self) weakSelf = self;
+	__weak UIButton *weakButton = button;
 	[[TGClient shared] installStickerSet:[set[@"id"] longLongValue] completion:^(BOOL ok){
 		__strong typeof(weakSelf) strongSelf = weakSelf;
-		if (!strongSelf || !ok)
+		__strong UIButton *strongButton = weakButton;
+		if (!strongSelf)
 			return;
+		if (!ok){
+			strongButton.enabled = YES;
+			[strongButton setTitle:[strongSelf addButtonTitle] forState:UIControlStateNormal];
+			return;
+		}
 		if (row >= (NSInteger)strongSelf.sets.count)
 			return;
+		if (strongSelf.page == TGStickersPageArchived){
+			[strongSelf removeArchivedRow:row];
+			return;
+		}
 		NSMutableDictionary *updated = [NSMutableDictionary
 				dictionaryWithDictionary:strongSelf.sets[row]];
 		updated[@"installed"] = @YES;
@@ -781,22 +979,63 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 	}];
 }
 
+- (void)removeArchivedRow:(NSInteger)row {
+	if (row >= (NSInteger)self.sets.count)
+		return;
+	[self.sets removeObjectAtIndex:row];
+	if (self.archivedCount > 0)
+		self.archivedCount--;
+	if (self.sets.count == 0){
+		[self.table reloadData];
+		[self showTitle:@"No Archived Stickers"
+				   body:@"Sticker sets you archive are kept here, ready to be put back."];
+		return;
+	}
+	[self.table reloadData];
+}
+
+- (void)restoreArchivedSet:(NSDictionary *)set {
+	NSUInteger row = [self.sets indexOfObject:set];
+	if (row == NSNotFound)
+		return;
+	[self installSet:set fromRow:(NSInteger)row button:nil];
+}
+
+- (void)applyCurrentSetInstalled:(BOOL)installed {
+	self.installedHere = installed;
+	NSMutableDictionary *updated = [NSMutableDictionary dictionaryWithDictionary:self.set];
+	updated[@"installed"] = installed ? @YES : @NO;
+	if (installed)
+		updated[@"archived"] = @NO;
+	self.set = updated;
+	[self refreshSetBarButton];
+	[self refreshBottomBar];
+	if (self.setStateChanged)
+		self.setStateChanged(installed);
+}
+
 - (void)toggleCurrentSet {
 	int64_t identifier = self.setId ?: [self.set[@"id"] longLongValue];
 	if (identifier == 0)
 		return;
-	BOOL installed = [self.set[@"installed"] boolValue] || self.installedHere;
-	self.installedHere = !installed;
+	BOOL installed = [self currentSetInstalled];
+	[self applyCurrentSetInstalled:!installed];
+	self.bottomButton.enabled = NO;
 
-	NSMutableDictionary *updated = [NSMutableDictionary dictionaryWithDictionary:self.set];
-	updated[@"installed"] = installed ? @NO : @YES;
-	self.set = updated;
-	[self refreshSetBarButton];
+	__weak typeof(self) weakSelf = self;
+	void (^done)(BOOL) = ^(BOOL ok){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		strongSelf.bottomButton.enabled = YES;
+		if (!ok)
+			[strongSelf applyCurrentSetInstalled:installed];
+	};
 
 	if (installed)
-		[[TGClient shared] uninstallStickerSet:identifier completion:^(__unused BOOL ok){}];
+		[[TGClient shared] uninstallStickerSet:identifier completion:done];
 	else
-		[[TGClient shared] installStickerSet:identifier completion:^(__unused BOOL ok){}];
+		[[TGClient shared] installStickerSet:identifier completion:done];
 }
 
 - (void)clearRecent {
@@ -831,6 +1070,7 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 		[self.table setEditing:NO animated:YES];
 	} else {
 		self.reordering = YES;
+		self.orderBeforeEdit = [NSArray arrayWithArray:self.sets];
 		[self.table setEditing:YES animated:YES];
 	}
 	[self installEditButton];
@@ -838,14 +1078,28 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 
 - (void)commitOrder {
 	self.reordering = NO;
+	NSArray *previous = self.orderBeforeEdit;
+	self.orderBeforeEdit = nil;
 	if (self.sets.count == 0)
 		return;
+	if (previous && [previous isEqualToArray:self.sets])
+		return;
+
 	NSMutableArray *ids = [NSMutableArray array];
 	for (NSDictionary *set in self.sets)
 		if (set[@"id"])
 			[ids addObject:set[@"id"]];
-	if (ids.count)
-		[[TGClient shared] reorderInstalledStickerSets:ids];
+	if (ids.count == 0)
+		return;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] reorderInstalledStickerSets:ids completion:^(BOOL ok){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf || ok || !previous)
+			return;
+		strongSelf.sets = [NSMutableArray arrayWithArray:previous];
+		[strongSelf.table reloadData];
+	}];
 }
 
 #pragma mark - navigation
@@ -861,7 +1115,33 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 	next.page = TGStickersPageSet;
 	next.set = set;
 	next.setId = [set[@"id"] longLongValue];
+
+	if (self.page == TGStickersPageTrending || self.page == TGStickersPageArchived){
+		__weak typeof(self) weakSelf = self;
+		next.setStateChanged = ^(BOOL installed){
+			__strong typeof(weakSelf) strongSelf = weakSelf;
+			if (!strongSelf)
+				return;
+			[strongSelf previewedSet:set becameInstalled:installed];
+		};
+	}
 	[self.navigationController pushViewController:next animated:YES];
+}
+
+- (void)previewedSet:(NSDictionary *)set becameInstalled:(BOOL)installed {
+	NSUInteger index = [self.sets indexOfObject:set];
+	if (index == NSNotFound)
+		return;
+	if (self.page == TGStickersPageArchived){
+		if (installed)
+			[self removeArchivedRow:(NSInteger)index];
+		return;
+	}
+	NSMutableDictionary *updated = [NSMutableDictionary dictionaryWithDictionary:set];
+	updated[@"installed"] = installed ? @YES : @NO;
+	updated[@"archived"] = @NO;
+	self.sets[index] = updated;
+	[self.table reloadData];
 }
 
 #pragma mark - captions
@@ -902,9 +1182,9 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 		return @"Tap a set to see its stickers. Swipe one away to archive or remove it, or press Edit to reorder.";
 	}
 	if (self.page == TGStickersPageArchived && section == 0 && self.sets.count)
-		return @"Archived sets are kept out of the panel until you add them back.";
+		return @"Archived sets are kept out of the panel until you add them back. Tap a set to look through it first, or swipe it to add it back or delete it.";
 	if (self.page == TGStickersPageTrending && section == 0 && self.sets.count)
-		return @"Sets other people are using right now.";
+		return @"Sets other people are using right now. Tap one to see its stickers before you add it.";
 	return nil;
 }
 
@@ -991,11 +1271,16 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 	return count == 1 ? @"1 sticker" : [NSString stringWithFormat:@"%d stickers", (int)count];
 }
 
+- (NSString *)addButtonTitle {
+	return self.page == TGStickersPageArchived ? @"Add Back" : @"Add";
+}
+
 - (UIButton *)addButton {
 	UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
-	button.frame = CGRectMake(0, 0, 54, 30);
+	button.frame = CGRectMake(0, 0,
+			self.page == TGStickersPageArchived ? 72 : 54, 30);
 	button.titleLabel.font = [UIFont boldSystemFontOfSize:13];
-	[button setTitle:@"Add" forState:UIControlStateNormal];
+	[button setTitle:[self addButtonTitle] forState:UIControlStateNormal];
 	[button setTitleColor:[[TGTheme shared] accentColour] forState:UIControlStateNormal];
 	[button setTitleColor:TGStickersRGB(0x8b97a5) forState:UIControlStateDisabled];
 	[button addTarget:self action:@selector(addButtonTapped:)
@@ -1009,7 +1294,7 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 		return;
 	button.enabled = NO;
 	[button setTitle:@"Added" forState:UIControlStateDisabled];
-	[self installSet:self.sets[row] fromRow:row];
+	[self installSet:self.sets[row] fromRow:row button:button];
 }
 
 - (UITableViewCell *)plainCellForTable:(UITableView *)tableView {
@@ -1159,13 +1444,19 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 - (void)tableView:(UITableView *)tableView
 		willDisplayCell:(UITableViewCell *)cell
 	  forRowAtIndexPath:(NSIndexPath *)indexPath {
-	if (self.page != TGStickersPageArchived)
+	if (self.page != TGStickersPageArchived && self.page != TGStickersPageTrending)
 		return;
-	if (indexPath.row >= (NSInteger)self.sets.count - 3)
+	if (indexPath.row < (NSInteger)self.sets.count - 3)
+		return;
+	if (self.page == TGStickersPageArchived)
 		[self loadMoreArchived];
+	else
+		[self loadMoreTrending];
 }
 
 - (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
+	if (self.page == TGStickersPageArchived)
+		return YES;
 	return self.page == TGStickersPageRoot && indexPath.section == 1;
 }
 
@@ -1177,6 +1468,8 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 		   editingStyleForRowAtIndexPath:(NSIndexPath *)indexPath {
 	if (self.reordering)
 		return UITableViewCellEditingStyleNone;
+	if (self.page == TGStickersPageArchived)
+		return UITableViewCellEditingStyleDelete;
 	if (self.page == TGStickersPageRoot && indexPath.section == 1)
 		return UITableViewCellEditingStyleDelete;
 	return UITableViewCellEditingStyleNone;
@@ -1196,6 +1489,18 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 	if (!set)
 		return;
 	self.actionSheetSet = set;
+
+	if (self.page == TGStickersPageArchived){
+		NSArray *archivedActions = @[
+			[[TGActionSheetAction alloc] initWithTitle:@"Add Back" action:@"restoreSet"],
+			[[TGActionSheetAction alloc] initWithTitle:@"Delete" action:@"removeSet"
+												  type:TGActionSheetActionTypeDestructive],
+			[[TGActionSheetAction alloc] initWithTitle:@"Cancel" action:@"cancel"
+												  type:TGActionSheetActionTypeCancel]
+		];
+		[self presentSheetWithTitle:set[@"title"] actions:archivedActions];
+		return;
+	}
 
 	NSArray *actions = @[
 		[[TGActionSheetAction alloc] initWithTitle:@"Archive" action:@"archiveSet"],

@@ -9,6 +9,7 @@
 #import "TGNewContactViewController.h"
 #import "UIView+SafeTint.h"
 #import <QuartzCore/QuartzCore.h>
+#import <AddressBook/AddressBook.h>
 
 static const CGFloat kContactAvatar = 40.0f;
 static const CGFloat kContactRowHeight = 51.0f;
@@ -55,6 +56,65 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 		cache[key] = scaled;
 	return scaled;
 }
+
+@interface TGContactsProgressWindow : NSObject
+@property (nonatomic, strong) UIWindow *window;
+@property (nonatomic, strong) UIView *containerView;
+- (void)show;
+- (void)dismiss;
+@end
+
+@implementation TGContactsProgressWindow
+
+- (void)show {
+	if (self.window)
+		return;
+	CGRect bounds = [[UIScreen mainScreen] bounds];
+	self.window = [[UIWindow alloc] initWithFrame:bounds];
+	self.window.windowLevel = UIWindowLevelStatusBar + 1.0f;
+	self.window.backgroundColor = [UIColor clearColor];
+	self.window.userInteractionEnabled = YES;
+
+	UIView *dim = [[UIView alloc] initWithFrame:bounds];
+	dim.backgroundColor = [UIColor clearColor];
+	[self.window addSubview:dim];
+
+	self.containerView = [[UIView alloc] initWithFrame:CGRectMake(
+			(CGFloat)(int)((bounds.size.width - 100) / 2),
+			(CGFloat)(int)((bounds.size.height - 100) / 2), 100, 100)];
+	self.containerView.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.7f];
+	self.containerView.layer.cornerRadius = 16.0f;
+	self.containerView.alpha = 0.0f;
+	[dim addSubview:self.containerView];
+
+	UIActivityIndicatorView *spinner = [[UIActivityIndicatorView alloc]
+			initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhiteLarge];
+	spinner.center = CGPointMake(50, 50);
+	spinner.frame = CGRectIntegral(spinner.frame);
+	[spinner startAnimating];
+	[self.containerView addSubview:spinner];
+
+	self.window.hidden = NO;
+	[UIView animateWithDuration:0.3f animations:^{
+		self.containerView.alpha = 1.0f;
+	}];
+}
+
+- (void)dismiss {
+	if (!self.window)
+		return;
+	UIWindow *window = self.window;
+	UIView *container = self.containerView;
+	self.window = nil;
+	self.containerView = nil;
+	[UIView animateWithDuration:0.3f animations:^{
+		container.alpha = 0.0f;
+	} completion:^(BOOL finished){
+		window.hidden = YES;
+	}];
+}
+
+@end
 
 @interface TGContactRowCell : UITableViewCell
 @property (nonatomic, strong) UIImageView *avatarView;
@@ -188,7 +248,7 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 
 @end
 
-@interface TGContactsViewController () <UISearchBarDelegate, UIActionSheetDelegate>
+@interface TGContactsViewController () <UISearchBarDelegate, UIActionSheetDelegate, UIAlertViewDelegate>
 @property (nonatomic, strong) NSArray *users;
 @property (nonatomic, strong) NSArray *filteredUsers;
 @property (nonatomic, strong) NSArray *sectionTitles;
@@ -209,6 +269,10 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 @property (nonatomic, strong) NSDictionary *actionUser;
 @property (nonatomic, strong) NSString *actionBirthdate;
 @property (nonatomic, assign) BOOL actionSheetShown;
+@property (nonatomic, strong) NSMutableDictionary *birthdays;
+@property (nonatomic, strong) TGContactsProgressWindow *progress;
+@property (nonatomic, assign) BOOL importing;
+@property (nonatomic, strong) NSDictionary *pendingDeleteUser;
 @end
 
 @implementation TGContactsViewController
@@ -307,12 +371,10 @@ static NSString *TGContactName(NSDictionary *u) {
 - (void)updateImportFooter {
 	if (!self.importLabel)
 		return;
-	if (!self.importedCountKnown){
-		self.importLabel.text = @"";
-		return;
-	}
-	if (self.importedCount <= 0)
-		self.importLabel.text = @"No address book contacts synced";
+	if (!self.importedCountKnown)
+		self.importLabel.text = @"Sync contacts from your address book";
+	else if (self.importedCount <= 0)
+		self.importLabel.text = @"No address book contacts synced\nTap to sync";
 	else if (self.importedCount == 1)
 		self.importLabel.text = @"1 contact synced from your address book";
 	else
@@ -320,23 +382,160 @@ static NSString *TGContactName(NSDictionary *u) {
 				@"%d contacts synced from your address book", (int)self.importedCount];
 }
 
-- (void)importFooterTapped {
-	if (!self.importedCountKnown || self.importedCount <= 0)
-		return;
-	UIActionSheet *sheet = [[UIActionSheet alloc]
-			initWithTitle:@"Imported address book contacts stay on Telegram until you delete them."
-				 delegate:self
-		cancelButtonTitle:nil
-   destructiveButtonTitle:@"Delete Synced Contacts"
-		otherButtonTitles:nil];
-	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
-	sheet.tag = 3;
+- (void)presentSheet:(UIActionSheet *)sheet {
 	UITabBar *tabBar = [self.tabBarController isKindOfClass:UITabBarController.class]
 			? self.tabBarController.tabBar : nil;
 	if (tabBar)
 		[sheet showFromTabBar:tabBar];
 	else
 		[sheet showInView:self.navigationController.view];
+}
+
+- (void)importFooterTapped {
+	if (self.importing)
+		return;
+	NSString *title = (self.importedCountKnown && self.importedCount > 0)
+			? @"Imported address book contacts stay on Telegram until you delete them."
+			: @"Telegram can look for your address book contacts who already have an account.";
+	UIActionSheet *sheet = [[UIActionSheet alloc]
+			initWithTitle:title
+				 delegate:self
+		cancelButtonTitle:nil
+   destructiveButtonTitle:nil
+		otherButtonTitles:nil];
+	[sheet addButtonWithTitle:@"Sync Contacts"];
+	if (self.importedCountKnown && self.importedCount > 0)
+		sheet.destructiveButtonIndex = [sheet addButtonWithTitle:@"Delete Synced Contacts"];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = 3;
+	[self presentSheet:sheet];
+}
+
+- (NSString *)normalisedPhone:(NSString *)phone {
+	NSMutableString *digits = [NSMutableString string];
+	for (NSUInteger i = 0; i < phone.length; i++){
+		unichar c = [phone characterAtIndex:i];
+		if (c >= '0' && c <= '9')
+			[digits appendFormat:@"%C", c];
+	}
+	return digits;
+}
+
+- (NSArray *)addressBookEntriesFrom:(ABAddressBookRef)book {
+	NSMutableArray *entries = [NSMutableArray array];
+	CFArrayRef people = ABAddressBookCopyArrayOfAllPeople(book);
+	if (!people)
+		return entries;
+	CFIndex count = CFArrayGetCount(people);
+	for (CFIndex i = 0; i < count && entries.count < 1000; i++){
+		ABRecordRef person = CFArrayGetValueAtIndex(people, i);
+		NSString *first = (__bridge_transfer NSString *)
+				ABRecordCopyValue(person, kABPersonFirstNameProperty);
+		NSString *last = (__bridge_transfer NSString *)
+				ABRecordCopyValue(person, kABPersonLastNameProperty);
+		ABMultiValueRef phones = ABRecordCopyValue(person, kABPersonPhoneProperty);
+		if (!phones)
+			continue;
+		CFIndex phoneCount = ABMultiValueGetCount(phones);
+		for (CFIndex j = 0; j < phoneCount && entries.count < 1000; j++){
+			NSString *raw = (__bridge_transfer NSString *)
+					ABMultiValueCopyValueAtIndex(phones, j);
+			NSString *phone = [self normalisedPhone:raw ?: @""];
+			if (phone.length < 5)
+				continue;
+			[entries addObject:@{
+				@"phone"      : phone,
+				@"first_name" : first.length ? first : @"",
+				@"last_name"  : last.length ? last : @"",
+			}];
+		}
+		CFRelease(phones);
+	}
+	CFRelease(people);
+	return entries;
+}
+
+- (void)finishImportWithResult:(NSArray *)userIds total:(NSInteger)total {
+	self.importing = NO;
+	[self.progress dismiss];
+	self.progress = nil;
+	NSInteger found = 0;
+	if ([userIds isKindOfClass:NSArray.class]){
+		for (NSNumber *userId in userIds)
+			if ([userId isKindOfClass:NSNumber.class] && userId.longLongValue != 0)
+				found++;
+	}
+	NSString *message = found
+			? [NSString stringWithFormat:@"%d of %d address book contacts are on Telegram.",
+					(int)found, (int)total]
+			: @"None of your address book contacts are on Telegram yet.";
+	[[[UIAlertView alloc] initWithTitle:nil
+							   message:message
+							  delegate:nil
+					 cancelButtonTitle:@"OK"
+					 otherButtonTitles:nil] show];
+	[self reloadImportedCount];
+	[self reloadContacts];
+}
+
+- (void)startAddressBookImport {
+	if (self.importing)
+		return;
+	ABAddressBookRef book = ABAddressBookCreateWithOptions(NULL, NULL);
+	if (!book){
+		[[[UIAlertView alloc] initWithTitle:nil
+								   message:@"Telegram could not open your address book."
+								  delegate:nil
+						 cancelButtonTitle:@"OK"
+						 otherButtonTitles:nil] show];
+		return;
+	}
+	self.importing = YES;
+	self.progress = [[TGContactsProgressWindow alloc] init];
+	[self.progress show];
+
+	__weak typeof(self) weakSelf = self;
+	ABAddressBookRequestAccessWithCompletion(book, ^(bool granted, CFErrorRef error){
+		dispatch_async(dispatch_get_main_queue(), ^{
+			TGContactsViewController *me = weakSelf;
+			if (!me){
+				CFRelease(book);
+				return;
+			}
+			if (!granted){
+				CFRelease(book);
+				me.importing = NO;
+				[me.progress dismiss];
+				me.progress = nil;
+				[[[UIAlertView alloc] initWithTitle:nil
+										   message:@"Telegram needs access to Contacts in Settings."
+										  delegate:nil
+								 cancelButtonTitle:@"OK"
+								 otherButtonTitles:nil] show];
+				return;
+			}
+			NSArray *entries = [me addressBookEntriesFrom:book];
+			CFRelease(book);
+			if (!entries.count){
+				me.importing = NO;
+				[me.progress dismiss];
+				me.progress = nil;
+				[[[UIAlertView alloc] initWithTitle:nil
+										   message:@"Your address book has no phone numbers to sync."
+										  delegate:nil
+								 cancelButtonTitle:@"OK"
+								 otherButtonTitles:nil] show];
+				return;
+			}
+			NSInteger total = (NSInteger)entries.count;
+			[[TGClient shared] syncImportedContacts:entries completion:^(NSArray *userIds){
+				TGContactsViewController *inner = weakSelf;
+				if (!inner)
+					return;
+				[inner finishImportWithResult:userIds total:total];
+			}];
+		});
+	});
 }
 
 - (void)longPressed:(UILongPressGestureRecognizer *)gesture {
@@ -352,6 +551,16 @@ static NSString *TGContactName(NSDictionary *u) {
 	self.actionUser = u;
 	self.actionBirthdate = nil;
 	self.actionSheetShown = NO;
+
+	NSNumber *userId = [u[@"id"] isKindOfClass:NSNumber.class] ? u[@"id"] : nil;
+	id cached = userId ? self.birthdays[userId] : nil;
+	if (cached){
+		if ([cached isKindOfClass:NSDictionary.class])
+			self.actionBirthdate = [self birthdayTextFrom:cached];
+		[self showContactActions];
+		return;
+	}
+
 	[NSObject cancelPreviousPerformRequestsWithTarget:self
 											 selector:@selector(showContactActions)
 											   object:nil];
@@ -360,13 +569,45 @@ static NSString *TGContactName(NSDictionary *u) {
 	[[TGClient shared] birthdateForUser:[u[@"id"] longLongValue]
 							 completion:^(NSDictionary *birthdate){
 		TGContactsViewController *me = weakSelf;
-		if (!me || me.actionUser != u)
+		if (!me)
 			return;
-		NSString *text = [birthdate isKindOfClass:NSDictionary.class] ? birthdate[@"text"] : nil;
-		if ([text isKindOfClass:NSString.class] && text.length)
+		if (userId)
+			me.birthdays[userId] = [birthdate isKindOfClass:NSDictionary.class]
+					? birthdate : (id)[NSNull null];
+		if (me.actionUser != u)
+			return;
+		NSString *text = [birthdate isKindOfClass:NSDictionary.class]
+				? [me birthdayTextFrom:birthdate] : nil;
+		if (text.length)
 			me.actionBirthdate = text;
 		[me showContactActions];
 	}];
+}
+
+- (NSString *)birthdayTextFrom:(NSDictionary *)birthdate {
+	NSString *text = birthdate[@"text"];
+	if (![text isKindOfClass:NSString.class] || !text.length)
+		return nil;
+	return [self isBirthdayToday:birthdate]
+			? [NSString stringWithFormat:@"%@ (today)", text] : text;
+}
+
+- (BOOL)isBirthdayToday:(NSDictionary *)birthdate {
+	if (![birthdate isKindOfClass:NSDictionary.class])
+		return NO;
+	NSInteger day = [birthdate[@"day"] integerValue];
+	NSInteger month = [birthdate[@"month"] integerValue];
+	if (day <= 0 || month <= 0)
+		return NO;
+	NSDateComponents *now = [[NSCalendar currentCalendar]
+			components:(NSDayCalendarUnit | NSMonthCalendarUnit) fromDate:[NSDate date]];
+	return now.day == day && now.month == month;
+}
+
+- (BOOL)hasBirthdayTodayForUser:(NSDictionary *)u {
+	NSNumber *userId = [u[@"id"] isKindOfClass:NSNumber.class] ? u[@"id"] : nil;
+	id cached = userId ? self.birthdays[userId] : nil;
+	return [cached isKindOfClass:NSDictionary.class] && [self isBirthdayToday:cached];
 }
 
 - (void)showContactActions {
@@ -395,14 +636,10 @@ static NSString *TGContactName(NSDictionary *u) {
 											 otherButtonTitles:
 			close ? @"Remove from Close Friends" : @"Add to Close Friends",
 			@"Send Message", nil];
+	sheet.destructiveButtonIndex = [sheet addButtonWithTitle:@"Delete Contact"];
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 	sheet.tag = 2;
-	UITabBar *tabBar = [self.tabBarController isKindOfClass:UITabBarController.class]
-			? self.tabBarController.tabBar : nil;
-	if (tabBar)
-		[sheet showFromTabBar:tabBar];
-	else
-		[sheet showInView:self.navigationController.view];
+	[self presentSheet:sheet];
 }
 
 - (void)toggleCloseFriendForUser:(NSDictionary *)u {
@@ -464,19 +701,78 @@ static NSString *TGContactName(NSDictionary *u) {
 			[self toggleCloseFriendForUser:u];
 		else if (index == 1)
 			[self openChatWithUser:u];
+		else if (index == sheet.destructiveButtonIndex)
+			[self confirmDeleteContact:u];
 		return;
 	}
-	if (sheet.tag == 3 && index == sheet.destructiveButtonIndex){
-		__weak typeof(self) weakSelf = self;
-		[[TGClient shared] clearImportedContactsWithCompletion:^(BOOL ok){
-			TGContactsViewController *me = weakSelf;
-			if (!me)
-				return;
-			[me reloadImportedCount];
-			if (ok)
-				[me reloadContacts];
-		}];
+	if (sheet.tag == 3){
+		if (index == sheet.destructiveButtonIndex){
+			__weak typeof(self) weakSelf = self;
+			[[TGClient shared] clearImportedContactsWithCompletion:^(BOOL ok){
+				TGContactsViewController *me = weakSelf;
+				if (!me)
+					return;
+				[me reloadImportedCount];
+				if (ok)
+					[me reloadContacts];
+			}];
+			return;
+		}
+		if ([[sheet buttonTitleAtIndex:index] isEqualToString:@"Sync Contacts"])
+			[self startAddressBookImport];
 	}
+}
+
+- (void)confirmDeleteContact:(NSDictionary *)u {
+	self.pendingDeleteUser = u;
+	UIAlertView *alert = [[UIAlertView alloc]
+			initWithTitle:nil
+				  message:[NSString stringWithFormat:@"Delete %@ from your contacts?",
+						  TGContactName(u)]
+				 delegate:self
+		cancelButtonTitle:@"Cancel"
+		otherButtonTitles:@"Delete", nil];
+	[alert show];
+}
+
+- (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)index {
+	NSDictionary *u = self.pendingDeleteUser;
+	self.pendingDeleteUser = nil;
+	if (index == alertView.cancelButtonIndex || !u)
+		return;
+	[self deleteContact:u];
+}
+
+- (void)deleteContact:(NSDictionary *)u {
+	NSNumber *userId = [u[@"id"] isKindOfClass:NSNumber.class] ? u[@"id"] : nil;
+	if (!userId)
+		return;
+
+	NSArray *previous = self.users;
+	NSMutableArray *remaining = [NSMutableArray array];
+	for (NSDictionary *other in previous)
+		if ([other[@"id"] longLongValue] != userId.longLongValue)
+			[remaining addObject:other];
+	self.users = remaining;
+	[self refreshTable];
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] removeContacts:@[userId] completion:^(BOOL ok){
+		TGContactsViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (ok){
+			[me.closeFriendIds removeObject:@(userId.longLongValue)];
+			return;
+		}
+		me.users = previous;
+		[me refreshTable];
+		[[[UIAlertView alloc] initWithTitle:nil
+								   message:@"Could not delete this contact."
+								  delegate:nil
+						 cancelButtonTitle:@"OK"
+						 otherButtonTitles:nil] show];
+	}];
 }
 
 - (BOOL)matchesQuery:(NSDictionary *)u query:(NSString *)query {
@@ -625,6 +921,7 @@ static NSString *TGContactName(NSDictionary *u) {
 	self.closeFriendIds = [NSMutableSet set];
 	self.badges = [NSMutableDictionary dictionary];
 	self.badgesRequested = [NSMutableSet set];
+	self.birthdays = [NSMutableDictionary dictionary];
 	self.tableView.rowHeight = kContactRowHeight;
 	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
 	self.tableView.separatorColor = [[TGTheme shared] separatorColour];
@@ -1054,6 +1351,11 @@ static NSString *TGContactName(NSDictionary *u) {
 	cell.premiumView.hidden = (premiumIcon == nil);
 	cell.verifiedLabel.hidden = !verified;
 	cell.closeFriendLabel.hidden = self.isPickerMode || ![self isCloseFriend:u];
+	if (!self.isPickerMode && [self hasBirthdayTodayForUser:u]){
+		cell.subtitleLabel.text = cell.subtitleLabel.text.length
+				? [NSString stringWithFormat:@"🎂 %@", cell.subtitleLabel.text]
+				: @"🎂 Birthday today";
+	}
 	if (flagged && !self.isPickerMode){
 		cell.subtitleLabel.textColor = TGContactsRGB(0xcc3333);
 		NSString *mark = [badges[@"isScam"] boolValue] ? @"SCAM" : @"FAKE";
@@ -1126,21 +1428,8 @@ static NSString *TGContactName(NSDictionary *u) {
 	if (editingStyle != UITableViewCellEditingStyleDelete)
 		return;
 	NSDictionary *u = [self userAtIndexPath:indexPath];
-	NSNumber *userId = [u[@"id"] isKindOfClass:NSNumber.class] ? u[@"id"] : nil;
-	if (!userId)
-		return;
-
-	[[TGClient shared] request:@{
-		@"@type"    : @"removeContacts",
-		@"user_ids" : @[userId],
-	} completion:nil];
-
-	NSMutableArray *remaining = [NSMutableArray array];
-	for (NSDictionary *other in self.users)
-		if ([other[@"id"] longLongValue] != userId.longLongValue)
-			[remaining addObject:other];
-	self.users = remaining;
-	[self refreshTable];
+	if (u)
+		[self deleteContact:u];
 }
 
 @end

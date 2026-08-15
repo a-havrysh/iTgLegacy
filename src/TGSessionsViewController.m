@@ -1,8 +1,20 @@
 #import "TGSessionsViewController.h"
 #import "TGClient.h"
 #import "TGClient+Privacy.h"
+#import "TGClient+Account.h"
 #import "TGTheme.h"
 #import "TGActionSheet.h"
+
+@class TGSessionDetailViewController;
+
+@protocol TGSessionDetailDelegate <NSObject>
+- (void)sessionDetailDidChangeSessions:(TGSessionDetailViewController *)controller;
+@end
+
+@interface TGSessionDetailViewController : UITableViewController
+@property (nonatomic, weak) id<TGSessionDetailDelegate> detailDelegate;
+- (instancetype)initWithSession:(NSDictionary *)session;
+@end
 
 #define TGSessionsRGB(rgb) [UIColor colorWithRed:(((rgb) >> 16) & 0xff) / 255.0f \
 									   green:(((rgb) >> 8) & 0xff) / 255.0f \
@@ -14,7 +26,7 @@ static CGFloat TGSessionsRetinaPixel(void) {
 	return [UIScreen mainScreen].scale > 1.0f ? 0.5f : 0.0f;
 }
 
-@interface TGSessionsViewController ()
+@interface TGSessionsViewController () <TGSessionDetailDelegate>
 @property (nonatomic, strong) NSArray *sessions;
 @property (nonatomic, strong) TGActionSheet *currentActionSheet;
 @property (nonatomic, assign) long long pendingTermination;
@@ -144,9 +156,10 @@ static CGFloat TGSessionsRetinaPixel(void) {
 	if (age < 0)
 		age = 0;
 
-	NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
 	if (age < 60)
 		return @"just now";
+
+	NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
 	if (age < 60 * 60 * 12){
 		formatter.dateStyle = NSDateFormatterNoStyle;
 		formatter.timeStyle = NSDateFormatterShortStyle;
@@ -228,7 +241,7 @@ static CGFloat TGSessionsRetinaPixel(void) {
 	if (!self.loaded)
 		return @"Loading...";
 	if ([self othersOnly].count)
-		return @"Tap a session to terminate it, or swipe it away.";
+		return @"Tap a session to see its details, or swipe it away to terminate it.";
 	return @"You have no other active sessions.";
 }
 
@@ -241,6 +254,7 @@ static CGFloat TGSessionsRetinaPixel(void) {
 }
 
 - (NSString *)ttlTitleForDays:(NSInteger)days {
+	if (days <= 0) return @"Never";
 	if (days <= 7) return @"1 week";
 	if (days <= 30) return @"1 month";
 	if (days <= 90) return @"3 months";
@@ -431,6 +445,9 @@ static CGFloat TGSessionsRetinaPixel(void) {
 										  : TGSessionsRGB(0x888888);
 	cell.selectionStyle = indexPath.section == 0
 			? UITableViewCellSelectionStyleNone : UITableViewCellSelectionStyleBlue;
+	cell.accessoryType = indexPath.section == 1
+			? UITableViewCellAccessoryDisclosureIndicator
+			: UITableViewCellAccessoryNone;
 
 	UIView *hairline = [cell.contentView viewWithTag:TGSessionsHairlineTag];
 	NSInteger rows = [self tableView:tableView numberOfRowsInSection:indexPath.section];
@@ -595,11 +612,331 @@ static CGFloat TGSessionsRetinaPixel(void) {
 	NSDictionary *session = [self sessionAtIndexPath:indexPath];
 	if (!session)
 		return;
-	long long sessionId = [session[@"id"] longLongValue];
-	if (!sessionId)
+	if (![session[@"id"] longLongValue])
 		return;
-	self.pendingTermination = sessionId;
 
+	TGSessionDetailViewController *detail =
+			[[TGSessionDetailViewController alloc] initWithSession:session];
+	detail.detailDelegate = self;
+	[self.navigationController pushViewController:detail animated:YES];
+}
+
+- (void)sessionDetailDidChangeSessions:(__unused TGSessionDetailViewController *)controller {
+	[self refresh];
+}
+
+@end
+
+@interface TGSessionDetailViewController ()
+@property (nonatomic, strong) NSDictionary *session;
+@property (nonatomic, strong) NSArray *infoRows;
+@property (nonatomic, strong) TGActionSheet *currentActionSheet;
+@property (nonatomic, assign) BOOL acceptsCalls;
+@property (nonatomic, assign) BOOL acceptsSecrets;
+@property (nonatomic, assign) BOOL isCurrent;
+@property (nonatomic, assign) BOOL unconfirmed;
+@property (nonatomic, assign) long long sessionId;
+@end
+
+@implementation TGSessionDetailViewController
+
+- (instancetype)initWithSession:(NSDictionary *)session {
+	self = [super initWithStyle:UITableViewStyleGrouped];
+	if (self){
+		_session = session ?: [NSDictionary dictionary];
+		_sessionId = [_session[@"id"] longLongValue];
+		[self adoptSession:_session];
+	}
+	return self;
+}
+
+- (NSString *)stringIn:(NSDictionary *)session forKey:(NSString *)key {
+	id value = session[key];
+	if (![value isKindOfClass:[NSString class]])
+		return @"";
+	return [value stringByTrimmingCharactersInSet:
+			[NSCharacterSet whitespaceCharacterSet]];
+}
+
+- (NSString *)firstStringIn:(NSDictionary *)session keys:(NSArray *)keys {
+	for (NSString *key in keys){
+		NSString *value = [self stringIn:session forKey:key];
+		if (value.length)
+			return value;
+	}
+	return @"";
+}
+
+- (NSString *)dateTextIn:(NSDictionary *)session keys:(NSArray *)keys {
+	long long stamp = 0;
+	for (NSString *key in keys){
+		stamp = [session[key] longLongValue];
+		if (stamp > 0)
+			break;
+	}
+	if (stamp <= 0)
+		return @"";
+	NSDate *date = [NSDate dateWithTimeIntervalSince1970:(NSTimeInterval)stamp];
+	NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+	formatter.dateStyle = NSDateFormatterMediumStyle;
+	formatter.timeStyle = NSDateFormatterShortStyle;
+	return [formatter stringFromDate:date];
+}
+
+- (void)adoptSession:(NSDictionary *)session {
+	if (!session.count)
+		return;
+	self.session = session;
+	self.acceptsCalls = [session[@"canAcceptCalls"] boolValue];
+	self.acceptsSecrets = [session[@"canAcceptSecretChats"] boolValue];
+	self.isCurrent = [session[@"isCurrent"] boolValue];
+	self.unconfirmed = [session[@"isUnconfirmed"] boolValue];
+
+	NSMutableArray *rows = [NSMutableArray array];
+	NSString *app = [self firstStringIn:session keys:
+			[NSArray arrayWithObjects:@"appName", @"name", nil]];
+	NSString *version = [self stringIn:session forKey:@"appVersion"];
+	if (app.length && version.length)
+		app = [NSString stringWithFormat:@"%@ %@", app, version];
+	if (app.length)
+		[rows addObject:[NSArray arrayWithObjects:@"Application", app, nil]];
+
+	NSString *device = [self stringIn:session forKey:@"deviceModel"];
+	if (device.length)
+		[rows addObject:[NSArray arrayWithObjects:@"Device", device, nil]];
+
+	NSString *platform = [self firstStringIn:session keys:
+			[NSArray arrayWithObjects:@"platform", @"systemVersion", nil]];
+	if (platform.length)
+		[rows addObject:[NSArray arrayWithObjects:@"System", platform, nil]];
+
+	NSString *ip = [self firstStringIn:session keys:
+			[NSArray arrayWithObjects:@"ipAddress", @"ip", nil]];
+	if (ip.length)
+		[rows addObject:[NSArray arrayWithObjects:@"IP", ip, nil]];
+
+	NSString *location = [self stringIn:session forKey:@"location"];
+	if (location.length)
+		[rows addObject:[NSArray arrayWithObjects:@"Location", location, nil]];
+
+	NSString *login = [self dateTextIn:session keys:
+			[NSArray arrayWithObjects:@"loginDate", nil]];
+	if (login.length)
+		[rows addObject:[NSArray arrayWithObjects:@"Logged in", login, nil]];
+
+	if (!self.isCurrent){
+		NSString *seen = [self dateTextIn:session keys:
+				[NSArray arrayWithObjects:@"lastActiveDate", @"lastActive", nil]];
+		if (seen.length)
+			[rows addObject:[NSArray arrayWithObjects:@"Last active", seen, nil]];
+	}
+	self.infoRows = rows;
+}
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+	self.title = @"Session";
+	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
+		self.edgesForExtendedLayout = UIRectEdgeNone;
+	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	self.tableView.rowHeight = 44;
+	[self reload];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+	[super viewWillAppear:animated];
+	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+	[super viewWillDisappear:animated];
+	if (self.currentActionSheet){
+		[self.currentActionSheet dismissWithClickedButtonIndex:
+				self.currentActionSheet.cancelButtonIndex animated:NO];
+		self.currentActionSheet = nil;
+	}
+}
+
+- (void)reload {
+	if (!self.sessionId)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] sessionInfoForId:self.sessionId
+							 completion:^(NSDictionary *session){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf || !session.count)
+			return;
+		[strongSelf adoptSession:session];
+		[strongSelf.tableView reloadData];
+	}];
+}
+
+- (UIView *)sheetHostView {
+	if (self.navigationController.view)
+		return self.navigationController.view;
+	return self.view;
+}
+
+- (BOOL)showsSwitches {
+	return !self.isCurrent;
+}
+
+- (NSInteger)numberOfSectionsInTableView:(__unused UITableView *)tableView {
+	return 3;
+}
+
+- (NSInteger)tableView:(__unused UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	if (section == 0)
+		return (NSInteger)self.infoRows.count;
+	if (section == 1)
+		return [self showsSwitches] ? 2 : 0;
+	if (self.isCurrent)
+		return 0;
+	return self.unconfirmed ? 2 : 1;
+}
+
+- (NSString *)tableView:(__unused UITableView *)tableView
+		titleForHeaderInSection:(NSInteger)section {
+	if (section == 1 && [self showsSwitches])
+		return @"Accepts from this session";
+	return nil;
+}
+
+- (NSString *)tableView:(__unused UITableView *)tableView
+		titleForFooterInSection:(NSInteger)section {
+	if (section == 1 && [self showsSwitches])
+		return @"Calls and secret chats can be turned off for this session "
+			   @"without ending it.";
+	if (section == 2 && self.unconfirmed)
+		return @"You have not confirmed this login yet.";
+	return nil;
+}
+
+- (UITableViewCell *)infoCellForTable:(UITableView *)tableView
+								  row:(NSInteger)row {
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"info"];
+	if (!cell){
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
+									  reuseIdentifier:@"info"];
+	}
+	[[TGTheme shared] styleCell:cell];
+	NSArray *pair = self.infoRows[row];
+	cell.textLabel.text = pair[0];
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+	cell.textLabel.textColor = [[TGTheme shared] isDark]
+			? [[TGTheme shared] primaryTextColour] : TGSessionsRGB(0x516691);
+	cell.detailTextLabel.text = pair[1];
+	cell.detailTextLabel.font = [UIFont systemFontOfSize:17];
+	cell.detailTextLabel.textColor = [[TGTheme shared] cellDetailColour];
+	cell.accessoryType = UITableViewCellAccessoryNone;
+	cell.selectionStyle = UITableViewCellSelectionStyleNone;
+	return cell;
+}
+
+- (UITableViewCell *)switchCellForTable:(UITableView *)tableView
+									row:(NSInteger)row {
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"toggle"];
+	if (!cell){
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+									  reuseIdentifier:@"toggle"];
+		UISwitch *toggle = [[UISwitch alloc] initWithFrame:CGRectZero];
+		[toggle addTarget:self action:@selector(toggleChanged:)
+		 forControlEvents:UIControlEventValueChanged];
+		cell.accessoryView = toggle;
+	}
+	[[TGTheme shared] styleCell:cell];
+	cell.textLabel.text = row == 0 ? @"Calls" : @"Secret Chats";
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+	cell.textLabel.textColor = [[TGTheme shared] isDark]
+			? [[TGTheme shared] primaryTextColour] : TGSessionsRGB(0x516691);
+	cell.selectionStyle = UITableViewCellSelectionStyleNone;
+
+	UISwitch *toggle = (UISwitch *)cell.accessoryView;
+	toggle.tag = row;
+	[toggle setOn:(row == 0 ? self.acceptsCalls : self.acceptsSecrets) animated:NO];
+	return cell;
+}
+
+- (UITableViewCell *)actionCellForTable:(UITableView *)tableView
+								   row:(NSInteger)row {
+	BOOL confirmRow = self.unconfirmed && row == 0;
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"action"];
+	if (!cell){
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+									  reuseIdentifier:@"action"];
+	}
+	[[TGTheme shared] styleCell:cell];
+	cell.textLabel.text = confirmRow ? @"Confirm Session" : @"Terminate Session";
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:16];
+	cell.textLabel.textAlignment = NSTextAlignmentCenter;
+	cell.textLabel.textColor = confirmRow ? TGSessionsRGB(0x0779d0)
+										  : TGSessionsRGB(0xc4362f);
+	cell.textLabel.highlightedTextColor = [UIColor whiteColor];
+	cell.accessoryType = UITableViewCellAccessoryNone;
+	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+	return cell;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView
+		 cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	if (indexPath.section == 0)
+		return [self infoCellForTable:tableView row:indexPath.row];
+	if (indexPath.section == 1)
+		return [self switchCellForTable:tableView row:indexPath.row];
+	return [self actionCellForTable:tableView row:indexPath.row];
+}
+
+- (void)toggleChanged:(UISwitch *)sender {
+	BOOL calls = self.acceptsCalls;
+	BOOL secrets = self.acceptsSecrets;
+	if (sender.tag == 0)
+		calls = sender.on;
+	else
+		secrets = sender.on;
+
+	BOOL previousCalls = self.acceptsCalls;
+	BOOL previousSecrets = self.acceptsSecrets;
+	self.acceptsCalls = calls;
+	self.acceptsSecrets = secrets;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] setSession:self.sessionId
+				   canAcceptCalls:calls
+				 canAcceptSecrets:secrets
+					   completion:^(BOOL ok){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (ok || !strongSelf)
+			return;
+		strongSelf.acceptsCalls = previousCalls;
+		strongSelf.acceptsSecrets = previousSecrets;
+		[strongSelf.tableView reloadData];
+	}];
+}
+
+- (void)confirmSession {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] confirmSession:self.sessionId completion:^(BOOL ok){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		if (ok){
+			strongSelf.unconfirmed = NO;
+			[strongSelf.tableView reloadData];
+			[strongSelf.detailDelegate sessionDetailDidChangeSessions:strongSelf];
+		}
+	}];
+}
+
+- (void)performTerminate {
+	__weak typeof(self) weakSelf = self;
+	id<TGSessionDetailDelegate> delegate = self.detailDelegate;
+	[[TGClient shared] terminateSession:self.sessionId completion:^(__unused BOOL ok){
+		[delegate sessionDetailDidChangeSessions:weakSelf];
+	}];
+	[self.navigationController popViewControllerAnimated:YES];
+}
+
+- (void)confirmTerminate {
 	NSArray *actions = [NSArray arrayWithObjects:
 			[[TGActionSheetAction alloc] initWithTitle:@"Terminate Session"
 												action:@"terminate"
@@ -614,19 +951,21 @@ static CGFloat TGSessionsRetinaPixel(void) {
 			actionBlock:^(__unused id target, NSString *action){
 				__strong typeof(weakSelf) strongSelf = weakSelf;
 				strongSelf.currentActionSheet = nil;
-				if (![action isEqualToString:@"terminate"])
-					return;
-				long long pending = strongSelf.pendingTermination;
-				strongSelf.pendingTermination = 0;
-				for (NSDictionary *candidate in [strongSelf othersOnly]){
-					if ([candidate[@"id"] longLongValue] == pending){
-						[strongSelf terminateSessions:
-								[NSArray arrayWithObject:candidate]];
-						return;
-					}
-				}
+				if ([action isEqualToString:@"terminate"])
+					[strongSelf performTerminate];
 			} target:self];
 	[self.currentActionSheet showInView:[self sheetHostView]];
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	if (indexPath.section != 2 || !self.sessionId)
+		return;
+	if (self.unconfirmed && indexPath.row == 0){
+		[self confirmSession];
+		return;
+	}
+	[self confirmTerminate];
 }
 
 @end

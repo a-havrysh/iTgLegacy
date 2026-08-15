@@ -22,6 +22,45 @@ static NSString *TGProxyTypeTitle(NSString *type) {
 	return @"SOCKS5";
 }
 
+static NSString *TGProxyLinkInText(NSString *text) {
+	if (![text isKindOfClass:[NSString class]])
+		return nil;
+	NSString *trimmed = [text stringByTrimmingCharactersInSet:
+			[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+	if (trimmed.length < 8 || trimmed.length > 2048)
+		return nil;
+	NSString *lower = [trimmed lowercaseString];
+	NSArray *needles = [NSArray arrayWithObjects:@"tg://proxy", @"tg://socks",
+			@"t.me/proxy", @"t.me/socks", @"telegram.me/proxy", @"telegram.me/socks", nil];
+	for (NSString *needle in needles){
+		NSRange range = [lower rangeOfString:needle];
+		if (range.location == NSNotFound)
+			continue;
+		NSString *tail = [trimmed substringFromIndex:range.location];
+		NSRange space = [tail rangeOfCharacterFromSet:
+				[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+		if (space.location != NSNotFound)
+			tail = [tail substringToIndex:space.location];
+		return tail;
+	}
+	return nil;
+}
+
+static NSString *TGProxyPasteboardLink(void) {
+	UIPasteboard *board = [UIPasteboard generalPasteboard];
+	NSString *link = TGProxyLinkInText(board.string);
+	if (link)
+		return link;
+	for (NSURL *url in board.URLs){
+		if (![url isKindOfClass:[NSURL class]])
+			continue;
+		link = TGProxyLinkInText([url absoluteString]);
+		if (link)
+			return link;
+	}
+	return nil;
+}
+
 static NSString *TGProxyServerLine(NSDictionary *proxy) {
 	NSString *server = [proxy[@"server"] isKindOfClass:[NSString class]]
 			? proxy[@"server"] : @"";
@@ -45,6 +84,9 @@ static NSString *TGProxyServerLine(NSDictionary *proxy) {
 @property (nonatomic, strong) UITextField *usernameField;
 @property (nonatomic, strong) UITextField *passwordField;
 @property (nonatomic, assign) BOOL saving;
+@property (nonatomic, strong) NSString *pasteboardLink;
+@property (nonatomic, strong) NSString *initialLink;
+@property (nonatomic, assign) BOOL parsingLink;
 @end
 
 @implementation TGProxyEditViewController
@@ -97,17 +139,93 @@ static NSString *TGProxyServerLine(NSDictionary *proxy) {
 	NSString *existingType = self.existing[@"type"];
 	if ([existingType isKindOfClass:[NSString class]] && existingType.length)
 		self.type = existingType;
+
+	if (self.initialLink.length)
+		[self applyLink:self.initialLink announce:NO];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+	if (!self.existing){
+		NSString *link = TGProxyPasteboardLink();
+		if (![link isEqualToString:self.pasteboardLink]){
+			self.pasteboardLink = link;
+			[self.tableView reloadData];
+		}
+	}
 }
 
 - (void)viewDidAppear:(BOOL)animated {
 	[super viewDidAppear:animated];
-	if (!self.existing)
+	if (!self.existing && !self.serverField.text.length)
 		[self.serverField becomeFirstResponder];
+}
+
+- (BOOL)showsPasteRow {
+	return !self.existing && self.pasteboardLink.length > 0;
+}
+
+- (void)applyLink:(NSString *)link announce:(BOOL)announce {
+	if (!link.length || self.parsingLink)
+		return;
+	self.parsingLink = YES;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] proxyFromLink:link completion:^(NSDictionary *proxy){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		strongSelf.parsingLink = NO;
+		if (![proxy isKindOfClass:[NSDictionary class]] || !proxy.count){
+			if (announce){
+				UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Proxy"
+						message:@"That link is not a Telegram proxy link."
+						delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+				[alert show];
+			}
+			return;
+		}
+		[strongSelf fillFromProxy:proxy];
+	}];
+}
+
+- (void)fillFromProxy:(NSDictionary *)proxy {
+	[self.view endEditing:YES];
+
+	NSString *type = proxy[@"type"];
+	if ([type isKindOfClass:[NSString class]] && type.length)
+		self.type = type;
+
+	NSString *server = [proxy[@"server"] isKindOfClass:[NSString class]]
+			? proxy[@"server"] : @"";
+	self.serverField.text = server;
+
+	NSInteger port = [proxy[@"port"] respondsToSelector:@selector(integerValue)]
+			? [proxy[@"port"] integerValue] : 0;
+	self.portField.text = port > 0
+			? [NSString stringWithFormat:@"%d", (int)port] : @"";
+
+	self.secretField.text = [proxy[@"secret"] isKindOfClass:[NSString class]]
+			? proxy[@"secret"] : @"";
+	self.usernameField.text = [proxy[@"username"] isKindOfClass:[NSString class]]
+			? proxy[@"username"] : @"";
+	self.passwordField.text = [proxy[@"password"] isKindOfClass:[NSString class]]
+			? proxy[@"password"] : @"";
+
+	self.pasteboardLink = nil;
+	[self.tableView reloadData];
+}
+
+- (void)pasteLink {
+	NSString *link = self.pasteboardLink ?: TGProxyPasteboardLink();
+	if (!link.length){
+		UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Proxy"
+				message:@"There is no proxy link on the clipboard."
+				delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+		[alert show];
+		return;
+	}
+	[self applyLink:link announce:YES];
 }
 
 - (UITextField *)fieldWithPlaceholder:(NSString *)placeholder text:(id)text {
@@ -173,10 +291,16 @@ static NSString *TGProxyServerLine(NSDictionary *proxy) {
 }
 
 - (NSString *)headerTitleForSection:(NSInteger)section {
-	return section == 0 ? @"Proxy type" : @"Connection";
+	if (section == 0)
+		return @"Proxy type";
+	if (section == 1)
+		return @"Connection";
+	return nil;
 }
 
 - (NSString *)footerTitleForSection:(NSInteger)section {
+	if (section == 2)
+		return @"A copied tg://proxy or t.me/proxy link fills this form in for you.";
 	if (section != 1)
 		return nil;
 	if ([self isMtproto])
@@ -187,11 +311,15 @@ static NSString *TGProxyServerLine(NSDictionary *proxy) {
 
 - (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
 	NSString *title = [self headerTitleForSection:section];
+	if (!title)
+		return 12;
 	return [self captionHeightFor:title width:tableView.bounds.size.width - 42] + 18;
 }
 
 - (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
 	NSString *title = [self headerTitleForSection:section];
+	if (!title)
+		return nil;
 	CGFloat width = tableView.bounds.size.width - 42;
 	CGFloat height = [self captionHeightFor:title width:width];
 	UIView *container = [[UIView alloc] initWithFrame:
@@ -230,12 +358,14 @@ static NSString *TGProxyServerLine(NSDictionary *proxy) {
 #pragma mark - table
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-	return 2;
+	return [self showsPasteRow] ? 3 : 2;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
 	if (section == 0)
 		return 2;
+	if (section == 2)
+		return 1;
 	return (NSInteger)[self fields].count;
 }
 
@@ -275,6 +405,22 @@ static NSString *TGProxyServerLine(NSDictionary *proxy) {
 		return cell;
 	}
 
+	if (indexPath.section == 2){
+		UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"paste"];
+		if (!cell)
+			cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+										  reuseIdentifier:@"paste"];
+		[[TGTheme shared] styleCell:cell];
+		cell.accessoryType = UITableViewCellAccessoryNone;
+		cell.accessoryView = nil;
+		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+		cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+		cell.textLabel.textColor = [[TGTheme shared] isFlat]
+				? [[TGTheme shared] accentColour] : TGProxyRGB(0x0779d0);
+		cell.textLabel.text = @"Paste Proxy Link";
+		return cell;
+	}
+
 	UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
 												  reuseIdentifier:nil];
 	[[TGTheme shared] styleCell:cell];
@@ -287,6 +433,10 @@ static NSString *TGProxyServerLine(NSDictionary *proxy) {
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	if (indexPath.section == 2){
+		[self pasteLink];
+		return;
+	}
 	if (indexPath.section != 0)
 		return;
 	NSString *picked = indexPath.row == 0 ? @"mtproto" : @"socks5";
@@ -426,6 +576,8 @@ static NSString *TGProxyServerLine(NSDictionary *proxy) {
 @property (nonatomic, strong) NSTimer *statusTimer;
 @property (nonatomic, strong) TGActionSheet *currentActionSheet;
 @property (nonatomic, assign) NSInteger pendingProxyId;
+@property (nonatomic, assign) BOOL broadcasting;
+@property (nonatomic, strong) NSString *pasteboardLink;
 @end
 
 @implementation TGProxyViewController
@@ -459,15 +611,31 @@ static NSString *TGProxyServerLine(NSDictionary *proxy) {
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+	self.pasteboardLink = TGProxyPasteboardLink();
 	[self.tableView reloadData];
-	self.statusTimer = [NSTimer scheduledTimerWithTimeInterval:2.0 target:self
-				selector:@selector(refreshStatus) userInfo:nil repeats:YES];
+
+	if (!self.broadcasting){
+		self.broadcasting = YES;
+		[[NSNotificationCenter defaultCenter] addObserver:self
+				selector:@selector(refreshStatus)
+					name:TGConnectionStateDidChangeNotification object:nil];
+		[[NSNotificationCenter defaultCenter] addObserver:self
+				selector:@selector(proxyListChanged)
+					name:TGProxyListDidChangeNotification object:nil];
+		[[TGClient shared] beginBroadcastingConnectionState];
+	}
+	[self refreshStatus];
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
 	[super viewWillDisappear:animated];
 	[self.statusTimer invalidate];
 	self.statusTimer = nil;
+	if (self.broadcasting){
+		self.broadcasting = NO;
+		[[NSNotificationCenter defaultCenter] removeObserver:self];
+		[[TGClient shared] endBroadcastingConnectionState];
+	}
 	if (self.currentActionSheet){
 		[self.currentActionSheet dismissWithClickedButtonIndex:
 				self.currentActionSheet.cancelButtonIndex animated:NO];
@@ -477,6 +645,15 @@ static NSString *TGProxyServerLine(NSDictionary *proxy) {
 
 - (void)dealloc {
 	[_statusTimer invalidate];
+	if (_broadcasting){
+		[[NSNotificationCenter defaultCenter] removeObserver:self];
+		[[TGClient shared] endBroadcastingConnectionState];
+	}
+}
+
+- (void)proxyListChanged {
+	if (self.isViewLoaded && self.view.window)
+		[self reload];
 }
 
 #pragma mark - data
@@ -681,7 +858,17 @@ static NSString *TGProxyServerLine(NSDictionary *proxy) {
 		return 1;
 	if (section == 1)
 		return 1 + (NSInteger)self.proxies.count;
-	return self.proxies.count > 1 ? 2 : 1;
+	return (NSInteger)[self actionTitles].count;
+}
+
+- (NSArray *)actionTitles {
+	NSMutableArray *titles = [NSMutableArray array];
+	[titles addObject:@"Add Proxy"];
+	if (self.pasteboardLink.length)
+		[titles addObject:@"Add Proxy from Link"];
+	if (self.proxies.count > 1)
+		[titles addObject:@"Use Fastest Proxy"];
+	return titles;
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -750,7 +937,9 @@ static NSString *TGProxyServerLine(NSDictionary *proxy) {
 		return [self statusCellForTable:tableView];
 
 	if (indexPath.section == 2){
-		NSString *title = indexPath.row == 0 ? @"Add Proxy" : @"Use Fastest Proxy";
+		NSArray *titles = [self actionTitles];
+		NSString *title = indexPath.row < (NSInteger)titles.count
+				? titles[indexPath.row] : @"";
 		return [self actionCellForTable:tableView title:title];
 	}
 
@@ -790,9 +979,14 @@ static NSString *TGProxyServerLine(NSDictionary *proxy) {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
 
 	if (indexPath.section == 2){
-		if (indexPath.row == 0)
+		NSArray *titles = [self actionTitles];
+		NSString *title = indexPath.row < (NSInteger)titles.count
+				? titles[indexPath.row] : @"";
+		if ([title isEqualToString:@"Add Proxy"])
 			[self presentFormForProxy:nil];
-		else
+		else if ([title isEqualToString:@"Add Proxy from Link"])
+			[self addFromPasteboardLink];
+		else if ([title isEqualToString:@"Use Fastest Proxy"])
 			[self useFastest];
 		return;
 	}
@@ -924,9 +1118,44 @@ static NSString *TGProxyServerLine(NSDictionary *proxy) {
 	}];
 }
 
+- (void)addFromPasteboardLink {
+	NSString *link = TGProxyPasteboardLink();
+	if (!link.length){
+		self.pasteboardLink = nil;
+		[self.tableView reloadData];
+		UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Proxy"
+				message:@"There is no proxy link on the clipboard."
+				delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+		[alert show];
+		return;
+	}
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] proxyFromLink:link completion:^(NSDictionary *proxy){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		if (![proxy isKindOfClass:[NSDictionary class]] || !proxy.count){
+			strongSelf.pasteboardLink = nil;
+			[strongSelf.tableView reloadData];
+			UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Proxy"
+					message:@"That link is not a Telegram proxy link."
+					delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+			[alert show];
+			return;
+		}
+		[strongSelf presentFormForProxy:nil withLink:link];
+	}];
+}
+
 - (void)presentFormForProxy:(NSDictionary *)proxy {
+	[self presentFormForProxy:proxy withLink:nil];
+}
+
+- (void)presentFormForProxy:(NSDictionary *)proxy withLink:(NSString *)link {
 	TGProxyEditViewController *form = [[TGProxyEditViewController alloc] init];
 	form.existing = proxy;
+	form.initialLink = link;
 	__weak typeof(self) weakSelf = self;
 	form.onSaved = ^{
 		__strong typeof(weakSelf) strongSelf = weakSelf;

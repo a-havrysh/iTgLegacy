@@ -32,6 +32,29 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 	return [value isKindOfClass:NSString.class] ? value : @"";
 }
 
+@interface TGMemberRightsViewController : UIViewController <UITableViewDataSource, UITableViewDelegate> {
+	int64_t _chatId;
+	int64_t _userId;
+	BOOL _restricting;
+}
+
+@property (nonatomic, strong) NSString *memberName;
+@property (nonatomic, strong) UITableView *tableView;
+@property (nonatomic, strong) NSArray *keys;
+@property (nonatomic, strong) NSMutableDictionary *values;
+@property (nonatomic, strong) UIActivityIndicatorView *spinner;
+@property (nonatomic, strong) UILabel *statusLabel;
+@property (nonatomic, assign) NSInteger untilDate;
+@property (nonatomic, assign) BOOL editable;
+@property (nonatomic, assign) BOOL loaded;
+@property (nonatomic, assign) BOOL saving;
+@property (nonatomic, copy) void (^onSaved)(void);
+
+- (id)initWithChatId:(int64_t)chatId userId:(int64_t)userId
+				name:(NSString *)name restricting:(BOOL)restricting;
+
+@end
+
 @interface TGGroupMemberCell : UITableViewCell
 @property (nonatomic, strong) UIImageView *avatarView;
 @property (nonatomic, strong) UILabel *titleLabel;
@@ -107,6 +130,253 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 
 @end
 
+@implementation TGMemberRightsViewController
+
+- (id)initWithChatId:(int64_t)chatId userId:(int64_t)userId
+				name:(NSString *)name restricting:(BOOL)restricting {
+	self = [super init];
+	if (!self)
+		return nil;
+	_chatId = chatId;
+	_userId = userId;
+	_restricting = restricting;
+	self.memberName = name.length ? name : @"this user";
+	self.values = [NSMutableDictionary dictionary];
+	self.keys = [NSArray array];
+	return self;
+}
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+
+	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
+		self.edgesForExtendedLayout = UIRectEdgeNone;
+
+	self.title = _restricting ? @"Restrictions" : @"Admin Rights";
+	self.view.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+
+	self.tableView = [[UITableView alloc] initWithFrame:self.view.bounds
+												  style:UITableViewStyleGrouped];
+	self.tableView.autoresizingMask =
+			UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+	self.tableView.dataSource = self;
+	self.tableView.delegate = self;
+	self.tableView.rowHeight = 44;
+	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	self.tableView.separatorColor = [[TGTheme shared] separatorColour];
+	[self.view addSubview:self.tableView];
+
+	self.statusLabel = [[UILabel alloc] initWithFrame:
+			CGRectMake(0, 120, self.view.bounds.size.width, 22)];
+	self.statusLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	self.statusLabel.backgroundColor = [UIColor clearColor];
+	self.statusLabel.textAlignment = NSTextAlignmentCenter;
+	self.statusLabel.font = [UIFont systemFontOfSize:15];
+	self.statusLabel.textColor = [[TGTheme shared] secondaryTextColour];
+	self.statusLabel.hidden = YES;
+	[self.view addSubview:self.statusLabel];
+
+	self.spinner = [[UIActivityIndicatorView alloc]
+			initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleGray];
+	self.spinner.center = CGPointMake(self.view.bounds.size.width / 2, 90);
+	self.spinner.autoresizingMask =
+			UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin;
+	self.spinner.hidesWhenStopped = YES;
+	[self.view addSubview:self.spinner];
+	[self.spinner startAnimating];
+	self.tableView.hidden = YES;
+
+	[self loadCurrentState];
+}
+
+- (NSArray *)defaultAdminKeys {
+	return [NSArray arrayWithObjects:@"can_manage_chat", @"can_change_info",
+			@"can_delete_messages", @"can_invite_users", @"can_restrict_members",
+			@"can_pin_messages", @"can_manage_video_chats", nil];
+}
+
+- (void)loadCurrentState {
+	__weak typeof(self) weakSelf = self;
+	if (_restricting){
+		self.keys = [[TGClient shared] memberPermissionKeys] ?: [NSArray array];
+		[[TGClient shared] permissionsOfUser:_userId inGroup:_chatId
+								  completion:^(NSDictionary *permissions, BOOL isRestricted,
+											   NSInteger untilDate){
+			TGMemberRightsViewController *me = weakSelf;
+			if (!me)
+				return;
+			if (![permissions isKindOfClass:NSDictionary.class]){
+				[me showLoadFailure];
+				return;
+			}
+			me.untilDate = untilDate;
+			[me.values removeAllObjects];
+			for (NSString *key in me.keys)
+				[me.values setObject:[NSNumber numberWithBool:
+						[[permissions objectForKey:key] boolValue]] forKey:key];
+			me.editable = YES;
+			[me finishLoading];
+		}];
+		return;
+	}
+
+	self.keys = [[TGClient shared] administratorRightKeys] ?: [NSArray array];
+	[[TGClient shared] administratorRightsOfUser:_userId inGroup:_chatId
+									  completion:^(NSDictionary *rights, NSString *status,
+												   BOOL canBeEdited){
+		TGMemberRightsViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (![rights isKindOfClass:NSDictionary.class]){
+			[me showLoadFailure];
+			return;
+		}
+		BOOL alreadyAdmin = [status isEqualToString:@"administrator"]
+				|| [status isEqualToString:@"creator"];
+		[me.values removeAllObjects];
+		for (NSString *key in me.keys){
+			BOOL on = [[rights objectForKey:key] boolValue];
+			if (!alreadyAdmin)
+				on = [[me defaultAdminKeys] containsObject:key];
+			[me.values setObject:[NSNumber numberWithBool:on] forKey:key];
+		}
+		me.editable = canBeEdited || !alreadyAdmin;
+		[me finishLoading];
+	}];
+}
+
+- (void)showLoadFailure {
+	[self.spinner stopAnimating];
+	self.tableView.hidden = YES;
+	self.statusLabel.text = @"Could not read this member.";
+	self.statusLabel.hidden = NO;
+}
+
+- (void)finishLoading {
+	[self.spinner stopAnimating];
+	self.statusLabel.hidden = YES;
+	self.loaded = YES;
+	self.tableView.hidden = NO;
+	[self.tableView reloadData];
+	if (self.editable){
+		self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
+				initWithTitle:@"Done" style:UIBarButtonItemStyleDone
+					   target:self action:@selector(save)];
+	}
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+	return 1;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	return self.loaded ? (NSInteger)self.keys.count : 0;
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
+	return _restricting ? @"What can this member do?" : @"What can this admin do?";
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+	if (!self.editable)
+		return @"You cannot change the rights of this member.";
+	if (_restricting)
+		return [NSString stringWithFormat:@"Anything turned off here is denied to %@.",
+				self.memberName];
+	return [NSString stringWithFormat:@"%@ keeps only the rights left on here.",
+			self.memberName];
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView
+		 cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	static NSString *reuse = @"TGMemberRightCell";
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
+	if (!cell){
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+									  reuseIdentifier:reuse];
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		cell.textLabel.font = [UIFont systemFontOfSize:17];
+	}
+
+	if (indexPath.row < 0 || indexPath.row >= (NSInteger)self.keys.count)
+		return cell;
+	NSString *key = [self.keys objectAtIndex:(NSUInteger)indexPath.row];
+	cell.textLabel.text = _restricting
+			? [[TGClient shared] titleForMemberPermissionKey:key]
+			: [[TGClient shared] titleForAdministratorRightKey:key];
+	cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
+
+	UISwitch *toggle = [cell.accessoryView isKindOfClass:UISwitch.class]
+			? (UISwitch *)cell.accessoryView : nil;
+	if (!toggle){
+		toggle = [[UISwitch alloc] initWithFrame:CGRectZero];
+		[toggle addTarget:self action:@selector(toggleChanged:)
+		 forControlEvents:UIControlEventValueChanged];
+		cell.accessoryView = toggle;
+	}
+	toggle.tag = indexPath.row;
+	toggle.on = [[self.values objectForKey:key] boolValue];
+	toggle.enabled = self.editable;
+	return cell;
+}
+
+- (void)toggleChanged:(UISwitch *)sender {
+	if (sender.tag < 0 || sender.tag >= (NSInteger)self.keys.count)
+		return;
+	NSString *key = [self.keys objectAtIndex:(NSUInteger)sender.tag];
+	[self.values setObject:[NSNumber numberWithBool:sender.on] forKey:key];
+}
+
+- (void)save {
+	if (self.saving || !self.editable)
+		return;
+	self.saving = YES;
+	self.navigationItem.rightBarButtonItem.enabled = NO;
+
+	NSMutableDictionary *payload = [NSMutableDictionary dictionary];
+	for (NSString *key in self.keys){
+		if ([[self.values objectForKey:key] boolValue])
+			[payload setObject:[NSNumber numberWithBool:YES] forKey:key];
+	}
+
+	__weak typeof(self) weakSelf = self;
+	void (^done)(BOOL) = ^(BOOL ok){
+		TGMemberRightsViewController *me = weakSelf;
+		if (!me)
+			return;
+		me.saving = NO;
+		me.navigationItem.rightBarButtonItem.enabled = YES;
+		if (!ok){
+			[[[UIAlertView alloc] initWithTitle:nil
+										message:@"Could not save these changes."
+									   delegate:nil
+							  cancelButtonTitle:@"OK"
+							  otherButtonTitles:nil] show];
+			return;
+		}
+		if (me.onSaved)
+			me.onSaved();
+		[me.navigationController popViewControllerAnimated:YES];
+	};
+
+	if (_restricting){
+		[[TGClient shared] restrictMember:_userId
+								  inGroup:_chatId
+							  permissions:payload
+								untilDate:self.untilDate
+							   completion:done];
+		return;
+	}
+	[[TGClient shared] promoteMember:_userId
+							 inGroup:_chatId
+							  rights:payload
+						 customTitle:nil
+						  completion:done];
+}
+
+@end
+
 @interface TGGroupMembersViewController () <UITableViewDataSource, UITableViewDelegate,
 		UISearchBarDelegate> {
 	UIView *_modeBar;
@@ -122,6 +392,8 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 @property (nonatomic, strong) NSMutableDictionary *photos;
 @property (nonatomic, strong) NSMutableSet *photosRequested;
 @property (nonatomic, strong) NSDictionary *groupInfo;
+@property (nonatomic, strong) NSDictionary *myRights;
+@property (nonatomic, strong) NSString *myStatus;
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UIButton *retryButton;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
@@ -421,6 +693,25 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 			[me updateTitle];
 		}
 	}];
+
+	[[TGClient shared] myAdministratorRightsInGroup:self.chatId
+										 completion:^(NSDictionary *rights, NSString *status){
+		TGGroupMembersViewController *me = weakSelf;
+		if (!me)
+			return;
+		if ([rights isKindOfClass:NSDictionary.class])
+			me.myRights = rights;
+		if ([status isKindOfClass:NSString.class])
+			me.myStatus = status;
+	}];
+}
+
+- (BOOL)iMay:(NSString *)right {
+	if ([self.myStatus isEqualToString:@"creator"])
+		return YES;
+	if (![self.myRights isKindOfClass:NSDictionary.class])
+		return YES;
+	return [[self.myRights objectForKey:right] boolValue];
 }
 
 - (void)updateTitle {
@@ -783,6 +1074,12 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 	if ([action isEqualToString:@"promote"])
 		return [NSDictionary dictionaryWithObjectsAndKeys:
 				@"Promote to Admin", @"title", @"edit", @"icon", nil];
+	if ([action isEqualToString:@"editRights"])
+		return [NSDictionary dictionaryWithObjectsAndKeys:
+				@"Edit Admin Rights", @"title", @"edit", @"icon", nil];
+	if ([action isEqualToString:@"editRestrictions"])
+		return [NSDictionary dictionaryWithObjectsAndKeys:
+				@"Edit Restrictions", @"title", @"edit", @"icon", nil];
 	if ([action isEqualToString:@"dismiss"])
 		return [NSDictionary dictionaryWithObjectsAndKeys:
 				@"Dismiss Admin", @"title", @"edit", @"icon", nil];
@@ -820,53 +1117,58 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 		return [NSArray array];
 
 	NSMutableArray *actions = [NSMutableArray array];
+	BOOL mayRestrict = [self iMay:@"can_restrict_members"];
+	BOOL mayPromote = [self iMay:@"can_promote_members"];
+	BOOL mayDelete = [self iMay:@"can_delete_messages"];
 
 	if ([status isEqualToString:@"banned"]){
-		[actions addObject:@"unban"];
-		[actions addObject:@"deleteMessages"];
+		if (mayRestrict)
+			[actions addObject:@"unban"];
+		if (mayDelete)
+			[actions addObject:@"deleteMessages"];
 		return actions;
 	}
 
 	if ([status isEqualToString:@"restricted"]){
-		[actions addObject:@"unrestrict"];
-		[actions addObject:@"ban"];
+		if (mayRestrict){
+			[actions addObject:@"editRestrictions"];
+			[actions addObject:@"unrestrict"];
+			[actions addObject:@"ban"];
+		}
 		return actions;
 	}
 
 	if ([status isEqualToString:@"administrator"]){
-		if (canEdit)
+		if (canEdit && mayPromote){
+			[actions addObject:@"editRights"];
 			[actions addObject:@"dismiss"];
-		[actions addObject:@"remove"];
+		}
+		if (mayRestrict)
+			[actions addObject:@"remove"];
 		return actions;
 	}
 
-	[actions addObject:@"promote"];
-	[actions addObject:@"restrict"];
-	[actions addObject:@"ban"];
-	[actions addObject:@"remove"];
+	if (mayPromote)
+		[actions addObject:@"promote"];
+	if (mayRestrict){
+		[actions addObject:@"restrict"];
+		[actions addObject:@"ban"];
+		[actions addObject:@"remove"];
+	}
 	return actions;
 }
 
-- (NSDictionary *)fullAdminRights {
-	return [NSDictionary dictionaryWithObjectsAndKeys:
-			[NSNumber numberWithBool:YES], @"can_manage_chat",
-			[NSNumber numberWithBool:YES], @"can_change_info",
-			[NSNumber numberWithBool:YES], @"can_delete_messages",
-			[NSNumber numberWithBool:YES], @"can_invite_users",
-			[NSNumber numberWithBool:YES], @"can_restrict_members",
-			[NSNumber numberWithBool:YES], @"can_pin_messages",
-			[NSNumber numberWithBool:YES], @"can_manage_video_chats",
-			nil];
-}
-
-- (NSDictionary *)defaultMemberPermissions {
-	return [NSDictionary dictionaryWithObjectsAndKeys:
-			[NSNumber numberWithBool:YES], @"can_send_basic_messages",
-			[NSNumber numberWithBool:YES], @"can_send_photos",
-			[NSNumber numberWithBool:YES], @"can_send_other_messages",
-			[NSNumber numberWithBool:YES], @"can_add_link_previews",
-			[NSNumber numberWithBool:YES], @"can_invite_users",
-			nil];
+- (void)openRightsEditorForUser:(int64_t)userId name:(NSString *)name
+					restricting:(BOOL)restricting {
+	TGMemberRightsViewController *editor = [[TGMemberRightsViewController alloc]
+			initWithChatId:self.chatId userId:userId name:name restricting:restricting];
+	__weak typeof(self) weakSelf = self;
+	editor.onSaved = ^{
+		TGGroupMembersViewController *me = weakSelf;
+		[me refreshRowForUser:userId];
+		[me loadGroupInfo];
+	};
+	[self.navigationController pushViewController:editor animated:YES];
 }
 
 - (void)performAction:(NSString *)action onMember:(NSDictionary *)member {
@@ -875,11 +1177,12 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 	if (!name.length)
 		name = @"this user";
 
-	if ([action isEqualToString:@"promote"]){
-		[self confirm:[NSString stringWithFormat:@"Make %@ an administrator?", name]
-				   ok:@"Promote" destructive:NO run:^{
-			[self runPromote:userId];
-		}];
+	if ([action isEqualToString:@"promote"] || [action isEqualToString:@"editRights"]){
+		[self openRightsEditorForUser:userId name:name restricting:NO];
+		return;
+	}
+	if ([action isEqualToString:@"editRestrictions"]){
+		[self openRightsEditorForUser:userId name:name restricting:YES];
 		return;
 	}
 	if ([action isEqualToString:@"dismiss"]){
@@ -890,11 +1193,7 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 		return;
 	}
 	if ([action isEqualToString:@"restrict"]){
-		[self confirm:[NSString stringWithFormat:
-				@"%@ will not be able to send anything here until you lift this.", name]
-				   ok:@"Restrict" destructive:NO run:^{
-			[self runRestrict:userId];
-		}];
+		[self openRightsEditorForUser:userId name:name restricting:YES];
 		return;
 	}
 	if ([action isEqualToString:@"unrestrict"]){
@@ -939,7 +1238,8 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 	[alert show];
 }
 
-- (void)finishWithSuccess:(BOOL)ok failureText:(NSString *)failureText {
+- (void)finishWithSuccess:(BOOL)ok failureText:(NSString *)failureText
+				   userId:(int64_t)userId {
 	if (!ok){
 		[[[UIAlertView alloc] initWithTitle:nil
 									message:failureText
@@ -949,46 +1249,114 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 		return;
 	}
 	[self loadGroupInfo];
-	[self reload];
+	[self refreshRowForUser:userId];
 }
 
-- (void)runPromote:(int64_t)userId {
+- (NSInteger)rowIndexForUser:(int64_t)userId {
+	NSArray *rows = [self rows];
+	for (NSUInteger i = 0; i < rows.count; i++){
+		NSDictionary *member = [rows objectAtIndex:i];
+		if (![member isKindOfClass:NSDictionary.class])
+			continue;
+		if ([[member objectForKey:@"id"] longLongValue] == userId)
+			return (NSInteger)i;
+	}
+	return -1;
+}
+
+- (BOOL)status:(NSString *)status belongsToMode:(NSInteger)mode {
+	switch (mode){
+		case 1: return [status isEqualToString:@"administrator"]
+				|| [status isEqualToString:@"creator"];
+		case 2: return [status isEqualToString:@"banned"];
+		case 3: return [status isEqualToString:@"restricted"];
+		default: return ![status isEqualToString:@"banned"]
+				&& ![status isEqualToString:@"left"];
+	}
+}
+
+- (void)replaceRowAtIndex:(NSInteger)index withMember:(NSDictionary *)member {
+	NSMutableArray *rows = [[self rows] mutableCopy];
+	if (index < 0 || index >= (NSInteger)rows.count)
+		return;
+	if (member)
+		[rows replaceObjectAtIndex:(NSUInteger)index withObject:member];
+	else
+		[rows removeObjectAtIndex:(NSUInteger)index];
+
+	if (self.searchResults)
+		self.searchResults = rows;
+	else {
+		self.members = rows;
+		if (!member && self.totalCount > 0)
+			self.totalCount--;
+	}
+
+	NSArray *paths = [NSArray arrayWithObject:
+			[NSIndexPath indexPathForRow:index inSection:0]];
+	if (member)
+		[self.tableView reloadRowsAtIndexPaths:paths
+							  withRowAnimation:UITableViewRowAnimationNone];
+	else
+		[self.tableView deleteRowsAtIndexPaths:paths
+							  withRowAnimation:UITableViewRowAnimationFade];
+	[self updateStatusView];
+	[self updateTitle];
+}
+
+- (void)refreshRowForUser:(int64_t)userId {
+	NSInteger generation = self.generation;
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] promoteMember:userId
-							 inGroup:self.chatId
-							  rights:[self fullAdminRights]
-						 customTitle:nil
-						  completion:^(BOOL ok){
-		[weakSelf finishWithSuccess:ok failureText:@"Could not promote this member."];
+	[[TGClient shared] memberStatusOfUser:userId
+								  inGroup:self.chatId
+							   completion:^(NSDictionary *member){
+		TGGroupMembersViewController *me = weakSelf;
+		if (!me || me.generation != generation)
+			return;
+		NSInteger index = [me rowIndexForUser:userId];
+		if (index < 0)
+			return;
+		if (![member isKindOfClass:NSDictionary.class]){
+			[me replaceRowAtIndex:index withMember:nil];
+			return;
+		}
+		NSString *status = TGMembersString(member, @"status");
+		if (![me status:status belongsToMode:me.mode]){
+			[me replaceRowAtIndex:index withMember:nil];
+			return;
+		}
+		[me replaceRowAtIndex:index withMember:member];
+		[me fetchPhotosForRows];
 	}];
 }
 
 - (void)runDismiss:(int64_t)userId {
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] dismissAdmin:userId inGroup:self.chatId completion:^(BOOL ok){
-		[weakSelf finishWithSuccess:ok failureText:@"Could not dismiss this administrator."];
-	}];
-}
-
-- (void)runRestrict:(int64_t)userId {
-	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] restrictMember:userId
-							  inGroup:self.chatId
-						  permissions:[NSDictionary dictionary]
-							untilDate:0
-						   completion:^(BOOL ok){
-		[weakSelf finishWithSuccess:ok failureText:@"Could not restrict this member."];
+		[weakSelf finishWithSuccess:ok
+						failureText:@"Could not dismiss this administrator."
+							 userId:userId];
 	}];
 }
 
 - (void)runUnrestrict:(int64_t)userId {
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] restrictMember:userId
-							  inGroup:self.chatId
-						  permissions:[self defaultMemberPermissions]
-							untilDate:0
-						   completion:^(BOOL ok){
-		[weakSelf finishWithSuccess:ok failureText:@"Could not lift the restrictions."];
+	[[TGClient shared] defaultPermissionsInGroup:self.chatId
+									  completion:^(NSDictionary *permissions){
+		TGGroupMembersViewController *me = weakSelf;
+		if (!me)
+			return;
+		NSDictionary *restore = [permissions isKindOfClass:NSDictionary.class]
+				? permissions : [NSDictionary dictionary];
+		[[TGClient shared] restrictMember:userId
+								  inGroup:me.chatId
+							  permissions:restore
+								untilDate:0
+							   completion:^(BOOL ok){
+			[weakSelf finishWithSuccess:ok
+							failureText:@"Could not lift the restrictions."
+								 userId:userId];
+		}];
 	}];
 }
 
@@ -999,21 +1367,27 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 					   untilDate:0
 				  revokeMessages:NO
 					  completion:^(BOOL ok){
-		[weakSelf finishWithSuccess:ok failureText:@"Could not ban this member."];
+		[weakSelf finishWithSuccess:ok
+						failureText:@"Could not ban this member."
+							 userId:userId];
 	}];
 }
 
 - (void)runUnban:(int64_t)userId {
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] unbanMember:userId inGroup:self.chatId completion:^(BOOL ok){
-		[weakSelf finishWithSuccess:ok failureText:@"Could not lift this ban."];
+		[weakSelf finishWithSuccess:ok
+						failureText:@"Could not lift this ban."
+							 userId:userId];
 	}];
 }
 
 - (void)runRemove:(int64_t)userId {
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] removeMember:userId fromGroup:self.chatId completion:^(BOOL ok){
-		[weakSelf finishWithSuccess:ok failureText:@"Could not remove this member."];
+		[weakSelf finishWithSuccess:ok
+						failureText:@"Could not remove this member."
+							 userId:userId];
 	}];
 }
 

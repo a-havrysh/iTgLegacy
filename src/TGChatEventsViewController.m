@@ -1,6 +1,10 @@
 #import "TGChatEventsViewController.h"
 #import "TGClient.h"
 #import "TGClient+ChatManagement.h"
+#import "TGClient+Messages.h"
+#import "TGChatViewController.h"
+#import "TGActionSheet.h"
+#import "TGAlertView.h"
 #import "TGTheme.h"
 #import "TGIcons.h"
 #import "TGDateUtils.h"
@@ -66,21 +70,61 @@ static NSString *TGEventsInitials(NSString *name) {
 @interface TGChatEventsFilterController : UITableViewController
 
 @property (nonatomic, strong) NSMutableArray *selection;
-@property (nonatomic, copy) void (^completion)(NSArray *filters);
+@property (nonatomic, strong) NSArray *administrators;
+@property (nonatomic, strong) NSMutableArray *userSelection;
+@property (nonatomic, copy) void (^completion)(NSArray *filters, NSArray *userIds);
 
-- (instancetype)initWithFilters:(NSArray *)filters;
+- (instancetype)initWithFilters:(NSArray *)filters
+				 administrators:(NSArray *)administrators
+						userIds:(NSArray *)userIds;
 
 @end
 
 @implementation TGChatEventsFilterController
 
-- (instancetype)initWithFilters:(NSArray *)filters {
+- (instancetype)initWithFilters:(NSArray *)filters
+				 administrators:(NSArray *)administrators
+						userIds:(NSArray *)userIds {
 	self = [super initWithStyle:UITableViewStyleGrouped];
 	if (self){
 		_selection = filters.count ? [NSMutableArray arrayWithArray:filters]
 								   : [NSMutableArray arrayWithArray:TGEventsAllFilters()];
+		_administrators = [administrators isKindOfClass:[NSArray class]]
+				? administrators : [NSArray array];
+		_userSelection = userIds.count ? [NSMutableArray arrayWithArray:userIds]
+									   : [NSMutableArray array];
+		if (!_userSelection.count){
+			for (NSDictionary *admin in _administrators){
+				NSNumber *userId = [admin isKindOfClass:[NSDictionary class]]
+						? admin[@"userId"] : nil;
+				if ([userId isKindOfClass:[NSNumber class]])
+					[_userSelection addObject:userId];
+			}
+		}
 	}
 	return self;
+}
+
+- (NSNumber *)userIdAtRow:(NSInteger)row {
+	if (row < 1 || row - 1 >= (NSInteger)self.administrators.count)
+		return nil;
+	NSDictionary *admin = self.administrators[row - 1];
+	if (![admin isKindOfClass:[NSDictionary class]])
+		return nil;
+	NSNumber *userId = admin[@"userId"];
+	return [userId isKindOfClass:[NSNumber class]] ? userId : nil;
+}
+
+- (NSString *)adminTitleAtRow:(NSInteger)row {
+	NSDictionary *admin = self.administrators[row - 1];
+	NSString *name = [admin isKindOfClass:[NSDictionary class]] ? admin[@"name"] : nil;
+	if (![name isKindOfClass:[NSString class]] || !name.length)
+		name = @"Admin";
+	NSString *custom = [admin isKindOfClass:[NSDictionary class]]
+			? admin[@"customTitle"] : nil;
+	if ([custom isKindOfClass:[NSString class]] && custom.length)
+		return [NSString stringWithFormat:@"%@ (%@)", name, custom];
+	return name;
 }
 
 - (void)viewDidLoad {
@@ -113,23 +157,37 @@ static NSString *TGEventsInitials(NSString *name) {
 	NSArray *result = nil;
 	if (self.selection.count && self.selection.count < TGEventsAllFilters().count)
 		result = [NSArray arrayWithArray:self.selection];
+	NSArray *users = nil;
+	if (self.administrators.count && self.userSelection.count
+			&& self.userSelection.count < self.administrators.count)
+		users = [NSArray arrayWithArray:self.userSelection];
 	if (self.completion)
-		self.completion(result);
+		self.completion(result, users);
 	[self dismissModalViewControllerAnimated:YES];
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-	return 2;
+	return self.administrators.count ? 3 : 2;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-	return section == 0 ? 1 : (NSInteger)TGEventsAllFilters().count;
+	if (section == 0)
+		return 1;
+	if (section == 1)
+		return (NSInteger)TGEventsAllFilters().count;
+	return (NSInteger)self.administrators.count + 1;
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
+	return section == 2 ? @"By Admin" : nil;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
-	if (section != 1)
-		return nil;
-	return @"Only the selected kinds of action are listed.";
+	if (section == 1)
+		return @"Only the selected kinds of action are listed.";
+	if (section == 2)
+		return @"Only actions taken by the selected admins are listed.";
+	return nil;
 }
 
 - (UIImage *)checkImage {
@@ -152,10 +210,17 @@ static NSString *TGEventsInitials(NSString *name) {
 	if (indexPath.section == 0){
 		cell.textLabel.text = @"All Actions";
 		selected = self.selection.count == TGEventsAllFilters().count;
-	} else {
+	} else if (indexPath.section == 1){
 		NSString *filter = TGEventsAllFilters()[indexPath.row];
 		cell.textLabel.text = TGEventsFilterTitle(filter);
 		selected = [self.selection containsObject:filter];
+	} else if (indexPath.row == 0){
+		cell.textLabel.text = @"All Admins";
+		selected = self.userSelection.count == self.administrators.count;
+	} else {
+		cell.textLabel.text = [self adminTitleAtRow:indexPath.row];
+		NSNumber *userId = [self userIdAtRow:indexPath.row];
+		selected = userId != nil && [self.userSelection containsObject:userId];
 	}
 
 	UIImage *check = [self checkImage];
@@ -187,11 +252,39 @@ static NSString *TGEventsInitials(NSString *name) {
 		return;
 	}
 
-	NSString *filter = TGEventsAllFilters()[indexPath.row];
-	if ([self.selection containsObject:filter])
-		[self.selection removeObject:filter];
+	if (indexPath.section == 1){
+		NSString *filter = TGEventsAllFilters()[indexPath.row];
+		if ([self.selection containsObject:filter])
+			[self.selection removeObject:filter];
+		else
+			[self.selection addObject:filter];
+		[tableView reloadData];
+		return;
+	}
+
+	if (indexPath.row == 0){
+		if (self.userSelection.count == self.administrators.count){
+			[self.userSelection removeAllObjects];
+		} else {
+			[self.userSelection removeAllObjects];
+			for (NSDictionary *admin in self.administrators){
+				NSNumber *userId = [admin isKindOfClass:[NSDictionary class]]
+						? admin[@"userId"] : nil;
+				if ([userId isKindOfClass:[NSNumber class]])
+					[self.userSelection addObject:userId];
+			}
+		}
+		[tableView reloadData];
+		return;
+	}
+
+	NSNumber *userId = [self userIdAtRow:indexPath.row];
+	if (!userId)
+		return;
+	if ([self.userSelection containsObject:userId])
+		[self.userSelection removeObject:userId];
 	else
-		[self.selection addObject:filter];
+		[self.userSelection addObject:userId];
 	[tableView reloadData];
 }
 
@@ -309,6 +402,9 @@ static NSString *TGEventsInitials(NSString *name) {
 @property (nonatomic, strong) NSMutableArray *events;
 @property (nonatomic, strong) NSMutableArray *sections;
 @property (nonatomic, strong) NSArray *filters;
+@property (nonatomic, strong) NSArray *userIds;
+@property (nonatomic, strong) NSArray *administrators;
+@property (nonatomic, strong) TGActionSheet *currentActionSheet;
 @property (nonatomic, assign) long long oldestEventId;
 @property (nonatomic, assign) BOOL loading;
 @property (nonatomic, assign) BOOL loaded;
@@ -400,12 +496,36 @@ static NSString *TGEventsInitials(NSString *name) {
 			[[UIBarButtonItem alloc] initWithCustomView:filterButton];
 
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+	[self loadAdministrators];
 	[self reload];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+	[super viewWillDisappear:animated];
+	if (self.currentActionSheet){
+		[self.currentActionSheet dismissWithClickedButtonIndex:
+				self.currentActionSheet.cancelButtonIndex animated:NO];
+		self.currentActionSheet = nil;
+	}
+}
+
+- (void)loadAdministrators {
+	if (self.chatId == 0)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] administratorsForChat:self.chatId
+								  completion:^(NSArray *administrators){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		strongSelf.administrators = [administrators isKindOfClass:[NSArray class]]
+				? administrators : nil;
+	}];
 }
 
 - (void)viewDidLayoutSubviews {
@@ -478,7 +598,7 @@ static NSString *TGEventsInitials(NSString *name) {
 						   fromEventId:from
 								 limit:TGEventsPageSize
 							   filters:self.filters
-							   userIds:nil
+							   userIds:self.userIds
 							completion:^(NSArray *events){
 		__strong typeof(weakSelf) strongSelf = weakSelf;
 		if (!strongSelf)
@@ -543,7 +663,7 @@ static NSString *TGEventsInitials(NSString *name) {
 		self.messageTitleLabel.text = @"Cannot load";
 		self.messageBodyLabel.text = @"The recent actions of this chat could not be "
 				@"loaded. Check the connection and open this screen again.";
-	} else if (self.filters.count){
+	} else if (self.filters.count || self.userIds.count){
 		self.messageTitleLabel.text = @"No actions";
 		self.messageBodyLabel.text = @"No recent action matches the filter. "
 				@"Admin actions are kept for 48 hours.";
@@ -617,13 +737,16 @@ static NSString *TGEventsInitials(NSString *name) {
 
 - (void)filterPressed {
 	TGChatEventsFilterController *controller =
-			[[TGChatEventsFilterController alloc] initWithFilters:self.filters];
+			[[TGChatEventsFilterController alloc] initWithFilters:self.filters
+												  administrators:self.administrators
+														 userIds:self.userIds];
 	__weak typeof(self) weakSelf = self;
-	controller.completion = ^(NSArray *filters){
+	controller.completion = ^(NSArray *filters, NSArray *userIds){
 		__strong typeof(weakSelf) strongSelf = weakSelf;
 		if (!strongSelf)
 			return;
 		strongSelf.filters = filters;
+		strongSelf.userIds = userIds;
 		[strongSelf reload];
 	};
 
@@ -726,6 +849,8 @@ static NSString *TGEventsInitials(NSString *name) {
 									: TGEventsRGB(0x337acc);
 
 	cell.hairline.backgroundColor = [[TGTheme shared] separatorColour];
+	cell.selectionStyle = [event[@"messageId"] longLongValue] != 0
+			? UITableViewCellSelectionStyleBlue : UITableViewCellSelectionStyleNone;
 
 	int64_t userId = [event[@"userId"] longLongValue];
 	cell.avatarView.image = [TGIcons avatarWithInitials:TGEventsInitials(name)
@@ -749,6 +874,100 @@ static NSString *TGEventsInitials(NSString *name) {
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+
+	NSDictionary *event = [self eventAtIndexPath:indexPath];
+	if (!event)
+		return;
+
+	int64_t messageId = (int64_t)[event[@"messageId"] longLongValue];
+	BOOL canReportNotSpam = [event[@"canReportNotSpam"] boolValue] && messageId != 0;
+	if (messageId == 0)
+		return;
+
+	NSMutableArray *actions = [NSMutableArray array];
+	[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Go to Message"
+														  action:@"jump"]];
+	if (canReportNotSpam)
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Report Not Spam"
+															  action:@"notSpam"]];
+	[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Cancel" action:@"cancel"
+															type:TGActionSheetActionTypeCancel]];
+
+	__weak typeof(self) weakSelf = self;
+	self.currentActionSheet = [[TGActionSheet alloc] initWithTitle:nil actions:actions
+			actionBlock:^(__unused id target, NSString *action){
+				__strong typeof(weakSelf) strongSelf = weakSelf;
+				if (!strongSelf)
+					return;
+				strongSelf.currentActionSheet = nil;
+				if ([action isEqualToString:@"jump"])
+					[strongSelf jumpToMessage:messageId];
+				else if ([action isEqualToString:@"notSpam"])
+					[strongSelf reportNotSpamForMessage:messageId];
+			} target:self];
+	[self.currentActionSheet showInView:[self sheetHostView]];
+}
+
+- (UIView *)sheetHostView {
+	if (self.navigationController.view)
+		return self.navigationController.view;
+	return self.view;
+}
+
+- (void)showAlertWithMessage:(NSString *)message {
+	[[[TGAlertView alloc] initWithTitle:nil message:message cancelButtonTitle:@"OK"
+						  okButtonTitle:nil completionBlock:nil] show];
+}
+
+- (void)jumpToMessage:(int64_t)messageId {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] propertiesOfMessage:messageId inChat:self.chatId
+								completion:^(NSDictionary *properties){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		if (![properties isKindOfClass:[NSDictionary class]] || !properties.count){
+			[strongSelf showAlertWithMessage:
+					@"This message is no longer in the chat."];
+			return;
+		}
+		[strongSelf openChat];
+	}];
+}
+
+- (void)openChat {
+	for (UIViewController *existing in self.navigationController.viewControllers){
+		if (![existing isKindOfClass:[TGChatViewController class]])
+			continue;
+		if (((TGChatViewController *)existing).chatId != self.chatId)
+			continue;
+		[self.navigationController popToViewController:existing animated:YES];
+		return;
+	}
+
+	TGChatViewController *controller = [[TGChatViewController alloc] init];
+	controller.chatId = self.chatId;
+	controller.chatTitle = self.chatTitle.length ? self.chatTitle : @"Chat";
+	controller.isGroup = YES;
+	[self.navigationController pushViewController:controller animated:YES];
+}
+
+- (void)reportNotSpamForMessage:(int64_t)messageId {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] reportAntiSpamFalsePositiveForMessage:messageId
+													  inChat:self.chatId
+												  completion:^(BOOL ok){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		if (!ok){
+			[strongSelf showAlertWithMessage:
+					@"This deletion could not be reported as a false positive."];
+			return;
+		}
+		[strongSelf showAlertWithMessage:
+				@"Thank you. The deletion was reported as a false positive."];
+	}];
 }
 
 @end

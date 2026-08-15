@@ -21,11 +21,13 @@ static const NSInteger TGInviteSectionRevoked = 3;
 
 static const NSInteger TGInviteRequestPageLimit = 50;
 
+static const NSInteger TGInviteRenameAlertTag = 7812;
+
 static CGFloat TGInviteRetinaPixel(void) {
 	return [UIScreen mainScreen].scale > 1.0f ? 0.5f : 0.0f;
 }
 
-@interface TGInviteLinksViewController ()
+@interface TGInviteLinksViewController () <UIAlertViewDelegate>
 @property (nonatomic, strong) NSString *primaryLink;
 @property (nonatomic, strong) NSArray *links;
 @property (nonatomic, strong) NSArray *revokedLinks;
@@ -35,6 +37,10 @@ static CGFloat TGInviteRetinaPixel(void) {
 @property (nonatomic, strong) TGActionSheet *currentActionSheet;
 @property (nonatomic, strong) NSDictionary *pendingLink;
 @property (nonatomic, strong) NSDictionary *pendingRequest;
+@property (nonatomic, strong) NSDictionary *editingLink;
+@property (nonatomic, assign) NSInteger requestLimit;
+@property (nonatomic, assign) BOOL canManage;
+@property (nonatomic, assign) BOOL loadingMoreRequests;
 @property (nonatomic, assign) NSInteger outstanding;
 @property (nonatomic, assign) BOOL loaded;
 @property (nonatomic, assign) BOOL failed;
@@ -44,7 +50,14 @@ static CGFloat TGInviteRetinaPixel(void) {
 @implementation TGInviteLinksViewController
 
 - (instancetype)init {
-	return [super initWithStyle:UITableViewStyleGrouped];
+	return [self initWithStyle:UITableViewStyleGrouped];
+}
+
+- (instancetype)initWithStyle:(__unused UITableViewStyle)style {
+	self = [super initWithStyle:UITableViewStyleGrouped];
+	if (self)
+		_requestLimit = TGInviteRequestPageLimit;
+	return self;
 }
 
 - (instancetype)initWithChatId:(int64_t)chatId {
@@ -62,12 +75,7 @@ static CGFloat TGInviteRetinaPixel(void) {
 	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
 	self.tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
 
-	UIButton *button = [TGIcons headerButtonWithTitle:@"New" bold:NO
-											   target:self action:@selector(createLink)];
-	if (button)
-		self.navigationItem.rightBarButtonItem =
-				[[UIBarButtonItem alloc] initWithCustomView:button];
-
+	[self updateNewButton];
 	[self rebuildSections];
 	[self reload];
 }
@@ -88,13 +96,33 @@ static CGFloat TGInviteRetinaPixel(void) {
 
 #pragma mark - loading
 
+- (void)updateNewButton {
+	if (!self.canManage){
+		self.navigationItem.rightBarButtonItem = nil;
+		return;
+	}
+	if (self.navigationItem.rightBarButtonItem)
+		return;
+	UIButton *button = [TGIcons headerButtonWithTitle:@"New" bold:NO
+											   target:self action:@selector(createLink)];
+	if (button)
+		self.navigationItem.rightBarButtonItem =
+				[[UIBarButtonItem alloc] initWithCustomView:button];
+}
+
 - (void)reload {
 	if (self.outstanding > 0)
 		return;
-	self.outstanding = 4;
+	self.outstanding = 5;
 	self.failed = NO;
 
 	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] canManageInviteLinksInChat:self.chatId completion:^(BOOL canManage){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		strongSelf.canManage = canManage;
+		[strongSelf updateNewButton];
+		[strongSelf stepFinishedWithFailure:NO];
+	}];
 	[[TGClient shared] primaryInviteLinkForChat:self.chatId completion:^(NSString *link){
 		__strong typeof(weakSelf) strongSelf = weakSelf;
 		strongSelf.primaryLink = [link isKindOfClass:[NSString class]] ? link : @"";
@@ -110,13 +138,47 @@ static CGFloat TGInviteRetinaPixel(void) {
 		strongSelf.revokedLinks = links ?: [NSArray array];
 		[strongSelf stepFinishedWithFailure:NO];
 	}];
+	if (self.requestLimit < TGInviteRequestPageLimit)
+		self.requestLimit = TGInviteRequestPageLimit;
 	[[TGClient shared] joinRequestsForChat:self.chatId inviteLink:nil query:nil
-									 limit:TGInviteRequestPageLimit
+									 limit:self.requestLimit
 								completion:^(NSArray *requests, NSInteger total){
 		__strong typeof(weakSelf) strongSelf = weakSelf;
 		strongSelf.requests = requests ?: [NSArray array];
 		strongSelf.requestTotal = total;
 		[strongSelf stepFinishedWithFailure:NO];
+	}];
+}
+
+- (BOOL)canLoadMoreRequests {
+	return self.loaded && self.requests.count
+			&& self.requestTotal > (NSInteger)self.requests.count;
+}
+
+- (void)loadMoreRequests {
+	if (self.loadingMoreRequests || self.outstanding > 0)
+		return;
+	self.loadingMoreRequests = YES;
+	self.requestLimit += TGInviteRequestPageLimit;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] joinRequestsForChat:self.chatId inviteLink:nil query:nil
+									 limit:self.requestLimit
+								completion:^(NSArray *requests, NSInteger total){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		strongSelf.loadingMoreRequests = NO;
+		if (!requests){
+			[strongSelf failedWithMessage:@"More requests could not be loaded."];
+			[strongSelf.tableView reloadData];
+			return;
+		}
+		if (requests.count <= strongSelf.requests.count
+				&& total > (NSInteger)requests.count)
+			strongSelf.requestLimit = (NSInteger)requests.count + TGInviteRequestPageLimit;
+		strongSelf.requests = requests;
+		strongSelf.requestTotal = total;
+		[strongSelf rebuildSections];
+		[strongSelf.tableView reloadData];
 	}];
 }
 
@@ -149,7 +211,8 @@ static CGFloat TGInviteRetinaPixel(void) {
 	[sections addObject:[NSNumber numberWithInteger:TGInviteSectionPrimary]];
 	if (self.requests.count)
 		[sections addObject:[NSNumber numberWithInteger:TGInviteSectionRequests]];
-	[sections addObject:[NSNumber numberWithInteger:TGInviteSectionLinks]];
+	if (self.canManage || self.links.count)
+		[sections addObject:[NSNumber numberWithInteger:TGInviteSectionLinks]];
 	if (self.revokedLinks.count)
 		[sections addObject:[NSNumber numberWithInteger:TGInviteSectionRevoked]];
 	self.sections = sections;
@@ -289,16 +352,22 @@ static CGFloat TGInviteRetinaPixel(void) {
 			return @"The links could not be loaded. Leave this screen and open it again to retry.";
 		if (!self.primaryLink.length)
 			return @"This chat has no invite link. Only an administrator with the right to invite users can make one.";
+		if (!self.canManage)
+			return @"Anyone with this link can join. Tap it to copy or share it.";
 		return @"Anyone with this link can join. Tap it to copy, share or revoke it.";
 	}
 	if (kind == TGInviteSectionRequests)
-		return @"Tap a person to approve or decline the request.";
+		return self.canManage
+				? @"Tap a person to approve or decline the request."
+				: @"Only an administrator who may invite users can answer these requests.";
 	if (kind == TGInviteSectionLinks){
 		if (!self.loaded)
 			return nil;
+		if (!self.canManage)
+			return self.links.count ? @"Tap a link to copy or share it." : nil;
 		if (!self.links.count)
 			return @"You have no additional links yet. A new link can carry its own expiry and member limit.";
-		return @"Tap a link to copy, share or revoke it, or swipe it away to revoke.";
+		return @"Tap a link to copy, edit or revoke it, or swipe it away to revoke.";
 	}
 	if (kind == TGInviteSectionRevoked)
 		return @"A revoked link no longer works. Deleting it removes it from this list.";
@@ -316,12 +385,23 @@ static CGFloat TGInviteRetinaPixel(void) {
 	if (kind == TGInviteSectionPrimary)
 		return self.primaryLink.length ? 1 : 0;
 	if (kind == TGInviteSectionRequests)
-		return (NSInteger)self.requests.count + (self.requests.count > 1 ? 1 : 0);
+		return (NSInteger)self.requests.count + ([self canLoadMoreRequests] ? 1 : 0)
+				+ ((self.canManage && self.requests.count > 1) ? 1 : 0);
 	if (kind == TGInviteSectionLinks)
-		return (NSInteger)self.links.count + 1;
+		return (NSInteger)self.links.count + (self.canManage ? 1 : 0);
 	if (kind == TGInviteSectionRevoked)
-		return (NSInteger)self.revokedLinks.count + 1;
+		return (NSInteger)self.revokedLinks.count + (self.canManage ? 1 : 0);
 	return 0;
+}
+
+- (NSInteger)moreRequestsRow {
+	return [self canLoadMoreRequests] ? (NSInteger)self.requests.count : -1;
+}
+
+- (NSInteger)approveAllRow {
+	if (!self.canManage || self.requests.count <= 1)
+		return -1;
+	return (NSInteger)self.requests.count + ([self canLoadMoreRequests] ? 1 : 0);
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -404,11 +484,11 @@ static CGFloat TGInviteRetinaPixel(void) {
 - (BOOL)isActionRowAtIndexPath:(NSIndexPath *)indexPath {
 	NSInteger kind = [self kindOfSection:indexPath.section];
 	if (kind == TGInviteSectionLinks)
-		return indexPath.row == (NSInteger)self.links.count;
+		return self.canManage && indexPath.row == (NSInteger)self.links.count;
 	if (kind == TGInviteSectionRevoked)
-		return indexPath.row == (NSInteger)self.revokedLinks.count;
+		return self.canManage && indexPath.row == (NSInteger)self.revokedLinks.count;
 	if (kind == TGInviteSectionRequests)
-		return indexPath.row == (NSInteger)self.requests.count;
+		return indexPath.row >= (NSInteger)self.requests.count;
 	return NO;
 }
 
@@ -444,6 +524,14 @@ static CGFloat TGInviteRetinaPixel(void) {
 		if (kind == TGInviteSectionRevoked)
 			return [self actionCellForTable:tableView title:@"Delete All Revoked Links"
 								destructive:YES];
+		if (indexPath.row == [self moreRequestsRow])
+			return [self actionCellForTable:tableView
+									  title:self.loadingMoreRequests
+											  ? @"Loading..."
+											  : [NSString stringWithFormat:@"Show More (%d left)",
+													  (int)(self.requestTotal
+															  - (NSInteger)self.requests.count)]
+								destructive:NO];
 		return [self actionCellForTable:tableView title:@"Approve All Requests"
 							destructive:NO];
 	}
@@ -486,6 +574,8 @@ static CGFloat TGInviteRetinaPixel(void) {
 		cell.textLabel.textColor = dark ? [[TGTheme shared] primaryTextColour]
 										: TGInviteRGB(0x516691);
 		cell.detailTextLabel.text = [self subtitleForRequest:request];
+		if (!self.canManage)
+			cell.selectionStyle = UITableViewCellSelectionStyleNone;
 		cell.imageView.image = [TGIcons avatarWithInitials:[self initialsForName:name]
 													  size:30
 												  colourId:[request[@"userId"] longLongValue]];
@@ -533,7 +623,7 @@ static CGFloat TGInviteRetinaPixel(void) {
 #pragma mark - swipe to revoke
 
 - (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
-	if ([self isActionRowAtIndexPath:indexPath])
+	if ([self isActionRowAtIndexPath:indexPath] || !self.canManage)
 		return NO;
 	NSInteger kind = [self kindOfSection:indexPath.section];
 	return kind == TGInviteSectionLinks || kind == TGInviteSectionRevoked;
@@ -576,6 +666,8 @@ static CGFloat TGInviteRetinaPixel(void) {
 			[self createLink];
 		else if (kind == TGInviteSectionRevoked)
 			[self confirmDeleteAllRevoked];
+		else if (indexPath.row == [self moreRequestsRow])
+			[self loadMoreRequests];
 		else
 			[self confirmApproveAll];
 		return;
@@ -624,14 +716,15 @@ static CGFloat TGInviteRetinaPixel(void) {
 	if (!link.length)
 		return;
 
-	NSArray *actions = [NSArray arrayWithObjects:
-			[[TGActionSheetAction alloc] initWithTitle:@"Copy Link" action:@"copy"],
-			[[TGActionSheetAction alloc] initWithTitle:@"Share Link" action:@"share"],
-			[[TGActionSheetAction alloc] initWithTitle:@"Revoke Link" action:@"revoke"
-												  type:TGActionSheetActionTypeDestructive],
-			[[TGActionSheetAction alloc] initWithTitle:@"Cancel" action:@"cancel"
-												  type:TGActionSheetActionTypeCancel],
-			nil];
+	NSMutableArray *actions = [NSMutableArray array];
+	[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Copy Link" action:@"copy"]];
+	[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Share Link" action:@"share"]];
+	if (self.canManage)
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Revoke Link"
+															  action:@"revoke"
+																type:TGActionSheetActionTypeDestructive]];
+	[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Cancel" action:@"cancel"
+															type:TGActionSheetActionTypeCancel]];
 
 	__weak typeof(self) weakSelf = self;
 	self.currentActionSheet = [[TGActionSheet alloc] initWithTitle:[self shortLink:link]
@@ -662,10 +755,14 @@ static CGFloat TGInviteRetinaPixel(void) {
 	if (!revoked)
 		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Share Link"
 															  action:@"share"]];
-	[actions addObject:[[TGActionSheetAction alloc]
-			initWithTitle:revoked ? @"Delete Link" : @"Revoke Link"
-				   action:revoked ? @"delete" : @"revoke"
-					 type:TGActionSheetActionTypeDestructive]];
+	if (!revoked && self.canManage)
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Edit Link"
+															  action:@"edit"]];
+	if (self.canManage)
+		[actions addObject:[[TGActionSheetAction alloc]
+				initWithTitle:revoked ? @"Delete Link" : @"Revoke Link"
+					   action:revoked ? @"delete" : @"revoke"
+						 type:TGActionSheetActionTypeDestructive]];
 	[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Cancel" action:@"cancel"
 															type:TGActionSheetActionTypeCancel]];
 
@@ -681,6 +778,8 @@ static CGFloat TGInviteRetinaPixel(void) {
 					[strongSelf copyLink:url];
 				else if ([action isEqualToString:@"share"])
 					[strongSelf shareLink:url];
+				else if ([action isEqualToString:@"edit"])
+					[strongSelf showEditSheetForLink:pending];
 				else if ([action isEqualToString:@"revoke"])
 					[strongSelf revokeLink:pending];
 				else if ([action isEqualToString:@"delete"])
@@ -787,6 +886,8 @@ static CGFloat TGInviteRetinaPixel(void) {
 #pragma mark - creating a link
 
 - (void)createLink {
+	if (!self.canManage)
+		return;
 	NSArray *actions = [NSArray arrayWithObjects:
 			[[TGActionSheetAction alloc] initWithTitle:@"Permanent Link" action:@"plain"],
 			[[TGActionSheetAction alloc] initWithTitle:@"Expires in 1 Hour" action:@"hour"],
@@ -847,10 +948,164 @@ static CGFloat TGInviteRetinaPixel(void) {
 	}];
 }
 
+#pragma mark - editing a link
+
+- (void)showEditSheetForLink:(NSDictionary *)link {
+	NSString *url = link[@"link"];
+	if (![url isKindOfClass:[NSString class]] || !url.length)
+		return;
+	self.editingLink = link;
+
+	NSMutableArray *actions = [NSMutableArray array];
+	[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Change Name"
+														  action:@"name"]];
+	[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Expiry: Never"
+														  action:@"never"]];
+	[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Expiry: 1 Hour"
+														  action:@"hour"]];
+	[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Expiry: 1 Day"
+														  action:@"day"]];
+	[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Expiry: 1 Week"
+														  action:@"week"]];
+	[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Limit: No Limit"
+														  action:@"nolimit"]];
+	[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Limit: 10 Users"
+														  action:@"limit10"]];
+	[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Limit: 100 Users"
+														  action:@"limit100"]];
+	[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Cancel" action:@"cancel"
+															type:TGActionSheetActionTypeCancel]];
+
+	__weak typeof(self) weakSelf = self;
+	TGActionSheet *sheet = [[TGActionSheet alloc]
+			initWithTitle:[self titleForLink:link]
+				  actions:actions
+			  actionBlock:^(__unused id target, NSString *action){
+				__strong typeof(weakSelf) strongSelf = weakSelf;
+				strongSelf.currentActionSheet = nil;
+				NSDictionary *editing = strongSelf.editingLink;
+				if (!editing || [action isEqualToString:@"cancel"]){
+					strongSelf.editingLink = nil;
+					return;
+				}
+				if ([action isEqualToString:@"name"]){
+					[strongSelf askNameForLink:editing];
+					return;
+				}
+				strongSelf.editingLink = nil;
+
+				NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+				NSInteger expires = [editing[@"expirationDate"] integerValue];
+				NSInteger limit = [editing[@"memberLimit"] integerValue];
+				if ([action isEqualToString:@"never"])
+					expires = 0;
+				else if ([action isEqualToString:@"hour"])
+					expires = (NSInteger)now + 60 * 60;
+				else if ([action isEqualToString:@"day"])
+					expires = (NSInteger)now + 60 * 60 * 24;
+				else if ([action isEqualToString:@"week"])
+					expires = (NSInteger)now + 60 * 60 * 24 * 7;
+				else if ([action isEqualToString:@"nolimit"])
+					limit = 0;
+				else if ([action isEqualToString:@"limit10"])
+					limit = 10;
+				else if ([action isEqualToString:@"limit100"])
+					limit = 100;
+
+				[strongSelf applyEditToLink:editing
+									   name:[strongSelf nameOfLink:editing]
+							 expirationDate:expires
+								memberLimit:limit];
+			} target:self];
+
+	self.currentActionSheet = sheet;
+	UIView *host = [self sheetHostView];
+	dispatch_async(dispatch_get_main_queue(), ^{
+		[sheet showInView:host];
+	});
+}
+
+- (NSString *)nameOfLink:(NSDictionary *)link {
+	NSString *name = link[@"name"];
+	return [name isKindOfClass:[NSString class]] ? name : @"";
+}
+
+- (void)askNameForLink:(NSDictionary *)link {
+	self.editingLink = link;
+	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Link Name"
+													message:@"Name this link."
+												   delegate:self
+										  cancelButtonTitle:@"Cancel"
+										  otherButtonTitles:@"Save", nil];
+	alert.tag = TGInviteRenameAlertTag;
+	if ([alert respondsToSelector:@selector(setAlertViewStyle:)]){
+		alert.alertViewStyle = UIAlertViewStylePlainTextInput;
+		[alert textFieldAtIndex:0].text = [self nameOfLink:link];
+	}
+	dispatch_async(dispatch_get_main_queue(), ^{
+		[alert show];
+	});
+}
+
+- (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {
+	if (alertView.tag != TGInviteRenameAlertTag)
+		return;
+	NSDictionary *link = self.editingLink;
+	self.editingLink = nil;
+	if (buttonIndex == alertView.cancelButtonIndex || !link)
+		return;
+	if (![alertView respondsToSelector:@selector(textFieldAtIndex:)])
+		return;
+
+	NSString *name = [[alertView textFieldAtIndex:0].text
+			stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+	if (!name)
+		name = @"";
+	if (name.length > 32)
+		name = [name substringToIndex:32];
+	[self applyEditToLink:link
+					 name:name
+		   expirationDate:[link[@"expirationDate"] integerValue]
+			  memberLimit:[link[@"memberLimit"] integerValue]];
+}
+
+- (void)applyEditToLink:(NSDictionary *)link
+				   name:(NSString *)name
+		 expirationDate:(NSInteger)expirationDate
+			memberLimit:(NSInteger)memberLimit {
+	NSString *url = link[@"link"];
+	if (![url isKindOfClass:[NSString class]] || !url.length)
+		return;
+	if (self.busy)
+		return;
+	self.busy = YES;
+
+	BOOL requiresApproval = [link[@"requiresApproval"] boolValue];
+	if (requiresApproval)
+		memberLimit = 0;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] editInviteLink:url
+							   inChat:self.chatId
+								 name:name ?: @""
+					   expirationDate:expirationDate
+						  memberLimit:memberLimit
+					 requiresApproval:requiresApproval
+						   completion:^(NSDictionary *updated){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		strongSelf.busy = NO;
+		if (!updated){
+			[strongSelf failedWithMessage:@"The link could not be changed."];
+			return;
+		}
+		[strongSelf reload];
+	}];
+}
+
 #pragma mark - join requests
 
 - (void)showSheetForRequest:(NSDictionary *)request {
-	if (!request)
+	if (!request || !self.canManage)
 		return;
 	self.pendingRequest = request;
 
@@ -899,10 +1154,9 @@ static CGFloat TGInviteRetinaPixel(void) {
 	[[TGClient shared] processJoinRequestFromUser:userId inChat:self.chatId
 										  approve:approve completion:^(BOOL ok){
 		__strong typeof(weakSelf) strongSelf = weakSelf;
-		if (!ok){
+		if (!ok)
 			[strongSelf failedWithMessage:@"The request could not be processed."];
-			[strongSelf reload];
-		}
+		[strongSelf reload];
 	}];
 }
 

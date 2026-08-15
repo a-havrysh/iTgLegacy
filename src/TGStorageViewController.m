@@ -9,6 +9,20 @@ typedef enum {
 	TGStorageActionOptimise
 } TGStorageAction;
 
+enum {
+	TGStorageSheetConfirm = 3301,
+	TGStorageSheetTTL,
+	TGStorageSheetSize
+};
+
+@interface TGStorageChatViewController : UITableViewController <UIActionSheetDelegate>
+@property (nonatomic, assign) int64_t chatId;
+@property (nonatomic, copy) NSString *chatTitle;
+@property (nonatomic, assign) long long bytes;
+@property (nonatomic, assign) NSInteger files;
+@property (nonatomic, copy) void (^didChange)(void);
+@end
+
 @interface TGStorageViewController () <UIActionSheetDelegate>
 @property (nonatomic, assign) long long bytes;
 @property (nonatomic, assign) NSInteger files;
@@ -61,10 +75,41 @@ enum {
 	TGStorageSectionSummary = 0,
 	TGStorageSectionTypes,
 	TGStorageSectionChats,
+	TGStorageSectionPolicy,
 	TGStorageSectionClear,
 	TGStorageSectionEverything,
 	TGStorageSectionCount
 };
+
+static NSString *TGHumanSize(long long bytes);
+
+static const NSInteger TGStorageTTLValues[4] = {3 * 24 * 60 * 60,
+												7 * 24 * 60 * 60,
+												30 * 24 * 60 * 60,
+												-1};
+
+static const long long TGStorageSizeValues[4] = {5LL * 1024 * 1024 * 1024,
+												 16LL * 1024 * 1024 * 1024,
+												 32LL * 1024 * 1024 * 1024,
+												 -1};
+
+static NSString *TGStorageTTLName(NSInteger ttl) {
+	if (ttl <= 0)
+		return @"Forever";
+	if (ttl <= 3 * 24 * 60 * 60)
+		return @"3 days";
+	if (ttl <= 7 * 24 * 60 * 60)
+		return @"1 week";
+	if (ttl <= 30 * 24 * 60 * 60)
+		return @"1 month";
+	return [NSString stringWithFormat:@"%ld days", (long)(ttl / (24 * 60 * 60))];
+}
+
+static NSString *TGStorageSizeName(long long maxBytes) {
+	if (maxBytes <= 0)
+		return @"No limit";
+	return TGHumanSize(maxBytes);
+}
 
 @implementation TGStorageViewController
 
@@ -87,6 +132,9 @@ enum {
 	if (self.refreshing)
 		return;
 	self.refreshing = YES;
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+											 selector:@selector(statsTimedOut)
+											   object:nil];
 
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] storageStatsWithCompletion:^(long long bytes, NSInteger files){
@@ -254,6 +302,7 @@ static NSString *TGHumanSize(long long bytes) {
 		case TGStorageSectionSummary: return @"Cache";
 		case TGStorageSectionTypes: return @"By media type";
 		case TGStorageSectionChats: return @"By chat";
+		case TGStorageSectionPolicy: return @"Cache limits";
 		case TGStorageSectionClear: return @"Clear";
 		default: return @"";
 	}
@@ -353,6 +402,8 @@ static NSString *TGHumanSize(long long bytes) {
 			if (!self.detailLoaded)
 				return 1;
 			return (NSInteger)self.chatRows.count;
+		case TGStorageSectionPolicy:
+			return 2;
 		case TGStorageSectionClear:
 			return 4;
 		default:
@@ -379,7 +430,26 @@ static NSString *TGHumanSize(long long bytes) {
 	cell.textLabel.text = @"";
 	cell.detailTextLabel.text = @"";
 	cell.accessoryView = nil;
+	cell.accessoryType = UITableViewCellAccessoryNone;
 	return cell;
+}
+
+- (NSInteger)policyTTLSeconds {
+	NSDictionary *policy = [[TGClient shared] cachePolicy];
+	id value = [policy objectForKey:@"ttlSeconds"];
+	return value ? [value integerValue] : -1;
+}
+
+- (long long)policyMaxBytes {
+	NSDictionary *policy = [[TGClient shared] cachePolicy];
+	id value = [policy objectForKey:@"maxBytes"];
+	return value ? [value longLongValue] : -1;
+}
+
+- (NSArray *)policyExcludedChatIds {
+	NSDictionary *policy = [[TGClient shared] cachePolicy];
+	NSArray *excluded = [policy objectForKey:@"excludedChatIds"];
+	return [excluded isKindOfClass:[NSArray class]] ? excluded : nil;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -453,8 +523,26 @@ static NSString *TGHumanSize(long long bytes) {
 		NSDictionary *row = [self.chatRows objectAtIndex:indexPath.row];
 		cell.textLabel.text = [row objectForKey:@"title"];
 		cell.detailTextLabel.text = TGHumanSize([[row objectForKey:@"size"] longLongValue]);
-		if ([self canClear])
+		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+		return cell;
+	}
+
+	if (indexPath.section == TGStorageSectionPolicy){
+		if (indexPath.row == 0){
+			cell.textLabel.text = @"Keep media for";
+			cell.detailTextLabel.text = TGStorageTTLName([self policyTTLSeconds]);
+		} else {
+			cell.textLabel.text = @"Maximum cache size";
+			cell.detailTextLabel.text = TGStorageSizeName([self policyMaxBytes]);
+		}
+		if (self.working){
+			cell.selectionStyle = UITableViewCellSelectionStyleNone;
+			cell.textLabel.textColor = dark ? [[TGTheme shared] secondaryTextColour]
+											: TGStorageRGB(0x888888);
+		} else {
 			cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+		}
 		return cell;
 	}
 
@@ -462,8 +550,18 @@ static NSString *TGHumanSize(long long bytes) {
 	if (!labels)
 		labels = @[@"Clear photos", @"Clear videos", @"Clear other files", @"Optimise storage"];
 	cell.textLabel.text = [labels objectAtIndex:indexPath.row];
-	if (indexPath.row == 3)
-		cell.detailTextLabel.text = @"older than 30 days";
+	if (indexPath.row == 3){
+		NSInteger ttl = [self policyTTLSeconds];
+		long long limit = [self policyMaxBytes];
+		if (ttl > 0)
+			cell.detailTextLabel.text = [NSString stringWithFormat:@"older than %@",
+					[TGStorageTTLName(ttl) lowercaseString]];
+		else if (limit > 0)
+			cell.detailTextLabel.text = [NSString stringWithFormat:@"down to %@",
+					TGHumanSize(limit)];
+		else
+			cell.detailTextLabel.text = @"no limits set";
+	}
 	if ([self canClear]){
 		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
 	} else {
@@ -547,6 +645,21 @@ static NSString *TGHumanSize(long long bytes) {
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+
+	if (indexPath.section == TGStorageSectionPolicy){
+		if (self.working)
+			return;
+		[self presentPolicySheetForRow:indexPath.row];
+		return;
+	}
+
+	if (indexPath.section == TGStorageSectionChats){
+		if (!self.detailLoaded || indexPath.row >= (NSInteger)self.chatRows.count)
+			return;
+		[self openChatDetail:[self.chatRows objectAtIndex:indexPath.row]];
+		return;
+	}
+
 	if (![self canClear])
 		return;
 
@@ -557,18 +670,6 @@ static NSString *TGHumanSize(long long bytes) {
 		[self confirmClearKinds:@[[row objectForKey:@"kind"]]
 						  title:[NSString stringWithFormat:@"Clear %@",
 								  [[row objectForKey:@"title"] lowercaseString]]];
-		return;
-	}
-
-	if (indexPath.section == TGStorageSectionChats){
-		if (!self.detailLoaded || indexPath.row >= (NSInteger)self.chatRows.count)
-			return;
-		NSDictionary *row = [self.chatRows objectAtIndex:indexPath.row];
-		self.pendingAction = TGStorageActionChat;
-		self.pendingChatId = (int64_t)[[row objectForKey:@"chatId"] longLongValue];
-		self.pendingKinds = nil;
-		[self presentConfirmationWithTitle:
-				[NSString stringWithFormat:@"Clear cache of %@", [row objectForKey:@"title"]]];
 		return;
 	}
 
@@ -600,6 +701,57 @@ static NSString *TGHumanSize(long long bytes) {
 	[self presentConfirmationWithTitle:title];
 }
 
+- (void)openChatDetail:(NSDictionary *)row {
+	TGStorageChatViewController *controller = [[TGStorageChatViewController alloc] init];
+	controller.chatId = (int64_t)[[row objectForKey:@"chatId"] longLongValue];
+	controller.chatTitle = [row objectForKey:@"title"];
+	controller.bytes = [[row objectForKey:@"size"] longLongValue];
+	__weak typeof(self) weakSelf = self;
+	controller.didChange = ^{
+		typeof(self) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		[strongSelf refresh];
+		[strongSelf refreshDetail];
+	};
+	[self.navigationController pushViewController:controller animated:YES];
+}
+
+- (void)presentPolicySheetForRow:(NSInteger)row {
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:
+					row == 0 ? @"Keep media for" : @"Maximum cache size"
+													  delegate:self
+											 cancelButtonTitle:nil
+										destructiveButtonTitle:nil
+											 otherButtonTitles:nil];
+	sheet.tag = row == 0 ? TGStorageSheetTTL : TGStorageSheetSize;
+	if (row == 0){
+		for (int i = 0; i < 4; i++)
+			[sheet addButtonWithTitle:TGStorageTTLName(TGStorageTTLValues[i])];
+	} else {
+		for (int i = 0; i < 4; i++)
+			[sheet addButtonWithTitle:TGStorageSizeName(TGStorageSizeValues[i])];
+	}
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	if (self.tabBarController.tabBar)
+		[sheet showFromTabBar:self.tabBarController.tabBar];
+	else
+		[sheet showInView:self.view];
+}
+
+- (void)applyPolicy {
+	if (![self beginWork])
+		return;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] applyPersistedCachePolicyWithCompletion:^(long long freed){
+		typeof(self) strongSelf = weakSelf;
+		if (!strongSelf || !strongSelf.working)
+			return;
+		[strongSelf finishWorkWithFreed:freed];
+	}];
+}
+
 - (void)presentConfirmationWithTitle:(NSString *)title {
 	self.pendingTitle = title.length ? title : @"Clear";
 
@@ -608,6 +760,7 @@ static NSString *TGHumanSize(long long bytes) {
 											 cancelButtonTitle:nil
 										destructiveButtonTitle:nil
 											 otherButtonTitles:nil];
+	sheet.tag = TGStorageSheetConfirm;
 	[sheet addButtonWithTitle:self.pendingTitle];
 	sheet.destructiveButtonIndex = 0;
 	[sheet addButtonWithTitle:@"Cancel"];
@@ -620,6 +773,24 @@ static NSString *TGHumanSize(long long bytes) {
 
 - (void)actionSheet:(UIActionSheet *)actionSheet
 		clickedButtonAtIndex:(NSInteger)buttonIndex {
+	if (actionSheet.tag == TGStorageSheetTTL || actionSheet.tag == TGStorageSheetSize){
+		if (buttonIndex < 0 || buttonIndex > 3)
+			return;
+		NSInteger ttl = [self policyTTLSeconds];
+		long long maxBytes = [self policyMaxBytes];
+		if (actionSheet.tag == TGStorageSheetTTL)
+			ttl = TGStorageTTLValues[buttonIndex];
+		else
+			maxBytes = TGStorageSizeValues[buttonIndex];
+		[[TGClient shared] setCachePolicyMaxBytes:maxBytes
+									   ttlSeconds:ttl
+								  excludedChatIds:[self policyExcludedChatIds]];
+		[self.tableView reloadData];
+		if (ttl > 0 || maxBytes > 0)
+			[self applyPolicy];
+		return;
+	}
+
 	if (buttonIndex != actionSheet.destructiveButtonIndex)
 		return;
 	TGStorageAction action = self.pendingAction;
@@ -694,17 +865,232 @@ static NSString *TGHumanSize(long long bytes) {
 	if (![self beginWork])
 		return;
 
+	NSInteger ttl = [self policyTTLSeconds];
+	long long maxBytes = [self policyMaxBytes];
+	if (ttl <= 0 && maxBytes <= 0)
+		ttl = 30 * 24 * 60 * 60;
+
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] optimizeStorageToSize:-1
-								  ttlSeconds:30 * 24 * 60 * 60
+	[[TGClient shared] optimizeStorageToSize:maxBytes
+								  ttlSeconds:ttl
 						immunityDelaySeconds:60 * 60
 								   fileTypes:nil
-							 excludedChatIds:nil
+							 excludedChatIds:[self policyExcludedChatIds]
 								  completion:^(long long freed){
 		typeof(self) strongSelf = weakSelf;
 		if (!strongSelf || !strongSelf.working)
 			return;
 		[strongSelf finishWorkWithFreed:freed];
+	}];
+}
+
+- (void)clearTimedOut {
+	if (!self.working)
+		return;
+	self.working = NO;
+	[self.tableView reloadData];
+	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Storage"
+			message:@"Clearing the cache is taking too long. Please try again."
+		   delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+	[alert show];
+}
+
+@end
+
+@interface TGStorageChatViewController ()
+@property (nonatomic, assign) BOOL working;
+@property (nonatomic, assign) BOOL loaded;
+@end
+
+@implementation TGStorageChatViewController
+
+- (instancetype)init {
+	return [super initWithStyle:UITableViewStyleGrouped];
+}
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+	self.title = self.chatTitle.length ? self.chatTitle : @"Chat";
+	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
+		self.edgesForExtendedLayout = UIRectEdgeNone;
+	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	self.tableView.separatorColor = [[TGTheme shared] bubbleBorderColour];
+	[self reload];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+	[super viewWillAppear:animated];
+	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+}
+
+- (void)dealloc {
+	[NSObject cancelPreviousPerformRequestsWithTarget:self];
+}
+
+- (void)reload {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] storageUsageForChat:self.chatId
+								completion:^(long long bytes, NSInteger files){
+		typeof(self) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		strongSelf.loaded = YES;
+		strongSelf.bytes = bytes < 0 ? 0 : bytes;
+		strongSelf.files = files < 0 ? 0 : files;
+		[strongSelf.tableView reloadData];
+	}];
+}
+
+- (BOOL)canClear {
+	return !self.working && self.bytes > 0;
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+	return 2;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	return section == 0 ? 2 : 1;
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
+	return 44;
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
+	return section == 0 ? 46 : 12;
+}
+
+- (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
+	if (section != 0)
+		return nil;
+	BOOL dark = [[TGTheme shared] isDark];
+	UIView *container = [[UIView alloc] initWithFrame:
+			CGRectMake(0, 0, tableView.bounds.size.width, 46)];
+	container.backgroundColor = [UIColor clearColor];
+
+	UILabel *label = [[UILabel alloc] init];
+	label.text = @"Cached in this chat";
+	label.font = [UIFont boldSystemFontOfSize:17];
+	label.backgroundColor = [UIColor clearColor];
+	label.textColor = dark ? [[TGTheme shared] sectionHeaderColour]
+						   : TGStorageRGB(0x697487);
+	if (!dark){
+		label.shadowColor = TGStorageRGB(0xdae0e8);
+		label.shadowOffset = CGSizeMake(0, 1);
+	}
+	[label sizeToFit];
+	label.frame = CGRectOffset(label.frame, 21, 16);
+	[container addSubview:label];
+	return container;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"row"];
+	if (!cell)
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
+									  reuseIdentifier:@"row"];
+	[[TGTheme shared] styleCell:cell];
+	BOOL dark = [[TGTheme shared] isDark];
+	cell.accessoryView = nil;
+	cell.accessoryType = UITableViewCellAccessoryNone;
+	cell.selectionStyle = UITableViewCellSelectionStyleNone;
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+	cell.textLabel.textAlignment = NSTextAlignmentLeft;
+	cell.textLabel.textColor = dark ? [[TGTheme shared] primaryTextColour]
+									: [UIColor blackColor];
+	cell.textLabel.highlightedTextColor = [UIColor whiteColor];
+	cell.detailTextLabel.font = [UIFont systemFontOfSize:16];
+	cell.detailTextLabel.textColor = dark ? [[TGTheme shared] cellDetailColour]
+										  : TGStorageRGB(0x356596);
+	cell.detailTextLabel.highlightedTextColor = [UIColor whiteColor];
+	cell.detailTextLabel.text = @"";
+
+	if (indexPath.section == 0){
+		if (indexPath.row == 0){
+			cell.textLabel.text = @"Size on disk";
+			cell.detailTextLabel.text = self.bytes > 0 ? TGHumanSize(self.bytes) : @"Empty";
+		} else {
+			cell.textLabel.text = @"Files";
+			cell.detailTextLabel.text = [NSString stringWithFormat:@"%ld", (long)self.files];
+		}
+		if (!self.loaded){
+			cell.detailTextLabel.text = @"";
+			UIActivityIndicatorView *view = [[UIActivityIndicatorView alloc]
+					initWithActivityIndicatorStyle:dark ? UIActivityIndicatorViewStyleWhite
+													   : UIActivityIndicatorViewStyleGray];
+			[view startAnimating];
+			cell.accessoryView = view;
+		}
+		return cell;
+	}
+
+	cell.textLabel.text = @"Clear cache of this chat";
+	cell.textLabel.textAlignment = NSTextAlignmentCenter;
+	if ([self canClear]){
+		cell.textLabel.textColor = TGStorageRGB(0xc4362f);
+		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+	} else {
+		cell.textLabel.textColor = dark ? [[TGTheme shared] secondaryTextColour]
+										: TGStorageRGB(0x888888);
+		if (self.working){
+			UIActivityIndicatorView *view = [[UIActivityIndicatorView alloc]
+					initWithActivityIndicatorStyle:dark ? UIActivityIndicatorViewStyleWhite
+													   : UIActivityIndicatorViewStyleGray];
+			[view startAnimating];
+			cell.accessoryView = view;
+		}
+	}
+	return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	if (indexPath.section != 1 || ![self canClear])
+		return;
+
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
+													  delegate:self
+											 cancelButtonTitle:nil
+										destructiveButtonTitle:nil
+											 otherButtonTitles:nil];
+	[sheet addButtonWithTitle:@"Clear cache"];
+	sheet.destructiveButtonIndex = 0;
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	[sheet showInView:self.view];
+}
+
+- (void)actionSheet:(UIActionSheet *)actionSheet
+		clickedButtonAtIndex:(NSInteger)buttonIndex {
+	if (buttonIndex != actionSheet.destructiveButtonIndex || ![self canClear])
+		return;
+	self.working = YES;
+	[self.tableView reloadData];
+	[self performSelector:@selector(clearTimedOut) withObject:nil afterDelay:60.0];
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] clearCacheForChat:self.chatId completion:^(long long freed){
+		typeof(self) strongSelf = weakSelf;
+		if (!strongSelf || !strongSelf.working)
+			return;
+		[NSObject cancelPreviousPerformRequestsWithTarget:strongSelf
+												 selector:@selector(clearTimedOut)
+												   object:nil];
+		strongSelf.working = NO;
+		strongSelf.bytes = 0;
+		strongSelf.files = 0;
+		[strongSelf.tableView reloadData];
+		[strongSelf reload];
+		if (strongSelf.didChange)
+			strongSelf.didChange();
+
+		NSString *message = freed > 0
+				? [NSString stringWithFormat:@"Freed %@.", TGHumanSize(freed)]
+				: @"There was nothing to clear.";
+		UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Storage"
+				message:message
+			   delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+		[alert show];
 	}];
 }
 

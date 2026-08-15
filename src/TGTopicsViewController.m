@@ -2,6 +2,7 @@
 #import "TGChatViewController.h"
 #import "TGClient.h"
 #import "TGClient+Forums.h"
+#import "TGClient+Notifications.h"
 #import "TGTheme.h"
 #import "TGIcons.h"
 #import "TGActionSheet.h"
@@ -42,6 +43,42 @@ static NSString *TGTopicDate(NSTimeInterval unix) {
 	return [full stringFromDate:date];
 }
 
+static UIImage *TGTopicAvatarImage(NSString *initials, CGFloat size, NSInteger rgb) {
+	UIGraphicsBeginImageContextWithOptions(CGSizeMake(size, size), NO, 0);
+	CGContextRef ctx = UIGraphicsGetCurrentContext();
+
+	UIBezierPath *shape = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, size, size)
+													cornerRadius:size * 0.12f];
+	CGContextSetRGBFillColor(ctx,
+			((rgb >> 16) & 0xff) / 255.0f,
+			((rgb >> 8) & 0xff) / 255.0f,
+			(rgb & 0xff) / 255.0f, 1.0f);
+	CGContextAddPath(ctx, shape.CGPath);
+	CGContextFillPath(ctx);
+
+	if (![TGTheme shared].isFlat){
+		CGContextSaveGState(ctx);
+		CGContextAddPath(ctx, shape.CGPath);
+		CGContextClip(ctx);
+		CGContextSetRGBFillColor(ctx, 1, 1, 1, 0.20f);
+		CGContextFillEllipseInRect(ctx,
+				CGRectMake(-size * 0.2f, -size * 0.55f, size * 1.4f, size * 0.95f));
+		CGContextRestoreGState(ctx);
+	}
+
+	NSString *text = initials.length ? initials : @"?";
+	UIFont *font = [UIFont boldSystemFontOfSize:size * 0.4f];
+	CGSize textSize = [text sizeWithFont:font];
+	[[UIColor whiteColor] set];
+	[text drawAtPoint:CGPointMake((size - textSize.width) / 2,
+								  (size - textSize.height) / 2)
+			 withFont:font];
+
+	UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return image;
+}
+
 @interface TGTopicCell : UITableViewCell
 @property (nonatomic, strong) UIImageView *avatar;
 @property (nonatomic, strong) UILabel *titleLabel;
@@ -51,6 +88,7 @@ static NSString *TGTopicDate(NSTimeInterval unix) {
 @property (nonatomic, strong) UILabel *badge;
 @property (nonatomic, strong) UIImageView *arrow;
 @property (nonatomic, strong) UIImageView *pinIcon;
+@property (nonatomic, strong) UIImageView *muteIcon;
 @end
 
 @implementation TGTopicCell
@@ -111,6 +149,10 @@ static NSString *TGTopicDate(NSTimeInterval unix) {
 	self.pinIcon.hidden = YES;
 	[self.contentView addSubview:self.pinIcon];
 
+	self.muteIcon = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"DialogList_Muted.png"]];
+	self.muteIcon.hidden = YES;
+	[self.contentView addSubview:self.muteIcon];
+
 	UIImage *plate = [[UIImage imageNamed:@"DialogListCell.png"]
 			stretchableImageWithLeftCapWidth:1 topCapHeight:0];
 	UIImage *platePressed = [[UIImage imageNamed:@"DialogListCellHighlighted.png"]
@@ -150,11 +192,18 @@ static NSString *TGTopicDate(NSTimeInterval unix) {
 		dateX -= pinSize.width + 5;
 	}
 
-	CGFloat titleWidth = (int)(dateX - 4 - left - 18);
+	CGSize muteSize = (!self.muteIcon.hidden && self.muteIcon.image)
+			? self.muteIcon.image.size : CGSizeZero;
+
+	CGFloat titleWidth = (int)(dateX - 4 - left - 18 - (muteSize.width ? muteSize.width + 3 : 0));
 	titleWidth = MIN(titleWidth, [self.titleLabel.text sizeWithFont:self.titleLabel.font].width);
 	if (titleWidth < 0)
 		titleWidth = 0;
 	self.titleLabel.frame = CGRectMake(left, 6, titleWidth, 20);
+
+	if (muteSize.width > 0)
+		self.muteIcon.frame = CGRectMake(left + titleWidth + 3, 12,
+				muteSize.width, muteSize.height);
 
 	self.previewLabel.frame = CGRectMake(left, 29, w - left - 10 - rightPadding, 40);
 
@@ -166,6 +215,7 @@ static NSString *TGTopicDate(NSTimeInterval unix) {
 
 static const NSInteger kTopicNameAlertCreate = 91;
 static const NSInteger kTopicNameAlertEdit = 92;
+static const NSInteger kTopicDeleteAlert = 93;
 
 @interface TGTopicsViewController () <UIAlertViewDelegate>
 @property (nonatomic, strong) NSArray *topics;
@@ -176,6 +226,9 @@ static const NSInteger kTopicNameAlertEdit = 92;
 @property (nonatomic, strong) NSArray *iconChoices;
 @property (nonatomic, strong) NSDictionary *actionTopic;
 @property (nonatomic, strong) TGActionSheet *currentActionSheet;
+@property (nonatomic, assign) CGPoint menuPoint;
+@property (nonatomic, assign) BOOL reordering;
+@property (nonatomic, assign) BOOL orderDirty;
 @end
 
 @implementation TGTopicsViewController
@@ -286,7 +339,7 @@ static const NSInteger kTopicNameAlertEdit = 92;
 }
 
 - (void)reloadTopics {
-	if (self.loading)
+	if (self.loading || self.reordering)
 		return;
 	self.loading = YES;
 
@@ -313,7 +366,16 @@ static const NSInteger kTopicNameAlertEdit = 92;
 					[clean addObject:topic];
 			}
 		}
-		me.topics = clean;
+		NSMutableArray *ordered = [NSMutableArray arrayWithCapacity:clean.count];
+		for (NSDictionary *topic in clean){
+			if ([topic[@"isPinned"] boolValue])
+				[ordered addObject:topic];
+		}
+		for (NSDictionary *topic in clean){
+			if (![topic[@"isPinned"] boolValue])
+				[ordered addObject:topic];
+		}
+		me.topics = ordered;
 
 		me.emptyLabel.text = @"No topics";
 		me.emptyLabel.hidden = (clean.count > 0);
@@ -347,6 +409,7 @@ static const NSInteger kTopicNameAlertEdit = 92;
 	cell.badge.hidden = YES;
 	cell.badgeBackground.hidden = YES;
 	cell.pinIcon.hidden = YES;
+	cell.muteIcon.hidden = YES;
 
 	if (indexPath.row >= (NSInteger)self.topics.count)
 		return cell;
@@ -375,17 +438,26 @@ static const NSInteger kTopicNameAlertEdit = 92;
 	cell.dateLabel.text = TGTopicDate([t[@"date"] doubleValue]);
 	cell.pinIcon.hidden = ![t[@"isPinned"] boolValue];
 
-	long long colourId = [self topicIdOf:t];
-	if ([t[@"iconColor"] respondsToSelector:@selector(longLongValue)])
-		colourId = [t[@"iconColor"] longLongValue];
-	cell.avatar.image = [TGIcons avatarWithInitials:[title substringToIndex:1].uppercaseString
-											   size:kTopicAvatar
-										   colourId:colourId];
+	NSString *initials = [title substringToIndex:1].uppercaseString;
+	NSInteger rgb = [t[@"iconColor"] respondsToSelector:@selector(integerValue)]
+			? [t[@"iconColor"] integerValue] : 0;
+	cell.avatar.image = (rgb > 0)
+			? TGTopicAvatarImage(initials, kTopicAvatar, rgb)
+			: [TGIcons avatarWithInitials:initials size:kTopicAvatar
+								 colourId:[self topicIdOf:t]];
 
+	cell.muteIcon.hidden = ![self topicIsMuted:t];
+
+	NSInteger mentions = [t[@"unreadMentions"] respondsToSelector:@selector(integerValue)]
+			? [t[@"unreadMentions"] integerValue] : 0;
 	if (unread > 0){
 		cell.badge.text = unread < 1000
 				? [NSString stringWithFormat:@"%ld", (long)unread]
 				: [NSString stringWithFormat:@"%ldK", (long)(unread / 1000)];
+		cell.badge.hidden = NO;
+		cell.badgeBackground.hidden = NO;
+	} else if (mentions > 0){
+		cell.badge.text = @"@";
 		cell.badge.hidden = NO;
 		cell.badgeBackground.hidden = NO;
 	}
@@ -396,6 +468,9 @@ static const NSInteger kTopicNameAlertEdit = 92;
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+
+	if (self.reordering)
+		return;
 
 	if (indexPath.row >= (NSInteger)self.topics.count)
 		return;
@@ -433,8 +508,24 @@ static const NSInteger kTopicNameAlertEdit = 92;
 					  cancelButtonTitle:@"OK" otherButtonTitles:nil] show];
 }
 
+- (BOOL)topicIsMuted:(NSDictionary *)topic {
+	id value = topic[@"muteFor"];
+	return [value respondsToSelector:@selector(integerValue)] && [value integerValue] > 0;
+}
+
+- (NSInteger)pinnedCount {
+	NSInteger count = 0;
+	for (NSDictionary *topic in self.topics){
+		if ([topic[@"isPinned"] boolValue])
+			count++;
+		else
+			break;
+	}
+	return count;
+}
+
 - (void)topicHeld:(UILongPressGestureRecognizer *)hold {
-	if (hold.state != UIGestureRecognizerStateBegan)
+	if (hold.state != UIGestureRecognizerStateBegan || self.reordering)
 		return;
 
 	NSIndexPath *path = [self.tableView indexPathForRowAtPoint:
@@ -472,9 +563,36 @@ static const NSInteger kTopicNameAlertEdit = 92;
 		[keys addObject:@"hide"];
 	}
 
+	BOOL muted = [self topicIsMuted:t];
+	[items addObject:@{@"title" : (muted ? @"Unmute" : @"Mute"),
+					   @"icon"  : (muted ? @"unmute" : @"mute")}];
+	[keys addObject:@"mute"];
+
+	if ([t[@"unread"] integerValue] > 0 || [t[@"unreadMentions"] integerValue] > 0
+			|| [t[@"unreadReactions"] integerValue] > 0){
+		[items addObject:@{@"title" : @"Mark as Read", @"icon" : @"unmute"}];
+		[keys addObject:@"read"];
+	}
+
+	[items addObject:@{@"title" : @"Copy Link", @"icon" : @"copy"}];
+	[keys addObject:@"link"];
+
+	if (pinned && [self pinnedCount] > 1){
+		[items addObject:@{@"title" : @"Reorder Pins", @"icon" : @"pin"}];
+		[keys addObject:@"reorder"];
+	}
+
+	if (!general){
+		[items addObject:@{@"title"       : @"Delete",
+						   @"icon"        : @"delete",
+						   @"destructive" : @YES}];
+		[keys addObject:@"delete"];
+	}
+
 	CGRect rect = [self.tableView rectForRowAtIndexPath:path];
 	CGPoint where = [self.tableView convertPoint:
 			CGPointMake(120, CGRectGetMaxY(rect) - 10) toView:self.navigationController.view];
+	self.menuPoint = where;
 
 	__weak typeof(self) weakSelf = self;
 	[TGPopupMenu showItems:items atPoint:where inView:self.navigationController.view
@@ -516,6 +634,39 @@ static const NSInteger kTopicNameAlertEdit = 92;
 										 : @"Could not reopen the topic."];
 			[weakSelf reloadTopics];
 		}];
+	} else if ([key isEqualToString:@"mute"]){
+		if ([self topicIsMuted:t]){
+			[[TGClient shared] setForumTopicInChat:self.chatId topic:topicId mutedFor:0
+										completion:^(BOOL success){
+				if (!success)
+					[weakSelf showError:@"Could not unmute the topic."];
+				[weakSelf reloadTopics];
+			}];
+		} else {
+			[self showMuteDurationsForTopic:topicId];
+			return;
+		}
+	} else if ([key isEqualToString:@"read"]){
+		[[TGClient shared] markForumTopicReadInChat:self.chatId topic:topicId
+										 completion:^(BOOL success){
+			if (!success)
+				[weakSelf showError:@"Could not mark the topic as read."];
+			[weakSelf reloadTopics];
+		}];
+	} else if ([key isEqualToString:@"link"]){
+		[[TGClient shared] forumTopicLinkInChat:self.chatId topic:topicId
+									 completion:^(NSString *link){
+			if (link.length)
+				[UIPasteboard generalPasteboard].string = link;
+			else
+				[weakSelf showError:@"Could not get a link to the topic."];
+		}];
+	} else if ([key isEqualToString:@"reorder"]){
+		[self beginReordering];
+		return;
+	} else if ([key isEqualToString:@"delete"]){
+		[self confirmDeleteTopic:t];
+		return;
 	} else if ([key isEqualToString:@"hide"]){
 		BOOL hide = ![t[@"isHidden"] boolValue];
 		[[TGClient shared] setGeneralForumTopicInChat:self.chatId hidden:hide
@@ -528,6 +679,143 @@ static const NSInteger kTopicNameAlertEdit = 92;
 	}
 
 	self.actionTopic = nil;
+}
+
+- (void)showMuteDurationsForTopic:(int32_t)topicId {
+	NSArray *items = @[
+		@{@"title" : @"Mute for 1 hour",  @"icon" : @"mute"},
+		@{@"title" : @"Mute for 8 hours", @"icon" : @"mute"},
+		@{@"title" : @"Mute for 2 days",  @"icon" : @"mute"},
+		@{@"title" : @"Mute forever",     @"icon" : @"mute"},
+	];
+	NSArray *seconds = @[@(3600), @(8 * 3600), @(2 * 24 * 3600), @(TGNotificationMuteForever)];
+
+	__weak typeof(self) weakSelf = self;
+	[TGPopupMenu showItems:items atPoint:self.menuPoint inView:self.navigationController.view
+				  onChoice:^(NSInteger choice, NSString *title){
+		TGTopicsViewController *me = weakSelf;
+		if (!me || choice < 0 || choice >= (NSInteger)seconds.count)
+			return;
+		me.actionTopic = nil;
+		[[TGClient shared] setForumTopicInChat:me.chatId topic:topicId
+									  mutedFor:[seconds[choice] integerValue]
+									completion:^(BOOL success){
+			if (!success)
+				[weakSelf showError:@"Could not mute the topic."];
+			[weakSelf reloadTopics];
+		}];
+	}];
+}
+
+- (void)confirmDeleteTopic:(NSDictionary *)topic {
+	self.actionTopic = topic;
+	NSString *name = [topic[@"name"] isKindOfClass:NSString.class] ? topic[@"name"] : @"this topic";
+	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Delete Topic"
+													message:[NSString stringWithFormat:
+															@"Delete %@ and all of its messages?", name]
+												   delegate:self
+										  cancelButtonTitle:@"Cancel"
+										  otherButtonTitles:@"Delete", nil];
+	alert.tag = kTopicDeleteAlert;
+	[alert show];
+}
+
+#pragma mark - reordering pinned topics
+
+- (void)beginReordering {
+	if ([self pinnedCount] < 2)
+		return;
+
+	self.actionTopic = nil;
+	self.reordering = YES;
+	self.orderDirty = NO;
+	[self.tableView setEditing:YES animated:YES];
+
+	UIButton *done = [TGIcons headerButtonWithTitle:@"Done" bold:YES
+											 target:self action:@selector(finishReordering)];
+	self.navigationItem.rightBarButtonItem =
+			[[UIBarButtonItem alloc] initWithCustomView:done];
+}
+
+- (void)finishReordering {
+	self.reordering = NO;
+	[self.tableView setEditing:NO animated:YES];
+
+	UIButton *create = [TGIcons headerButtonWithTitle:@"New" bold:NO
+											   target:self action:@selector(newTopicPressed)];
+	self.navigationItem.rightBarButtonItem =
+			[[UIBarButtonItem alloc] initWithCustomView:create];
+
+	if (!self.orderDirty){
+		[self reloadTopics];
+		return;
+	}
+	self.orderDirty = NO;
+
+	NSMutableArray *ids = [NSMutableArray array];
+	for (NSDictionary *topic in self.topics){
+		if (![topic[@"isPinned"] boolValue])
+			break;
+		int32_t topicId = [self topicIdOf:topic];
+		if (topicId != 0)
+			[ids addObject:@(topicId)];
+	}
+	if (ids.count < 2){
+		[self reloadTopics];
+		return;
+	}
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] setPinnedForumTopicsInChat:self.chatId topicIds:ids
+									   completion:^(BOOL success){
+		if (!success)
+			[weakSelf showError:@"Could not save the order of the pinned topics."];
+		[weakSelf reloadTopics];
+	}];
+}
+
+- (BOOL)tableView:(UITableView *)tableView canMoveRowAtIndexPath:(NSIndexPath *)indexPath {
+	return self.reordering && indexPath.row < [self pinnedCount];
+}
+
+- (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
+	return self.reordering;
+}
+
+- (UITableViewCellEditingStyle)tableView:(UITableView *)tableView
+		   editingStyleForRowAtIndexPath:(NSIndexPath *)indexPath {
+	return UITableViewCellEditingStyleNone;
+}
+
+- (BOOL)tableView:(UITableView *)tableView
+		shouldIndentWhileEditingRowAtIndexPath:(NSIndexPath *)indexPath {
+	return NO;
+}
+
+- (NSIndexPath *)tableView:(UITableView *)tableView
+targetIndexPathForMoveFromRowAtIndexPath:(NSIndexPath *)from
+	   toProposedIndexPath:(NSIndexPath *)proposed {
+	NSInteger last = [self pinnedCount] - 1;
+	if (last < 0)
+		return from;
+	if (proposed.row > last)
+		return [NSIndexPath indexPathForRow:last inSection:0];
+	return proposed;
+}
+
+- (void)tableView:(UITableView *)tableView
+		moveRowAtIndexPath:(NSIndexPath *)from toIndexPath:(NSIndexPath *)to {
+	NSInteger pinned = [self pinnedCount];
+	if (from.row >= pinned || from.row >= (NSInteger)self.topics.count)
+		return;
+
+	NSMutableArray *ordered = [self.topics mutableCopy];
+	NSDictionary *topic = ordered[from.row];
+	[ordered removeObjectAtIndex:from.row];
+	NSInteger target = MIN(MAX(to.row, 0), pinned - 1);
+	[ordered insertObject:topic atIndex:target];
+	self.topics = ordered;
+	self.orderDirty = YES;
 }
 
 #pragma mark - create and rename
@@ -561,8 +849,28 @@ static const NSInteger kTopicNameAlertEdit = 92;
 }
 
 - (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {
-	if (buttonIndex == alertView.cancelButtonIndex)
+	if (buttonIndex == alertView.cancelButtonIndex){
+		if (alertView.tag == kTopicDeleteAlert)
+			self.actionTopic = nil;
 		return;
+	}
+
+	if (alertView.tag == kTopicDeleteAlert){
+		NSDictionary *t = self.actionTopic;
+		self.actionTopic = nil;
+		int32_t topicId = [self topicIdOf:t];
+		if (topicId == 0)
+			return;
+		__weak typeof(self) weakSelf = self;
+		[[TGClient shared] deleteForumTopicInChat:self.chatId topic:topicId
+									   completion:^(BOOL success){
+			if (!success)
+				[weakSelf showError:@"Could not delete the topic."];
+			[weakSelf reloadTopics];
+		}];
+		return;
+	}
+
 	if (![alertView respondsToSelector:@selector(textFieldAtIndex:)])
 		return;
 

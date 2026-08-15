@@ -71,13 +71,31 @@ static NSString *const TGMessageActionDeleteRow = @"deleteRow";
 	self.finished = NO;
 	self.hostView = host;
 	self.completion = completion;
+	self.confirming = NO;
+	self.resolvedPinned = self.pinned;
 
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] propertiesOfMessage:self.messageId
 									inChat:self.chatId
 								completion:^(NSDictionary *properties){
 		dispatch_async(dispatch_get_main_queue(), ^{
-			[weakSelf showMenuAtPoint:point properties:properties];
+			__strong typeof(weakSelf) strongSelf = weakSelf;
+			if (strongSelf == nil)
+				return;
+			if ([properties isKindOfClass:NSDictionary.class] &&
+				[strongSelf flag:@"canPin" in:properties]){
+				[[TGClient shared] isMessagePinned:strongSelf.messageId
+											inChat:strongSelf.chatId
+										completion:^(BOOL pinned){
+					dispatch_async(dispatch_get_main_queue(), ^{
+						__strong typeof(weakSelf) innerSelf = weakSelf;
+						innerSelf.resolvedPinned = pinned;
+						[innerSelf showMenuAtPoint:point properties:properties];
+					});
+				}];
+				return;
+			}
+			[strongSelf showMenuAtPoint:point properties:properties];
 		});
 	}];
 }
@@ -112,6 +130,50 @@ static NSString *const TGMessageActionDeleteRow = @"deleteRow";
 				  onChoice:^(NSInteger index, __unused NSString *title){
 		[weakSelf menuChoseIndex:index];
 	}];
+
+	self.menuView = [self openMenuViewInHost:host];
+	if (self.menuView == nil){
+		[self finishWithAction:nil];
+		return;
+	}
+	[self scheduleDismissalWatch];
+}
+
+- (UIView *)openMenuViewInHost:(UIView *)host {
+	Class menuClass = NSClassFromString(@"TGPopupMenu");
+	if (menuClass == Nil)
+		return nil;
+	for (UIView *view in [host.subviews reverseObjectEnumerator]){
+		if ([view isKindOfClass:menuClass])
+			return view;
+	}
+	return nil;
+}
+
+- (void)scheduleDismissalWatch {
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+											 selector:@selector(checkMenuStillOpen)
+											   object:nil];
+	[self performSelector:@selector(checkMenuStillOpen) withObject:nil afterDelay:0.2];
+}
+
+- (void)checkMenuStillOpen {
+	if (self.finished || self.confirming)
+		return;
+	UIView *menu = self.menuView;
+	if (menu != nil && menu.superview != nil && menu.window != nil){
+		[self scheduleDismissalWatch];
+		return;
+	}
+	self.menuView = nil;
+	[self finishWithAction:nil];
+}
+
+- (void)stopDismissalWatch {
+	self.menuView = nil;
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+											 selector:@selector(checkMenuStillOpen)
+											   object:nil];
 }
 
 - (BOOL)flag:(NSString *)key in:(NSDictionary *)properties {
@@ -161,7 +223,7 @@ destructive:(BOOL)destructive {
 			action:TGMessageActionForward destructive:NO];
 
 	if ([self flag:@"canPin" in:properties]){
-		if (self.pinned)
+		if (self.resolvedPinned)
 			[self add:items ids:ids title:@"Unpin" icon:@"unpin"
 				action:TGMessageActionUnpin destructive:NO];
 		else
@@ -169,17 +231,26 @@ destructive:(BOOL)destructive {
 				action:TGMessageActionPin destructive:NO];
 	}
 
-	if (hasText)
+	BOOL canTranslate = properties[@"canTranslate"] != nil
+			? [self flag:@"canTranslate" in:properties] : hasText;
+	if (canTranslate)
 		[self add:items ids:ids title:@"Translate" icon:nil
 			action:TGMessageActionTranslate destructive:NO];
 
 	BOOL forMe = [self flag:@"canDeleteForMe" in:properties];
 	BOOL forEveryone = [self flag:@"canDeleteForEveryone" in:properties];
-	if (forMe || forEveryone)
+	if (forEveryone && !forMe)
+		[self add:items ids:ids title:@"Delete for Everyone" icon:@"delete"
+			action:TGMessageActionDeleteForEveryone destructive:YES];
+	else if (forMe && !forEveryone)
 		[self add:items ids:ids title:@"Delete" icon:@"delete"
 			action:TGMessageActionDeleteForMe destructive:YES];
+	else if (forMe && forEveryone)
+		[self add:items ids:ids title:@"Delete" icon:@"delete"
+			action:TGMessageActionDeleteRow destructive:YES];
 
-	if (self.allowsSelection)
+	if (self.allowsSelection && (properties[@"canSelect"] == nil ||
+								 [self flag:@"canSelect" in:properties]))
 		[self add:items ids:ids title:@"Select" icon:nil
 			action:TGMessageActionSelect destructive:NO];
 
@@ -194,20 +265,30 @@ destructive:(BOOL)destructive {
 #pragma mark - choice
 
 - (void)menuChoseIndex:(NSInteger)index {
+	[self stopDismissalWatch];
+
 	if (index < 0 || index >= (NSInteger)self.actionIds.count){
 		[self finishWithAction:nil];
 		return;
 	}
 
 	NSString *action = self.actionIds[index];
+	if ([action isEqualToString:TGMessageActionDeleteRow]){
+		[self confirmDeleteForMe:self.canDeleteForMe forEveryone:self.canDeleteForEveryone];
+		return;
+	}
 	if ([action isEqualToString:TGMessageActionDeleteForMe]){
-		[self confirmDelete];
+		[self confirmDeleteForMe:YES forEveryone:NO];
+		return;
+	}
+	if ([action isEqualToString:TGMessageActionDeleteForEveryone]){
+		[self confirmDeleteForMe:NO forEveryone:YES];
 		return;
 	}
 	[self finishWithAction:action];
 }
 
-- (void)confirmDelete {
+- (void)confirmDeleteForMe:(BOOL)forMe forEveryone:(BOOL)forEveryone {
 	UIView *host = self.hostView;
 	if (host == nil){
 		[self finishWithAction:nil];
@@ -215,25 +296,28 @@ destructive:(BOOL)destructive {
 	}
 
 	NSMutableArray *actions = [[NSMutableArray alloc] init];
-	if (self.canDeleteForEveryone)
+	if (forEveryone)
 		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Delete for Everyone"
 															   action:TGMessageActionDeleteForEveryone
 																 type:TGActionSheetActionTypeDestructive]];
-	if (self.canDeleteForMe)
-		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Delete for Me"
+	if (forMe)
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:
+								(forEveryone ? @"Delete for Me" : @"Delete")
 															   action:TGMessageActionDeleteForMe
-																 type:self.canDeleteForEveryone ? TGActionSheetActionTypeGeneric : TGActionSheetActionTypeDestructive]];
+																 type:forEveryone ? TGActionSheetActionTypeGeneric : TGActionSheetActionTypeDestructive]];
 
 	if (actions.count == 0){
 		[self finishWithAction:nil];
 		return;
 	}
 
+	self.confirming = YES;
 	__weak typeof(self) weakSelf = self;
 	self.currentActionSheet = [[TGActionSheet alloc] initWithTitle:nil actions:actions
 			actionBlock:^(__unused id target, NSString *action){
 				__strong typeof(weakSelf) strongSelf = weakSelf;
 				strongSelf.currentActionSheet = nil;
+				strongSelf.confirming = NO;
 				if ([action isEqualToString:TGMessageActionDeleteForEveryone] ||
 					[action isEqualToString:TGMessageActionDeleteForMe])
 					[strongSelf finishWithAction:action];
@@ -259,6 +343,7 @@ destructive:(BOOL)destructive {
 	if (self.finished)
 		return;
 	self.finished = YES;
+	[self stopDismissalWatch];
 
 	void (^block)(NSString *) = self.completion;
 	self.completion = nil;
@@ -274,6 +359,7 @@ destructive:(BOOL)destructive {
 				self.currentActionSheet.cancelButtonIndex animated:NO];
 		self.currentActionSheet = nil;
 	}
+	self.confirming = NO;
 	self.presenting = NO;
 	[self finishWithAction:nil];
 }

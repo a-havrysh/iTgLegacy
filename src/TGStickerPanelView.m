@@ -6,6 +6,7 @@
 #import "TGViewRecycler.h"
 #import "TGReusableView.h"
 #import "UIImage+WebP.h"
+#import "UIView+SafeTint.h"
 
 static const CGFloat TGStickerPanelTabHeight = 30.0f;
 static const CGFloat TGStickerPanelHeaderHeight = 25.0f;
@@ -13,6 +14,7 @@ static const CGFloat TGStickerPanelTileSide = 64.0f;
 static const CGFloat TGStickerPanelSearchHeight = 44.0f;
 static const NSInteger TGStickerPanelImageCacheLimit = 96;
 static const CGFloat TGStickerPanelPurgeDistance = 900.0f;
+static const NSInteger TGStickerPanelPageSize = 40;
 
 static const NSInteger TGStickerSectionRecent = 0;
 static const NSInteger TGStickerSectionFavourite = 1;
@@ -84,7 +86,7 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 
 @end
 
-@interface TGStickerPanelView () <UIScrollViewDelegate>
+@interface TGStickerPanelView () <UIScrollViewDelegate, UISearchBarDelegate>
 
 @property (nonatomic, strong) UIScrollView *tabStrip;
 @property (nonatomic, strong) UIScrollView *grid;
@@ -92,16 +94,21 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UIButton *retryButton;
+@property (nonatomic, strong) UISearchBar *searchBar;
 
 @property (nonatomic, strong) TGViewRecycler *recycler;
+@property (nonatomic, strong) NSMutableArray *allSections;
 @property (nonatomic, strong) NSMutableArray *sections;
 @property (nonatomic, strong) NSMutableDictionary *visibleTiles;
 @property (nonatomic, strong) NSMutableArray *headerViews;
 @property (nonatomic, strong) NSMutableArray *tabButtons;
 @property (nonatomic, strong) NSMutableDictionary *imageCache;
-@property (nonatomic, strong) NSMutableSet *pendingImages;
+@property (nonatomic, strong) NSMutableArray *imageCacheOrder;
+@property (nonatomic, strong) NSMutableDictionary *pendingImages;
 @property (nonatomic, strong) dispatch_queue_t decodeQueue;
 
+@property (nonatomic, copy) NSString *searchQuery;
+@property (nonatomic, assign) BOOL searchVisible;
 @property (nonatomic, assign) NSInteger columns;
 @property (nonatomic, assign) CGFloat gutter;
 @property (nonatomic, assign) NSInteger selectedSection;
@@ -109,6 +116,7 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 @property (nonatomic, assign) BOOL loading;
 @property (nonatomic, assign) BOOL failed;
 @property (nonatomic, assign) NSInteger generation;
+@property (nonatomic, assign) NSInteger searchGeneration;
 
 @end
 
@@ -125,16 +133,19 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 		self.clipsToBounds = YES;
 
 		_recycler = [[TGViewRecycler alloc] init];
+		_allSections = [[NSMutableArray alloc] init];
 		_sections = [[NSMutableArray alloc] init];
 		_visibleTiles = [[NSMutableDictionary alloc] init];
 		_headerViews = [[NSMutableArray alloc] init];
 		_tabButtons = [[NSMutableArray alloc] init];
 		_imageCache = [[NSMutableDictionary alloc] init];
-		_pendingImages = [[NSMutableSet alloc] init];
+		_imageCacheOrder = [[NSMutableArray alloc] init];
+		_pendingImages = [[NSMutableDictionary alloc] init];
 		_decodeQueue = dispatch_queue_create("tg.stickerpanel.decode", NULL);
 		_columns = 4;
 		_gutter = 12.0f;
 		_selectedSection = -1;
+		_searchQuery = @"";
 
 		_grid = [[UIScrollView alloc] initWithFrame:CGRectZero];
 		_grid.delegate = self;
@@ -147,6 +158,17 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 		_tabStrip.showsHorizontalScrollIndicator = NO;
 		_tabStrip.backgroundColor = [UIColor clearColor];
 		[self addSubview:_tabStrip];
+
+		_searchBar = [[UISearchBar alloc] initWithFrame:CGRectZero];
+		_searchBar.delegate = self;
+		_searchBar.placeholder = @"Search Stickers";
+		_searchBar.showsCancelButton = YES;
+		_searchBar.autocapitalizationType = UITextAutocapitalizationTypeNone;
+		_searchBar.autocorrectionType = UITextAutocorrectionTypeNo;
+		_searchBar.barStyle = [[TGTheme shared] isDark] ? UIBarStyleBlack : UIBarStyleDefault;
+		[_searchBar tg_setTintColor:[[TGTheme shared] accentColour]];
+		_searchBar.hidden = YES;
+		[self addSubview:_searchBar];
 
 		_topSeparator = [[UIView alloc] initWithFrame:CGRectZero];
 		_topSeparator.backgroundColor = [[TGTheme shared] separatorColour];
@@ -196,12 +218,16 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 
 - (void)dealloc {
 	[[NSNotificationCenter defaultCenter] removeObserver:self];
+	[NSObject cancelPreviousPerformRequestsWithTarget:self];
 	_grid.delegate = nil;
+	_searchBar.delegate = nil;
 }
 
 - (void)handleMemoryWarning {
 	[self.imageCache removeAllObjects];
+	[self.imageCacheOrder removeAllObjects];
 	[self.recycler removeAllViews];
+	[self purgeDistantSectionsAggressively:YES];
 }
 
 #pragma mark - loading
@@ -211,8 +237,10 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 	NSInteger generation = self.generation;
 
 	[self.imageCache removeAllObjects];
+	[self.imageCacheOrder removeAllObjects];
 	[self.pendingImages removeAllObjects];
 	[self clearTiles];
+	[self.allSections removeAllObjects];
 	[self.sections removeAllObjects];
 	self.selectedSection = -1;
 	self.loading = YES;
@@ -221,10 +249,11 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 	[self rebuildTabs];
 
 	__block BOOL anyFailure = NO;
-	__block NSInteger outstanding = 3;
+	__block NSInteger outstanding = 4;
 	__block NSArray *recent = nil;
 	__block NSArray *favourites = nil;
 	__block NSArray *sets = nil;
+	__block NSArray *emojiSets = nil;
 
 	__weak TGStickerPanelView *weakSelf = self;
 	void (^finish)(void) = ^{
@@ -234,7 +263,8 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 		outstanding -= 1;
 		if (outstanding > 0)
 			return;
-		[me buildSectionsWithRecent:recent favourites:favourites sets:sets failed:anyFailure];
+		[me buildSectionsWithRecent:recent favourites:favourites sets:sets
+						  emojiSets:emojiSets failed:anyFailure];
 	};
 
 	[[TGClient shared] recentStickersWithCompletion:^(NSArray *stickers){
@@ -255,106 +285,281 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 			anyFailure = YES;
 		finish();
 	}];
+	[[TGClient shared] installedEmojiStickerSetsWithCompletion:^(NSArray *installed){
+		emojiSets = installed;
+		finish();
+	}];
+}
+
+- (NSMutableDictionary *)sectionForSet:(NSDictionary *)set kind:(NSInteger)kind {
+	NSInteger count = [set[@"count"] integerValue];
+	if (count <= 0)
+		return nil;
+
+	NSString *title = set[@"title"];
+	if (title.length == 0)
+		title = (kind == TGStickerSectionEmojiSet) ? @"Emoji" : @"Stickers";
+
+	NSMutableDictionary *section = [[NSMutableDictionary alloc] initWithObjectsAndKeys:
+			@(kind), @"kind",
+			title, @"title",
+			title, @"tabTitle",
+			set[@"id"], @"setId",
+			@(count), @"count", nil];
+
+	NSString *name = set[@"name"];
+	if (name.length > 0)
+		section[@"name"] = name;
+
+	NSInteger thumbId = [set[@"thumbId"] integerValue];
+	if (thumbId == 0){
+		NSArray *covers = set[@"covers"];
+		NSDictionary *cover = covers.count > 0 ? covers[0] : nil;
+		if (cover != nil){
+			thumbId = [cover[@"thumbId"] integerValue];
+			if (thumbId == 0 && ![cover[@"isVideo"] boolValue] && ![cover[@"isAnimated"] boolValue])
+				thumbId = [cover[@"fileId"] integerValue];
+		}
+	}
+	if (thumbId != 0)
+		section[@"tabThumbId"] = @(thumbId);
+
+	return section;
 }
 
 - (void)buildSectionsWithRecent:(NSArray *)recent
 					 favourites:(NSArray *)favourites
 						   sets:(NSArray *)sets
+					  emojiSets:(NSArray *)emojiSets
 						 failed:(BOOL)failed {
 	self.loading = NO;
 
 	if (recent.count > 0){
-		[self.sections addObject:[[NSMutableDictionary alloc] initWithObjectsAndKeys:
+		[self.allSections addObject:[[NSMutableDictionary alloc] initWithObjectsAndKeys:
 				@(TGStickerSectionRecent), @"kind",
 				@"Recent", @"title",
 				@"Recent", @"tabTitle",
-				recent, @"stickers",
+				[recent mutableCopy], @"stickers",
+				@(recent.count), @"loadedCount",
+				@YES, @"complete",
 				@(recent.count), @"count", nil]];
 	}
 	if (favourites.count > 0){
-		[self.sections addObject:[[NSMutableDictionary alloc] initWithObjectsAndKeys:
+		[self.allSections addObject:[[NSMutableDictionary alloc] initWithObjectsAndKeys:
 				@(TGStickerSectionFavourite), @"kind",
 				@"Favourites", @"title",
 				@"Fav", @"tabTitle",
-				favourites, @"stickers",
+				[favourites mutableCopy], @"stickers",
+				@(favourites.count), @"loadedCount",
+				@YES, @"complete",
 				@(favourites.count), @"count", nil]];
 	}
 
 	for (NSDictionary *set in sets){
 		if ([set[@"isEmoji"] boolValue])
 			continue;
-		NSInteger count = [set[@"count"] integerValue];
-		if (count <= 0)
-			continue;
-
-		NSString *title = set[@"title"];
-		if (title.length == 0)
-			title = @"Stickers";
-
-		NSMutableDictionary *section = [[NSMutableDictionary alloc] initWithObjectsAndKeys:
-				@(TGStickerSectionSet), @"kind",
-				title, @"title",
-				title, @"tabTitle",
-				set[@"id"], @"setId",
-				@(count), @"count", nil];
-
-		NSInteger thumbId = [set[@"thumbId"] integerValue];
-		if (thumbId == 0){
-			NSArray *covers = set[@"covers"];
-			NSDictionary *cover = covers.count > 0 ? covers[0] : nil;
-			if (cover != nil){
-				thumbId = [cover[@"thumbId"] integerValue];
-				if (thumbId == 0 && ![cover[@"isVideo"] boolValue] && ![cover[@"isAnimated"] boolValue])
-					thumbId = [cover[@"fileId"] integerValue];
-			}
-		}
-		if (thumbId != 0)
-			section[@"tabThumbId"] = @(thumbId);
-
-		[self.sections addObject:section];
+		NSMutableDictionary *section = [self sectionForSet:set kind:TGStickerSectionSet];
+		if (section != nil)
+			[self.allSections addObject:section];
 	}
 
-	self.failed = (self.sections.count == 0 && failed);
-	[self rebuildTabs];
-	[self relayoutSections];
+	for (NSDictionary *set in emojiSets){
+		NSMutableDictionary *section = [self sectionForSet:set kind:TGStickerSectionEmojiSet];
+		if (section != nil)
+			[self.allSections addObject:section];
+	}
+
+	self.failed = (self.allSections.count == 0 && failed);
+	[self applyFilter];
 	[self updateStatus];
 
 	if (self.sections.count > 0)
 		[self setSelectedSection:0 scrollGrid:NO];
 }
 
-- (void)loadSectionAtIndex:(NSInteger)index {
+- (void)ensureSection:(NSInteger)index loadedUpToItem:(NSInteger)item {
 	if (index < 0 || index >= (NSInteger)self.sections.count)
 		return;
 
 	NSMutableDictionary *section = self.sections[index];
-	if (section[@"stickers"] != nil || [section[@"loading"] boolValue])
+	NSInteger kind = [section[@"kind"] integerValue];
+	if (kind != TGStickerSectionSet && kind != TGStickerSectionEmojiSet)
 		return;
-	if ([section[@"kind"] integerValue] != TGStickerSectionSet)
+	if ([section[@"loading"] boolValue] || [section[@"complete"] boolValue])
 		return;
 
+	NSInteger loaded = [section[@"loadedCount"] integerValue];
+	if (loaded > item)
+		return;
+
+	NSInteger limit = MAX((NSInteger)TGStickerPanelPageSize, item - loaded + 1);
 	section[@"loading"] = @YES;
+
 	NSInteger generation = self.generation;
 	int64_t setId = [section[@"setId"] longLongValue];
+	NSMutableDictionary *target = section;
 
 	__weak TGStickerPanelView *weakSelf = self;
-	[[TGClient shared] stickerSetWithId:setId completion:^(NSDictionary *full){
+	[[TGClient shared] stickersFromSetId:setId offset:loaded limit:limit
+							  completion:^(NSArray *stickers, NSInteger totalCount){
 		TGStickerPanelView *me = weakSelf;
 		if (me == nil || me.generation != generation)
 			return;
-		if (index >= (NSInteger)me.sections.count)
-			return;
 
-		NSMutableDictionary *target = me.sections[index];
 		[target removeObjectForKey:@"loading"];
-		NSArray *stickers = full[@"stickers"];
-		target[@"stickers"] = stickers != nil ? stickers : [NSArray array];
-		if (stickers != nil && stickers.count != [target[@"count"] unsignedIntegerValue]){
-			target[@"count"] = @(stickers.count);
-			[me relayoutSections];
+		if (stickers == nil){
+			target[@"complete"] = @YES;
+			return;
 		}
+
+		NSMutableArray *store = target[@"stickers"];
+		if (store == nil){
+			store = [[NSMutableArray alloc] init];
+			target[@"stickers"] = store;
+		}
+		[store addObjectsFromArray:stickers];
+		target[@"loadedCount"] = @(store.count);
+		if (stickers.count < (NSUInteger)limit)
+			target[@"complete"] = @YES;
+
+		BOOL geometryChanged = NO;
+		if (totalCount > 0 && totalCount != [target[@"count"] integerValue]){
+			target[@"count"] = @(totalCount);
+			geometryChanged = YES;
+		}
+		else if (totalCount <= 0 && [target[@"complete"] boolValue] &&
+				 (NSInteger)store.count != [target[@"count"] integerValue]){
+			target[@"count"] = @(store.count);
+			geometryChanged = YES;
+		}
+
+		if (geometryChanged)
+			[me relayoutSections];
 		[me updateVisibleTiles];
 	}];
+}
+
+#pragma mark - search
+
+- (void)toggleSearch {
+	[self setSearchVisible:!self.searchVisible];
+}
+
+- (void)setSearchVisible:(BOOL)visible {
+	if (_searchVisible == visible)
+		return;
+	_searchVisible = visible;
+	self.searchBar.hidden = !visible;
+
+	if (visible){
+		[self setNeedsLayout];
+		[self layoutIfNeeded];
+		[self.searchBar becomeFirstResponder];
+		return;
+	}
+
+	[self.searchBar resignFirstResponder];
+	self.searchBar.text = @"";
+	if (self.searchQuery.length > 0){
+		self.searchQuery = @"";
+		[self applyFilter];
+		[self updateStatus];
+	}
+	[self setNeedsLayout];
+}
+
+- (void)applyFilter {
+	NSString *query = self.searchQuery;
+	NSMutableArray *filtered = [[NSMutableArray alloc] init];
+
+	if (query.length == 0){
+		[filtered addObjectsFromArray:self.allSections];
+	}
+	else {
+		for (NSMutableDictionary *section in self.allSections){
+			NSString *title = section[@"title"];
+			NSString *name = section[@"name"];
+			BOOL matched = ([title rangeOfString:query options:NSCaseInsensitiveSearch].location != NSNotFound) ||
+					(name.length > 0 && [name rangeOfString:query options:NSCaseInsensitiveSearch].location != NSNotFound);
+			if (!matched && section[@"serverMatch"] != nil)
+				matched = [section[@"serverMatch"] isEqualToString:query];
+			if (matched)
+				[filtered addObject:section];
+		}
+	}
+
+	[self.sections setArray:filtered];
+	if (query.length > 0)
+		[self purgeDistantSectionsAggressively:NO];
+	self.selectedSection = -1;
+	[self rebuildTabs];
+	[self relayoutSections];
+	if (self.sections.count > 0)
+		[self setSelectedSection:0 scrollGrid:NO];
+}
+
+- (void)runServerSearch {
+	NSString *query = self.searchQuery;
+	if (query.length == 0)
+		return;
+
+	self.searchGeneration += 1;
+	NSInteger searchGeneration = self.searchGeneration;
+	NSInteger generation = self.generation;
+
+	__weak TGStickerPanelView *weakSelf = self;
+	[[TGClient shared] searchInstalledStickerSets:query limit:40 completion:^(NSArray *sets){
+		TGStickerPanelView *me = weakSelf;
+		if (me == nil || me.generation != generation || me.searchGeneration != searchGeneration)
+			return;
+		if (sets.count == 0 || ![me.searchQuery isEqualToString:query])
+			return;
+
+		NSMutableSet *ids = [[NSMutableSet alloc] init];
+		for (NSDictionary *set in sets){
+			NSNumber *setId = set[@"id"];
+			if (setId != nil)
+				[ids addObject:setId];
+		}
+
+		BOOL changed = NO;
+		for (NSMutableDictionary *section in me.allSections){
+			NSNumber *setId = section[@"setId"];
+			if (setId != nil && [ids containsObject:setId] &&
+				![section[@"serverMatch"] isEqualToString:query]){
+				section[@"serverMatch"] = query;
+				changed = YES;
+			}
+		}
+		if (changed){
+			[me applyFilter];
+			[me updateStatus];
+		}
+	}];
+}
+
+- (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)text {
+	NSString *query = [text stringByTrimmingCharactersInSet:
+			[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+	if ([query isEqualToString:self.searchQuery])
+		return;
+
+	self.searchQuery = query;
+	[self applyFilter];
+	[self updateStatus];
+
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+											 selector:@selector(runServerSearch) object:nil];
+	if (query.length > 0)
+		[self performSelector:@selector(runServerSearch) withObject:nil afterDelay:0.3];
+}
+
+- (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {
+	[searchBar resignFirstResponder];
+}
+
+- (void)searchBarCancelButtonClicked:(UISearchBar *)searchBar {
+	[self setSearchVisible:NO];
 }
 
 #pragma mark - geometry
@@ -364,11 +569,15 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 
 	CGRect bounds = self.bounds;
 	CGFloat separator = 1.0f / [UIScreen mainScreen].scale;
+	CGFloat searchHeight = self.searchVisible ? TGStickerPanelSearchHeight : 0.0f;
 
 	self.topSeparator.frame = CGRectMake(0, 0, bounds.size.width, separator);
-	self.tabStrip.frame = CGRectMake(0, separator, bounds.size.width, TGStickerPanelTabHeight);
-	self.grid.frame = CGRectMake(0, separator + TGStickerPanelTabHeight, bounds.size.width,
-			bounds.size.height - separator - TGStickerPanelTabHeight);
+	self.searchBar.frame = CGRectMake(0, separator, bounds.size.width, TGStickerPanelSearchHeight);
+	self.tabStrip.frame = CGRectMake(0, separator + searchHeight, bounds.size.width,
+			TGStickerPanelTabHeight);
+	CGFloat gridTop = separator + searchHeight + TGStickerPanelTabHeight;
+	self.grid.frame = CGRectMake(0, gridTop, bounds.size.width,
+			MAX(0.0f, bounds.size.height - gridTop));
 
 	CGFloat centreY = floorf(self.grid.frame.origin.y + self.grid.frame.size.height / 2.0f);
 	self.spinner.frame = CGRectMake(floorf((bounds.size.width - 20) / 2.0f), centreY - 10, 20, 20);
@@ -394,6 +603,21 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 }
 
 - (void)relayoutSections {
+	CGFloat previousOffset = self.grid.contentOffset.y;
+	NSInteger anchorIndex = -1;
+	CGFloat anchorDelta = 0.0f;
+	for (NSInteger i = 0; i < (NSInteger)self.sections.count; i++){
+		NSNumber *y = self.sections[i][@"y"];
+		if (y == nil)
+			continue;
+		if ([y floatValue] <= previousOffset){
+			anchorIndex = i;
+			anchorDelta = previousOffset - [y floatValue];
+		}
+		else
+			break;
+	}
+
 	for (UIView *header in self.headerViews)
 		[header removeFromSuperview];
 	[self.headerViews removeAllObjects];
@@ -438,6 +662,15 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 	}
 
 	self.grid.contentSize = CGSizeMake(width, y);
+
+	if (anchorIndex >= 0 && anchorIndex < (NSInteger)self.sections.count){
+		CGFloat restored = [self.sections[anchorIndex][@"y"] floatValue] + anchorDelta;
+		CGFloat maxOffset = MAX(0.0f, self.grid.contentSize.height - self.grid.bounds.size.height);
+		restored = MAX(0.0f, MIN(restored, maxOffset));
+		if (fabsf(restored - previousOffset) > 0.5f)
+			self.grid.contentOffset = CGPointMake(0, restored);
+	}
+
 	[self clearTiles];
 	[self updateVisibleTiles];
 }
@@ -479,18 +712,18 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 		if (sectionY + sectionHeight < CGRectGetMinY(visible) || sectionY > CGRectGetMaxY(visible))
 			continue;
 
-		[self loadSectionAtIndex:s];
-
 		NSArray *stickers = section[@"stickers"];
 		NSInteger count = [section[@"count"] integerValue];
-		if (stickers != nil)
-			count = (NSInteger)stickers.count;
+		NSInteger highestWanted = -1;
 
 		for (NSInteger i = 0; i < count; i++){
 			CGRect frame = [self frameForItem:i inSection:s];
-			if (CGRectGetMaxY(frame) < CGRectGetMinY(visible) || frame.origin.y > CGRectGetMaxY(visible))
+			if (CGRectGetMaxY(frame) < CGRectGetMinY(visible))
 				continue;
+			if (frame.origin.y > CGRectGetMaxY(visible))
+				break;
 
+			highestWanted = i;
 			NSString *key = [NSString stringWithFormat:@"%d.%d", (int)s, (int)i];
 			[wanted addObject:key];
 
@@ -515,6 +748,8 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 			NSDictionary *sticker = (stickers != nil && i < (NSInteger)stickers.count) ? stickers[i] : nil;
 			[self configureTile:tile withSticker:sticker];
 		}
+
+		[self ensureSection:s loadedUpToItem:MAX(highestWanted, 0)];
 	}
 
 	for (NSString *key in [self.visibleTiles allKeys]){
@@ -522,6 +757,46 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 			continue;
 		[self.recycler recycleView:self.visibleTiles[key]];
 		[self.visibleTiles removeObjectForKey:key];
+	}
+
+	[self purgeDistantSectionsAggressively:NO];
+}
+
+- (void)purgeDistantSectionsAggressively:(BOOL)aggressive {
+	CGFloat offset = self.grid.contentOffset.y;
+	CGFloat height = self.grid.bounds.size.height;
+
+	for (NSMutableDictionary *section in self.allSections){
+		NSInteger kind = [section[@"kind"] integerValue];
+		if (kind != TGStickerSectionSet && kind != TGStickerSectionEmojiSet)
+			continue;
+		if (section[@"stickers"] == nil || [section[@"loading"] boolValue])
+			continue;
+
+		BOOL displayed = ([self.sections indexOfObjectIdenticalTo:section] != NSNotFound);
+		BOOL purge = !displayed;
+		if (displayed){
+			NSNumber *y = section[@"y"];
+			if (y == nil)
+				purge = YES;
+			else {
+				CGFloat top = [y floatValue];
+				CGFloat bottom = top + [section[@"height"] floatValue];
+				CGFloat distance = 0.0f;
+				if (bottom < offset)
+					distance = offset - bottom;
+				else if (top > offset + height)
+					distance = top - (offset + height);
+				purge = (distance > (aggressive ? 0.0f : TGStickerPanelPurgeDistance));
+			}
+		}
+
+		if (!purge)
+			continue;
+
+		[section removeObjectForKey:@"stickers"];
+		[section removeObjectForKey:@"loadedCount"];
+		[section removeObjectForKey:@"complete"];
 	}
 }
 
@@ -583,6 +858,28 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 	return self.imageCache[[self cacheKeyForFileId:fileId side:side]];
 }
 
+- (void)storeImage:(UIImage *)image forKey:(NSString *)key {
+	if (image == nil || key == nil)
+		return;
+	if (self.imageCache[key] != nil)
+		[self.imageCacheOrder removeObject:key];
+	self.imageCache[key] = image;
+	[self.imageCacheOrder addObject:key];
+
+	while ((NSInteger)self.imageCacheOrder.count > TGStickerPanelImageCacheLimit){
+		NSString *oldest = self.imageCacheOrder[0];
+		[self.imageCacheOrder removeObjectAtIndex:0];
+		[self.imageCache removeObjectForKey:oldest];
+	}
+}
+
+- (void)deliverImage:(UIImage *)image forKey:(NSString *)key {
+	NSArray *blocks = self.pendingImages[key];
+	[self.pendingImages removeObjectForKey:key];
+	for (void (^block)(UIImage *) in blocks)
+		block(image);
+}
+
 - (void)imageForFileId:(NSInteger)fileId side:(CGFloat)side completion:(void (^)(UIImage *))completion {
 	NSString *key = [self cacheKeyForFileId:fileId side:side];
 	UIImage *cached = self.imageCache[key];
@@ -591,9 +888,18 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 			completion(cached);
 		return;
 	}
-	if ([self.pendingImages containsObject:key])
+
+	NSMutableArray *waiting = self.pendingImages[key];
+	if (waiting != nil){
+		if (completion)
+			[waiting addObject:[completion copy]];
 		return;
-	[self.pendingImages addObject:key];
+	}
+
+	waiting = [[NSMutableArray alloc] init];
+	if (completion)
+		[waiting addObject:[completion copy]];
+	self.pendingImages[key] = waiting;
 
 	NSInteger generation = self.generation;
 	__weak TGStickerPanelView *weakSelf = self;
@@ -602,7 +908,7 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 		if (me == nil)
 			return;
 		if (path.length == 0){
-			[me.pendingImages removeObject:key];
+			[me deliverImage:nil forKey:key];
 			return;
 		}
 		dispatch_async(me.decodeQueue, ^{
@@ -610,18 +916,17 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 			if (decoded == nil)
 				decoded = [UIImage imageWithContentsOfFile:path];
 			UIImage *scaled = [TGStickerPanelView imageFrom:decoded fittingSide:side];
+			decoded = nil;
 			dispatch_async(dispatch_get_main_queue(), ^{
 				TGStickerPanelView *inner = weakSelf;
 				if (inner == nil)
 					return;
-				[inner.pendingImages removeObject:key];
-				if (scaled == nil || inner.generation != generation)
+				if (scaled == nil || inner.generation != generation){
+					[inner deliverImage:nil forKey:key];
 					return;
-				if (inner.imageCache.count > TGStickerPanelImageCacheLimit)
-					[inner.imageCache removeAllObjects];
-				inner.imageCache[key] = scaled;
-				if (completion)
-					completion(scaled);
+				}
+				[inner storeImage:scaled forKey:key];
+				[inner deliverImage:scaled forKey:key];
 			});
 		});
 	}];
@@ -653,7 +958,7 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 		[view removeFromSuperview];
 	[self.tabButtons removeAllObjects];
 
-	NSInteger total = (NSInteger)self.sections.count + 1;
+	NSInteger total = (NSInteger)self.sections.count + 2;
 	NSInteger index = 0;
 
 	for (NSMutableDictionary *section in self.sections){
@@ -688,6 +993,16 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 		[self.tabButtons addObject:button];
 		index += 1;
 	}
+
+	UIButton *search = [self tabButtonAtIndex:index total:total];
+	search.tag = -2;
+	[search setTitle:@"Find" forState:UIControlStateNormal];
+	search.selected = self.searchVisible;
+	[search addTarget:self action:@selector(toggleSearch)
+	 forControlEvents:UIControlEventTouchUpInside];
+	[self.tabStrip addSubview:search];
+	[self.tabButtons addObject:search];
+	index += 1;
 
 	UIButton *hide = [self tabButtonAtIndex:index total:total];
 	hide.tag = -1;
@@ -782,7 +1097,10 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 - (void)updateTabSelection {
 	NSInteger index = 0;
 	for (UIButton *button in self.tabButtons){
-		button.selected = (button.tag >= 0 && index == self.selectedSection);
+		if (button.tag == -2)
+			button.selected = self.searchVisible;
+		else
+			button.selected = (button.tag >= 0 && index == self.selectedSection);
 		index += 1;
 	}
 }
@@ -811,6 +1129,8 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 }
 
 - (void)hideTapped {
+	if (self.searchVisible)
+		[self.searchBar resignFirstResponder];
 	if (self.onCloseRequested)
 		self.onCloseRequested();
 }
@@ -826,14 +1146,17 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 		[self.spinner stopAnimating];
 
 	self.statusLabel.hidden = !empty;
-	self.retryButton.hidden = !(empty && self.failed);
+	self.retryButton.hidden = !(empty && self.failed && self.searchQuery.length == 0);
 	self.grid.hidden = empty;
 
 	if (!empty)
 		return;
 
-	self.statusLabel.text = self.failed ? @"Stickers could not be loaded."
-										: @"No sticker sets installed yet.";
+	if (self.searchQuery.length > 0)
+		self.statusLabel.text = @"No sticker sets found.";
+	else
+		self.statusLabel.text = self.failed ? @"Stickers could not be loaded."
+											: @"No sticker sets installed yet.";
 }
 
 #pragma mark - interaction
@@ -842,6 +1165,9 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 	NSDictionary *sticker = tile.sticker;
 	if (sticker == nil)
 		return;
+
+	if (self.searchVisible)
+		[self.searchBar resignFirstResponder];
 
 	NSInteger fileId = [sticker[@"fileId"] integerValue];
 	if (fileId != 0)
@@ -863,18 +1189,18 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 	if (fileId == 0)
 		return;
 
-	BOOL isFavourite = NO;
-	if (tile.sectionIndex < (NSInteger)self.sections.count){
-		NSDictionary *section = self.sections[tile.sectionIndex];
-		isFavourite = ([section[@"kind"] integerValue] == TGStickerSectionFavourite);
-	}
-
-	if (isFavourite)
-		[[TGClient shared] removeFavoriteStickerWithFileId:fileId];
-	else
-		[[TGClient shared] addFavoriteStickerWithFileId:fileId];
-
-	[self refreshFavourites];
+	NSInteger generation = self.generation;
+	__weak TGStickerPanelView *weakSelf = self;
+	[[TGClient shared] isStickerFavoriteWithFileId:fileId completion:^(BOOL favourite){
+		TGStickerPanelView *me = weakSelf;
+		if (me == nil || me.generation != generation)
+			return;
+		if (favourite)
+			[[TGClient shared] removeFavoriteStickerWithFileId:fileId];
+		else
+			[[TGClient shared] addFavoriteStickerWithFileId:fileId];
+		[me refreshFavourites];
+	}];
 }
 
 - (void)refreshFavourites {
@@ -886,8 +1212,8 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 			return;
 
 		NSInteger index = -1;
-		for (NSInteger i = 0; i < (NSInteger)me.sections.count; i++){
-			if ([me.sections[i][@"kind"] integerValue] == TGStickerSectionFavourite){
+		for (NSInteger i = 0; i < (NSInteger)me.allSections.count; i++){
+			if ([me.allSections[i][@"kind"] integerValue] == TGStickerSectionFavourite){
 				index = i;
 				break;
 			}
@@ -905,8 +1231,10 @@ static const NSInteger TGStickerSectionEmojiSet = 3;
 			return;
 		}
 
-		NSMutableDictionary *section = me.sections[index];
-		section[@"stickers"] = stickers;
+		NSMutableDictionary *section = me.allSections[index];
+		section[@"stickers"] = [stickers mutableCopy];
+		section[@"loadedCount"] = @(stickers.count);
+		section[@"complete"] = @YES;
 		section[@"count"] = @(stickers.count);
 		[me relayoutSections];
 	}];

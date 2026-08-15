@@ -201,7 +201,7 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 
 #pragma mark - controller
 
-@interface TGChatListViewController () <UISearchBarDelegate, UIAlertViewDelegate>
+@interface TGChatListViewController () <UISearchBarDelegate, UIAlertViewDelegate, UIActionSheetDelegate>
 @property (nonatomic, strong) NSArray *chats;
 @property (nonatomic, assign) BOOL showsArchive;      // this IS the archive screen
 @property (nonatomic, assign) NSInteger folderId;     // 0 = no folder
@@ -217,6 +217,10 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 @property (nonatomic, strong) NSArray *sheetItems;
 @property (nonatomic, strong) NSDictionary *archiveSettings;
 @property (nonatomic, assign) CGPoint menuPoint;
+@property (nonatomic, strong) NSMutableDictionary *listUnread;
+@property (nonatomic, assign) NSInteger folderLimit;
+@property (nonatomic, assign) BOOL loadingMore;
+@property (nonatomic, strong) NSMutableSet *sponsoredSeen;
 @end
 
 @implementation TGChatListViewController
@@ -237,6 +241,9 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 	self.chats = @[];
 	self.avatars = [NSMutableDictionary dictionary];
 	self.avatarsRequested = [NSMutableSet set];
+	self.listUnread = [NSMutableDictionary dictionary];
+	self.sponsoredSeen = [NSMutableSet set];
+	self.folderLimit = 60;
 
 	// Without this there is no way to start a conversation at all - you can
 	// only reply to chats that already exist.
@@ -355,6 +362,7 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView {
 	if (self.emptyLabel && !self.emptyLabel.hidden)
 		[self updateEmptyState];
+	[self loadMoreIfNeeded];
 }
 
 - (void)viewDidLayoutSubviews {
@@ -431,6 +439,14 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 		row.previewLabel.text = [NSString stringWithFormat:@"%lu chats",
 				(unsigned long)[TGClient shared].archivedChats.count];
 		row.previewLabel.textColor = [[TGTheme shared] secondaryTextColour];
+		NSInteger archiveUnread = [self.listUnread[@(TGChatListArchive)] integerValue];
+		if (archiveUnread > 0){
+			row.badge.text = archiveUnread < 1000
+					? [NSString stringWithFormat:@"%ld", (long)archiveUnread]
+					: [NSString stringWithFormat:@"%ldK", (long)(archiveUnread / 1000)];
+			row.badge.hidden = NO;
+			row.badgeBackground.hidden = NO;
+		}
 		row.avatar.image = [TGIcons archiveAvatarOfSide:kAvatar];
 		row.avatar.backgroundColor = [UIColor clearColor];
 		row.backgroundColor = [[TGTheme shared] listBackgroundColour];
@@ -511,25 +527,99 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 		self.chats = [TGClient shared].archivedChats ?: @[];
 		[self.tableView reloadData];
 		[self fetchMissingAvatars];
+		[self refreshUnreadCounters];
 		return;
 	}
 
 	if (self.folderId != 0){
 		__weak typeof(self) weakSelf = self;
-		[[TGClient shared] chatsInList:(TGChatListId)self.folderId limit:200
+		[[TGClient shared] chatsInList:(TGChatListId)self.folderId limit:self.folderLimit
 							completion:^(NSArray *chats){
-			weakSelf.chats = chats ?: @[];
-			[weakSelf.tableView reloadData];
-			[weakSelf rebuildTableHeader];
-			[weakSelf fetchMissingAvatars];
+			TGChatListViewController *me = weakSelf;
+			if (!me)
+				return;
+			me.loadingMore = NO;
+			me.chats = chats ?: @[];
+			[me.tableView reloadData];
+			[me rebuildTableHeader];
+			[me fetchMissingAvatars];
+			[me refreshUnreadCounters];
 		}];
 		return;
 	}
 
 	self.chats = [TGClient shared].chats ?: @[];
+	self.loadingMore = NO;
 	[self.tableView reloadData];
 	[self rebuildTableHeader];
 	[self fetchMissingAvatars];
+	[self refreshUnreadCounters];
+}
+
+- (void)refreshUnreadCounters {
+	TGClient *client = [TGClient shared];
+	NSDictionary *main = [client unreadSummaryForList:TGChatListMain];
+	if (main)
+		self.listUnread[@(TGChatListMain)] = main[@"messages"] ?: @0;
+	NSDictionary *archive = [client unreadSummaryForList:TGChatListArchive];
+	if (archive)
+		self.listUnread[@(TGChatListArchive)] = archive[@"messages"] ?: @0;
+
+	static NSTimeInterval lastFolderSweep = 0;
+	NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+	if (now - lastFolderSweep < 5.0)
+		return;
+	lastFolderSweep = now;
+
+	__weak typeof(self) weakSelf = self;
+	for (NSDictionary *folder in client.folders){
+		NSInteger listId = [folder[@"id"] integerValue];
+		if (listId == 0)
+			continue;
+		[client chatsInList:(TGChatListId)listId limit:100 completion:^(NSArray *chats){
+			TGChatListViewController *me = weakSelf;
+			if (!me)
+				return;
+			NSInteger total = 0;
+			for (NSDictionary *c in chats)
+				total += [c[@"unread"] integerValue];
+			me.listUnread[@(listId)] = @(total);
+		}];
+	}
+}
+
+- (NSString *)unreadSuffixForList:(TGChatListId)list {
+	NSInteger count = [self.listUnread[@(list)] integerValue];
+	if (count <= 0)
+		return @"";
+	return [NSString stringWithFormat:@"  (%ld)", (long)count];
+}
+
+- (void)loadMoreIfNeeded {
+	if (self.searchResults || self.loadingMore)
+		return;
+	UITableView *table = self.tableView;
+	CGFloat bottom = table.contentOffset.y + table.bounds.size.height;
+	if (table.contentSize.height <= 0 || bottom < table.contentSize.height - kRowHeight * 2)
+		return;
+
+	self.loadingMore = YES;
+	if (self.folderId != 0){
+		if ((NSInteger)self.chats.count < self.folderLimit){
+			self.loadingMore = NO;
+			return;
+		}
+		self.folderLimit += 60;
+		[[TGClient shared] loadMoreChatsInList:(TGChatListId)self.folderId limit:60];
+		[self reload];
+		return;
+	}
+	[[TGClient shared] loadMoreChatsInList:[self currentListId] limit:60];
+	__weak typeof(self) weakSelf = self;
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
+			dispatch_get_main_queue(), ^{
+		weakSelf.loadingMore = NO;
+	});
 }
 
 /// Nothing sits above the chats any more. The archive lives in the table's
@@ -574,11 +664,18 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 	NSArray *folders = [TGClient shared].folders;
 
 	NSMutableArray *items = [NSMutableArray array];
-	[items addObject:@{@"kind" : @"list", @"title" : @"All Chats", @"folder" : @0}];
-	for (NSDictionary *f in folders)
+	[items addObject:@{@"kind"   : @"list",
+					   @"title"  : [@"All Chats" stringByAppendingString:
+										   [self unreadSuffixForList:TGChatListMain]],
+					   @"folder" : @0}];
+	for (NSDictionary *f in folders){
+		NSInteger listId = [f[@"id"] integerValue];
+		NSString *name = f[@"title"] ?: @"Folder";
 		[items addObject:@{@"kind"   : @"list",
-						   @"title"  : f[@"title"] ?: @"Folder",
+						   @"title"  : [name stringByAppendingString:
+											   [self unreadSuffixForList:(TGChatListId)listId]],
 						   @"folder" : f[@"id"] ?: @0}];
+	}
 	[items addObject:@{@"kind" : @"markAllRead", @"title" : @"Mark All as Read"}];
 	[items addObject:@{@"kind" : @"editFolders",
 					   @"title" : folders.count ? @"Edit Folders" : @"Create a Folder"}];
@@ -662,7 +759,7 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 	}];
 }
 
-- (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
+- (void)actionSheet:(UIActionSheet *)sheet didDismissWithButtonIndex:(NSInteger)index {
 	if (index == sheet.cancelButtonIndex)
 		return;
 	if (index < 0 || index >= (NSInteger)self.sheetItems.count)
@@ -764,8 +861,7 @@ static const NSInteger kChatActionsTag = 77;
 
 	BOOL pinned = [self.actionChat[@"isPinned"] boolValue];
 	BOOL muted  = [self.actionChat[@"isMuted"] boolValue];
-	BOOL unread = ([self.actionChat[@"unread"] integerValue] > 0) ||
-				  [self.actionChat[@"markedUnread"] boolValue];
+	BOOL unread = [self chatIsUnread:self.actionChat];
 	NSArray *items = @[
 		@{@"title" : (pinned ? @"Unpin" : @"Pin"),
 		  @"icon"  : (pinned ? @"unpin" : @"pin")},
@@ -794,7 +890,7 @@ static const NSInteger kChatActionsTag = 77;
 - (void)runChatAction:(NSInteger)choice {
 	NSDictionary *chat = self.actionChat;
 	int64_t chatId = [chat[@"id"] longLongValue];
-	BOOL unread = ([chat[@"unread"] integerValue] > 0) || [chat[@"markedUnread"] boolValue];
+	BOOL unread = [self chatIsUnread:chat];
 
 	if (choice == 0){
 		[[TGClient shared] setChat:chatId
@@ -816,16 +912,31 @@ static const NSInteger kChatActionsTag = 77;
 	self.actionChat = nil;
 }
 
-/// TDLib has no single "mark this chat read" call in the API layer here, so
-/// the flag the list draws is set by hand and the mention and reaction badges
-/// are cleared alongside it.
 - (void)setChat:(int64_t)chatId read:(BOOL)read {
-	[[TGClient shared] setChat:chatId markedAsUnread:!read];
-	if (read){
-		[[TGClient shared] readAllMentionsInChat:chatId];
-		[[TGClient shared] readAllReactionsInChat:chatId];
+	__weak typeof(self) weakSelf = self;
+	if (!read){
+		[[TGClient shared] setChat:chatId markedAsUnread:YES];
+		[self reload];
+		return;
 	}
-	[self reload];
+	[[TGClient shared] readAllMentionsInChat:chatId];
+	[[TGClient shared] readAllReactionsInChat:chatId];
+	[[TGClient shared] markChatAsRead:chatId completion:^(BOOL ok){
+		TGChatListViewController *me = weakSelf;
+		if (!me)
+			return;
+		[me reload];
+		if ([me.tabBarController isKindOfClass:[RootViewController class]])
+			[(RootViewController *)me.tabBarController updateUnreadBadge];
+	}];
+}
+
+- (BOOL)chatIsUnread:(NSDictionary *)chat {
+	if ([chat[@"unread"] integerValue] > 0)
+		return YES;
+	if ([chat[@"markedUnread"] boolValue])
+		return YES;
+	return [[TGClient shared] isChatMarkedAsUnread:[chat[@"id"] longLongValue]];
 }
 
 /// Muting is a choice of how long, the way every client asks it, rather than
@@ -936,6 +1047,35 @@ static const NSInteger kChatActionsTag = 77;
 			}];
 		me.searchResults = combined;
 		[me.tableView reloadData];
+		[me appendSponsoredChatsForQuery:query onto:combined];
+	}];
+	[self appendSponsoredChatsForQuery:query onto:results];
+}
+
+- (void)appendSponsoredChatsForQuery:(NSString *)query onto:(NSArray *)base {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] sponsoredChatsForQuery:query completion:^(NSArray *sponsored){
+		TGChatListViewController *me = weakSelf;
+		if (!me || !sponsored.count || ![me.searchBar.text isEqualToString:query])
+			return;
+		NSMutableArray *combined = [NSMutableArray array];
+		for (NSDictionary *existing in (me.searchResults ?: base))
+			if (![existing[@"sponsored"] boolValue])
+				[combined addObject:existing];
+		for (NSDictionary *s in sponsored){
+			if (![s[@"id"] longLongValue])
+				continue;
+			[combined addObject:@{
+				@"id"        : s[@"id"],
+				@"title"     : s[@"title"] ?: @"",
+				@"text"      : s[@"sponsorInfo"] ?: (s[@"additionalInfo"] ?: @"Sponsored"),
+				@"date"      : @0,
+				@"sponsored" : @YES,
+				@"uniqueId"  : s[@"uniqueId"] ?: @0,
+			}];
+		}
+		me.searchResults = combined;
+		[me.tableView reloadData];
 	}];
 }
 
@@ -1029,7 +1169,11 @@ static const NSInteger kChatActionsTag = 77;
 
 	NSDictionary *c = rows[indexPath.row - header.count];
 	cell.titleLabel.text = c[@"title"];
-	cell.dateLabel.text = TGChatDate([c[@"date"] doubleValue]);
+	cell.dateLabel.text = [c[@"sponsored"] boolValue]
+			? @"Sponsored"
+			: TGChatDate([c[@"date"] doubleValue]);
+	cell.dateLabel.textColor = [c[@"sponsored"] boolValue]
+			? [theme secondaryTextColour] : [theme accentColour];
 
 	// Someone typing takes the preview over for as long as it lasts, in their
 	// blurple rather than the grey the preview uses.
@@ -1050,9 +1194,10 @@ static const NSInteger kChatActionsTag = 77;
 	cell.groupIcon.hidden = ![c[@"isGroup"] boolValue];
 
 	NSInteger unread = [c[@"unread"] integerValue];
-	cell.badge.hidden = (unread <= 0);
+	BOOL markedUnread = (unread <= 0) && ![c[@"sponsored"] boolValue] && [self chatIsUnread:c];
+	cell.badge.hidden = (unread <= 0 && !markedUnread);
 	cell.badgeBackground.hidden = cell.badge.hidden;
-	cell.pin.hidden = !([c[@"isPinned"] boolValue] && unread <= 0);
+	cell.pin.hidden = !([c[@"isPinned"] boolValue] && unread <= 0 && !markedUnread);
 	if (!cell.pin.hidden){
 		cell.pin.image = [TGIcons menuGlyphNamed:@"pin"];
 		[cell.pin tg_setTintColor:[theme secondaryTextColour]];
@@ -1080,6 +1225,22 @@ static const NSInteger kChatActionsTag = 77;
 	return cell;
 }
 
+- (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell
+		forRowAtIndexPath:(NSIndexPath *)indexPath {
+	NSArray *rows = [self visibleChats];
+	NSInteger index = indexPath.row - (NSInteger)[self headerRows].count;
+	if (index < 0 || index >= (NSInteger)rows.count)
+		return;
+	NSDictionary *c = rows[index];
+	if (![c[@"sponsored"] boolValue])
+		return;
+	NSNumber *uniqueId = c[@"uniqueId"];
+	if (!uniqueId || [self.sponsoredSeen containsObject:uniqueId])
+		return;
+	[self.sponsoredSeen addObject:uniqueId];
+	[[TGClient shared] viewSponsoredChat:[uniqueId longLongValue]];
+}
+
 - (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
 	if (self.searchResults)
 		return NO;
@@ -1089,6 +1250,10 @@ static const NSInteger kChatActionsTag = 77;
 
 - (NSString *)tableView:(UITableView *)tableView
 		titleForDeleteConfirmationButtonForRowAtIndexPath:(NSIndexPath *)indexPath {
+	NSArray *rows = [self visibleChats];
+	NSInteger index = indexPath.row - (NSInteger)[self headerRows].count;
+	if (index >= 0 && index < (NSInteger)rows.count && [rows[index][@"isGroup"] boolValue])
+		return @"Leave";
 	return @"Delete";
 }
 
@@ -1124,6 +1289,8 @@ static const NSInteger kChatActionsTag = 77;
 	int64_t chatId = [c[@"id"] longLongValue];
 	if (!chatId)
 		return;
+	if ([c[@"sponsored"] boolValue] && [c[@"uniqueId"] longLongValue])
+		[[TGClient shared] openSponsoredChat:[c[@"uniqueId"] longLongValue]];
 	NSLog(@"open chat: group=%@ forum=%@", c[@"isGroup"], c[@"isForum"] ?: @"(absent)");
 
 	if ([c[@"isForum"] boolValue]){
