@@ -371,6 +371,7 @@ typedef void (^TGSecurityStepBlock)(TGSecurityStepViewController *step, NSString
 	cell.textLabel.textAlignment = NSTextAlignmentLeft;
 	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
 	cell.textLabel.textColor = TGPrivacyRowTitleColour();
+	cell.textLabel.highlightedTextColor = [UIColor whiteColor];
 	cell.detailTextLabel.text = @"";
 	cell.detailTextLabel.font = [UIFont systemFontOfSize:17];
 	cell.detailTextLabel.textColor = [[TGTheme shared] cellDetailColour];
@@ -553,14 +554,14 @@ typedef void (^TGSecurityStepBlock)(TGSecurityStepViewController *step, NSString
 - (void)confirmSkippingRecoveryForPassword:(NSString *)password hint:(NSString *)hint
 							   oldPassword:(NSString *)oldPassword {
 	self.newPassword = password;
+	self.pendingHint = hint;
+	self.pendingOldPassword = oldPassword;
 	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:nil
 			message:@"Without a recovery e-mail address you will lose the account if you "
 					@"forget the password. Continue anyway?"
 			delegate:self cancelButtonTitle:@"Cancel" otherButtonTitles:@"Continue", nil];
 	alert.tag = (NSInteger)(hint.length ? 1 : 2);
 	[alert show];
-	self.pendingHint = hint;
-	self.pendingOldPassword = oldPassword;
 }
 
 - (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {
@@ -572,6 +573,9 @@ typedef void (^TGSecurityStepBlock)(TGSecurityStepViewController *step, NSString
 	}
 	[self commitPassword:self.newPassword hint:self.pendingHint email:nil
 			 oldPassword:self.pendingOldPassword fromStep:nil];
+	self.newPassword = nil;
+	self.pendingHint = nil;
+	self.pendingOldPassword = nil;
 }
 
 - (void)commitPassword:(NSString *)password hint:(NSString *)hint email:(NSString *)email
@@ -1363,8 +1367,10 @@ typedef void (^TGPrivacyPickerBlock)(NSArray *userIds);
 }
 
 - (void)done {
-	if (self.completion)
-		self.completion([NSArray arrayWithArray:self.chosen]);
+	TGPrivacyPickerBlock completion = self.completion;
+	self.completion = nil;
+	if (completion)
+		completion([NSArray arrayWithArray:self.chosen]);
 	[self.navigationController popViewControllerAnimated:YES];
 }
 
@@ -2077,9 +2083,10 @@ typedef void (^TGPrivacyPickerBlock)(NSArray *userIds);
 		__strong typeof(weakSelf) strongSelf = weakSelf;
 		if (!strongSelf)
 			return;
-		strongSelf.passwordLoaded = [state isKindOfClass:[NSDictionary class]];
-		strongSelf.passwordOn = [state[@"hasPassword"] boolValue];
-		id pattern = state[@"loginEmailPattern"];
+		NSDictionary *info = [state isKindOfClass:[NSDictionary class]] ? state : nil;
+		strongSelf.passwordLoaded = (info != nil);
+		strongSelf.passwordOn = [info[@"hasPassword"] boolValue];
+		id pattern = info[@"loginEmailPattern"];
 		strongSelf.loginEmailPattern =
 				([pattern isKindOfClass:[NSString class]] && [pattern length]) ? pattern : nil;
 		[strongSelf.tableView reloadData];

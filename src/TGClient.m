@@ -18,6 +18,59 @@ static NSString *TGActiveUsername(NSDictionary *user) {
 	return [name isKindOfClass:NSString.class] ? name : nil;
 }
 
+/// TDLib ships `bytes` fields as base64 text. iOS 6 has no public decoder
+/// (-initWithBase64EncodedString:options: arrived in iOS 7), so decode by hand.
+/// A missing or wrong-typed value answers empty data, never nil.
+static NSData *TGCliBase64(id value) {
+	NSString *encoded = [value isKindOfClass:NSString.class] ? value : nil;
+	if (!encoded.length)
+		return [NSData data];
+
+	static signed char table[256];
+	static BOOL ready = NO;
+	if (!ready){
+		static const char *alphabet =
+				"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+		for (int i = 0; i < 256; i++)
+			table[i] = -1;
+		for (int i = 0; i < 64; i++)
+			table[(unsigned char)alphabet[i]] = (signed char)i;
+		table[(unsigned char)'-'] = 62;
+		table[(unsigned char)'_'] = 63;
+		ready = YES;
+	}
+
+	NSMutableData *out = nil;
+	@autoreleasepool {
+		NSData *ascii = [encoded dataUsingEncoding:NSASCIIStringEncoding];
+		const unsigned char *src = ascii.bytes;
+		NSUInteger length = ascii.length;
+		out = [[NSMutableData alloc] initWithCapacity:(length / 4) * 3 + 3];
+		unsigned char chunk[3072];
+		NSUInteger filled = 0;
+		unsigned int accumulator = 0;
+		int bits = 0;
+		for (NSUInteger i = 0; i < length; i++){
+			signed char decoded = table[src[i]];
+			if (decoded < 0)
+				continue;
+			accumulator = (accumulator << 6) | (unsigned int)decoded;
+			bits += 6;
+			if (bits >= 8){
+				bits -= 8;
+				chunk[filled++] = (unsigned char)((accumulator >> bits) & 0xFF);
+				if (filled == sizeof(chunk)){
+					[out appendBytes:chunk length:filled];
+					filled = 0;
+				}
+			}
+		}
+		if (filled)
+			[out appendBytes:chunk length:filled];
+	}
+	return out;
+}
+
 static const NSTimeInterval TGRequestDeadline = 300.0;
 static const NSTimeInterval TGRequestSweepInterval = 30.0;
 
@@ -344,7 +397,7 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 		return;
 	}
 	if ([type isEqualToString:@"updateNewCallSignalingData"]){
-		NSData *data = [[NSData alloc] initWithBase64EncodedString:obj[@"data"] options:0];
+		NSData *data = TGCliBase64(obj[@"data"]);
 		[[TGCall shared] handleSignalingData:data];
 		return;
 	}
@@ -780,8 +833,7 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		duration  = content[@"voice_note"][@"duration"];
 		// Telegram sends the shape of the sound with the message: five bits
 		// per sample, which is what the bars in the bubble are drawn from.
-		waveform  = [[NSData alloc] initWithBase64EncodedString:
-				content[@"voice_note"][@"waveform"] ?: @"" options:0];
+		waveform  = TGCliBase64(content[@"voice_note"][@"waveform"]);
 		extra = @"";
 
 	} else if ([ctype isEqualToString:@"messageAudio"]){

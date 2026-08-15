@@ -59,9 +59,7 @@ static NSString *const TGMessageActionDeleteRow = @"deleteRow";
 - (void)presentAtPoint:(CGPoint)point
                 inView:(UIView *)host
             completion:(void (^)(NSString *action))completion {
-	if (self.presenting || host == nil)
-		return;
-	if (self.messageId == 0 || self.chatId == 0){
+	if (self.presenting || host == nil || self.messageId == 0 || self.chatId == 0){
 		if (completion)
 			completion(nil);
 		return;

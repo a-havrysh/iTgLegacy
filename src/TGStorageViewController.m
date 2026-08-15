@@ -119,7 +119,15 @@ enum {
 	TGStorageSectionCount
 };
 
-static NSString *TGHumanSize(long long bytes);
+static NSString *TGHumanSize(long long bytes) {
+	if (bytes < 1024LL)
+		return [NSString stringWithFormat:@"%lld B", bytes];
+	if (bytes < 1024LL * 1024)
+		return [NSString stringWithFormat:@"%.0f KB", bytes / 1024.0];
+	if (bytes < 1024LL * 1024 * 1024)
+		return [NSString stringWithFormat:@"%.1f MB", bytes / (1024.0 * 1024)];
+	return [NSString stringWithFormat:@"%.2f GB", bytes / (1024.0 * 1024 * 1024)];
+}
 
 static const NSInteger TGStorageTTLValues[4] = {3 * 24 * 60 * 60,
 												7 * 24 * 60 * 60,
@@ -423,16 +431,6 @@ static NSString *TGStorageSizeName(long long maxBytes) {
 
 - (void)dealloc {
 	[NSObject cancelPreviousPerformRequestsWithTarget:self];
-}
-
-static NSString *TGHumanSize(long long bytes) {
-	if (bytes < 1024)
-		return [NSString stringWithFormat:@"%lld B", bytes];
-	if (bytes < 1024 * 1024)
-		return [NSString stringWithFormat:@"%.0f KB", bytes / 1024.0];
-	if (bytes < 1024LL * 1024 * 1024)
-		return [NSString stringWithFormat:@"%.1f MB", bytes / (1024.0 * 1024)];
-	return [NSString stringWithFormat:@"%.2f GB", bytes / (1024.0 * 1024 * 1024)];
 }
 
 /// Settings has its own navigation controller, and nothing was styling
