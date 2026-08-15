@@ -277,12 +277,12 @@ ARM64_ALL_OBJS   := $(ARM64_LIBTG_OBJS) $(ARM64_APP_OBJS)
 
 # Compiler Flags per Architecture
 CFLAGS_ARMV7    := -arch armv7 -mthumb -O2 -isysroot $(SDK_PATH_ARMV7) $(MIN_IOS) $(INCLUDES) $(DEFINES) -fPIC \
-                   -Wno-macro-redefined -Wno-implicit-function-declaration -Wno-incompatible-pointer-types -Wno-deprecated-declarations
+                   -Wno-macro-redefined -Wno-incompatible-pointer-types -Wno-deprecated-declarations
 OBJCFLAGS_ARMV7 := $(CFLAGS_ARMV7) -fobjc-arc
 CXXFLAGS_ARMV7  := $(CFLAGS_ARMV7) $(CXX_STDLIB_INC) -std=c++11 -fno-use-cxa-atexit -fno-threadsafe-statics -Wno-error
 
 CFLAGS_ARM64    := -arch arm64 -O2 -isysroot $(SDK_PATH_ARM64) $(MIN_IOS) $(INCLUDES) $(DEFINES) -fPIC \
-                   -Wno-macro-redefined -Wno-implicit-function-declaration -Wno-incompatible-pointer-types -Wno-deprecated-declarations
+                   -Wno-macro-redefined -Wno-incompatible-pointer-types -Wno-deprecated-declarations
 OBJCFLAGS_ARM64 := $(CFLAGS_ARM64) -fobjc-arc
 CXXFLAGS_ARM64  := $(CFLAGS_ARM64) $(CXX_STDLIB_INC) -std=c++11 -fno-use-cxa-atexit -fno-threadsafe-statics -Wno-error
 

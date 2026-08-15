@@ -1,0 +1,104 @@
+{
+  "area": "shared-widgets",
+  "findings": [
+    {
+      "kind": "correctness",
+      "severity": "high",
+      "file": "src/UIImage+WebP.m",
+      "line": 50,
+      "what": "WebPDecodeRGBAInto() produces straight (unpremultiplied) RGBA, but the CGImage is created declaring premultiplied alpha: `kCGBitmapByteOrderDefault | kCGImageAlphaPremultipliedLast`.",
+      "failure": "Every WebP sticker with transparency renders wrong. CoreGraphics assumes R/G/B are already scaled by A, so it does not multiply again: a pixel of (255,255,255,64) draws as near-opaque white at 25% coverage instead of a faint white, producing bright halos around every antialiased sticker edge and colored fringes wherever the encoder left non-zero RGB under alpha=0. Fully opaque stickers look fine, which is why it survives a smoke test.",
+      "fix": "Either (a) change the bitmapInfo to `kCGBitmapByteOrderDefault | kCGImageAlphaLast` (CGImage supports 8bpc straight-alpha RGBA), or (b) keep kCGImageAlphaPremultipliedLast and premultiply in place right after the WebPDecodeRGBAInto call, before CGDataProviderCreateWithData: loop over `size/4` pixels doing `a = pixels[i*4+3]; pixels[i*4+0] = pixels[i*4+0]*a/255;` for the three colour channels. (a) is cheaper on an A5; (b) is faster to composite. Do not do both."
+    },
+    {
+      "kind": "crash",
+      "severity": "medium",
+      "file": "src/TGLottieView.m",
+      "line": 431,
+      "what": "Unguarded `isEqualToString:` on an arbitrary JSON value: `if ([item isKindOfClass:NSDictionary.class] && [item[@\"ty\"] isEqualToString:@\"tr\"])`. The same file guards the identical lookup correctly 13 lines earlier (line 418-420: `NSString *ty = shape[@\"ty\"]; if (![ty isKindOfClass:NSString.class]) continue;`).",
+      "failure": "A .tgs whose group item carries a numeric or null `ty` (hand-authored or truncated/corrupt sticker download) makes `item[@\"ty\"]` an NSNumber or NSNull, neither of which implements isEqualToString:. Result: `-[__NSCFNumber isEqualToString:]: unrecognized selector sent to instance` and the app terminates while scrolling a sticker into view. TGLottieView.loadTGSFile guards the top-level shape of the JSON but nothing validates group-item contents.",
+      "fix": "In TGLottieView.m:429-432 replace the inline test with the same guarded form used at 418-420: `for (NSDictionary *item in items){ if (![item isKindOfClass:NSDictionary.class]) continue; id ity = item[@\"ty\"]; if ([ity isKindOfClass:NSString.class] && [ity isEqualToString:@\"tr\"]) [self applyTransform:item atFrame:frame inContext:ctx]; }`."
+    },
+    {
+      "kind": "duplication",
+      "severity": "medium",
+      "file": "src/TGActionsMenu.m",
+      "line": 26,
+      "what": "TGActionsMenu.m is a near-verbatim fork of TGPopupMenu.m. TGActionsMenuButton (lines 26-112) duplicates TGPopupMenuButton (TGPopupMenu.m:18-105) field for field; -positionCard/-buttonContainsArrow/-menuButtonHighlightChanged/-layoutCard/-present (lines 431-593) duplicate TGPopupMenu.m:373-536 line for line, down to the same `kMenuHeight = 41.0f`, `kMenuTitlePadding = 34.0f`, `kMenuLineInset = 10.0f` constants, the same 0.142/0.08/0.06 three-stage bounce, and the same `shadowHighlighted = 0x18/0x6b/0xcb alpha 0.6` colour literal. ~450 duplicated lines.",
+      "failure": "They have already drifted: TGActionsMenu.m:424-425 does `[_card bringSubviewToFront:_arrowTopView/_arrowBottomView]` after building buttons, TGPopupMenu.m never does (see the z-order finding below), so the two menus draw the arrow differently. Any future fix to menu geometry, hit-testing or the reopen-suppression behaviour has to be applied twice and will be applied once.",
+      "fix": "Extract the shared button class and the card geometry into one place: rename TGPopupMenuButton to TGMenuCardButton in a new src/TGMenuCard.{h,m} together with positionCardIn:anchor:, buttonContainsArrow:atIndex:, layoutCardWithButtons:separators:arrowTop:arrowBottom:, and presentCard:. Have TGPopupMenu and TGActionsMenuView both call into it; delete TGActionsMenu.m:26-112 and 431-556 and TGPopupMenu.m:18-105 and 373-501."
+    },
+    {
+      "kind": "duplication",
+      "severity": "medium",
+      "file": "src/TGDateUtils.mm",
+      "line": 99,
+      "what": "TGDateUtils is the project's date formatter and it detects 12-hour locales (`value_dateHas12hFormat`, line 34), but three list screens each carry their own private copy of the same today/weekday/absolute ladder with a hardcoded 24-hour format: TGChatListViewController.m:2161-2170, TGSavedMessagesViewController.m:39-41, TGTopicsViewController.m:36-44 (`[time setDateFormat:@\"HH:mm\"]; [weekday setDateFormat:@\"EEE\"]; [full setDateFormat:@\"dd.MM.yy\"]`).",
+      "failure": "On a US-locale iPhone 4S the chat list, saved messages and topics rows show `14:32` while the chat event log (which goes through `[TGDateUtils stringForShortTime:]`, TGChatEventsViewController.m:1113) shows `2:32 PM`, and TGDateLabel (TGDateLabel.m:40) is meanwhile stripping an \" AM\"/\" PM\" suffix that the list formatters never produce, so its two-font AM/PM rendering path is dead on exactly those screens. Two files disagree about the shape of the same value.",
+      "fix": "Delete the three private static formatter trios and route all four call sites through TGDateUtils: `stringForMessageListDate:` already implements exactly this ladder (same-day -> stringForShortTime, within 6 days -> weekdayNameShort, else shortAbsoluteDate). Replace e.g. TGChatListViewController.m:2168-2170 with `return [TGDateUtils stringForMessageListDate:(int)unix];` and the same in TGSavedMessagesViewController.m and TGTopicsViewController.m."
+    },
+    {
+      "kind": "dead-code",
+      "severity": "medium",
+      "file": "src/TGDateUtils.mm",
+      "line": 112,
+      "what": "Only two of the nine TGDateUtils class methods have a caller anywhere in src/: stringForShortTime: (TGChatEventsViewController.m:1113) and stringForMessageListDate: (TGSavedMessagesTagsViewController.m:130). stringForDialogTime:, stringForDayOfMonth:dayOfMonth:, stringForDayOfWeek:, stringForLastSeen:, stringForLastSeenShort:, stringForRelativeLastSeen: and stringForUntil: have zero callers. Worse, stringForDialogTime: (lines 112-120) is degenerate — the `if (dialogTimeMonthNameFirst())` branch and the fall-through return are byte-identical, and `value_dialogTimeMonthNameFirst` (line 13) is initialised false and never assigned anywhere, so the accessor at 79-83 is a constant. stringForLastSeenShort: (183-185) is a pure alias that just calls stringForLastSeen:.",
+      "failure": "No runtime failure - it is ~110 lines of unreachable code plus five unread globals (value_dialogTimeMonthNameFirst, value_dialogTimeFormat, value_today/yesterday/tomorrow/at are only read from dead paths except value_today/value_yesterday). The concrete cost is that stringForLastSeen/stringForRelativeLastSeen look like the app's last-seen formatter but the real one is TGClient+UserStatus.m:30-61, so an agent fixing a last-seen bug edits the dead copy and nothing changes.",
+      "fix": "Delete stringForDialogTime:, stringForDayOfMonth:dayOfMonth:, stringForDayOfWeek:, stringForLastSeenShort:, stringForRelativeLastSeen: and stringForUntil: from TGDateUtils.mm and their declarations from TGDateUtils.h, along with value_dialogTimeMonthNameFirst/value_dialogTimeFormat/dialogTimeMonthNameFirst()/dialogTimeFormat() and value_tomorrow. Keep stringForShortTime:, stringForMessageListDate:, stringForLastSeen: (needed by stringForMessageListDate's siblings if the duplication fix above lands), weekdayNameShort/monthNameGenShort/shortAbsoluteDate and TGUse12hDateFormat()."
+    },
+    {
+      "kind": "correctness",
+      "severity": "low",
+      "file": "src/TGPopupMenu.m",
+      "line": 252,
+      "what": "_arrowTopView and _arrowBottomView are added to _card at lines 247 and 252, before the buttons are added at line 355, and are never raised afterwards - unlike the equivalent code in TGActionsMenu.m:424-425 which does `[_card bringSubviewToFront:_arrowTopView]; [_card bringSubviewToFront:_arrowBottomView];` right after the button loop.",
+      "failure": "The bottom arrow is positioned at y = kMenuHeight - 4 = 37 (line 463), i.e. its top 4 points overlap the button row (0..41), and the buttons are later siblings so they paint over it. TGPopupMenu's positioning prefers placing the card above the anchor (positionCardFromRect:, line 384-395 sets _arrowOnTop = NO in the common case), so the bottom arrow is the one normally visible: it renders with its top 4px clipped by the button plate, showing a hairline seam between the card and the tail on every long-press menu.",
+      "fix": "In TGPopupMenu.m, after the button-building loop ends at line 363 and before `CGRect cardFrame = _card.frame;` at 365, add `[_card bringSubviewToFront:_arrowTopView]; [_card bringSubviewToFront:_arrowBottomView];` - matching TGActionsMenu.m:424-425."
+    },
+    {
+      "kind": "correctness",
+      "severity": "low",
+      "file": "src/TGLottieView.m",
+      "line": 567,
+      "what": "The fill-rule branch contradicts both the Lottie spec and its own comment: `// Lottie fills use even-odd, which is what makes holes work.` then `if ([shape[@\"r\"] intValue] == 1) CGContextFillPath(ctx); else CGContextEOFillPath(ctx);`. In Lottie, `r` is the fill rule where 1 = non-zero and 2 = even-odd, and the value is optional with non-zero as the default.",
+      "failure": "The r==1 mapping is right, but the default is wrong: when a fill item omits `r`, `[nil intValue]` is 0, so the shape is filled even-odd instead of non-zero. Any sticker whose overlapping subpaths wind in the same direction (a common result of boolean-unioned shapes) renders with holes punched where the subpaths overlap - a mouth or eye that should be solid comes out hollow.",
+      "fix": "Read the value explicitly and default to non-zero: `id rule = shape[@\"r\"]; if ([rule intValue] == 2) CGContextEOFillPath(ctx); else CGContextFillPath(ctx);`, and correct the comment above line 566 to say Lottie defaults to non-zero and only uses even-odd when r == 2."
+    },
+    {
+      "kind": "dead-code",
+      "severity": "low",
+      "file": "src/TGActionsMenu.m",
+      "line": 444,
+      "what": "Both arms of an if/else assign the same value: `if (frame.origin.y < 2.0f){ frame.origin.y = floorf(...); _arrowOnTop = NO; } else { _arrowOnTop = NO; }` (lines 444-449).",
+      "failure": "No wrong behaviour today - the value is correct in both cases - but the branch reads as if the centred fallback and the above-anchor placement are meant to differ, so an agent reading it assumes the arrow orientation is already handled for the centred case and does not notice that when the card is centred (neither above nor below the anchor) the downward arrow still points at nothing.",
+      "fix": "Collapse to `if (frame.origin.y < 2.0f) frame.origin.y = floorf((self.bounds.size.height - frame.size.height) / 2); _arrowOnTop = NO;` and, if the centred case should hide the tail entirely, set a flag there and force both `_arrowTopView.hidden` and `_arrowBottomView.hidden` to YES at the end of layoutCard (lines 554-555)."
+    },
+    {
+      "kind": "correctness",
+      "severity": "low",
+      "file": "src/TGActionSheet.m",
+      "line": 75,
+      "what": "The initialiser mutates the caller's model objects: `if (hasDestructive) action.type = TGActionSheetActionTypeGeneric;` (line 75) and `cancelAction.title = TGActionSheetCancelTitle();` (line 89) write through into the TGActionSheetAction instances the caller supplied in its `actions` array.",
+      "failure": "Callers that build the array once and re-show it lose styling permanently. TGInviteLinksViewController.m:754-767 rebuilds its array each time so it is safe, but TGStoriesViewController.m:1840-1878 and TGReactionPickerView.m:1504-1519 add two destructive entries to one array (e.g. Delete plus Decline); the second is downgraded to Generic on first show and stays Generic, so on every subsequent presentation neither the caller nor the sheet can restore the red styling.",
+      "fix": "Do not mutate the input. In TGActionSheet.m:72-78 track the downgrade locally (e.g. `TGActionSheetActionType effectiveType = (action.type == TGActionSheetActionTypeDestructive && hasDestructive) ? TGActionSheetActionTypeGeneric : action.type;`) and store the pair in the internal `_actions` array as a copied TGActionSheetAction, and at line 89 build a fresh cancel TGActionSheetAction rather than retitling the caller's."
+    },
+    {
+      "kind": "memory",
+      "severity": "low",
+      "file": "src/TGLottieView.m",
+      "line": 307,
+      "what": "`for (NSDictionary *layer in [[self.layers reverseObjectEnumerator] allObjects])` allocates a full reversed copy of the layer array inside drawRect:, which the 20 Hz timer (line 248) drives.",
+      "failure": "On an A5 with 40-60MB usable this churns 20 autoreleased NSArrays per second per visible animated sticker, on the main thread, on top of the per-frame path building. With several .tgs stickers on screen in a chat it is measurable main-thread allocator pressure for no benefit, since the reversal is over an array that never changes after loadTGSFile:.",
+      "fix": "Store the reversed order once. In loadTGSFile: after `self.layers = layers;` (line 215) also set a `_drawOrder` ivar to `[[layers reverseObjectEnumerator] allObjects]`, and iterate `_drawOrder` at line 307. Clear it alongside self.layers at lines 164-165."
+    },
+    {
+      "kind": "correctness",
+      "severity": "low",
+      "file": "src/TGDateUtils.mm",
+      "line": 24,
+      "what": "Lazy init is unsynchronised: `static bool TGDateUtilsInitialized = false;` plus `if (!TGDateUtilsInitialized) initializeTGDateUtils();` repeated in six accessors (lines 51, 57, 63, 72, 80, 86). TGAlertView.m:7 solves the identical problem with dispatch_once.",
+      "failure": "Two threads entering simultaneously both run initializeTGDateUtils(), which allocates an NSDateFormatter and writes value_dateHas12hFormat, value_date_separator and value_monthFirst. The formatter work is duplicated and a caller can read a half-initialised value_date_separator (set at 38/40/42) before value_monthFirst is computed at 44-45, producing one date string with the wrong separator or wrong field order. Rare, but the call sites do reach background queues via the image/thumbnail decode paths.",
+      "fix": "Wrap the body: give initializeTGDateUtils a `static dispatch_once_t once; dispatch_once(&once, ^{ ... });` around lines 26-47, and drop the TGDateUtilsInitialized flag and the six `if (!TGDateUtilsInitialized)` guards in favour of an unconditional call to initializeTGDateUtils() at the top of each accessor."
+    }
+  ]
+}

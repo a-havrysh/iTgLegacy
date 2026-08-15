@@ -1,0 +1,93 @@
+{
+  "cluster": "data-sync",
+  "gaps": [
+    {
+      "name": "Scroll-back history pagination (load older messages)",
+      "whatItIs": "The modern client anchors the message list at a ChatHistoryLocation and continuously extends it in both directions as the view scrolls (AccountContext/Sources/ChatHistoryLocation.swift: .Initial / .Navigation / .Scroll with an anchorIndex and count). Reaching the top of the loaded window fires another fetch of older messages, forever, until the chat's real beginning.",
+      "whyItMatters": "Our chat view loads exactly 60 messages once in -reload and never loads more. Anything older than the last 60 messages in a chat is unreachable in this client - you cannot scroll back through a conversation at all. For a messenger this is the single most visible data-sync hole; it also silently breaks reply-jumps and search-result jumps into older messages, because -scrollToMessageId: only searches self.messages.",
+      "whereItGoes": "TGChatViewController.m: -reload (line ~1697) and -scrollViewDidScroll: (line ~2076); TGClient.m -fetchHistoryChunkForChat:fromMessageId:... (line ~1054) already does exactly the right walk-backwards loop and just needs to be callable with a from_message_id from the UI. Telegraph implements the same thing in TGModernConversationController.mm / TGGenericModernConversationCompanion.mm (loadMoreMessages), so the anchoring logic can be ported.",
+      "tdlib": ["getChatHistory (wrapped, TGClient.m ~1058, but only ever called with from_message_id:0)", "getChatSparseMessagePositions (wrapped)"],
+      "effort": "small"
+    },
+    {
+      "name": "Open chat at the first unread message, with an 'Unread messages' divider",
+      "whatItIs": "Modern Telegram opens a chat scrolled to the oldest unread message and draws a full-width 'Unread messages' separator row above it (TelegramUI/Components/Chat/ChatMessageItemImpl/Sources/ChatUnreadItem.swift), rather than jumping to the bottom.",
+      "whyItMatters": "We always -scrollToBottomAnimated:NO and immediately markRead every loaded id, so a chat with 40 unread messages is opened at the newest one, marked entirely read, and the user has no way to find where they left off. Combined with the missing scroll-back this loses the unread run permanently.",
+      "whereItGoes": "TGChatViewController.m -reload / -scrollToBottomAnimated: and the cell builder; the anchor is chat[\"last_read_inbox_message_id\"], which TGClient+ChatList.m line 801 already reads. Telegraph has TGModernUnreadHeaderView.h/.m for the divider row.",
+      "tdlib": ["getChatHistory with from_message_id = last_read_inbox_message_id and a negative offset (wrapped)", "chat.last_read_inbox_message_id (already parsed)", "viewMessages (wrapped) - should be driven by what is actually on screen, not by the whole loaded page"],
+      "effort": "small"
+    },
+    {
+      "name": "Outgoing delivery state driven by updates instead of per-message polling",
+      "whatItIs": "TDLib emits updateMessageSendSucceeded (carrying old_message_id -> new id) and updateMessageSendFailed for every outgoing message. Modern clients rewrite the pending message in place when these arrive.",
+      "whyItMatters": "Neither update is handled anywhere in our code (verified: zero occurrences in src/). TGChatViewController -sendStateForMessage: instead fires a getMessage request per outgoing message and caches the answer once, so a message stuck at the clock glyph never advances to a tick, and a failed send never turns red, until the chat is reopened. Worse, the temporary local message id is never swapped for the server id, so reply/forward/delete on a just-sent message target an id the server does not know.",
+      "whereItGoes": "TGClient.m -handleUpdate: (add two cases next to updateNewMessage at line 213) plus a new onMessageIdChanged callback; consumed in TGChatViewController.m -sendStateForMessage: (line ~5757), which can then drop sendStatesRequested entirely.",
+      "tdlib": ["updateMessageSendSucceeded (not handled)", "updateMessageSendFailed (not handled)", "messageSendingStatePending / messageSendingStateFailed (parsed only on demand via getMessage)"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Read receipts: updateChatReadOutbox and the single-vs-double tick",
+      "whatItIs": "chat.last_read_outbox_message_id, kept current by updateChatReadOutbox, tells you which of your sent messages the other side has read. Every Telegram client draws one tick for delivered and two for read from this one number.",
+      "whyItMatters": "We never read last_read_outbox_message_id and never handle updateChatReadOutbox; -statusGlyphForMessage: returns the same [TGIcons ticksWhite:] for everything that is not pending or failed. So you can never tell whether your message was read - a core 2013-era affordance the original app had.",
+      "whereItGoes": "TGClient.m -handleUpdate: (fold into the applyChatUpdate: group at line 237) and -mergeChat:; rendered in TGChatViewController.m -statusGlyphForMessage: (line ~5749). Telegraph models this as TGPeerReadState.",
+      "tdlib": ["updateChatReadOutbox (not handled)", "chat.last_read_outbox_message_id (not parsed)"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "In-place message mutation updates (edited, pinned, interaction info, opened)",
+      "whatItIs": "Modern clients apply updateMessageEdited (edit date + reply markup), updateMessageInteractionInfo (view/forward/reaction/reply-thread counts), updateMessageIsPinned and updateMessageContentOpened to the already-rendered message.",
+      "whyItMatters": "None of these four is handled. An edited message keeps its old text until the chat is reopened; channel view counters and reaction chips freeze at whatever they were when the page loaded; the pinned banner does not follow a pin/unpin done elsewhere; a voice note opened on another device still shows unplayed here. We already render all of these things, we just never refresh them.",
+      "whereItGoes": "TGClient.m -handleUpdate:, alongside the existing updateMessageContent case at line 219 - the onMessage(chatId, nil, 0) refresh hook it already uses is the right delivery mechanism. Consumers: TGChatViewController message cells, reaction chips, pinned banner (line ~2432).",
+      "tdlib": ["updateMessageEdited (not handled)", "updateMessageInteractionInfo (not handled)", "updateMessageIsPinned (not handled)", "updateMessageContentOpened (not handled)"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Chat-level updates beyond the five we handle",
+      "whatItIs": "TDLib splits chat mutation into roughly twenty narrow updates. Modern clients apply all of them to the cached chat record.",
+      "whyItMatters": "-handleUpdate: only applies updateChatLastMessage, ChatPosition, ChatTitle, ChatReadInbox and ChatNotificationSettings (line 237). Everything else is dropped on the floor: updateChatDraftMessage (a draft typed on another device never appears, and our own draft never re-sorts the list), updateChatIsMarkedAsUnread, updateChatUnreadMentionCount / updateChatUnreadReactionCount (the @ and reaction badges never move), updateChatPermissions (the composer stays enabled after you are restricted), updateChatBlockList, updateChatMessageAutoDeleteTime, updateChatHasScheduledMessages, updateChatPhoto. Each one is a stale-until-relaunch bug on a screen we already ship.",
+      "whereItGoes": "TGClient.m -handleUpdate: line 237 and -applyChatUpdate: / -mergeChat: (line ~2390) - most are a single key copy into the chat dictionary followed by -rebuildChats.",
+      "tdlib": ["updateChatDraftMessage", "updateChatIsMarkedAsUnread", "updateChatUnreadMentionCount", "updateChatUnreadReactionCount", "updateChatPermissions", "updateChatBlockList", "updateChatMessageAutoDeleteTime", "updateChatHasScheduledMessages", "updateChatPhoto - none handled; the chat fields themselves are already parsed in TGClient+ChatList.m"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Online presence and foreground/background lifecycle",
+      "whatItIs": "Clients set the TDLib option \"online\" to true while the app is in the foreground and false on backgrounding, and push setNetworkType on every reachability change so TDLib can back off its connection.",
+      "whyItMatters": "setOption \"online\" appears nowhere in src/ and AppDelegate.m has no applicationDidEnterBackground:/WillEnterForeground: at all. Consequence: you are permanently invisible - contacts never see you as online, and your own last-seen never advances - while we happily render everyone else's presence from updateUserStatus. On a 4S the missing backgrounding also means the socket and update loop keep running behind the lock screen, which is a real battery and data cost on this hardware.",
+      "whereItGoes": "AppDelegate.m (add the two lifecycle callbacks next to -startTDLib at line 95) calling into TGClient; TGClient+Network.m already has -setNetworkTypeKind: (line 460) with the full reachability mapping, it is simply never wired to a reachability notification.",
+      "tdlib": ["setOption \"online\" (setOption is wrapped, this option is never sent)", "setNetworkType (wrapped, TGClient+Network.m:461, never called on a reachability change)"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Persistent chat and file info databases",
+      "whatItIs": "setTdlibParameters takes use_chat_info_database and use_file_database alongside use_message_database; every shipping client enables all three so that chat, user and file metadata survive a restart.",
+      "whyItMatters": "Our parameters block (TGClient.m line 452) sets only use_message_database:YES. Without use_chat_info_database TDLib re-fetches every chat's full info from the network on each cold launch, and without use_file_database local file paths for already-downloaded media are forgotten, so avatars and photos are re-downloaded. On a 4S that is the difference between a chat list that paints immediately offline and one that sits empty until the network answers - and it silently doubles our data usage.",
+      "whereItGoes": "TGClient.m -sendTdlibParameters, line 452-464. Two boolean keys.",
+      "tdlib": ["setTdlibParameters.use_chat_info_database (missing)", "setTdlibParameters.use_file_database (missing)"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "updateOption handling (global counters, own id, expiring flags)",
+      "whatItIs": "TDLib pushes its whole option table through updateOption: my_id, unix_time offset, is_premium, suggested_actions, and the option-driven limits clients use to gate UI.",
+      "whyItMatters": "updateOption is not handled at all. We learn our own id only from the getMe reply (TGClient.m line 189) and never see it change; premium status, the server time offset used for every timestamp we render, and any option that expires mid-session all go stale until relaunch. It is one small case statement that several other screens are already implicitly assuming works.",
+      "whereItGoes": "TGClient.m -handleUpdate:, plus an options dictionary on TGClient that TGSettingsViewController and the premium screens can read.",
+      "tdlib": ["updateOption (not handled)", "getOption / setOption (setOption wrapped)"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Local-first history load on chat open",
+      "whatItIs": "Modern clients render the locally stored history window instantly from the Postbox and only then reconcile with the server; TDLib exposes the same via getChatHistory only_local:true as a first pass.",
+      "whyItMatters": "Every chat open in our client makes a network round trip before a single bubble appears (TGClient.m line 1063 hardcodes only_local:NO), which on a 4S over EDGE is seconds of blank screen, and with no connectivity the chat is simply empty even though the messages are in the local database we already enabled. A local pass followed by a remote refresh fixes both.",
+      "whereItGoes": "TGClient.m -fetchHistoryChunkForChat:... (line 1054): one local call to paint, then the existing remote walk to reconcile; TGChatViewController -reload consumes it unchanged if the completion may fire twice.",
+      "tdlib": ["getChatHistory only_local:true (the parameter is there but pinned to NO)"],
+      "effort": "small"
+    },
+    {
+      "name": "Unread mention and reaction navigation state",
+      "whatItIs": "Chats carry unread_mention_count and unread_reaction_count plus the positions to jump to; the modern chat shows an @-badge that walks through unread mentions and clears them with readAllChatMentions.",
+      "whyItMatters": "We wrap readAllChatMentions and readAllChatReactions and TGClient+Forums.m already surfaces the per-topic counts, but the main chat never reads the counts, never handles the two updates that maintain them, and has no jump affordance. In a busy group you have no way to find the message that mentioned you - the classic reason to open a group at all.",
+      "whereItGoes": "TGChatViewController.m next to the existing scroll-down button (-updateScrollDownButton, line ~2076) as a second floating badge; counts from TGClient chat records.",
+      "tdlib": ["updateChatUnreadMentionCount (not handled)", "updateChatUnreadReactionCount (not handled)", "updateMessageMentionRead (not handled)", "searchChatMessages with searchMessagesFilterUnreadMention (searchChatMessages wrapped)", "readAllChatMentions / readAllChatReactions (wrapped)"],
+      "effort": "small"
+    }
+  ]
+}

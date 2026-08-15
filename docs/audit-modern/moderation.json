@@ -1,0 +1,76 @@
+{
+  "cluster": "moderation",
+  "gaps": [
+    {
+      "name": "Chat action bar (Report Spam / Block / Add Contact)",
+      "whatItIs": "Modern clients show a panel at the top of a chat driven by chat.action_bar: 'Report Spam / Add to Contacts / Block' for an unknown private sender, 'Share My Phone Number', 'Report Unrelated Location', 'Report Spam and Leave' for an unknown group, and a pending-join-request notice. Tapping an option calls reportChat or setMessageSenderBlockList and then removeChatActionBar. See submodules/TelegramUI/Sources/ChatReportPeerTitlePanelNode.swift.",
+      "whyItMatters": "This is the only place an ordinary user ever reports spam. Without it, a stranger who messages you out of nowhere can only be blocked from the profile screen buried two taps deep, and there is no first-contact spam signal at all — the single most-used moderation surface in the app is absent.",
+      "whereItGoes": "A new title panel above the message list in src/TGChatViewController.m, fed from the chat object's action_bar field parsed in TGClient+ChatList. Telegraph already implements exactly this as TGModernConversationContactLinkTitlePanel.m plus TGCachedPeerSettings.m, so the layout and state machine can be ported almost verbatim.",
+      "tdlib": [
+        "chat.action_bar (chatActionBarReportSpam / ReportAddBlock / AddContact / SharePhoneNumber / ReportUnrelatedLocation / InviteMembers / JoinRequest) — not parsed anywhere in src/",
+        "removeChatActionBar — NOT wrapped in any TGClient+*.h",
+        "reportChat — already wrapped (TGClient+Privacy.h:196)",
+        "setMessageSenderBlockList / setUser:blocked: — already wrapped and used"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Report a user, group or channel from the profile screen",
+      "whatItIs": "The modern peer info screen has a Report entry that runs the same multi-step reportChat flow as messages: server returns reportChatResultOptionRequired with a list of reasons, then optionally reportChatResultTextRequired for a comment. There is a parallel entry for reporting a chat's profile photo (reportChatPhoto).",
+      "whyItMatters": "We wrap reportChat but literally nothing calls it — grep of src/ finds no caller outside the header. Reporting is currently only reachable by long-pressing an individual message, so a scam channel, an abusive user's profile, or an offensive avatar cannot be reported at all.",
+      "whereItGoes": "A 'Report' row in the existing action sheet in src/TGProfileViewController.m (around line 696 where Block/Unblock lives), reusing the option-sheet loop already written for messages in src/TGChatViewController.m -reportMessage:optionId:text: (line ~3524).",
+      "tdlib": [
+        "reportChat — already wrapped (TGClient+Privacy.h:196), zero callers",
+        "reportChatPhoto — not wrapped",
+        "reportChatResultOptionRequired / reportChatResultTextRequired handling — already implemented for messages, reusable"
+      ],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Sensitive content restrictions",
+      "whatItIs": "Messages and channels carry restriction rules (restriction_reason, 'sensitive' among them). Modern clients hide restricted content behind a placeholder and offer a Settings toggle — 'Display sensitive content' in Data and Storage — that flips the ignore_sensitive_content_restrictions option when the account is allowed to (submodules/PlatformRestrictionMatching and SettingsUI/Data and Storage/DataAndStorageSettingsController.swift:644).",
+      "whyItMatters": "We render restricted media unconditionally: grep of src/ finds no handling of restriction_reason at all. That means content the server marks as restricted for iOS is shown raw with no warning, and an adult user in a region where the toggle exists has no way to control it. It is both a safety gap and an unimplemented server contract.",
+      "whereItGoes": "Message bubble rendering in src/TGChatViewController.m gets a restricted placeholder cell; the toggle becomes one switch row in the existing settings screen, wired through the generic setOptionNamed: in TGClient+Network.h:200.",
+      "tdlib": [
+        "message.restriction_reason / supergroup.restriction_reason — not parsed",
+        "option 'ignore_sensitive_content_restrictions' + 'can_ignore_sensitive_content_restrictions' via getOption/setOption — generic setOptionNamed: already wrapped"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Moderator actions on a message: delete all from sender, ban, report spam",
+      "whatItIs": "When an admin deletes a message in a group, the modern delete sheet offers extra checkboxes: delete all messages from this sender, ban the sender, and report spam. From a reply chain there is also 'delete and ban the sender of the replies'.",
+      "whyItMatters": "Cleaning up a spam raid currently means going to the members list, finding the account, and banning it there — one user at a time, and only if they are still listed. The action every group admin actually performs, straight off the offending message, is missing.",
+      "whereItGoes": "Extend the delete confirmation path in src/TGChatViewController.m; the group-side calls already exist in src/TGClient+Groups.h (deleteAllMessagesFromUser:inGroup: line 181, banMember:, reportSpamMessages: line 373), today only reachable from src/TGGroupMembersViewController.m.",
+      "tdlib": [
+        "deleteChatMessagesBySender — wrapped as deleteAllMessagesFromUser:inGroup:",
+        "setChatMemberStatus(banned) — wrapped as banMember:",
+        "reportSupergroupSpam — wrapped as reportSpamMessages:inGroup:",
+        "blockMessageSenderFromReplies — NOT wrapped"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Aggressive anti-spam toggle for supergroup admins",
+      "whatItIs": "A switch in group admin settings that enables Telegram's automatic spam filtering for supergroups above the member threshold, paired with the 'report false positive' action in the recent-actions log.",
+      "whyItMatters": "We already implement the second half — reportAntiSpamFalsePositiveForMessage is called from src/TGChatEventsViewController.m:1224 — but there is no way to turn the filter on in the first place, so that code path can never fire for a group we own. The catalogue calls this trivial and it is, it just was never wired to a row.",
+      "whereItGoes": "One switch row in the group admin/settings section of src/TGProfileViewController.m, gated on the canToggleAggressiveAntiSpam flag the group info dictionary already exposes (TGClient+Groups.h:48).",
+      "tdlib": [
+        "toggleSupergroupHasAggressiveAntiSpamEnabled — already wrapped as setGroup:aggressiveAntiSpam: (TGClient+Groups.h:369)",
+        "supergroupFullInfo.can_toggle_aggressive_anti_spam — already surfaced"
+      ],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Per-permission timed restriction of a member",
+      "whatItIs": "The modern restrict screen lets an admin uncheck individual rights for one member (send messages, send media, send stickers, embed links, pin, change info) and set a duration — 1 day, 1 week, forever — rather than only banning outright.",
+      "whyItMatters": "Our member sheet can only ban, unrestrict (restore defaults) or dismiss an admin — see runUnrestrict/runBan in src/TGGroupMembersViewController.m around line 1567. A group admin who wants to mute one noisy member for a day has to kick them instead. The catalogue lists this as 'design' bucket, which is right about the cost but it remains a real hole in group moderation.",
+      "whereItGoes": "A new push-on screen from the member action sheet in src/TGGroupMembersViewController.m: a grouped table of switches plus a duration picker, calling the already-wrapped restrictMember:inGroup:permissions:untilDate:.",
+      "tdlib": [
+        "setChatMemberStatus(chatMemberStatusRestricted) — already wrapped as restrictMember:inGroup:permissions:untilDate:",
+        "getChatMember for the current restriction state — already wrapped"
+      ],
+      "effort": "substantial"
+    }
+  ]
+}

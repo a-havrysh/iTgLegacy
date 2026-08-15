@@ -1,0 +1,69 @@
+{
+  "cluster": "contacts-users",
+  "gaps": [
+    {
+      "name": "Chat action bar for unknown senders",
+      "whatItIs": "When a non-contact writes you, modern Telegram puts a bar at the top of the chat with Add Contact / Block / Report Spam, and for a contact who asked for your number a Share My Phone Number bar. The state comes from chat.action_bar (reportSpam, reportAddBlock, addContact, sharePhoneNumber, inviteMembers).",
+      "whyItMatters": "Without it the only defence against a spammer or an unknown caller is to open the profile and hunt for Block; and the phone-sharing request never surfaces, so sharePhoneNumberWithUser can never fire.",
+      "whereItGoes": "TGChatViewController, as a banner above the message list reusing the existing compose/undo banner plumbing; TGClient.m must surface chat.action_bar and wrap removeChatActionBar.",
+      "tdlib": ["chat.action_bar (not surfaced by TGClient.m chat flattening)", "removeChatActionBar (not wrapped)", "reportChat (wrapped, TGClient+Privacy)", "toggleMessageSenderIsBlocked (wrapped)", "sharePhoneNumberWithUser (wrapped, TGClient+Contacts, currently uncalled)", "addContact (wrapped)"],
+      "effort": "small"
+    },
+    {
+      "name": "Invite friends who are not on Telegram",
+      "whatItIs": "InviteContactsController: a multi-select list of address-book people with no Telegram account, a count panel, and an SMS composer prefilled with your invite link. Our Contacts tab only has a single Invite Friends row that opens a generic UIActivityViewController with a link.",
+      "whyItMatters": "The address book is already read and diffed against the imported set, so we know exactly who is missing; today the user has to know who to invite and pick them again in the share sheet, one at a time.",
+      "whereItGoes": "TGContactsViewController - the existing -inviteFriendsTapped should push a picker built from -addressBookEntriesFrom: minus the resolved Telegram ids, and finish in MFMessageComposeViewController (available on iOS 6).",
+      "tdlib": ["importContacts / syncImportedContacts (wrapped) supply the 0 ids that mark a non-Telegram entry", "getUserLink (wrapped) for the invite link"],
+      "effort": "small"
+    },
+    {
+      "name": "Add a person by scanning their contact QR",
+      "whatItIs": "Modern Telegram QR codes for people are t.me/contact/<token> links resolved with searchUserByToken, not usernames. Our scanner parses any t.me path as a username, so scanning a real Telegram person-QR resolves the literal word 'contact' and fails.",
+      "whyItMatters": "The QR scanner already exists and is offered from New Contact, so scanning someone's code in front of you is the advertised flow - and it is the one case that silently misbehaves rather than being absent.",
+      "whereItGoes": "TGQRViewController -usernameIn:/-actOn: (recognise the /contact/<token> path and branch), then -userForToken: and the existing add-contact form in TGNewContactViewController.",
+      "tdlib": ["searchUserByToken (wrapped twice: TGClient+Contacts -userForToken: and TGClient+Account, both uncalled)"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Wrapped-but-unwired profile and contact fields",
+      "whatItIs": "TGClient+Contacts fully wraps a set of profile capabilities that no screen calls: the private note about a contact (getUserSupportInfo-style note pair), the groups-in-common list (we only print the count), the profile-photo history pager, own birthdate and personal channel setters, and multiple-username toggling. The feature catalogue still marks several of these alreadyWrapped:false.",
+      "whyItMatters": "These are the cheapest visible wins left in this area - each is one row or one small screen against an API that is already written, tested and shaped for UI.",
+      "whereItGoes": "TGProfileViewController (note row, 'N groups in common' becoming a tappable chat list, avatar tap opening the photo history), TGEditProfileViewController (birthdate date row, personal-channel picker from -suitablePersonalChatsWithCompletion:, username toggles).",
+      "tdlib": ["getUserProfileNote / setUserProfileNote via -noteForUser:/-setNote:forUser: (wrapped)", "getGroupsInCommon (wrapped)", "getUserProfilePhotos (wrapped)", "setBirthdate (wrapped)", "setPersonalChat + getSuitablePersonalChats (wrapped)", "toggleUsernameIsActive / getUserLink (wrapped)"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Business info on a user profile: opening hours and location",
+      "whatItIs": "userFullInfo.business_info carries opening hours (with a computed open/closed-now state and a timezone), a business location with address, plus away/greeting message config. Modern shows Hours and Location rows on the profile of any business account.",
+      "whyItMatters": "Small shops and support accounts on Telegram now live entirely in these fields; without them the profile of a business looks empty and you cannot tell whether writing now will get an answer.",
+      "whereItGoes": "TGClient.m user-full-info flattening (add businessHours/businessLocation), then two read-only rows in TGProfileViewController's info section next to bio and birthday. Display only - authoring business settings is premium-gated and out of scope.",
+      "tdlib": ["userFullInfo.business_info (not surfaced)", "getBusinessConnectedBot etc. not needed for display"],
+      "effort": "small"
+    },
+    {
+      "name": "Full contact card screen for a shared contact",
+      "whatItIs": "DeviceContactInfoController: tapping a contact message or an address-book person opens a card with job title, every phone with its label, emails, URLs, postal addresses, birthday and note, plus Create Contact / Add to Existing Contact / Save to device address book / Invite actions. We render the contact bubble and can add the user, nothing more.",
+      "whyItMatters": "A shared vCard usually carries more than a name and one number; today everything but the primary phone is discarded, and there is no way to put a received contact into the phone's own address book.",
+      "whereItGoes": "A new small table screen pushed from the contact bubble in TGChatViewController and from TGContactsViewController; writes go through AddressBook.framework, which TGContactsViewController already links for the import path.",
+      "tdlib": ["messageContact / contact.vcard (already received, currently only name+phone used)", "addContact (wrapped)", "no new td_api calls"],
+      "effort": "small"
+    },
+    {
+      "name": "Accepting a profile photo someone suggested for you",
+      "whatItIs": "The receiving half of Suggest Photo: a service message in the chat showing the proposed avatar with Set Profile Photo / Decline. The catalogue only covers the sending half ('Personal photo set for another contact').",
+      "whyItMatters": "Suggested photos arrive as an unreadable unsupported-content bubble until this exists, and the sender's suggestion silently dies.",
+      "whereItGoes": "ChatViewCell service-message rendering plus a confirm sheet in TGChatViewController, calling the existing avatar-setting path.",
+      "tdlib": ["messageSuggestProfilePhoto (message content, not handled)", "setProfilePhoto with inputChatPhotoPrevious (wrapped setProfilePhoto takes a path only - needs a photo-id variant)"],
+      "effort": "small"
+    },
+    {
+      "name": "Bucket corrections: contact link, personal photo, address-book sync",
+      "whatItIs": "Three catalogue rows are now cheaper than recorded. 'Temporary contact link (add-me QR/link)' and 'Personal photo set for another contact' both say alreadyWrapped:false, yet getUserLink, searchUserByToken, setUserPersonalProfilePhoto and suggestUserProfilePhoto are all wrapped in TGClient+Contacts, and the avatar picker plus QR rendering already exist. 'Address Book import and sync' is marked design but the AddressBook read, phone normalisation and importedContactCount plumbing are already written in TGContactsViewController.",
+      "whyItMatters": "Left as design, these keep getting deferred behind work that is already done; each is now a row plus an action sheet.",
+      "whereItGoes": "TGProfileViewController action sheet (Set Photo for X / Suggest Photo), a link+expiry row in TGContactsViewController, and a Sync Contacts toggle in the privacy section of TGSettingsViewController.",
+      "tdlib": ["getUserLink (wrapped)", "searchUserByToken (wrapped)", "setUserPersonalProfilePhoto / suggestUserProfilePhoto (wrapped)", "changeImportedContacts / getImportedContactCount / clearImportedContacts (wrapped and already called)"],
+      "effort": "drop-in"
+    }
+  ]
+}

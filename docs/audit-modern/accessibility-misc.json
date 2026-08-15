@@ -1,0 +1,69 @@
+{
+  "cluster": "accessibility-misc",
+  "gaps": [
+    {
+      "name": "Passcode is never actually enforced (no lock screen)",
+      "whatItIs": "Modern AppLock (submodules/AppLock, AppLockState, PasscodeUI) keeps a LockState with isManuallyLocked, autolockTimeout and a monotonic applicationActivityTimestamp, and presents a full-screen PasscodeEntryController over the window whenever isAppLocked() is true on launch or on becoming active; failed attempts are counted and rate-limited.",
+      "whyItMatters": "We ship a complete Passcode Lock settings screen (TGPrivacyViewController.m: TGPasscodeViewController, digest + TGPasscodeAutoLockSeconds) but nothing in AppDelegate.m or RootViewController.m ever reads passcodeIsSet/autoLockSeconds. A user who turns the passcode on gets zero protection - the app opens straight into the chat list. That is worse than not offering the feature. Also the digest lives in NSUserDefaults, which is world-readable on a jailbroken device; it belongs in the keychain.",
+      "whereItGoes": "AppDelegate.m applicationDidBecomeActive/didFinishLaunching plus a new full-screen keypad overlay window; the existing +passcodeMatches: is the check. Telegraph (twelve/Telegraph) has a passcode lock window to copy the structure from.",
+      "tdlib": ["none - purely client-local, no TDLib call involved"],
+      "effort": "small"
+    },
+    {
+      "name": "App-switcher snapshot not covered when locked",
+      "whatItIs": "AppLock installs a LockedWindowCoveringView with a blurred snapshot on willResignActive so iOS's suspend screenshot never shows chat content.",
+      "whyItMatters": "iOS 6 caches a PNG of the last frame under the app's Library/Caches/Snapshots on suspend. With a passcode set, that snapshot leaks the open conversation to anyone who double-taps home, and the file persists on disk. Cheap fix, real leak.",
+      "whereItGoes": "AppDelegate.m applicationWillResignActive - add an opaque logo view to the key window, remove it on didBecomeActive. Only meaningful together with the lock-enforcement gap above.",
+      "tdlib": ["none"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "VoiceOver labels and traits",
+      "whatItIs": "Modern Telegram annotates nearly every node: chat list rows read as \"name, message, time, N unread\", bubbles expose accessibilityLabel plus custom actions (reply, forward, delete), and every icon-only bar button has a label.",
+      "whyItMatters": "There is not a single accessibilityLabel or isAccessibilityElement in our 88k lines. VoiceOver on iOS 6 is complete and works fine on a 4S, but our custom-drawn ChatViewCell and TGChatListViewController cells are drawn into one CALayer, so a blind user hears nothing usable and icon-only buttons (attach, mic, mute icon, back chevron) announce as \"Button\". This is the one accessibility item that a real user actually loses.",
+      "whereItGoes": "ChatViewCell.m and TGChatListViewController.m cell configure methods (set isAccessibilityElement=YES and compose the label from data we already have), plus the toolbar/nav buttons in TGChatViewController.m, TGTabBar.m and TGActionSheet.m.",
+      "tdlib": ["none - all data already parsed into our cell dictionaries"],
+      "effort": "small"
+    },
+    {
+      "name": "Message text size setting",
+      "whatItIs": "PresentationData carries a user-chosen fontSize applied to all message text; Settings > Appearance has a live-preview slider. The 2013 client had the same thing as \"Message Text Size\".",
+      "whyItMatters": "Our fonts are hard-coded, and on a 3.5\" 320x480 screen the default bubble text is the single most common thing users want bigger or smaller. It is also the only realistic accessibility affordance on iOS 6, which has no Dynamic Type at all.",
+      "whereItGoes": "TGTheme.h/.m as a font-size token read from NSUserDefaults, a slider or a 5-row radio list in TGSettingsViewController.m Appearance page, and a height-cache invalidation in ChatViewCell/TGChatViewController.",
+      "tdlib": ["none - client-local"],
+      "effort": "small"
+    },
+    {
+      "name": "Receive files from other apps (\"Open in Telegram\")",
+      "whatItIs": "The modern app has a Share Extension so any app can send a photo, document or URL into a chat via ShareController.",
+      "whyItMatters": "iOS 6 has no app extensions, but it has the document-interaction handoff the 2013 app used: declare CFBundleDocumentTypes, get the file at application:openURL: as a file:// URL, and show a chat picker. Today our Info.plist declares only the telegram:// URL scheme and no document types, so Telegram never appears in any other app's \"Open In\" list - there is no way at all to get a file from Safari, Photos or Mail into a chat.",
+      "whereItGoes": "src/Info.plist CFBundleDocumentTypes (public.image, public.movie, public.data, public.url), AppDelegate.m handleOpenURL: branch for file URLs, then reuse the existing TGForwardPicker to choose the destination chat.",
+      "tdlib": ["sendMessage / inputMessageDocument / inputMessagePhoto - already wrapped in TGClient+Messages and TGClient+MessageContent"],
+      "effort": "small"
+    },
+    {
+      "name": "Send media out of Telegram (Open In / share sheet)",
+      "whatItIs": "Modern Telegram's media viewer and document bubbles offer a system share sheet: save, open in another app, copy link.",
+      "whyItMatters": "UIActivityViewController exists on iOS 6 and we already use it once (TGContactsViewController.m:1037), but nowhere in the chat: a received photo, video or document is a dead end - it cannot be saved to the camera roll or opened in another app. UIDocumentInteractionController is the iOS 6 way to do the \"Open In\" half.",
+      "whereItGoes": "The message action sheet in TGChatViewController.m and the full-screen media viewer; downloaded file paths already come back from TGClient+Files.",
+      "tdlib": ["downloadFile - wrapped; getSuggestedFileName / getFileMimeType would tidy the filename but are optional"],
+      "effort": "small"
+    },
+    {
+      "name": "Photo library permission denial guidance",
+      "whatItIs": "submodules/DeviceAccess centralises camera/microphone/photos/contacts checks and shows a \"go to Settings > Privacy\" alert when access was refused.",
+      "whyItMatters": "We do this correctly for camera (TGQRViewController.m, TGVideoRecorder.m) and microphone (TGVoiceRecorder.m) but not for Photos: a user who denied photo access gets a silently empty UIImagePickerController from the attach menu with no explanation, which reads as a broken app.",
+      "whereItGoes": "Wherever UIImagePickerController is presented - TGChatViewController.m, TGProfileViewController.m, TGSettingsViewController.m, TGStoriesViewController.m - guarded by +[ALAssetsLibrary authorizationStatus], reusing the alert wording already in TGQRViewController.m.",
+      "tdlib": ["none"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Home-screen quick actions, widgets and a share extension",
+      "whatItIs": "3D Touch shortcut items (Saved Messages, top contacts, compose), the WidgetItems/WidgetItemsUtils home-screen widget, and the Share/Notification-Service extensions.",
+      "whyItMatters": "Nothing to build - recorded so the area is closed. The 4S has no 3D Touch hardware, and iOS 6 predates app extensions (introduced in iOS 8) and WidgetKit entirely; there is no Today view for third-party apps either. The only usable substitutes are the document-type handoff and the telegram:// URL scheme, both covered above.",
+      "whereItGoes": "n/a",
+      "tdlib": ["n/a"],
+      "effort": "blocked"
+    }
+  ]
+}

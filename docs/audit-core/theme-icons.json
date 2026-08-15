@@ -1,0 +1,77 @@
+{
+  "area": "theme-icons",
+  "findings": [
+    {
+      "kind": "leak",
+      "severity": "high",
+      "file": "src/TGIcons.m",
+      "line": 687,
+      "what": "+waveform:size:played:colour: opens a graphics context on line 680 and then bails out of the method without closing it: `NSUInteger bars = (NSUInteger)(size.width / (barW + gap)); if (bars == 0) return nil;` — there is no UIGraphicsEndImageContext() on that path.",
+      "failure": "Any call with 0 < size.width < 3 (a voice-note wave view that has been laid out narrow, or a cell mid-animation) creates and pushes a CGBitmapContext that is never popped. The orphaned context stays on top of the UIKit context stack for the lifetime of the process, so every subsequent UIGraphicsGetCurrentContext()/UIGraphicsGetImageFromCurrentImageContext() in the app — every TGIcons glyph, every avatar in +avatarWithInitials:, every bubble tail — draws into and reads back from that stale bitmap instead of its own. Icons and avatars come back blank or wrong from that point on, and each occurrence leaks size.width*size.height*4*scale^2 bytes. -playbackTick (src/TGChatViewController.m:2948) calls this five times a second per visible cell with `bubble.wave.bounds.size`, so it only takes one narrow wave view to poison the whole drawing stack.",
+      "fix": "Move the degenerate-size check above the context creation. Replace lines 680-688 with: compute `CGFloat barW = 2, gap = 1; NSUInteger bars = (NSUInteger)(size.width / (barW + gap)); if (bars == 0 || size.width <= 0 || size.height <= 0) return nil;` FIRST, then call UIGraphicsBeginImageContextWithOptions(size, NO, 0) and take ctx. Keep the single UIGraphicsEndImageContext() at line 716."
+    },
+    {
+      "kind": "correctness",
+      "severity": "high",
+      "file": "src/TGIcons.m",
+      "line": 72,
+      "what": "+iconNamed:draw: always paints the glyph in opaque black — `CGContextSetRGBFillColor(ctx, 0, 0, 0, 1); CGContextSetRGBStrokeColor(ctx, 0, 0, 0, 1);` — and relies on template rendering to recolour it: `if ([image respondsToSelector:@selector(imageWithRenderingMode:)]) image = [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];` (line 80). imageWithRenderingMode: does not exist on iOS 6, and neither does UIView.tintColor (see src/UIView+SafeTint.m, whose whole job is to swallow that setter).",
+      "failure": "On the target device (iPhone 4S, iOS 6.1.3) the respondsToSelector: check is always NO, so every TGIcons glyph is a hard black bitmap that nothing can recolour. Select the Dark theme (TGThemeStyleDark is offered in Settings on iOS 6) and: the composer buttons — [TGIcons attach] at src/TGChatViewController.m:1545, [TGIcons sticker] at 1621, [TGIcons microphone] at 1651 — are black glyphs on the #202020 input bar returned by -inputBarColour, i.e. invisible; and the settings list glyphs at src/TGSettingsViewController.m:1164-1165 (`cell.imageView.image = [TGIcons menuGlyphNamed:row[1]]; [cell.imageView tg_setTintColor:[theme secondaryTextColour]];`) are black on the #212121 -listBackgroundColour, also invisible, because tg_setTintColor: is a no-op on iOS 6.",
+      "fix": "Make the glyph colour part of the drawing rather than a post-hoc tint. In +iconNamed:draw: replace the hardcoded black at lines 72-73 with the theme's glyph colour (e.g. `UIColor *ink = [TGTheme shared].isDark ? [UIColor whiteColor] : [UIColor blackColor];` set via CGContextSetFillColorWithColor/CGContextSetStrokeColorWithColor), and extend the cache key on line 52 to include the dark flag — today it is only `[NSString stringWithFormat:@\"%@-%d\", name, (int)flat]` and isFlat is YES for both Flat and Dark, so Flat and Dark would collide on the same cache entry. Keep the imageWithRenderingMode: call for iOS 7+ hosts. [TGIcons flush] is already wired to the theme-changed notification (src/TGChatListViewController.m:977, src/TGChatViewController.m:1435)."
+    },
+    {
+      "kind": "correctness",
+      "severity": "medium",
+      "file": "src/TGTheme.m",
+      "line": 369,
+      "what": "Seven palette accessors branch on -isDarkStyle, which is defined at line 136 as `return _style == TGThemeStyleDark && _imported == nil;` — i.e. deliberately false whenever a theme file is loaded. -fileTileColour (369), -fileMetaColour (382), -mutedBadgeColour (399), -serviceBubbleColour (422), -serviceTextColour (427), -bubbleBorderColour (304) and -separatorColour (414) therefore always take their light-theme branch under an imported theme, even one that declares itself dark (TGThemeFile writes palette[@\"isDark\"] = @YES, and -isDark at line 93 honours it).",
+      "failure": "Import any dark .attheme/.tgios-theme: the chat renders with dark bubbles and dark list background, but every document/file block still gets the near-white #EBF0F4 tile from TG_FILE_TILE and #A1AAB3 meta text, and -bubbleBorderColour returns black at 12% — which -separatorColour then reuses for every hairline — so table separators and bubble outlines are invisible black-on-black. Only the six colours the file happens to define are dark; the rest of the UI stays light, producing white tiles punched into a dark chat.",
+      "fix": "Gate these seven on -isDark rather than -isDarkStyle. -isDarkStyle should remain only where the built-in dark defaults must not override a file's own colour (i.e. inside accessors that first consult -importedColour: and fall through). Concretely change lines 304, 369, 382, 399, 414, 422 and 427 from `self.isDarkStyle` to `self.isDark`."
+    },
+    {
+      "kind": "memory",
+      "severity": "medium",
+      "file": "src/TGIcons.m",
+      "line": 849,
+      "what": "+avatarWithInitials:size:colourId: (849), TGGlyphAvatar (781, behind +archiveAvatarOfSide:/+savedMessagesAvatarOfSide:/+inviteFriendsAvatarOfSide:), +mediaDiscOfSide:playing: (589), +fileDiscOfSide: (616), +callArrowOutgoing:missed: (269), +bubbleTailForColour:outgoing: (720) and +ticksWhite: (746) each open a fresh bitmap context, draw, and return a brand-new UIImage on every call. Only +iconNamed:draw: uses sCache; none of these do.",
+      "failure": "They are called straight out of cell configuration: src/TGChatListViewController.m:1386/2375/2438, src/TGContactsViewController.m:1292/1371, src/TGChatViewController.m:4699/4756/4878/4997/5035, src/TGSearchViewController.m:1831/1894. Scrolling the chat list on the 4S allocates a new CGBitmapContext plus a CGImage per row per reuse — a 40pt avatar at scale 2 is 40*40*4*4 = 25.6KB, and TGGlyphAvatar additionally builds a CGGradient each time. At ~10 visible rows and continuous scrolling this is megabytes of short-lived allocations per second against a 40-60MB budget, and the drawing itself runs synchronously on the main thread inside tableView:cellForRowAtIndexPath:, which is the scroll stutter.",
+      "fix": "Give these the same treatment +iconNamed:draw: already has: an NSMutableDictionary (or NSCache) keyed by the arguments that affect the pixels — for avatars `[NSString stringWithFormat:@\"av-%@-%.0f-%lld-%d\", initials, size, colourId, (int)[TGTheme shared].isFlat]`, for the discs/tail/ticks the side plus colour plus flags. Clear it from +flush, which is already invoked on TGThemeChangedNotification."
+    },
+    {
+      "kind": "correctness",
+      "severity": "low",
+      "file": "src/TGIcons.m",
+      "line": 866,
+      "what": "The avatar colour mapping `static const NSUInteger order[7] = {0, 7, 4, 1, 6, 3, 5}; NSArray *c = palette[order[(NSUInteger)llabs(colourId) % 7]];` indexes an 8-entry palette whose 8th entry is declared as `@[@0.882f, @0.443f, @0.463f]  // the 8th slot repeats red` — the same values as entry 0.",
+      "failure": "order never contains 2, so the violet colour at palette[2] is unreachable: no user or chat is ever drawn violet. And because order[0]=0 and order[1]=7 both resolve to the identical red, users with colourId%7==0 and colourId%7==1 get the same avatar colour — roughly 2/7 of placeholders are red and the set of distinct colours is six, not seven, so avatar colours do not match what other Telegram clients show for the same person.",
+      "fix": "Either drop the duplicate 8th entry and use `palette[(NSUInteger)llabs(colourId) % 7]` directly, or correct the order table so it is a permutation of 0..6 that includes 2."
+    },
+    {
+      "kind": "dead-code",
+      "severity": "low",
+      "file": "src/TGTheme.m",
+      "line": 393,
+      "what": "-badgeColour (393), -mutedBadgeColour (398) and -profileHeaderColour (353) are declared in TGTheme.h (lines 90, 91, 78) and implemented, but grep over every other .m file in src/ returns zero call sites for all three.",
+      "failure": "No runtime failure — but the unread badge and profile header are being coloured by hand somewhere else, so an imported theme's accent colour never reaches them while these accessors sit unused and give the false impression that it does. Any future fix applied here would have no effect.",
+      "fix": "Either delete the three accessors and their header declarations, or wire them up: the chat-list unread badge should take -badgeColour / -mutedBadgeColour and the profile header block -profileHeaderColour, which is what their header comments claim."
+    },
+    {
+      "kind": "duplication",
+      "severity": "low",
+      "file": "src/TGCapabilities.m",
+      "line": 20,
+      "what": "`+ (NSUInteger)memoryMB { return (NSUInteger)([NSProcessInfo processInfo].physicalMemory / (1024 * 1024)); }` duplicates +[TGDevice memoryMB] (src/TGDevice.m:106), which answers from the hardware table and only falls back to physicalMemory for unknown models. Nothing calls the TGCapabilities version — the one call site, src/TGDeviceViewController.m:77, uses [TGDevice memoryMB].",
+      "failure": "Dead duplicate, and the two disagree: physicalMemory on a 512MB iPhone 4S reports 512 or less after the kernel's reservation, while the table says 512 exactly. If anyone later calls the TGCapabilities copy to reproduce a tier decision they will get a different tier than +[TGDevice tier], whose armv7 branch is `[self memoryMB] > 512 ? Legacy : Vintage` (TGDevice.m:127) — a strict > against a value that may round down.",
+      "fix": "Delete +[TGCapabilities memoryMB] and its declaration in TGCapabilities.h line 28; callers should use +[TGDevice memoryMB]."
+    },
+    {
+      "kind": "correctness",
+      "severity": "low",
+      "file": "src/TGTheme.h",
+      "line": 102,
+      "what": "The header documents contracts the implementation does not honour: `- (CGFloat)bubbleBorderWidth;  ///< 0 when flat` but TGTheme.m:436 returns a flat 1.0f unconditionally, and `- (UIColor *)bubbleBorderColour;  ///< clear when flat` (TGTheme.h:70) but TGTheme.m:298-307 returns black at 12% alpha for the flat style too. Separately, TGCapabilities.h:45 documents video calls as starting at the A7 while TGCapabilities.m:48 requires TGDeviceTierFull (A9 / 2GB).",
+      "failure": "A caller that reads the header and skips the border draw when flat, or that trusts a width of 0 to mean 'no hairline', gets a 1pt black hairline it did not expect — the flat/iOS-7 bubble picks up an outline the design does not have. No crash, but the two files disagree about the same contract, so whichever one a future edit trusts is wrong.",
+      "fix": "Pick one. The implementation is the intended behaviour per the comment at TGTheme.m:299-303 ('their bubbles carry a hairline whatever the era'), so correct the header comments on TGTheme.h:70 and 102 to say the hairline is always drawn, and change TGCapabilities.h:45 to say A9/Full to match the code."
+    }
+  ]
+}

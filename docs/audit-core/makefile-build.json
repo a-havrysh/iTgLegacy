@@ -1,0 +1,68 @@
+{
+  "area": "makefile-build",
+  "findings": [
+    {
+      "kind": "structure",
+      "severity": "high",
+      "file": "Makefile",
+      "line": 401,
+      "what": "`clean: @rm -rf \"$(BUILD_DIR)\"` deletes the entire build/ tree, which is not just intermediates: it also holds build/sdks (the theos SDK clone), build/{armv7,arm64}/libs (libcrypto.a, libssl.a, libwebp.a), build/{armv7,arm64}/tdlib/lib/libtdjson.dylib and build/tools/machofix.",
+      "failure": "After `make clean && make ipa-armv7`, SDK_PATH's wildcard checks at lines 42-48 all miss and fall through to $(XCODE_SDK). The Makefile's own comment at lines 50-53 states that the modern Xcode SDK ships no armv7 slice in libSystem.tbd, so the armv7 link fails with undefined libc symbols. Even if an SDK is restored, -lcrypto is unresolved (build/armv7/libs gone) and the libtdjson.dylib copy at line 329 silently degrades to the `|| echo` branch, producing an app bundle with no TDLib that dlopen-fails at startup in TGClient.m:42. None of these are rebuildable by any Makefile target.",
+      "fix": "Make `clean` remove only generated intermediates: `rm -rf $(BUILD_DIR)/armv7/obj $(BUILD_DIR)/arm64/obj $(BUILD_DIR)/armv7/app $(BUILD_DIR)/arm64/app $(BUILD_DIR)/fat_app $(BUILD_DIR)/Payload $(IPA_DIR)`. Add a separate `distclean` target that additionally removes build/sdks, build/libs, build/*/libs, build/*/tdlib and build/tdlib-dylib-*, and document that distclean requires re-running scripts/setup_sdk.sh, scripts/build_deps.sh and scripts/build_tdlib_dylib.sh."
+    },
+    {
+      "kind": "structure",
+      "severity": "high",
+      "file": "scripts/build_deps.sh",
+      "line": 10,
+      "what": "build_deps.sh writes its output to `BUILD_LIBS_DIR=\"${ROOT_DIR}/build/libs\"` (lines 10, 30-31, 37-40), but the Makefile links against `-L$(BUILD_DIR)/armv7/libs` (Makefile:323) and `-L$(BUILD_DIR)/arm64/libs` (Makefile:343), and scripts/build_tdlib_dylib.sh:84-85 reads build/armv7/libs/libcrypto.a. Nothing populates the per-arch directories.",
+      "failure": "On a fresh clone the documented dependency bootstrap produces build/libs/libcrypto.a only. The armv7 link then fails with `ld: library not found for -lcrypto` (DEPS_LIBS, Makefile:95), and build_tdlib_dylib.sh's cmake configure fails because OPENSSL_CRYPTO_LIBRARY points at a nonexistent path. The current tree only works because build/armv7/libs and build/arm64/libs were populated by hand at some point.",
+      "fix": "In scripts/build_deps.sh, extract per-architecture slices into the directories the build actually uses: create build/armv7/libs and build/arm64/libs and run `lipo <universal>.a -thin armv7 -output build/armv7/libs/libcrypto.a` and `-thin arm64 -output build/arm64/libs/libcrypto.a` (same for libssl, libwebp), instead of a single dual-arch archive in build/libs. Also fix scripts/build_tdlib.sh:97-98, which still reads the old build/libs path."
+    },
+    {
+      "kind": "structure",
+      "severity": "medium",
+      "file": "README.md",
+      "line": 86,
+      "what": "README documents `make app`, `make deps` and `make tdlib` (README.md:86-88). The Makefile's only targets are `all ipa ipa-armv7 ipa-arm64 clean help` (.PHONY, Makefile:292) plus the object and $(MACHOFIX) rules.",
+      "failure": "A new contributor following the README runs `make deps` and gets `make: *** No rule to make target 'deps'.  Stop.`, then runs `make` and hits the missing -lcrypto link error from the previous finding. The documented bootstrap path does not exist.",
+      "fix": "Either add the targets — `deps: ; @scripts/build_deps.sh`, `tdlib: ; @scripts/build_tdlib_dylib.sh && scripts/build_tdlib_dylib_arm64.sh`, and drop `app` — adding them to .PHONY on Makefile:292, or correct README.md:86-88 to reference the scripts directly (scripts/setup_sdk.sh, scripts/build_deps.sh, scripts/build_tdlib_dylib.sh)."
+    },
+    {
+      "kind": "correctness",
+      "severity": "medium",
+      "file": "Makefile",
+      "line": 296,
+      "what": "`ipa: ipa-armv7 ipa-arm64` — both prerequisites use the same shared staging directory: ipa-armv7 does `rm -rf \"$(BUILD_DIR)/Payload\"` / `mkdir` / `cp` / `cd $(BUILD_DIR) && zip -qr` (lines 333-337) and ipa-arm64 does the identical sequence on the same path (lines 348-352). The `ipa` recipe itself reuses it again at lines 302-306.",
+      "failure": "With `make -j2 ipa` (or any -j, which is the natural way to build 88k lines on a laptop) the two arch targets interleave: ipa-arm64 can `rm -rf build/Payload` while ipa-armv7 is mid-`zip`, yielding a truncated or empty iTgLegacy-armv7.ipa, or zip picking up the arm64 bundle so the armv7 IPA contains an arm64 binary that will not launch on the 4S. The failure is nondeterministic and silent — zip -q reports nothing.",
+      "fix": "Give each target its own staging dir: use `$(BUILD_DIR)/Payload-armv7` in the ipa-armv7 recipe (lines 333-337), `$(BUILD_DIR)/Payload-arm64` in ipa-arm64 (lines 348-352), and `$(BUILD_DIR)/Payload-fat` in ipa (lines 302-306), each with a matching `mv`/`rm` of only its own directory, and zip with `cd $(BUILD_DIR)/stage-<arch>`."
+    },
+    {
+      "kind": "correctness",
+      "severity": "medium",
+      "file": "Makefile",
+      "line": 357,
+      "what": "No compilation rule emits or includes header dependencies: every rule is a bare `$(CC) $(FLAGS) -c $< -o $@` with no `-MMD -MP` and no `-include $(OBJS:.o=.d)` anywhere in the file.",
+      "failure": "Editing any header — e.g. adding a field to a struct in src/TGClient.h, which ~30 TGClient+*.m files import — rebuilds nothing. The stale .o files keep the old struct layout while newly compiled ones use the new one, so the linked binary reads fields at the wrong offsets and crashes or corrupts data at runtime with no build error. In a repo where dozens of files share a handful of headers this misfires constantly, and the usual workaround (`make clean`) triggers the first finding above.",
+      "fix": "Add `-MMD -MP` to CFLAGS_ARMV7 (line 279) and CFLAGS_ARM64 (line 284) so it propagates to the OBJC/CXX variants, and before the `clean` target add `-include $(ARMV7_ALL_OBJS:.o=.d)` and `-include $(ARM64_ALL_OBJS:.o=.d)`."
+    },
+    {
+      "kind": "dead-code",
+      "severity": "low",
+      "file": "src/ChatViewCell.m",
+      "line": 1,
+      "what": "src/ChatViewCell.m (81 lines) and src/TGActionTableView.m (257 lines) exist in src/ but appear in no *_SRC_* list in the Makefile, and neither `ChatViewCell` nor `TGActionTableView` is referenced from any other file in src/ — the only hits are their own headers. src/ChatViewCell.h:3 also `#import \"TGMessage.h\"`, a header that does not exist anywhere in the tree.",
+      "failure": "338 lines of never-compiled code that no build error protects. Anyone who adds src/ChatViewCell.m to APP_SRC_M gets an immediate `'TGMessage.h' file not found`, and TGActionTableView.m:7 has its TGHacks import commented out, so both are unverified against the current codebase. Meanwhile grep-driven agents keep finding these classes and assuming they are live.",
+      "fix": "Delete src/ChatViewCell.{m,h} and src/TGActionTableView.{m,h}. If TGActionTableView is intended for future use, add it to APP_SRC_M (Makefile:142-241) so it is at least compiled and kept honest; ChatViewCell cannot be revived without a TGMessage.h that no longer exists."
+    },
+    {
+      "kind": "structure",
+      "severity": "low",
+      "file": "Makefile",
+      "line": 369,
+      "what": "The generic `.mm` rules — `$(ARMV7_OBJ_DIR)/%.o: %.mm` (line 369) and `$(ARM64_OBJ_DIR)/%.o: %.mm` (line 392) — apply `$(VOIP_FLAGS)`, which is `-DTGVOIP_NO_DSP -DWEBRTC_POSIX -DTGVOIP_USE_CUSTOM_CRYPTO -I.../libtgvoip -Wno-everything` (line 135-136). VOIP_SRC_MM (line 130-133) contains src/TGCall.mm and src/TGDateUtils.mm, which are app code, not vendored libtgvoip.",
+      "failure": "`-Wno-everything` disables every diagnostic for src/TGCall.mm and src/TGDateUtils.mm, including -Wobjc-method-access, -Wincompatible-pointer-types and -Wformat. A wrong selector or a %d format against an int64 chat id in TGCall.mm compiles completely silently and only shows up as a runtime crash or truncated id on the 4S. The blanket suppression is meant for the vendored public-domain C++, not for first-party ObjC++.",
+      "fix": "Split the rules: keep the VOIP_FLAGS rule scoped to the vendored tree with a pattern `$(ARMV7_OBJ_DIR)/src/libtgvoip/%.o: src/libtgvoip/%.mm` (mirroring the existing .cpp rule at line 365), and give the generic `%.mm` rule the libtgvoip include and defines but drop `-Wno-everything`, e.g. compile src/TGCall.mm and src/TGDateUtils.mm with `$(CXXFLAGS_ARMV7) -I$(ROOT_DIR)/src/libtgvoip -DTGVOIP_NO_DSP -DTGVOIP_USE_CUSTOM_CRYPTO -fobjc-arc`. Same for the arm64 pair at lines 388-394."
+    }
+  ]
+}

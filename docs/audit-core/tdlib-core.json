@@ -1,0 +1,122 @@
+{
+  "area": "tdlib-core",
+  "findings": [
+    {
+      "kind": "crash",
+      "severity": "high",
+      "file": "src/TGClient.m",
+      "line": 351,
+      "what": "`NSDictionary *status = TGUserStatusInfo(obj[@\"status\"]);` is called at line 351 but the function is only defined at line 555 (`static NSDictionary *TGUserStatusInfo(...)`); the same pattern exists for `text = TGMessagePreview(m);` at line 877 vs. its definition at line 1628. Only `TGFlattenMessage` has a forward declaration (line 9). The Makefile builds with `-Wno-implicit-function-declaration` (Makefile:280/285), so this compiles silently.",
+      "failure": "With no visible prototype clang codegens the call against the implicit signature `int f()`. On the armv7 slice the 32-bit return in r0 happens to alias the pointer, so it works by accident. On the arm64 slice (build/arm64/obj/src/TGClient.o is built by the same Makefile) the return value is truncated to a 32-bit int and sign-extended, so `status` / `text` is a garbage pointer: the very next `status[@\"isOnline\"]` (line 360) or `text.length` (line 884) messages a wild address and crashes with EXC_BAD_ACCESS on the first updateUserStatus / on every non-text message.",
+      "fix": "Next to the existing forward declaration at TGClient.m:9 add `static NSDictionary *TGUserStatusInfo(NSDictionary *status);` and `static NSString *TGMessagePreview(NSDictionary *message);`. Do not rely on -Wno-implicit-function-declaration to keep hiding it."
+    },
+    {
+      "kind": "crash",
+      "severity": "high",
+      "file": "src/TGClient.m",
+      "line": 193,
+      "what": "`obj[@\"usernames\"][@\"active_usernames\"][0]` indexes element 0 of a TDLib array with no count check. Same unguarded `[0]` at lines 205 (`updateUser`), 1365 (`contactsWithCompletion:`), 1428 (`userForPhone:`) and 2267 (`ensureUserName:`).",
+      "failure": "td_api's `usernames` object is `active_usernames:vector<string> disabled_usernames:vector<string> editable_username:string`. A user who owns a username but has it disabled gets a non-nil `usernames` object with an EMPTY `active_usernames` array. `array[0]` then goes through -objectAtIndexedSubscript: and raises NSRangeException, which is uncaught on the main queue. At line 193 this happens on the getMe reply, i.e. the app terminates during login for such an account; at line 205 any `updateUser` for such a contact kills the app mid-session.",
+      "fix": "Replace every `x[@\"usernames\"][@\"active_usernames\"][0]` with a guarded helper, e.g. add `static NSString *TGFirstUsername(NSDictionary *u){ NSArray *a = u[@\"usernames\"][@\"active_usernames\"]; return ([a isKindOfClass:NSArray.class] && a.count && [a[0] isKindOfClass:NSString.class]) ? a[0] : nil; }` and call it at 193, 205, 1365, 1428, 2267."
+    },
+    {
+      "kind": "correctness",
+      "severity": "high",
+      "file": "src/TGClient.m",
+      "line": 1906,
+      "what": "`-forumTopicsForChat:completion:` reads the topic id as `info[@\"message_thread_id\"]` and pages with `@\"offset_message_thread_id\" : @(0)` (line 1898). td_api.tl:3911 says `forumTopicInfo chat_id:int53 forum_topic_id:int32 ...` — there is no `message_thread_id` field — and td_api.tl:12510 says `getForumTopics ... offset_forum_topic_id:int32 ...`.",
+      "failure": "`info[@\"message_thread_id\"]` is always nil, so every returned topic carries `@\"threadId\" : @(0)`. Any caller opening a topic with that id would send `message_thread_id: 0` and land in the merged chat stream instead of the topic, and paging would restart from the top forever. The request field `offset_message_thread_id` is also unknown to this TDLib and is ignored.",
+      "fix": "Either delete this method (see the dead-code finding — TGTopicsViewController.m:781/863 use TGClient+Forums.m's `-forumTopicsForChat:query:offsetDate:offsetMessageId:offsetTopicId:limit:completion:` instead), or change line 1906 to `info[@\"forum_topic_id\"]` and line 1898 to `@\"offset_forum_topic_id\" : @(0)`. If deleted, also remove the declaration at TGClient.h:99."
+    },
+    {
+      "kind": "correctness",
+      "severity": "high",
+      "file": "src/TGClient.m",
+      "line": 1476,
+      "what": "`-premiumStateWithCompletion:` gates on `if (![me[@\"is_premium\"] boolValue]) { completion(nil); return; }`, but `self.me` is constructed at lines 190-195 with exactly four keys: `id`, `first_name`, `username`, `phone`. It never contains `is_premium`. The line below (1481) also reads `state[@\"state\"][@\"expiration_date\"]`, while td_api.tl:8166 declares `premiumState state:formattedText ...` — a formattedText has no `expiration_date`.",
+      "failure": "The completion is unconditionally called with nil for every account, premium or not, so the premium row never appears; even if the guard were removed, the expiry lookup would always miss and the answer would be the bare string \"Active\".",
+      "fix": "Add `@\"is_premium\" : obj[@\"is_premium\"] ?: @NO` (and `@\"last_name\"`) to the `self.me` dictionary built at TGClient.m:190, and take the expiry from the account's own `getUserFullInfo` / `premium_expiration_date` option rather than from `premiumState`, which only carries promo text. The same stale `self.me[@\"is_premium\"]` read exists at TGClient+Premium.m:168."
+    },
+    {
+      "kind": "correctness",
+      "severity": "medium",
+      "file": "src/TGClient.m",
+      "line": 1952,
+      "what": "In `-chatProfile:completion:` the shared `answer` block does `@\"members\" : full[@\"member_count\"] ?: @0;` and it is used for both supergroups (line 1959) and basic groups (line 1963). td_api.tl:2696 `basicGroupFullInfo photo description creator_user_id members:vector<chatMember> ...` has no `member_count` field.",
+      "failure": "Opening the profile of a plain (non-super) group shows \"0 members\" no matter how many members it has, because `full[@\"member_count\"]` is nil for basicGroupFullInfo.",
+      "fix": "In the `answer` block use `@\"members\" : full[@\"member_count\"] ?: @([full[@\"members\"] count])`, or pass the count in from each branch: supergroups from `member_count`, basic groups from `[full[@\"members\"] count]`."
+    },
+    {
+      "kind": "correctness",
+      "severity": "medium",
+      "file": "src/TGClient.m",
+      "line": 2415,
+      "what": "`-applyChatUpdate:` handling a single-list `updateChatPosition`: the archive branch does `info[@\"archiveOrder\"] = ...; info[@\"order\"] = @(0);` and the main branch (line 2418) does `info[@\"archiveOrder\"] = @(0);`. One list's position update clobbers the order the chat holds in the other list.",
+      "failure": "TDLib removes a chat from a list by sending updateChatPosition for that list with order \"0\". When a chat lives in the archive and TDLib emits the chatListMain removal (order 0), line 2416-2418 sets order=0 AND archiveOrder=0; `-rebuildChats` (2440-2443) then puts the chat in neither `chats` nor `archivedChats`, so an archived chat silently vanishes from the archive until an unrelated full `updateNewChat` re-seeds it.",
+      "fix": "Only write the field that belongs to the list named in `position[@\"list\"][@\"@type\"]`: in the chatListArchive branch set `archiveOrder` only, in the chatListMain branch set `order` and `isPinned` only. Drop both `= @(0)` clobbers at lines 2415 and 2418."
+    },
+    {
+      "kind": "correctness",
+      "severity": "medium",
+      "file": "src/TGClient.m",
+      "line": 1742,
+      "what": "`-statusForUser:completion:` decides \"today\" with `BOOL today = [[NSCalendar currentCalendar] components:NSDayCalendarUnit fromDate:date].day == [[NSCalendar currentCalendar] components:NSDayCalendarUnit fromDate:[NSDate date]].day;` — that is the day-of-month only, with no month or year.",
+      "failure": "A user last seen at 12:30 on 14 July, viewed on 14 August, reads \"last seen at 12:30\" as if they were online this morning. Any last-seen whose day-of-month happens to match today is mis-labelled; everything else collapses to \"last seen a long time ago\", so a yesterday-evening status also reads as \"a long time ago\".",
+      "fix": "Delete the whole body of -statusForUser:completion: and implement it as `if (completion) completion(TGUserStatusInfo(user[@\"status\"])[@\"text\"]);` — TGUserStatusInfo (TGClient.m:555) already computes today/yesterday/weekday/date correctly from full year+month+day components."
+    },
+    {
+      "kind": "duplication",
+      "severity": "medium",
+      "file": "src/TGClient.m",
+      "line": 1719,
+      "what": "The last-seen phrase is written three times: `TGUserStatusInfo` (TGClient.m:555), `-statusForUser:completion:` (TGClient.m:1719, a worse copy — see the previous finding), and `TGUSLastSeenText` (TGClient+UserStatus.m:35). All three produce different strings for the same input: TGClient.m:579 gives \"last seen today at 12:30\" while TGClient.m:1747 gives \"last seen at 12:30\" and TGUSLastSeenText gives \"last seen today at 12:30\" but with a different long-ago fallback.",
+      "failure": "The same user shows a different subtitle in the chat header (statusForUser:), the chat list (TGUserStatusInfo via updateUserStatus) and the profile (TGClient+UserStatus.m), and a fix applied to one is invisible in the other two.",
+      "fix": "Keep one implementation. Promote `TGUserStatusInfo` out of TGClient.m into TGClient+Private.h as an exported `NSDictionary *TGUserStatusInfo(NSDictionary *status)`, make -statusForUser:completion: return `TGUserStatusInfo(...)[@\"text\"]`, and have TGClient+UserStatus.m's TGUSLastSeenText call it instead of re-deriving the text."
+    },
+    {
+      "kind": "leak",
+      "severity": "medium",
+      "file": "src/TGClient.m",
+      "line": 152,
+      "what": "`self.pendingRequests[extra] = [completion copy];` in `-request:completion:`. Entries are removed only in -handleUpdate: (line 167) when a reply carrying the matching `@extra` arrives. There is no timeout, no purge on authorizationStateClosed, and no purge when `-start` fails.",
+      "failure": "When TDLib never answers — dlopen failed so `available` is NO and drainOutbox (line 133) drops nothing but never sends, or the client was closed by logOut (line 426 sets running=NO and the receive loop exits) — the completion block is retained forever and never invoked. Any screen that shows a spinner until its completion fires (e.g. TGStorageViewController's -storageStatsWithCompletion:, TGProfileViewController's -userProfile:) spins for the life of the process, and every captured view controller stays alive with it.",
+      "fix": "Give -request:completion: a timeout: store `@{ @\"block\": [completion copy], @\"deadline\": @(CFAbsoluteTimeGetCurrent() + 30) }`, and from -receiveLoop (or a 5 s main-queue timer) sweep expired entries, invoking each with `@{@\"@type\":@\"error\", @\"code\":@(-1), @\"message\":@\"timeout\"}`. Also flush and error out every pending request in -handleAuthState: when the state is authorizationStateClosed, and in -start when it returns NO."
+    },
+    {
+      "kind": "correctness",
+      "severity": "medium",
+      "file": "src/TGClient.m",
+      "line": 151,
+      "what": "`NSString *extra = [NSString stringWithFormat:@\"r%lu\", (unsigned long)(++self.requestSeq)];` followed by `self.pendingRequests[extra] = [completion copy];` — both run on whatever thread called -request:, while -handleUpdate: reads and mutates the same NSMutableDictionary on the main queue (lines 165-167). Neither `requestSeq` nor `pendingRequests` is protected (the only lock in the class, `outboxLock`, guards the outbox only).",
+      "failure": "-request: is reachable from background queues (callers such as TGChatViewController.m:3934 and TGProfileViewController.m:2046 hop to a global queue before touching the client). Two concurrent `++self.requestSeq` on a non-atomic NSUInteger property can produce the same @extra, so one caller's completion overwrites the other's and one screen never gets its reply; concurrent -setObject:forKey: against the main thread's -removeObjectForKey: can corrupt the CFDictionary's bucket array and crash in CFBasicHashAddValue.",
+      "fix": "Serialise both: either wrap lines 151-152 and 165-167 in a dedicated NSLock (mirroring outboxLock), or make -request:completion: enqueue its bookkeeping with `dispatch_async(dispatch_get_main_queue(), ...)` so the seq bump, the dictionary insert and the handleUpdate lookup all happen on the main queue."
+    },
+    {
+      "kind": "dead-code",
+      "severity": "low",
+      "file": "src/TGClient.m",
+      "line": 1537,
+      "what": "Nine public methods declared in TGClient.h and implemented in TGClient.m have no caller anywhere outside TGClient.m/TGClient.h: -sessionsWithCompletion: (1537), -terminateSession: (1555, TGSessionsViewController.m:503 calls the category's -terminateSession:completion: instead), -setName:last: (1559), -premiumStateWithCompletion: (1473), -chatsInFolder:completion: (1865), -userForPhone:completion: (1410), -setUser:blocked: (1437), -notificationsMutedForScope:completion: + -setScope:muted: (2004/2015), -setChat:joined: (1841), and -forumTopicsForChat:completion: (1891). Two declared ivars are also unused: `fileWaiters` is allocated at line 27 and never read or written again anywhere in the tree, and `chatsAtLastLoad` is written at line 1596 and never read.",
+      "failure": "No runtime failure, but roughly 150 lines of TGClient.m are unreachable, three of them (forumTopicsForChat:completion:, premiumStateWithCompletion:, chatProfile: for basic groups) are actively wrong against the current td_api.tl, and a future caller wiring them up would inherit those bugs. `fileWaiters` in particular reads as live download plumbing that does not exist.",
+      "fix": "Delete the ten methods and their TGClient.h declarations, and remove the `fileWaiters` and `chatsAtLastLoad` properties from TGClient+Private.h (lines 36 and 43) plus the `s.fileWaiters = ...` line at TGClient.m:27 and the write at TGClient.m:1596. Keep -terminateSession: only if TGClient+Account.m's variant is removed instead."
+    },
+    {
+      "kind": "correctness",
+      "severity": "low",
+      "file": "src/TGClient.m",
+      "line": 1450,
+      "what": "`-isUserBlocked:completion:` answers `completion([full[@\"block_list\"] isKindOfClass:NSDictionary.class]);` — any non-null BlockList counts as blocked.",
+      "failure": "td_api has two block lists, `blockListMain` and `blockListStories`. A user muted only from stories comes back with `block_list: {\"@type\":\"blockListStories\"}`, so the profile shows \"Unblock\" for someone who is not actually blocked, and tapping it sends setMessageSenderBlockList with a null list, silently un-restricting their stories instead.",
+      "fix": "Change the test to `completion([full[@\"block_list\"][@\"@type\"] isEqualToString:@\"blockListMain\"]);`."
+    },
+    {
+      "kind": "dead-code",
+      "severity": "low",
+      "file": "src/TGClient.m",
+      "line": 1650,
+      "what": "`TGMessagePreview` tests `messageVideoNote` twice: line 1640 `if ([ctype isEqualToString:@\"messageVideoNote\"]) return @\"Video message\";` and again at line 1650 with the identical body.",
+      "failure": "The second branch is unreachable. Harmless today, but it is exactly the kind of duplicate that makes a later edit to one copy look like it had no effect.",
+      "fix": "Delete lines 1650-1651."
+    }
+  ]
+}

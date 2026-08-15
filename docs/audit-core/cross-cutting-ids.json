@@ -1,0 +1,33 @@
+{
+  "area": "cross-cutting-ids",
+  "summary": "Chat/user/message id handling (TDLib int53) is disciplined across src/: they arrive as JSON Numbers and are read with longLongValue and carried in int64_t almost everywhere. No int53 id was found read through intValue/integerValue or stored in NSInteger. The real 64-bit defect class in this codebase is the opposite one: TDLib's JSON interface encodes int64 fields as STRINGS (td_json_client.h:18-19), and two readers accept only NSNumber, so those ids silently become 0.",
+  "findings": [
+    {
+      "kind": "correctness",
+      "severity": "medium",
+      "file": "src/TGClient+Forums.m",
+      "line": 457,
+      "what": "`@\"emojiId\" : fullType[@\"custom_emoji_id\"] ?: @(0)` stores the raw JSON value. `custom_emoji_id` is int64 in td_api.tl (stickerFullTypeCustomEmoji), and td_json_client encodes every int64 field as a JSON string, so this key holds an NSString, not the NSNumber the header (TGClient+Forums.h:170) promises. Same raw pass-through at TGClient+Forums.m:86 for `icon[@\"custom_emoji_id\"]` -> @\"iconEmojiId\".",
+      "failure": "TGTopicsViewController.m:57 `TGTopicLongLong` returns `[value isKindOfClass:[NSNumber class]] ? [value longLongValue] : 0`. At TGTopicsViewController.m:1507 it reads @\"emojiId\" from a -forumTopicDefaultIconsWithCompletion: entry, gets an NSString, and yields 0. That 0 flows through commitCreateWithName:iconEmojiId: / commitEditWithName:changeIcon:iconEmojiId: into TGClient+Forums.m:256 `@\"custom_emoji_id\" : @(iconEmojiId)` and :283 `@\"icon_custom_emoji_id\" : @(...)`. Result: the user picks a topic icon emoji in the action sheet and the topic is always created/edited with no custom emoji icon at all, falling back to the colour circle. Silent, never logged.",
+      "fix": "Normalise int64-as-string at the flattening boundary. In TGClient+Forums.m add a helper alongside TGForumsFlattenTopic:\n  static NSNumber *TGForumsInt64(id v){ if ([v isKindOfClass:NSNumber.class]) return v; if ([v isKindOfClass:NSString.class]) return [NSNumber numberWithLongLong:[v longLongValue]]; return @(0); }\nthen use it at line 457 (`TGForumsInt64(fullType[@\"custom_emoji_id\"])`) and at line 86 (`TGForumsInt64(icon[@\"custom_emoji_id\"])`). This matches what TGClient+Stickers.m:29 TGNumber and TGClient+UserStatus.m:16 TGUSInt64 already do correctly. Optionally also relax TGTopicsViewController.m:57-59 to accept NSString: `return ([value isKindOfClass:NSNumber.class] || [value isKindOfClass:NSString.class]) ? [value longLongValue] : 0;`"
+    },
+    {
+      "kind": "correctness",
+      "severity": "low",
+      "file": "src/TGClient+Forums.m",
+      "line": 88,
+      "what": "`topic[@\"order\"] ?: @(0)` passes forumTopic.order straight through. Per td_api.tl:3926 `forumTopic ... order:int64`, so this is a JSON string, while TGClient+Forums.h:45 documents `\"order\" NSNumber int64 sort order`. TGClient.m:1682-1689 already documents and handles exactly this trap for chatPosition.order ('It is an int64 sent as a string, so it must not be compared as a string').",
+      "failure": "No caller currently sorts on this key (grep for \"order\" in TGTopicsViewController.m returns nothing), so there is no live failure today. The next caller that follows the header and does `[topic[@\"order\"] compare:...]` as NSNumber, or `isEqualToNumber:`, gets either a wrong ordering or an unrecognized-selector crash on the NSString.",
+      "fix": "Wrap with the same TGForumsInt64 helper: `TGForumsInt64(topic[@\"order\"]), @\"order\",` at TGClient+Forums.m:88."
+    },
+    {
+      "kind": "correctness",
+      "severity": "low",
+      "file": "src/TGClient+Forums.m",
+      "line": 72,
+      "what": "`topicId, @\"topicId\", topicId, @\"threadId\",` aliases forum_topic_id (int32, td_api.tl:3911) to the key \"threadId\", which TGClient+Messages.m:13-17 TGMsgTopic feeds into `messageTopicThread message_thread_id:int53` (td_api.tl:2983). TGClient+Forums.h:6-9 itself flags that these are not the same identifier.",
+      "failure": "TGTopicsViewController.m:1023-1030 reads @\"threadId\" and assigns it to the chat controller's threadId; sends into that topic build messageTopicThread with a forum_topic_id where a message_thread_id is expected. Not a width truncation (int32 widens cleanly into int53) but a wrong-namespace id: the server resolves it to a different thread or rejects it, so messages sent from a topic land outside the topic.",
+      "fix": "Not a width bug; noted here because it is the only remaining id-identity problem in this area. The correct construction is `@{@\"@type\":@\"messageTopicForum\", @\"forum_topic_id\":@((int32_t)topicId)}` when the target chat is a forum, versus messageTopicThread for legacy comment threads. Confirm with the forums/messages owner before changing; do not simply widen the type."
+    }
+  ]
+}
