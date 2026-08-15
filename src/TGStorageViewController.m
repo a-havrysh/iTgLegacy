@@ -7,7 +7,8 @@
 typedef enum {
 	TGStorageActionKinds = 0,
 	TGStorageActionChat,
-	TGStorageActionOptimise
+	TGStorageActionOptimise,
+	TGStorageActionEverything
 } TGStorageAction;
 
 enum {
@@ -21,6 +22,10 @@ enum {
 @property (nonatomic, copy) NSString *chatTitle;
 @property (nonatomic, assign) long long bytes;
 @property (nonatomic, assign) NSInteger files;
+@property (nonatomic, copy) void (^didChange)(void);
+@end
+
+@interface TGStorageDownloadsViewController : UITableViewController <UIActionSheetDelegate>
 @property (nonatomic, copy) void (^didChange)(void);
 @end
 
@@ -39,6 +44,9 @@ enum {
 @property (nonatomic, assign) int64_t pendingChatId;
 @property (nonatomic, assign) TGStorageAction pendingAction;
 @property (nonatomic, copy) NSString *pendingTitle;
+@property (nonatomic, copy) NSString *databaseStats;
+@property (nonatomic, assign) BOOL databaseStatsShown;
+@property (nonatomic, strong) NSDictionary *downloadCounts;
 @end
 
 static UIColor *TGStorageRGB(int rgb) {
@@ -105,6 +113,7 @@ enum {
 	TGStorageSectionTypes,
 	TGStorageSectionChats,
 	TGStorageSectionPolicy,
+	TGStorageSectionDownloads,
 	TGStorageSectionClear,
 	TGStorageSectionEverything,
 	TGStorageSectionCount
@@ -239,7 +248,79 @@ static NSString *TGStorageSizeName(long long maxBytes) {
 		[strongSelf.tableView reloadData];
 	}];
 
+	[[TGClient shared] downloadTotalsWithCompletion:^(NSDictionary *counts){
+		typeof(self) strongSelf = weakSelf;
+		if (!strongSelf || !counts)
+			return;
+		strongSelf.downloadCounts = counts;
+		[strongSelf.tableView reloadData];
+	}];
+
 	[self performSelector:@selector(statsTimedOut) withObject:nil afterDelay:20.0];
+}
+
+- (NSString *)downloadsDetailText {
+	if (!self.downloadCounts)
+		return @"";
+	NSInteger active = [[self.downloadCounts objectForKey:@"active"] integerValue];
+	NSInteger paused = [[self.downloadCounts objectForKey:@"paused"] integerValue];
+	NSInteger completed = [[self.downloadCounts objectForKey:@"completed"] integerValue];
+	if (active + paused + completed == 0)
+		return @"None";
+	if (active + paused == 0)
+		return [NSString stringWithFormat:@"%ld done", (long)completed];
+	return [NSString stringWithFormat:@"%ld in progress, %ld done",
+			(long)(active + paused), (long)completed];
+}
+
+- (NSInteger)summaryBaseRows {
+	return self.overview ? 5 : 3;
+}
+
+- (NSInteger)databaseRowIndex {
+	return self.overview ? 2 : -1;
+}
+
+- (NSString *)databaseStatsText {
+	return self.databaseStats.length ? self.databaseStats : @"Reading…";
+}
+
+- (void)toggleDatabaseStats {
+	if (self.databaseStatsShown){
+		self.databaseStatsShown = NO;
+		[self.tableView reloadData];
+		return;
+	}
+	self.databaseStatsShown = YES;
+	[self.tableView reloadData];
+	if (self.databaseStats.length)
+		return;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] databaseStatisticsWithCompletion:^(NSString *text){
+		typeof(self) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		NSString *value = text.length ? text : @"Statistics are not available.";
+		if (value.length > 3000)
+			value = [value substringToIndex:3000];
+		strongSelf.databaseStats = value;
+		[strongSelf.tableView reloadData];
+	}];
+}
+
+- (void)openDownloads {
+	TGStorageDownloadsViewController *controller =
+			[[TGStorageDownloadsViewController alloc] init];
+	__weak typeof(self) weakSelf = self;
+	controller.didChange = ^{
+		typeof(self) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		[strongSelf refresh];
+		[strongSelf refreshDetail];
+	};
+	[self.navigationController pushViewController:controller animated:YES];
 }
 
 - (void)refreshDetail {
@@ -440,6 +521,7 @@ static NSString *TGHumanSize(long long bytes) {
 		case TGStorageSectionTypes: return @"By media type";
 		case TGStorageSectionChats: return @"By chat";
 		case TGStorageSectionPolicy: return @"Cache limits";
+		case TGStorageSectionDownloads: return @"Downloads";
 		case TGStorageSectionClear: return @"Clear";
 		default: return @"";
 	}
@@ -532,13 +614,21 @@ static NSString *TGHumanSize(long long bytes) {
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
 	if (indexPath.section == TGStorageSectionEverything)
 		return 45;
+	if (indexPath.section == TGStorageSectionSummary && self.databaseStatsShown
+			&& indexPath.row == [self summaryBaseRows]){
+		CGSize size = [[self databaseStatsText] sizeWithFont:[UIFont systemFontOfSize:13]
+										   constrainedToSize:CGSizeMake(tableView.bounds.size.width - 40, 4000)
+											   lineBreakMode:NSLineBreakByWordWrapping];
+		CGFloat height = size.height + 20;
+		return height < 44 ? 44 : height;
+	}
 	return 44;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
 	switch (section){
 		case TGStorageSectionSummary:
-			return self.overview ? 5 : 3;
+			return [self summaryBaseRows] + (self.databaseStatsShown ? 1 : 0);
 		case TGStorageSectionTypes:
 			if (!self.detailLoaded)
 				return 1;
@@ -549,6 +639,8 @@ static NSString *TGHumanSize(long long bytes) {
 			return (NSInteger)self.chatRows.count;
 		case TGStorageSectionPolicy:
 			return 2;
+		case TGStorageSectionDownloads:
+			return 1;
 		case TGStorageSectionClear:
 			return 4;
 		default:
@@ -601,6 +693,10 @@ static NSString *TGHumanSize(long long bytes) {
 	if (indexPath.section == TGStorageSectionEverything)
 		return [self clearEverythingCellInTable:tableView];
 
+	if (indexPath.section == TGStorageSectionSummary && self.databaseStatsShown
+			&& indexPath.row == [self summaryBaseRows])
+		return [self databaseStatsCellInTable:tableView];
+
 	UITableViewCell *cell = [self plainCellInTable:tableView];
 	BOOL dark = [[TGTheme shared] isDark];
 
@@ -636,6 +732,7 @@ static NSString *TGHumanSize(long long bytes) {
 				cell.textLabel.text = @"Database";
 				cell.detailTextLabel.text = TGHumanSize(
 						[[self.overview objectForKey:@"database"] longLongValue]);
+				cell.selectionStyle = UITableViewCellSelectionStyleBlue;
 				break;
 			default:
 				cell.textLabel.text = @"Total";
@@ -688,6 +785,18 @@ static NSString *TGHumanSize(long long bytes) {
 		return cell;
 	}
 
+	if (indexPath.section == TGStorageSectionDownloads){
+		cell.textLabel.text = @"Downloaded files";
+		cell.detailTextLabel.text = [self downloadsDetailText];
+		UIView *indicator = TGStorageDisclosureIndicator();
+		if (indicator)
+			cell.accessoryView = indicator;
+		else
+			cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+		return cell;
+	}
+
 	if (indexPath.section == TGStorageSectionPolicy){
 		if (indexPath.row == 0){
 			cell.textLabel.text = @"Keep media for";
@@ -731,6 +840,38 @@ static NSString *TGHumanSize(long long bytes) {
 		if (self.working)
 			cell.accessoryView = [self spinner];
 	}
+	return cell;
+}
+
+- (UITableViewCell *)databaseStatsCellInTable:(UITableView *)tableView {
+	static NSString *reuse = @"TGStorageDatabaseStatsCell";
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
+	if (!cell){
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+									  reuseIdentifier:reuse];
+		UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
+		label.tag = 773;
+		label.numberOfLines = 0;
+		label.font = [UIFont systemFontOfSize:13];
+		label.backgroundColor = [UIColor clearColor];
+		label.lineBreakMode = NSLineBreakByWordWrapping;
+		[cell.contentView addSubview:label];
+	}
+	[[TGTheme shared] styleCell:cell];
+	cell.selectionStyle = UITableViewCellSelectionStyleNone;
+	cell.accessoryView = nil;
+	cell.accessoryType = UITableViewCellAccessoryNone;
+	cell.textLabel.text = @"";
+
+	UILabel *label = (UILabel *)[cell.contentView viewWithTag:773];
+	label.text = [self databaseStatsText];
+	label.textColor = [[TGTheme shared] isDark] ? [[TGTheme shared] secondaryTextColour]
+												: TGStorageRGB(0x555555);
+	CGFloat width = tableView.bounds.size.width - 40;
+	CGSize size = [label.text sizeWithFont:label.font
+						 constrainedToSize:CGSizeMake(width, 4000)
+							 lineBreakMode:NSLineBreakByWordWrapping];
+	label.frame = CGRectMake(12, 10, width, size.height);
 	return cell;
 }
 
@@ -800,11 +941,26 @@ static NSString *TGHumanSize(long long bytes) {
 }
 
 - (void)clearEverythingPressed {
-	[self confirmClearKinds:@[] title:@"Clear everything"];
+	if (![self canClear])
+		return;
+	self.pendingAction = TGStorageActionEverything;
+	self.pendingKinds = nil;
+	[self presentConfirmationWithTitle:@"Clear everything"];
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+
+	if (indexPath.section == TGStorageSectionSummary){
+		if (indexPath.row == [self databaseRowIndex])
+			[self toggleDatabaseStats];
+		return;
+	}
+
+	if (indexPath.section == TGStorageSectionDownloads){
+		[self openDownloads];
+		return;
+	}
 
 	if (indexPath.section == TGStorageSectionPolicy){
 		if (self.working)
@@ -904,7 +1060,10 @@ static NSString *TGHumanSize(long long bytes) {
 		return;
 
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] applyPersistedCachePolicyWithCompletion:^(long long freed){
+	[[TGClient shared] applyCachePolicyMaxBytes:[self policyMaxBytes]
+									 ttlSeconds:[self policyTTLSeconds]
+								excludedChatIds:[self policyExcludedChatIds]
+									 completion:^(long long freed){
 		typeof(self) strongSelf = weakSelf;
 		if (!strongSelf || !strongSelf.working)
 			return;
@@ -964,6 +1123,8 @@ static NSString *TGHumanSize(long long bytes) {
 		[self clearChat:chatId];
 	else if (action == TGStorageActionOptimise)
 		[self optimise];
+	else if (action == TGStorageActionEverything)
+		[self clearEverything];
 	else
 		[self clearKinds:kinds];
 }
@@ -1000,7 +1161,20 @@ static NSString *TGHumanSize(long long bytes) {
 		return;
 
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] clearCacheOfTypes:kinds completion:^(long long freed){
+	[[TGClient shared] clearCacheCategories:kinds completion:^(long long freed){
+		typeof(self) strongSelf = weakSelf;
+		if (!strongSelf || !strongSelf.working)
+			return;
+		[strongSelf finishWorkWithFreed:freed];
+	}];
+}
+
+- (void)clearEverything {
+	if (![self beginWork])
+		return;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] clearAllCacheWithCompletion:^(long long freed){
 		typeof(self) strongSelf = weakSelf;
 		if (!strongSelf || !strongSelf.working)
 			return;
@@ -1027,10 +1201,19 @@ static NSString *TGHumanSize(long long bytes) {
 
 	NSInteger ttl = [self policyTTLSeconds];
 	long long maxBytes = [self policyMaxBytes];
-	if (ttl <= 0 && maxBytes <= 0)
-		ttl = 30 * 24 * 60 * 60;
-
 	__weak typeof(self) weakSelf = self;
+
+	if (ttl > 0 || maxBytes > 0){
+		[[TGClient shared] applyPersistedCachePolicyWithCompletion:^(long long freed){
+			typeof(self) strongSelf = weakSelf;
+			if (!strongSelf || !strongSelf.working)
+				return;
+			[strongSelf finishWorkWithFreed:freed];
+		}];
+		return;
+	}
+	ttl = 30 * 24 * 60 * 60;
+
 	[[TGClient shared] optimizeStorageToSize:maxBytes
 								  ttlSeconds:ttl
 						immunityDelaySeconds:60 * 60
@@ -1263,6 +1446,401 @@ static NSString *TGHumanSize(long long bytes) {
 			message:@"Clearing the cache is taking too long. Please try again."
 		   delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
 	[alert show];
+}
+
+@end
+
+@interface TGStorageDownloadsViewController ()
+@property (nonatomic, strong) NSMutableArray *entries;
+@property (nonatomic, strong) NSDictionary *counts;
+@property (nonatomic, copy) NSString *nextOffset;
+@property (nonatomic, strong) NSMutableDictionary *suggestedNames;
+@property (nonatomic, strong) NSMutableArray *pendingActions;
+@property (nonatomic, assign) NSInteger pendingIndex;
+@property (nonatomic, assign) BOOL loading;
+@property (nonatomic, assign) BOOL loaded;
+@end
+
+enum {
+	TGStorageDownloadActionPause = 1,
+	TGStorageDownloadActionResume,
+	TGStorageDownloadActionCancel,
+	TGStorageDownloadActionDelete
+};
+
+enum {
+	TGStorageDownloadSheetItem = 3401,
+	TGStorageDownloadSheetClear
+};
+
+@implementation TGStorageDownloadsViewController
+
+- (instancetype)init {
+	self = [super initWithStyle:UITableViewStyleGrouped];
+	if (self){
+		_entries = [NSMutableArray array];
+		_suggestedNames = [NSMutableDictionary dictionary];
+		_pendingIndex = -1;
+	}
+	return self;
+}
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+	self.title = @"Downloads";
+	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
+		self.edgesForExtendedLayout = UIRectEdgeNone;
+	TGStorageApplyTableBackground(self.tableView);
+	self.tableView.separatorColor = [[TGTheme shared] bubbleBorderColour];
+	[self reload];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+	[super viewWillAppear:animated];
+	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+}
+
+- (void)dealloc {
+	[NSObject cancelPreviousPerformRequestsWithTarget:self];
+}
+
+- (void)reload {
+	[self.entries removeAllObjects];
+	self.nextOffset = nil;
+	self.loaded = NO;
+	[self loadPageFromOffset:nil];
+}
+
+- (void)reloadSoon {
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+											 selector:@selector(reload)
+											   object:nil];
+	[self performSelector:@selector(reload) withObject:nil afterDelay:0.7];
+}
+
+- (void)loadPageFromOffset:(NSString *)offset {
+	if (self.loading)
+		return;
+	self.loading = YES;
+	[self.tableView reloadData];
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] downloadsWithQuery:nil
+							   onlyActive:NO
+							onlyCompleted:NO
+								   offset:offset
+									limit:24
+							   completion:^(NSArray *files, NSDictionary *counts,
+											NSString *nextOffset){
+		typeof(self) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		strongSelf.loading = NO;
+		strongSelf.loaded = YES;
+		strongSelf.counts = counts;
+		strongSelf.nextOffset = nextOffset.length ? nextOffset : nil;
+		for (NSDictionary *entry in files){
+			if ([entry isKindOfClass:[NSDictionary class]])
+				[strongSelf.entries addObject:entry];
+		}
+		if (strongSelf.entries.count > 96)
+			strongSelf.nextOffset = nil;
+		[strongSelf.tableView reloadData];
+		[strongSelf fetchMissingNames];
+	}];
+}
+
+- (void)fetchMissingNames {
+	if (self.suggestedNames.count > 96)
+		return;
+	NSString *directory = [NSSearchPathForDirectoriesInDomains(
+			NSDocumentDirectory, NSUserDomainMask, YES) lastObject];
+	if (!directory.length)
+		return;
+	__weak typeof(self) weakSelf = self;
+	for (NSDictionary *entry in self.entries){
+		NSString *name = [entry objectForKey:@"name"];
+		if ([name isKindOfClass:[NSString class]] && name.length)
+			continue;
+		NSNumber *key = [entry objectForKey:@"fileId"];
+		if (!key || [self.suggestedNames objectForKey:key])
+			continue;
+		[self.suggestedNames setObject:@"" forKey:key];
+		[[TGClient shared] suggestedFileNameForFile:[key integerValue]
+										inDirectory:directory
+										 completion:^(NSString *suggested){
+			typeof(self) strongSelf = weakSelf;
+			if (!strongSelf || !suggested.length)
+				return;
+			[strongSelf.suggestedNames setObject:[suggested lastPathComponent] forKey:key];
+			[strongSelf.tableView reloadData];
+		}];
+	}
+}
+
+- (NSString *)titleForEntry:(NSDictionary *)entry {
+	NSString *name = [entry objectForKey:@"name"];
+	if ([name isKindOfClass:[NSString class]] && name.length)
+		return name;
+	NSString *suggested = [self.suggestedNames objectForKey:[entry objectForKey:@"fileId"]];
+	if (suggested.length)
+		return suggested;
+	return [NSString stringWithFormat:@"File %ld",
+			(long)[[entry objectForKey:@"fileId"] integerValue]];
+}
+
+- (NSString *)detailForEntry:(NSDictionary *)entry {
+	long long size = [[entry objectForKey:@"size"] longLongValue];
+	long long done = [[entry objectForKey:@"downloaded"] longLongValue];
+	BOOL complete = [[entry objectForKey:@"isComplete"] boolValue];
+	BOOL paused = [[entry objectForKey:@"isPaused"] boolValue];
+	if (complete)
+		return size > 0 ? TGHumanSize(size) : @"Downloaded";
+	NSString *progress = size > 0
+			? [NSString stringWithFormat:@"%@ of %@", TGHumanSize(done), TGHumanSize(size)]
+			: TGHumanSize(done);
+	return paused ? [NSString stringWithFormat:@"paused, %@", progress] : progress;
+}
+
+- (BOOL)showsLoadMore {
+	return self.nextOffset.length > 0;
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+	return 2;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	if (section == 1)
+		return self.entries.count ? 1 : 0;
+	if (!self.loaded)
+		return 1;
+	if (!self.entries.count)
+		return 1;
+	return (NSInteger)self.entries.count + ([self showsLoadMore] ? 1 : 0);
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
+	return 44;
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
+	return section == 0 ? 46 : 14;
+}
+
+- (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
+	if (section != 0)
+		return nil;
+	BOOL dark = [[TGTheme shared] isDark];
+	UIView *container = [[UIView alloc] initWithFrame:
+			CGRectMake(0, 0, tableView.bounds.size.width, 46)];
+	container.backgroundColor = [UIColor clearColor];
+
+	NSInteger active = [[self.counts objectForKey:@"active"] integerValue];
+	NSInteger paused = [[self.counts objectForKey:@"paused"] integerValue];
+	NSInteger completed = [[self.counts objectForKey:@"completed"] integerValue];
+	UILabel *label = [[UILabel alloc] init];
+	label.text = self.counts
+			? [NSString stringWithFormat:@"%ld active, %ld paused, %ld done",
+					(long)active, (long)paused, (long)completed]
+			: @"Download list";
+	label.font = [UIFont boldSystemFontOfSize:17];
+	label.backgroundColor = [UIColor clearColor];
+	label.textColor = dark ? [[TGTheme shared] sectionHeaderColour]
+						   : TGStorageRGB(0x697487);
+	if (!dark){
+		label.shadowColor = TGStorageRGB(0xdae0e8);
+		label.shadowOffset = CGSizeMake(0, 1);
+	}
+	[label sizeToFit];
+	label.frame = CGRectOffset(label.frame, 21, 16);
+	[container addSubview:label];
+	return container;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"downloadRow"];
+	if (!cell)
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
+									  reuseIdentifier:@"downloadRow"];
+	[[TGTheme shared] styleCell:cell];
+	BOOL dark = [[TGTheme shared] isDark];
+	cell.accessoryView = nil;
+	cell.accessoryType = UITableViewCellAccessoryNone;
+	cell.selectionStyle = UITableViewCellSelectionStyleNone;
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+	cell.textLabel.textAlignment = NSTextAlignmentLeft;
+	cell.textLabel.textColor = dark ? [[TGTheme shared] primaryTextColour]
+									: [UIColor blackColor];
+	cell.textLabel.highlightedTextColor = [UIColor whiteColor];
+	cell.detailTextLabel.font = [UIFont systemFontOfSize:16];
+	cell.detailTextLabel.textColor = dark ? [[TGTheme shared] cellDetailColour]
+										  : TGStorageRGB(0x356596);
+	cell.detailTextLabel.highlightedTextColor = [UIColor whiteColor];
+	cell.detailTextLabel.text = @"";
+
+	if (indexPath.section == 1){
+		cell.textLabel.text = @"Clear download list";
+		cell.textLabel.textAlignment = NSTextAlignmentCenter;
+		cell.textLabel.textColor = TGStorageRGB(0xc4362f);
+		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+		return cell;
+	}
+
+	if (!self.loaded){
+		cell.textLabel.text = @"Loading…";
+		cell.textLabel.textColor = dark ? [[TGTheme shared] secondaryTextColour]
+										: TGStorageRGB(0x888888);
+		UIActivityIndicatorView *view = [[UIActivityIndicatorView alloc]
+				initWithActivityIndicatorStyle:dark ? UIActivityIndicatorViewStyleWhite
+												   : UIActivityIndicatorViewStyleGray];
+		[view startAnimating];
+		cell.accessoryView = view;
+		return cell;
+	}
+
+	if (!self.entries.count){
+		cell.textLabel.text = @"Nothing downloaded";
+		cell.textLabel.textColor = dark ? [[TGTheme shared] secondaryTextColour]
+										: TGStorageRGB(0x888888);
+		return cell;
+	}
+
+	if (indexPath.row >= (NSInteger)self.entries.count){
+		cell.textLabel.text = self.loading ? @"Loading…" : @"Show more";
+		cell.textLabel.textColor = dark ? [[TGTheme shared] secondaryTextColour]
+										: TGStorageRGB(0x356596);
+		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+		return cell;
+	}
+
+	NSDictionary *entry = [self.entries objectAtIndex:indexPath.row];
+	cell.textLabel.text = [self titleForEntry:entry];
+	cell.detailTextLabel.text = [self detailForEntry:entry];
+	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+	return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+
+	if (indexPath.section == 1){
+		[self presentClearSheet];
+		return;
+	}
+	if (!self.loaded || !self.entries.count)
+		return;
+	if (indexPath.row >= (NSInteger)self.entries.count){
+		if (!self.loading)
+			[self loadPageFromOffset:self.nextOffset];
+		return;
+	}
+	[self presentSheetForIndex:indexPath.row];
+}
+
+- (void)presentSheetForIndex:(NSInteger)index {
+	NSDictionary *entry = [self.entries objectAtIndex:index];
+	BOOL complete = [[entry objectForKey:@"isComplete"] boolValue];
+	BOOL paused = [[entry objectForKey:@"isPaused"] boolValue];
+
+	self.pendingIndex = index;
+	self.pendingActions = [NSMutableArray array];
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:[self titleForEntry:entry]
+													  delegate:self
+											 cancelButtonTitle:nil
+										destructiveButtonTitle:nil
+											 otherButtonTitles:nil];
+	sheet.tag = TGStorageDownloadSheetItem;
+	if (!complete){
+		[sheet addButtonWithTitle:paused ? @"Resume download" : @"Pause download"];
+		[self.pendingActions addObject:[NSNumber numberWithInt:
+				paused ? TGStorageDownloadActionResume : TGStorageDownloadActionPause]];
+		[sheet addButtonWithTitle:@"Cancel download"];
+		[self.pendingActions addObject:[NSNumber numberWithInt:TGStorageDownloadActionCancel]];
+		sheet.destructiveButtonIndex = 1;
+	} else {
+		[sheet addButtonWithTitle:@"Delete from cache"];
+		[self.pendingActions addObject:[NSNumber numberWithInt:TGStorageDownloadActionDelete]];
+		sheet.destructiveButtonIndex = 0;
+	}
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	[sheet showInView:self.view];
+}
+
+- (void)presentClearSheet {
+	self.pendingIndex = -1;
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Clear download list"
+													  delegate:self
+											 cancelButtonTitle:nil
+										destructiveButtonTitle:nil
+											 otherButtonTitles:nil];
+	sheet.tag = TGStorageDownloadSheetClear;
+	[sheet addButtonWithTitle:@"Clear completed"];
+	[sheet addButtonWithTitle:@"Clear all"];
+	[sheet addButtonWithTitle:@"Clear all and delete files"];
+	sheet.destructiveButtonIndex = 2;
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	[sheet showInView:self.view];
+}
+
+- (void)actionSheet:(UIActionSheet *)actionSheet
+		clickedButtonAtIndex:(NSInteger)buttonIndex {
+	if (buttonIndex == actionSheet.cancelButtonIndex)
+		return;
+
+	if (actionSheet.tag == TGStorageDownloadSheetClear){
+		switch (buttonIndex){
+			case 0:
+				[[TGClient shared] clearDownloadsOnlyActive:NO
+											  onlyCompleted:YES
+											deleteFromCache:NO];
+				break;
+			case 1:
+				[[TGClient shared] clearDownloadsOnlyActive:NO
+											  onlyCompleted:NO
+											deleteFromCache:NO];
+				break;
+			default:
+				[[TGClient shared] clearDownloadsOnlyActive:NO
+											  onlyCompleted:NO
+											deleteFromCache:YES];
+				break;
+		}
+		[self reloadSoon];
+		if (self.didChange)
+			self.didChange();
+		return;
+	}
+
+	if (actionSheet.tag != TGStorageDownloadSheetItem)
+		return;
+	if (self.pendingIndex < 0 || self.pendingIndex >= (NSInteger)self.entries.count)
+		return;
+	if (buttonIndex < 0 || buttonIndex >= (NSInteger)self.pendingActions.count)
+		return;
+
+	NSDictionary *entry = [self.entries objectAtIndex:self.pendingIndex];
+	NSInteger fileId = [[entry objectForKey:@"fileId"] integerValue];
+	NSInteger action = [[self.pendingActions objectAtIndex:buttonIndex] integerValue];
+	self.pendingIndex = -1;
+
+	switch (action){
+		case TGStorageDownloadActionPause:
+			[[TGClient shared] setDownloadPaused:YES forFile:fileId];
+			break;
+		case TGStorageDownloadActionResume:
+			[[TGClient shared] setDownloadPaused:NO forFile:fileId];
+			break;
+		case TGStorageDownloadActionCancel:
+			[[TGClient shared] cancelDownloadFile:fileId onlyIfPending:NO];
+			break;
+		default:
+			[[TGClient shared] deleteCachedFile:fileId];
+			if (self.didChange)
+				self.didChange();
+			break;
+	}
+	[self reloadSoon];
 }
 
 @end

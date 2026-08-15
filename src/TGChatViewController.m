@@ -28,6 +28,7 @@
 #import "TGClient+Messages.h"
 #import "TGClient+MessageContent.h"
 #import "TGClient+Reactions.h"
+#import "TGClient+Bots.h"
 #import "TGClient+Translation.h"
 #import "TGClient+Search.h"
 #import "TGClient+WebLinks.h"
@@ -1350,6 +1351,1149 @@ static const CGFloat kPhotoPageGap = 20.0f;
 
 #pragma mark - controller
 
+#pragma mark - message info
+
+@interface TGMessageInfoViewController : UITableViewController <UIAlertViewDelegate,
+		UIActionSheetDelegate, UIImagePickerControllerDelegate,
+		UINavigationControllerDelegate>
+@property (nonatomic, assign) int64_t chatId;
+@property (nonatomic, assign) int64_t messageId;
+@property (nonatomic, strong) NSDictionary *message;
+@property (nonatomic, assign) BOOL isGroup;
+@property (nonatomic, assign) BOOL canResend;
+@property (nonatomic, copy) void (^onOpenChat)(int64_t chatId, NSString *title);
+@property (nonatomic, copy) NSString *formattedBody;
+@property (nonatomic, assign) int64_t threadChatId;
+@property (nonatomic, copy) NSString *replaceKind;
+@end
+
+static const NSInteger kInfoCaptionAlertTag = 71;
+
+@implementation TGMessageInfoViewController {
+	NSMutableArray *_order;
+	NSMutableDictionary *_rows;
+	NSMutableArray *_visible;
+}
+
+- (id)init {
+	self = [super initWithStyle:UITableViewStyleGrouped];
+	return self;
+}
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+	self.title = @"Message Info";
+	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
+		self.edgesForExtendedLayout = UIRectEdgeNone;
+
+	_order = [NSMutableArray arrayWithObjects:@"Details", @"Text", @"Seen By",
+			@"Voice", @"Poll", @"Story", @"Actions", nil];
+	_rows = [NSMutableDictionary dictionary];
+	_visible = [NSMutableArray array];
+	for (NSString *name in _order)
+		_rows[name] = [NSMutableArray array];
+
+	[self loadEverything];
+}
+
+- (void)addRow:(NSString *)title
+		detail:(NSString *)detail
+		action:(NSString *)action
+			to:(NSString *)section {
+	NSMutableArray *list = _rows[section];
+	if (!list)
+		return;
+	NSMutableDictionary *row = [NSMutableDictionary dictionary];
+	row[@"title"] = title.length ? title : @" ";
+	if (detail.length)
+		row[@"detail"] = detail;
+	if (action.length)
+		row[@"action"] = action;
+	[list addObject:row];
+	[self refresh];
+}
+
+- (void)clearSection:(NSString *)section {
+	[_rows[section] removeAllObjects];
+}
+
+- (void)refresh {
+	[_visible removeAllObjects];
+	for (NSString *name in _order)
+		if ([_rows[name] count])
+			[_visible addObject:name];
+	[self.tableView reloadData];
+}
+
+- (NSString *)sizeText:(long long)bytes {
+	if (bytes <= 0)
+		return nil;
+	if (bytes < 1024)
+		return [NSString stringWithFormat:@"%lld B", bytes];
+	if (bytes < 1024 * 1024)
+		return [NSString stringWithFormat:@"%.1f KB", bytes / 1024.0];
+	return [NSString stringWithFormat:@"%.1f MB", bytes / (1024.0 * 1024.0)];
+}
+
+- (NSString *)stringOf:(id)value {
+	return [value isKindOfClass:NSString.class] ? value : nil;
+}
+
+- (NSTimeInterval)messageDate {
+	id date = self.message[@"date"];
+	return [date isKindOfClass:NSNumber.class] ? [date doubleValue] : 0;
+}
+
+- (void)loadEverything {
+	int64_t messageId = self.messageId;
+	int64_t chatId = self.chatId;
+	NSString *kind = [self stringOf:self.message[@"kind"]] ?: @"message";
+	BOOL outgoing = [self.message[@"outgoing"] boolValue];
+	__weak typeof(self) weakSelf = self;
+
+	[self addRow:@"Type" detail:kind action:nil to:@"Details"];
+
+	NSTimeInterval date = [self messageDate];
+	if (date > 0)
+		[self addRow:@"Sent"
+			  detail:[NSDateFormatter localizedStringFromDate:
+					  [NSDate dateWithTimeIntervalSince1970:date]
+										  dateStyle:NSDateFormatterShortStyle
+										  timeStyle:NSDateFormatterShortStyle]
+			  action:nil to:@"Details"];
+
+	[[TGClient shared] mediaInfoForMessage:messageId inChat:chatId
+								completion:^(NSDictionary *info){
+		TGMessageInfoViewController *me = weakSelf;
+		if (!me || ![info isKindOfClass:NSDictionary.class])
+			return;
+		NSString *name = [me stringOf:info[@"fileName"]];
+		if (name.length)
+			[me addRow:@"File" detail:name action:nil to:@"Details"];
+		NSString *size = [me sizeText:[info[@"size"] longLongValue]];
+		if (size)
+			[me addRow:@"Size" detail:size action:nil to:@"Details"];
+		NSInteger seconds = [info[@"duration"] integerValue];
+		if (seconds > 0)
+			[me addRow:@"Length"
+				detail:[NSString stringWithFormat:@"%ld:%02ld",
+						(long)(seconds / 60), (long)(seconds % 60)]
+				action:nil to:@"Details"];
+		NSInteger width = [info[@"width"] integerValue];
+		NSInteger height = [info[@"height"] integerValue];
+		if (width > 0 && height > 0)
+			[me addRow:@"Dimensions"
+				detail:[NSString stringWithFormat:@"%ld x %ld", (long)width, (long)height]
+				action:nil to:@"Details"];
+		NSString *caption = [me stringOf:info[@"caption"]];
+		if (caption.length)
+			[me addRow:@"Caption" detail:caption action:nil to:@"Details"];
+		if ([info[@"isSecret"] boolValue])
+			[me addRow:@"Self-destructing" detail:@"Yes" action:nil to:@"Details"];
+
+		if (!outgoing)
+			return;
+		[me addRow:@"Edit Caption" detail:nil action:@"editCaption" to:@"Actions"];
+		NSString *contentKind = [me stringOf:info[@"kind"]] ?: kind;
+		if ([contentKind isEqualToString:@"messagePhoto"])
+			[me addRow:@"Replace Photo" detail:nil action:@"replacePhoto" to:@"Actions"];
+		else if ([contentKind isEqualToString:@"messageVideo"])
+			[me addRow:@"Replace Video" detail:nil action:@"replaceVideo" to:@"Actions"];
+	}];
+
+	[[TGClient shared] formattedTextForMessage:messageId inChat:chatId
+									completion:^(NSString *text, NSArray *entities){
+		TGMessageInfoViewController *me = weakSelf;
+		if (!me || !text.length)
+			return;
+		me.formattedBody = text;
+		[me addRow:@"Copy Text"
+			detail:[NSString stringWithFormat:@"%lu formatted run%@",
+					(unsigned long)entities.count, (entities.count == 1 ? @"" : @"s")]
+			action:@"copyText" to:@"Text"];
+	}];
+
+	if (outgoing && !self.isGroup)
+		[[TGClient shared] readDateOfMessage:messageId inChat:chatId
+								  completion:^(NSString *status, NSTimeInterval when){
+			TGMessageInfoViewController *me = weakSelf;
+			if (!me)
+				return;
+			NSString *detail = @"Not read yet";
+			if ([status isEqualToString:@"read"] && when > 0)
+				detail = [NSDateFormatter localizedStringFromDate:
+						[NSDate dateWithTimeIntervalSince1970:when]
+											   dateStyle:NSDateFormatterShortStyle
+											   timeStyle:NSDateFormatterShortStyle];
+			else if ([status isEqualToString:@"tooOld"])
+				detail = @"Too old to tell";
+			else if ([status isEqualToString:@"theirPrivacy"] ||
+					 [status isEqualToString:@"myPrivacy"])
+				detail = @"Hidden by privacy";
+			[me addRow:@"Read" detail:detail action:nil to:@"Details"];
+		}];
+
+	if (self.isGroup)
+		[[TGClient shared] viewersOfMessage:messageId inChat:chatId
+								 completion:^(NSArray *viewers){
+			TGMessageInfoViewController *me = weakSelf;
+			if (!me || !viewers.count)
+				return;
+			NSUInteger shown = 0;
+			for (NSDictionary *viewer in viewers){
+				if (shown++ >= 25)
+					break;
+				NSTimeInterval seen = [viewer[@"date"] doubleValue];
+				NSString *when = (seen > 0)
+						? [NSDateFormatter localizedStringFromDate:
+								[NSDate dateWithTimeIntervalSince1970:seen]
+												   dateStyle:NSDateFormatterNoStyle
+												   timeStyle:NSDateFormatterShortStyle]
+						: nil;
+				[me addRow:([me stringOf:viewer[@"name"]] ?: @"Someone")
+					detail:when action:nil to:@"Seen By"];
+			}
+		}];
+
+	[[TGClient shared] threadForMessage:messageId inChat:chatId
+							 completion:^(NSDictionary *thread){
+		TGMessageInfoViewController *me = weakSelf;
+		if (!me || ![thread isKindOfClass:NSDictionary.class])
+			return;
+		me.threadChatId = [thread[@"chatId"] longLongValue];
+		[me addRow:@"Comments"
+			detail:[NSString stringWithFormat:@"%ld, %ld unread",
+					(long)[thread[@"replies"] integerValue],
+					(long)[thread[@"unread"] integerValue]]
+			action:(me.threadChatId ? @"openThread" : nil) to:@"Details"];
+	}];
+
+	if ([kind isEqualToString:@"messageVoiceNote"] ||
+		[kind isEqualToString:@"messageVideoNote"])
+		[self loadTranscript];
+
+	NSArray *options = [self.message[@"pollOptions"] isKindOfClass:NSArray.class]
+			? self.message[@"pollOptions"] : nil;
+	for (NSUInteger i = 0; i < options.count; i++){
+		NSDictionary *option = options[i];
+		id text = option[@"text"];
+		NSString *label = [text isKindOfClass:NSDictionary.class]
+				? [self stringOf:text[@"text"]] : [self stringOf:text];
+		[self addRow:(label ?: @"Option")
+			  detail:[NSString stringWithFormat:@"%ld%%",
+					  (long)[option[@"vote_percentage"] integerValue]]
+			  action:[NSString stringWithFormat:@"voters:%lu", (unsigned long)i]
+				  to:@"Poll"];
+	}
+	if (options.count && outgoing && ![self.message[@"pollClosed"] boolValue])
+		[self addRow:@"Stop Poll" detail:nil action:@"stopPoll" to:@"Poll"];
+
+	if ([kind isEqualToString:@"messageStory"])
+		[[TGClient shared] storyForMessage:messageId inChat:chatId
+								completion:^(NSDictionary *story){
+			TGMessageInfoViewController *me = weakSelf;
+			if (!me)
+				return;
+			if (![story isKindOfClass:NSDictionary.class]){
+				[me addRow:@"Story" detail:@"No longer available" action:nil to:@"Story"];
+				return;
+			}
+			[me addRow:@"Kind"
+				detail:([story[@"isVideo"] boolValue] ? @"Video" : @"Photo")
+				action:nil to:@"Story"];
+			NSTimeInterval posted = [story[@"date"] doubleValue];
+			if (posted > 0)
+				[me addRow:@"Posted"
+					detail:[NSDateFormatter localizedStringFromDate:
+							[NSDate dateWithTimeIntervalSince1970:posted]
+											   dateStyle:NSDateFormatterShortStyle
+											   timeStyle:NSDateFormatterShortStyle]
+					action:nil to:@"Story"];
+			NSString *caption = [me stringOf:story[@"caption"]];
+			if (caption.length)
+				[me addRow:@"Caption" detail:caption action:nil to:@"Story"];
+		}];
+
+	if (self.canResend)
+		[self addRow:@"Try Again" detail:nil action:@"resend" to:@"Actions"];
+	[self addRow:@"Copy Embed Code" detail:nil action:@"embed" to:@"Actions"];
+	[self addRow:@"Delete This Day For Me" detail:nil action:@"deleteDay" to:@"Actions"];
+}
+
+- (void)loadTranscript {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] speechTranscriptForMessage:self.messageId inChat:self.chatId
+									   completion:^(NSDictionary *transcript){
+		TGMessageInfoViewController *me = weakSelf;
+		if (!me)
+			return;
+		[me clearSection:@"Voice"];
+		if (![transcript isKindOfClass:NSDictionary.class]){
+			[me addRow:@"Transcript" detail:@"None yet" action:nil to:@"Voice"];
+			return;
+		}
+		NSString *state = [me stringOf:transcript[@"state"]] ?: @"";
+		NSString *text = [me stringOf:transcript[@"text"]] ?: @"";
+		if ([state isEqualToString:@"error"]){
+			[me addRow:@"Transcript"
+				detail:([me stringOf:transcript[@"error"]] ?: @"Failed")
+				action:nil to:@"Voice"];
+			return;
+		}
+		if ([state isEqualToString:@"pending"]){
+			[me addRow:@"Transcript" detail:@"In progress" action:@"reloadTranscript"
+					to:@"Voice"];
+			return;
+		}
+		[me addRow:(text.length ? text : @"Empty") detail:nil action:nil to:@"Voice"];
+		if (!text.length)
+			return;
+		[me addRow:@"Transcript Is Good" detail:nil action:@"rateGood" to:@"Voice"];
+		[me addRow:@"Transcript Is Bad" detail:nil action:@"rateBad" to:@"Voice"];
+	}];
+}
+
+#pragma mark - table
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+	return (NSInteger)_visible.count;
+}
+
+- (NSString *)tableView:(UITableView *)tableView
+titleForHeaderInSection:(NSInteger)section {
+	return _visible[section];
+}
+
+- (NSInteger)tableView:(UITableView *)tableView
+ numberOfRowsInSection:(NSInteger)section {
+	return (NSInteger)[_rows[_visible[section]] count];
+}
+
+- (NSDictionary *)rowAt:(NSIndexPath *)path {
+	NSArray *list = _rows[_visible[path.section]];
+	return (path.row < (NSInteger)list.count) ? list[path.row] : nil;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView
+		 cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	static NSString *identifier = @"info";
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:identifier];
+	if (!cell)
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
+									  reuseIdentifier:identifier];
+	NSDictionary *row = [self rowAt:indexPath];
+	cell.textLabel.text = row[@"title"];
+	cell.detailTextLabel.text = row[@"detail"];
+	cell.textLabel.font = [UIFont systemFontOfSize:15];
+	cell.textLabel.numberOfLines = 0;
+	NSString *action = row[@"action"];
+	cell.selectionStyle = action.length ? UITableViewCellSelectionStyleBlue
+										: UITableViewCellSelectionStyleNone;
+	cell.accessoryType = [action isEqualToString:@"openThread"]
+			? UITableViewCellAccessoryDisclosureIndicator
+			: UITableViewCellAccessoryNone;
+	cell.textLabel.textColor = [action isEqualToString:@"deleteDay"]
+			? [UIColor colorWithRed:0.78f green:0.16f blue:0.13f alpha:1.0f]
+			: [UIColor blackColor];
+	return cell;
+}
+
+- (CGFloat)tableView:(UITableView *)tableView
+heightForRowAtIndexPath:(NSIndexPath *)indexPath {
+	NSDictionary *row = [self rowAt:indexPath];
+	if (row[@"detail"])
+		return 44;
+	CGSize size = [(row[@"title"] ?: @"") sizeWithFont:[UIFont systemFontOfSize:15]
+									 constrainedToSize:CGSizeMake(280, 400)
+										 lineBreakMode:NSLineBreakByWordWrapping];
+	return MAX(44, size.height + 20);
+}
+
+- (void)tableView:(UITableView *)tableView
+		didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	NSString *action = [self rowAt:indexPath][@"action"];
+	if (!action.length)
+		return;
+
+	if ([action isEqualToString:@"copyText"]){
+		[UIPasteboard generalPasteboard].string = self.formattedBody ?: @"";
+		[self say:@"Copied" message:@"The text is on the clipboard."];
+		return;
+	}
+	if ([action isEqualToString:@"openThread"]){
+		if (self.onOpenChat && self.threadChatId)
+			self.onOpenChat(self.threadChatId, @"Comments");
+		return;
+	}
+	if ([action isEqualToString:@"reloadTranscript"]){
+		[self loadTranscript];
+		return;
+	}
+	if ([action isEqualToString:@"rateGood"] || [action isEqualToString:@"rateBad"]){
+		[[TGClient shared] rateSpeechRecognitionForMessage:self.messageId
+													inChat:self.chatId
+													  good:[action isEqualToString:@"rateGood"]];
+		[self say:@"" message:@"Thank you for the feedback."];
+		return;
+	}
+	if ([action hasPrefix:@"voters:"]){
+		[self showVotersForOption:[[action substringFromIndex:7] integerValue]];
+		return;
+	}
+	if ([action isEqualToString:@"stopPoll"]){
+		[[TGClient shared] stopPoll:self.messageId inChat:self.chatId];
+		[self say:@"" message:@"The poll takes no more votes."];
+		return;
+	}
+	if ([action isEqualToString:@"editCaption"]){
+		UIAlertView *ask = [[UIAlertView alloc] initWithTitle:@"Caption"
+													  message:nil
+													 delegate:self
+											cancelButtonTitle:@"Cancel"
+											otherButtonTitles:@"Save", nil];
+		if ([ask respondsToSelector:@selector(setAlertViewStyle:)])
+			ask.alertViewStyle = UIAlertViewStylePlainTextInput;
+		ask.tag = kInfoCaptionAlertTag;
+		[ask show];
+		return;
+	}
+	if ([action isEqualToString:@"replacePhoto"] || [action isEqualToString:@"replaceVideo"]){
+		[self pickReplacementFor:action];
+		return;
+	}
+	if ([action isEqualToString:@"resend"]){
+		__weak typeof(self) weakSelf = self;
+		[[TGClient shared] resendMessages:@[@(self.messageId)] inChat:self.chatId
+							   completion:^(NSArray *messages){
+			[weakSelf say:@"" message:(messages.count ? @"Sending again."
+													  : @"This message could not be sent again.")];
+		}];
+		return;
+	}
+	if ([action isEqualToString:@"embed"]){
+		__weak typeof(self) weakSelf = self;
+		[[TGClient shared] embeddingCodeForMessage:self.messageId inChat:self.chatId
+										  forAlbum:NO completion:^(NSString *code){
+			TGMessageInfoViewController *me = weakSelf;
+			if (!me)
+				return;
+			if (!code.length){
+				[me say:@"" message:@"This message cannot be embedded."];
+				return;
+			}
+			[UIPasteboard generalPasteboard].string = code;
+			[me say:@"Copied" message:@"The embed code is on the clipboard."];
+		}];
+		return;
+	}
+	if ([action isEqualToString:@"deleteDay"]){
+		UIActionSheet *sheet = [[UIActionSheet alloc]
+				initWithTitle:@"Delete every message of this day from this device?"
+					 delegate:self
+			cancelButtonTitle:@"Cancel"
+	   destructiveButtonTitle:@"Delete"
+			otherButtonTitles:nil];
+		[sheet showInView:self.view];
+	}
+}
+
+- (void)showVotersForOption:(NSInteger)index {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] votersForPollOption:index ofMessage:self.messageId
+									inChat:self.chatId limit:20
+								completion:^(NSArray *voters, NSInteger total){
+		TGMessageInfoViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (!voters.count){
+			[me say:@"" message:(total > 0 ? @"This poll does not reveal its voters."
+										   : @"Nobody picked this option.")];
+			return;
+		}
+		NSMutableArray *names = [NSMutableArray array];
+		for (NSDictionary *voter in voters)
+			[names addObject:([me stringOf:voter[@"name"]] ?: @"Someone")];
+		[me say:[NSString stringWithFormat:@"%ld votes", (long)total]
+		  message:[names componentsJoinedByString:@"\n"]];
+	}];
+}
+
+- (void)pickReplacementFor:(NSString *)action {
+	if (![UIImagePickerController isSourceTypeAvailable:
+			UIImagePickerControllerSourceTypePhotoLibrary]){
+		[self say:@"" message:@"There is no photo library on this device."];
+		return;
+	}
+	self.replaceKind = action;
+	UIImagePickerController *picker = [[UIImagePickerController alloc] init];
+	picker.sourceType = UIImagePickerControllerSourceTypePhotoLibrary;
+	picker.mediaTypes = [action isEqualToString:@"replaceVideo"]
+			? @[(NSString *)kUTTypeMovie] : @[(NSString *)kUTTypeImage];
+	picker.delegate = self;
+	[self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)imagePickerController:(UIImagePickerController *)picker
+		didFinishPickingMediaWithInfo:(NSDictionary *)info {
+	[picker dismissViewControllerAnimated:YES completion:nil];
+	NSString *action = self.replaceKind;
+	self.replaceKind = nil;
+	__weak typeof(self) weakSelf = self;
+
+	if ([action isEqualToString:@"replaceVideo"]){
+		NSURL *movie = info[UIImagePickerControllerMediaURL];
+		if (!movie.path.length)
+			return;
+		[[TGClient shared] replaceVideoInMessage:self.messageId inChat:self.chatId
+											path:movie.path caption:nil
+									  completion:^(BOOL ok){
+			[weakSelf say:@"" message:(ok ? @"The video has been replaced."
+										  : @"The video could not be replaced.")];
+		}];
+		return;
+	}
+
+	UIImage *image = info[UIImagePickerControllerOriginalImage];
+	NSData *jpeg = image ? UIImageJPEGRepresentation(image, 0.85f) : nil;
+	if (!jpeg.length)
+		return;
+	NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:
+			[NSString stringWithFormat:@"replace-%.0f.jpg",
+					[[NSDate date] timeIntervalSince1970] * 1000]];
+	if (![jpeg writeToFile:path atomically:YES])
+		return;
+	[[TGClient shared] replacePhotoInMessage:self.messageId inChat:self.chatId
+										path:path caption:nil
+								  completion:^(BOOL ok){
+		[weakSelf say:@"" message:(ok ? @"The photo has been replaced."
+									  : @"The photo could not be replaced.")];
+	}];
+}
+
+- (void)imagePickerControllerDidCancel:(UIImagePickerController *)picker {
+	self.replaceKind = nil;
+	[picker dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {
+	if (alertView.tag != kInfoCaptionAlertTag || buttonIndex == alertView.cancelButtonIndex)
+		return;
+	NSString *caption = @"";
+	if ([alertView respondsToSelector:@selector(textFieldAtIndex:)])
+		caption = [alertView textFieldAtIndex:0].text ?: @"";
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] editCaptionOfMessage:self.messageId inChat:self.chatId
+									caption:caption completion:^(BOOL ok){
+		[weakSelf say:@"" message:(ok ? @"The caption has been changed."
+									  : @"The caption could not be changed.")];
+	}];
+}
+
+- (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
+	if (index != sheet.destructiveButtonIndex)
+		return;
+	NSTimeInterval date = [self messageDate];
+	if (date <= 0){
+		[self say:@"" message:@"This message has no date to work from."];
+		return;
+	}
+	NSCalendar *calendar = [NSCalendar currentCalendar];
+	NSDateComponents *parts = [calendar components:
+			(NSYearCalendarUnit | NSMonthCalendarUnit | NSDayCalendarUnit)
+										  fromDate:[NSDate dateWithTimeIntervalSince1970:date]];
+	NSTimeInterval start = [[calendar dateFromComponents:parts] timeIntervalSince1970];
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] deleteMessagesInChat:self.chatId
+								   fromDate:start
+									 toDate:start + 86399
+								forEveryone:NO
+								 completion:^(BOOL ok){
+		TGMessageInfoViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (!ok){
+			[me say:@"" message:@"These messages could not be deleted."];
+			return;
+		}
+		[me.navigationController popViewControllerAnimated:YES];
+	}];
+}
+
+- (void)say:(NSString *)title message:(NSString *)message {
+	[[[UIAlertView alloc] initWithTitle:(title ?: @"")
+								message:message
+							   delegate:nil
+					  cancelButtonTitle:@"OK"
+					  otherButtonTitles:nil] show];
+}
+
+@end
+
+#pragma mark - reactions detail
+
+static const NSInteger kReactorSheetTag      = 81;
+static const NSInteger kQuickReactionSheetTag = 82;
+static const NSInteger kChatReactionsSheetTag = 83;
+static const NSInteger kClearMineAlertTag    = 84;
+static const NSInteger kClearRecentAlertTag  = 85;
+
+@interface TGMessageReactionsViewController : UITableViewController <UIActionSheetDelegate,
+		UIAlertViewDelegate>
+@property (nonatomic, assign) int64_t chatId;
+@property (nonatomic, assign) int64_t messageId;
+@property (nonatomic, strong) NSDictionary *message;
+@end
+
+@implementation TGMessageReactionsViewController {
+	NSMutableArray *_sections;
+	NSArray *_chips;
+	NSMutableArray *_reactors;
+	NSString *_reactorsOffset;
+	NSInteger _reactorsTotal;
+	NSArray *_paidReactors;
+	NSMutableDictionary *_reactionTitles;
+	NSMutableDictionary *_reactionIcons;
+	NSArray *_chosenEmoji;
+	NSInteger _usedCount;
+	NSInteger _maxCount;
+	BOOL _canAddMore;
+	NSString *_allowedReason;
+	NSArray *_allowedEmoji;
+	NSArray *_chatEmoji;
+	BOOL _chatAllowsAll;
+	NSInteger _chatMax;
+	BOOL _canDelete;
+	BOOL _canReport;
+	int64_t _actionSenderId;
+	NSString *_actionSenderName;
+}
+
+- (id)init {
+	return [super initWithStyle:UITableViewStyleGrouped];
+}
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+	self.title = @"Reactions";
+	_sections = [NSMutableArray array];
+	_reactors = [NSMutableArray array];
+	_reactionTitles = [NSMutableDictionary dictionary];
+	_reactionIcons = [NSMutableDictionary dictionary];
+	_maxCount = 1;
+	_canAddMore = YES;
+	_paidReactors = self.message
+			? [TGClient paidReactorsFromMessage:self.message] : @[];
+	[self loadEverything];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+	[super viewWillAppear:animated];
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] setReactionWatchInterval:5];
+	[[TGClient shared] watchReactionsForMessage:self.messageId
+										 inChat:self.chatId
+									   onChange:^(NSArray *chips){
+		[weakSelf adoptChips:chips];
+	}];
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+	[super viewWillDisappear:animated];
+	[[TGClient shared] unwatchReactionsForMessage:self.messageId inChat:self.chatId];
+}
+
+- (void)dealloc {
+	[[TGClient shared] unwatchReactionsForMessage:self.messageId inChat:self.chatId];
+}
+
+- (void)adoptChips:(NSArray *)chips {
+	_chips = chips ?: @[];
+	[self fetchReactionDecoration];
+	[self rebuild];
+}
+
+- (void)loadEverything {
+	__weak typeof(self) weakSelf = self;
+
+	[[TGClient shared] reactionChipsForMessage:self.messageId
+										inChat:self.chatId
+									completion:^(NSArray *chips){
+		[weakSelf adoptChips:chips];
+	}];
+
+	[[TGClient shared] reactionUsageForMessage:self.messageId
+										inChat:self.chatId
+									completion:^(NSArray *chosenEmoji,
+												 NSInteger usedCount,
+												 NSInteger maxCount,
+												 BOOL canAddMore){
+		TGMessageReactionsViewController *me = weakSelf;
+		if (!me)
+			return;
+		me->_chosenEmoji = chosenEmoji ?: @[];
+		me->_usedCount = usedCount;
+		me->_maxCount = maxCount;
+		me->_canAddMore = canAddMore;
+		[me rebuild];
+	}];
+
+	[[TGClient shared] availableReactionsForMessage:self.messageId
+											 inChat:self.chatId
+										 completion:^(NSDictionary *info){
+		TGMessageReactionsViewController *me = weakSelf;
+		if (!me)
+			return;
+		me->_allowedEmoji = info[@"allEmoji"];
+		me->_allowedReason = info[@"reason"];
+		[me rebuild];
+	}];
+
+	[[TGClient shared] availableReactionsInChat:self.chatId
+									 completion:^(NSArray *emojis,
+												  BOOL allowsAll,
+												  NSInteger maxCount){
+		TGMessageReactionsViewController *me = weakSelf;
+		if (!me)
+			return;
+		me->_chatEmoji = emojis ?: @[];
+		me->_chatAllowsAll = allowsAll;
+		me->_chatMax = maxCount;
+		[me rebuild];
+	}];
+
+	[[TGClient shared] reactionPermissionsForMessage:self.messageId
+											  inChat:self.chatId
+										  completion:^(BOOL canDelete, BOOL canReport){
+		TGMessageReactionsViewController *me = weakSelf;
+		if (!me)
+			return;
+		me->_canDelete = canDelete;
+		me->_canReport = canReport;
+		[me rebuild];
+	}];
+
+	[self loadReactorsFromOffset:nil];
+}
+
+- (void)loadReactorsFromOffset:(NSString *)offset {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] addedReactionsForMessage:self.messageId
+										 inChat:self.chatId
+										  emoji:nil
+										 offset:offset
+										  limit:40
+									 completion:^(NSArray *reactors,
+												  NSString *nextOffset,
+												  NSInteger totalCount){
+		TGMessageReactionsViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (!offset.length)
+			[me->_reactors removeAllObjects];
+		[me->_reactors addObjectsFromArray:(reactors ?: @[])];
+		me->_reactorsOffset = nextOffset;
+		me->_reactorsTotal = totalCount;
+		[me rebuild];
+	}];
+}
+
+- (void)fetchReactionDecoration {
+	__weak typeof(self) weakSelf = self;
+	for (NSDictionary *chip in _chips){
+		NSString *emoji = chip[@"emoji"];
+		if (![emoji isKindOfClass:NSString.class] || !emoji.length)
+			continue;
+		if (_reactionTitles[emoji])
+			continue;
+		_reactionTitles[emoji] = emoji;
+
+		[[TGClient shared] emojiReactionInfo:emoji completion:^(NSDictionary *info){
+			TGMessageReactionsViewController *me = weakSelf;
+			if (!me || !info)
+				return;
+			NSString *title = info[@"title"];
+			if ([title isKindOfClass:NSString.class] && title.length)
+				me->_reactionTitles[emoji] = title;
+			[me rebuild];
+		}];
+
+		[[TGClient shared] reactionIconPathForEmoji:emoji completion:^(NSString *path){
+			if (!path.length)
+				return;
+			dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
+				UIImage *raw = [UIImage convertFromWebP:path compressedData:NULL error:NULL];
+				if (!raw)
+					return;
+				CGFloat side = 29.0f;
+				CGFloat scale = MIN(side / MAX(raw.size.width, 1.0f),
+									side / MAX(raw.size.height, 1.0f));
+				CGSize target = CGSizeMake(floorf(raw.size.width * scale),
+										   floorf(raw.size.height * scale));
+				if (target.width < 1 || target.height < 1)
+					return;
+				UIGraphicsBeginImageContextWithOptions(target, NO, 0.0f);
+				[raw drawInRect:CGRectMake(0, 0, target.width, target.height)];
+				UIImage *icon = UIGraphicsGetImageFromCurrentImageContext();
+				UIGraphicsEndImageContext();
+				raw = nil;
+				if (!icon)
+					return;
+				dispatch_async(dispatch_get_main_queue(), ^{
+					TGMessageReactionsViewController *me = weakSelf;
+					if (!me)
+						return;
+					me->_reactionIcons[emoji] = icon;
+					[me rebuild];
+				});
+			});
+		}];
+	}
+}
+
+- (NSDictionary *)row:(NSString *)title
+			   detail:(NSString *)detail
+			   action:(NSString *)action
+				emoji:(NSString *)emoji {
+	NSMutableDictionary *row = [NSMutableDictionary dictionary];
+	row[@"title"] = title ?: @"";
+	if (detail.length)
+		row[@"detail"] = detail;
+	if (action.length)
+		row[@"action"] = action;
+	if (emoji.length)
+		row[@"emoji"] = emoji;
+	return row;
+}
+
+- (void)addSection:(NSString *)title rows:(NSArray *)rows {
+	if (!rows.count)
+		return;
+	[_sections addObject:@{ @"title" : (title ?: @""), @"rows" : rows }];
+}
+
+- (void)rebuild {
+	[_sections removeAllObjects];
+
+	NSMutableArray *chipRows = [NSMutableArray array];
+	for (NSDictionary *chip in _chips){
+		NSString *emoji = chip[@"emoji"];
+		if (![emoji isKindOfClass:NSString.class] || !emoji.length)
+			continue;
+		NSString *name = _reactionTitles[emoji] ?: emoji;
+		NSString *detail = [NSString stringWithFormat:@"%@%ld",
+				([chip[@"chosen"] boolValue] ? @"✓ " : @""),
+				(long)[chip[@"count"] integerValue]];
+		[chipRows addObject:[self row:[NSString stringWithFormat:@"%@  %@", emoji, name]
+							   detail:detail
+							   action:([chip[@"custom"] boolValue] ? nil : @"toggle")
+								emoji:emoji]];
+	}
+	[self addSection:@"ON THIS MESSAGE" rows:chipRows];
+
+	NSMutableArray *mine = [NSMutableArray array];
+	[mine addObject:[self row:@"Your Reactions"
+					   detail:[NSString stringWithFormat:@"%ld of %ld",
+							   (long)_usedCount, (long)MAX(1, _maxCount)]
+					   action:nil
+						emoji:nil]];
+	[mine addObject:[self row:@"Reacting Here"
+					   detail:(_allowedReason.length ? _allowedReason
+							   : (_canAddMore ? @"Allowed" : @"Limit reached"))
+					   action:nil
+						emoji:nil]];
+	if (_chosenEmoji.count)
+		[mine addObject:[self row:@"Clear My Reactions" detail:nil
+						   action:@"clearMine" emoji:nil]];
+	[self addSection:@"YOU" rows:mine];
+
+	NSMutableArray *paid = [NSMutableArray array];
+	for (NSDictionary *reactor in _paidReactors){
+		NSString *name = reactor[@"name"];
+		if (![name isKindOfClass:NSString.class] || !name.length)
+			name = [reactor[@"isAnonymous"] boolValue] ? @"Anonymous" : @"Someone";
+		[paid addObject:[self row:name
+						   detail:[NSString stringWithFormat:@"%ld",
+								   (long)[reactor[@"stars"] integerValue]]
+						   action:nil
+							emoji:nil]];
+	}
+	[self addSection:@"STARS" rows:paid];
+
+	NSMutableArray *who = [NSMutableArray array];
+	for (NSDictionary *reactor in _reactors){
+		NSString *name = reactor[@"name"];
+		if (![name isKindOfClass:NSString.class] || !name.length)
+			name = [[TGClient shared] nameForUserId:
+					[reactor[@"senderId"] longLongValue]] ?: @"Someone";
+		NSMutableDictionary *entry = [[self row:name
+										 detail:(reactor[@"emoji"] ?: @"")
+										 action:@"reactor"
+										  emoji:nil] mutableCopy];
+		entry[@"senderId"] = reactor[@"senderId"] ?: @0;
+		[who addObject:entry];
+	}
+	if (_reactorsOffset.length)
+		[who addObject:[self row:@"Show More" detail:nil action:@"moreReactors" emoji:nil]];
+	[self addSection:(_reactorsTotal > 0
+			? [NSString stringWithFormat:@"WHO REACTED (%ld)", (long)_reactorsTotal]
+			: @"WHO REACTED") rows:who];
+
+	NSMutableArray *chat = [NSMutableArray array];
+	NSString *chatDetail = _chatAllowsAll
+			? @"All"
+			: (_chatEmoji.count
+					? [NSString stringWithFormat:@"%lu allowed", (unsigned long)_chatEmoji.count]
+					: @"Off");
+	[chat addObject:[self row:@"Allowed in This Chat" detail:chatDetail action:nil emoji:nil]];
+	if (_canDelete)
+		[chat addObject:[self row:@"Change What Is Allowed" detail:nil
+						   action:@"chatReactions" emoji:nil]];
+	[chat addObject:[self row:@"Quick Reaction"
+					   detail:[[TGClient shared] quickReactionEmoji]
+					   action:@"quick" emoji:nil]];
+	[chat addObject:[self row:@"Clear Recently Used" detail:nil
+					   action:@"clearRecent" emoji:nil]];
+	[self addSection:@"REACTIONS" rows:chat];
+
+	[self.tableView reloadData];
+}
+
+#pragma mark - table
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+	return (NSInteger)_sections.count;
+}
+
+- (NSString *)tableView:(UITableView *)tableView
+		titleForHeaderInSection:(NSInteger)section {
+	return _sections[section][@"title"];
+}
+
+- (NSInteger)tableView:(UITableView *)tableView
+		numberOfRowsInSection:(NSInteger)section {
+	return (NSInteger)[_sections[section][@"rows"] count];
+}
+
+- (NSDictionary *)rowAt:(NSIndexPath *)path {
+	if (path.section >= (NSInteger)_sections.count)
+		return nil;
+	NSArray *rows = _sections[path.section][@"rows"];
+	return (path.row < (NSInteger)rows.count) ? rows[path.row] : nil;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView
+		 cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"reaction"];
+	if (!cell)
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
+									  reuseIdentifier:@"reaction"];
+	NSDictionary *row = [self rowAt:indexPath];
+	cell.textLabel.text = row[@"title"];
+	cell.detailTextLabel.text = row[@"detail"] ?: @"";
+	cell.imageView.image = row[@"emoji"] ? _reactionIcons[row[@"emoji"]] : nil;
+	NSString *action = row[@"action"];
+	cell.selectionStyle = action.length ? UITableViewCellSelectionStyleBlue
+										: UITableViewCellSelectionStyleNone;
+	cell.textLabel.textColor = [action isEqualToString:@"clearMine"]
+			? [UIColor colorWithRed:0.78f green:0.13f blue:0.13f alpha:1.0f]
+			: [UIColor blackColor];
+	return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	NSDictionary *row = [self rowAt:indexPath];
+	NSString *action = row[@"action"];
+	if (!action.length)
+		return;
+
+	if ([action isEqualToString:@"toggle"]){
+		NSString *emoji = row[@"emoji"];
+		BOOL chosen = [row[@"detail"] hasPrefix:@"✓"];
+		if (chosen){
+			[[TGClient shared] removeReaction:emoji fromMessage:self.messageId inChat:self.chatId];
+		} else if (!_canAddMore){
+			[self say:@"" message:@"You have used every reaction this chat allows on one message."];
+			return;
+		} else {
+			[[TGClient shared] addReaction:emoji toMessage:self.messageId
+									inChat:self.chatId big:YES];
+		}
+		[self refreshSoon];
+		return;
+	}
+
+	if ([action isEqualToString:@"clearMine"]){
+		UIAlertView *ask = [[UIAlertView alloc] initWithTitle:@""
+													  message:@"Remove all of your reactions from this message?"
+													 delegate:self
+											cancelButtonTitle:@"Cancel"
+											otherButtonTitles:@"Remove", nil];
+		ask.tag = kClearMineAlertTag;
+		[ask show];
+		return;
+	}
+
+	if ([action isEqualToString:@"moreReactors"]){
+		[self loadReactorsFromOffset:_reactorsOffset];
+		return;
+	}
+
+	if ([action isEqualToString:@"reactor"]){
+		if (!_canDelete && !_canReport){
+			[self say:@"" message:@"You cannot moderate reactions in this chat."];
+			return;
+		}
+		_actionSenderId = [row[@"senderId"] longLongValue];
+		_actionSenderName = row[@"title"];
+		UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:_actionSenderName
+														   delegate:self
+												  cancelButtonTitle:nil
+											 destructiveButtonTitle:nil
+												  otherButtonTitles:nil];
+		if (_canDelete){
+			[sheet addButtonWithTitle:@"Remove From This Message"];
+			[sheet addButtonWithTitle:@"Remove Everywhere Here"];
+		}
+		if (_canReport)
+			[sheet addButtonWithTitle:@"Report as Spam"];
+		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+		sheet.tag = kReactorSheetTag;
+		[sheet showInView:self.view];
+		return;
+	}
+
+	if ([action isEqualToString:@"quick"]){
+		NSArray *choices = _allowedEmoji.count ? _allowedEmoji : _chatEmoji;
+		if (!choices.count){
+			[self say:@"" message:@"No reactions are available here."];
+			return;
+		}
+		UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Quick Reaction"
+														   delegate:self
+												  cancelButtonTitle:nil
+											 destructiveButtonTitle:nil
+												  otherButtonTitles:nil];
+		NSUInteger shown = MIN((NSUInteger)8, choices.count);
+		for (NSUInteger i = 0; i < shown; i++)
+			[sheet addButtonWithTitle:choices[i]];
+		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+		sheet.tag = kQuickReactionSheetTag;
+		[sheet showInView:self.view];
+		return;
+	}
+
+	if ([action isEqualToString:@"chatReactions"]){
+		UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Reactions in This Chat"
+														   delegate:self
+												  cancelButtonTitle:nil
+											 destructiveButtonTitle:nil
+												  otherButtonTitles:@"Allow All",
+																	@"Allow Only What Is Used",
+																	@"Turn Reactions Off", nil];
+		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+		sheet.tag = kChatReactionsSheetTag;
+		[sheet showInView:self.view];
+		return;
+	}
+
+	if ([action isEqualToString:@"clearRecent"]){
+		UIAlertView *ask = [[UIAlertView alloc] initWithTitle:@""
+													  message:@"Forget the reactions the picker suggests?"
+													 delegate:self
+											cancelButtonTitle:@"Cancel"
+											otherButtonTitles:@"Clear", nil];
+		ask.tag = kClearRecentAlertTag;
+		[ask show];
+	}
+}
+
+- (void)refreshSoon {
+	__weak typeof(self) weakSelf = self;
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)),
+			dispatch_get_main_queue(), ^{ [weakSelf loadEverything]; });
+}
+
+- (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
+	if (index == sheet.cancelButtonIndex)
+		return;
+	NSString *chosen = [sheet buttonTitleAtIndex:index];
+
+	if (sheet.tag == kReactorSheetTag){
+		if ([chosen isEqualToString:@"Remove From This Message"])
+			[[TGClient shared] deleteReactionsFromSender:_actionSenderId
+											   onMessage:self.messageId
+												  inChat:self.chatId];
+		else if ([chosen isEqualToString:@"Remove Everywhere Here"])
+			[[TGClient shared] deleteAllRecentReactionsFromSender:_actionSenderId
+														   inChat:self.chatId];
+		else if ([chosen isEqualToString:@"Report as Spam"])
+			[[TGClient shared] reportReactionsFromSender:_actionSenderId
+											   onMessage:self.messageId
+												  inChat:self.chatId];
+		[self refreshSoon];
+		return;
+	}
+
+	if (sheet.tag == kQuickReactionSheetTag){
+		[[TGClient shared] setQuickReactionEmoji:chosen];
+		[self rebuild];
+		return;
+	}
+
+	if (sheet.tag == kChatReactionsSheetTag){
+		NSInteger maxCount = MAX(1, _chatMax);
+		if ([chosen isEqualToString:@"Allow All"])
+			[[TGClient shared] setAvailableReactionsInChat:self.chatId emojis:nil
+												  maxCount:maxCount];
+		else if ([chosen isEqualToString:@"Turn Reactions Off"])
+			[[TGClient shared] setAvailableReactionsInChat:self.chatId emojis:@[]
+												  maxCount:maxCount];
+		else {
+			NSMutableArray *used = [NSMutableArray array];
+			for (NSDictionary *chip in _chips){
+				NSString *emoji = chip[@"emoji"];
+				if ([emoji isKindOfClass:NSString.class] && emoji.length &&
+					![chip[@"custom"] boolValue])
+					[used addObject:emoji];
+			}
+			if (!used.count){
+				[self say:@"" message:@"Nobody has reacted here yet, so there is nothing to keep."];
+				return;
+			}
+			[[TGClient shared] setAvailableReactionsInChat:self.chatId emojis:used
+												  maxCount:maxCount];
+		}
+		[self refreshSoon];
+	}
+}
+
+- (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {
+	if (buttonIndex == alertView.cancelButtonIndex)
+		return;
+	if (alertView.tag == kClearMineAlertTag){
+		[[TGClient shared] setReactions:@[] onMessage:self.messageId
+								 inChat:self.chatId big:NO];
+		[self refreshSoon];
+		return;
+	}
+	if (alertView.tag == kClearRecentAlertTag){
+		[[TGClient shared] clearRecentReactions];
+		[self say:@"" message:@"The suggested reactions have been cleared."];
+	}
+}
+
+- (void)say:(NSString *)title message:(NSString *)message {
+	[[[UIAlertView alloc] initWithTitle:(title ?: @"")
+								message:message
+							   delegate:nil
+					  cancelButtonTitle:@"OK"
+					  otherButtonTitles:nil] show];
+}
+
+@end
+
 @interface TGChatViewController () <UISearchBarDelegate, CLLocationManagerDelegate,
 		UIScrollViewDelegate, AVAudioPlayerDelegate, UIAlertViewDelegate,
 		ABPeoplePickerNavigationControllerDelegate, MPMediaPickerControllerDelegate,
@@ -1447,6 +2591,36 @@ static const CGFloat kPhotoPageGap = 20.0f;
 @property (nonatomic, assign) int64_t moderationUserId;
 @property (nonatomic, copy) NSString *moderationName;
 @property (nonatomic, strong) NSArray *moderationMessageIds;
+@property (nonatomic, copy) NSString *attachMode;
+@property (nonatomic, strong) NSMutableArray *albumPaths;
+@property (nonatomic, copy) NSString *locationMode;
+@property (nonatomic, assign) int64_t liveLocationMessageId;
+@property (nonatomic, copy) NSString *venueTitle;
+@property (nonatomic, copy) NSString *venueAddress;
+@property (nonatomic, copy) NSString *pollQuestion;
+@property (nonatomic, strong) NSMutableArray *pollOptionsBeingWritten;
+@property (nonatomic, assign) BOOL markdownComposing;
+@property (nonatomic, assign) int64_t reschedulingMessageId;
+@property (nonatomic, assign) NSInteger scheduledItemIndex;
+@property (nonatomic, strong) NSMutableSet *mapTilesRequested;
+@property (nonatomic, strong) NSArray *botButtons;
+@property (nonatomic, assign) int64_t botButtonsMessageId;
+@property (nonatomic, assign) NSInteger botButtonsRow;
+@property (nonatomic, strong) NSDictionary *pendingCallbackButton;
+@property (nonatomic, strong) NSArray *botCommandList;
+@property (nonatomic, strong) NSArray *similarBotList;
+@property (nonatomic, strong) NSArray *recentInlineBotList;
+@property (nonatomic, strong) NSDictionary *inlineResults;
+@property (nonatomic, copy) NSString *inlineQueryText;
+@property (nonatomic, assign) int64_t inlineBotId;
+@property (nonatomic, copy) NSString *pendingBotStartLink;
+@property (nonatomic, copy) NSString *sharePickerKind;
+@property (nonatomic, assign) NSInteger sharePickerButtonId;
+@property (nonatomic, assign) int64_t sharePickerMessageId;
+@property (nonatomic, assign) int64_t chipsSheetMessageId;
+@property (nonatomic, strong) NSMutableArray *reactionMessageIds;
+@property (nonatomic, strong) UIButton *reactionButton;
+@property (nonatomic, assign) BOOL chatIsWithBot;
 
 - (void)clearComposeState;
 - (void)showComposeBanner:(NSString *)text;
@@ -1545,6 +2719,8 @@ static const CGFloat kPhotoPageGap = 20.0f;
 
 	[self restoreDraft];
 	[self loadUnreadMentions];
+	[self loadUnreadReactions];
+	[self detectBotChat];
 	[self loadScheduledMessages];
 
 	[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(keyboardWillShow:)
@@ -1570,6 +2746,8 @@ static const CGFloat kPhotoPageGap = 20.0f;
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
 	[self installMessageHandler];
+	if (self.liveLocationMessageId && [self.locationMode isEqualToString:@"tracking"])
+		[self.locationManager startUpdatingLocation];
 }
 
 - (void)installMessageHandler {
@@ -1592,6 +2770,11 @@ static const CGFloat kPhotoPageGap = 20.0f;
 
 		if (message){
 			NSNumber *newId = [message[@"id"] isKindOfClass:NSNumber.class] ? message[@"id"] : nil;
+			NSArray *liveChips = [TGClient reactionChipsFromMessage:message];
+			if (newId && liveChips.count){
+				me.reactionChips[newId] = liveChips;
+				[me.reactionChipsRequested addObject:newId];
+			}
 			// TDLib echoes a message it has already delivered when the sending
 			// state settles; the same row twice is worse than a late refresh.
 			if (newId){
@@ -1915,8 +3098,11 @@ static const CGFloat kPhotoPageGap = 20.0f;
 	[TGSnackbar commitNow];
 	[TGPopupMenu dismiss];
 	[TGReactionPickerView dismiss];
+	[[TGClient shared] unwatchAllReactions];
 	[self.actionsSheet dismiss];
 	self.actionsSheet = nil;
+	if (self.locationManager)
+		[self.locationManager stopUpdatingLocation];
 }
 
 - (void)didReceiveMemoryWarning {
@@ -2056,7 +3242,44 @@ static const CGFloat kPhotoPageGap = 20.0f;
 						  longitude:[m[@"lon"] doubleValue]];
 	if (key && card)
 		self.maps[key] = card;
+	if (key)
+		[self fetchMapTileFor:m key:key];
 	return card;
+}
+
+/// The drawn card is only a stand-in: TDLib renders a real tile for the point,
+/// and the bubble swaps to it once it has arrived.
+- (void)fetchMapTileFor:(NSDictionary *)m key:(NSNumber *)key {
+	if (!self.mapTilesRequested)
+		self.mapTilesRequested = [NSMutableSet set];
+	if ([self.mapTilesRequested containsObject:key])
+		return;
+	[self.mapTilesRequested addObject:key];
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] mapThumbnailForLatitude:[m[@"lat"] doubleValue]
+									 longitude:[m[@"lon"] doubleValue]
+										  zoom:16
+										 width:(NSInteger)kMapCardW
+										height:(NSInteger)kMapCardH
+										 scale:1
+										inChat:self.chatId
+									completion:^(NSInteger fileId){
+		TGChatViewController *me = weakSelf;
+		if (!me || fileId <= 0)
+			return;
+		[[TGClient shared] downloadFile:fileId completion:^(NSString *path){
+			TGChatViewController *inner = weakSelf;
+			if (!inner || !path.length)
+				return;
+			UIImage *tile = [UIImage imageWithContentsOfFile:path];
+			if (!tile)
+				return;
+			inner.maps[key] = TGImageDrawnAtPointSize(tile,
+					CGSizeMake(kMapCardW, kMapCardH));
+			[inner.table reloadData];
+		}];
+	}];
 }
 
 /// Group messages need a name over the bubble, and TDLib only volunteers
@@ -2436,7 +3659,17 @@ static const CGFloat kPhotoPageGap = 20.0f;
 		[[TGClient shared] editMessage:self.editingId inChat:self.chatId text:text];
 	} else {
 		NSDictionary *options = [self sendOptionsDictionary];
-		if (options)
+		if (self.markdownComposing && !options){
+			[[TGClient shared] sendMarkdown:text toChat:self.chatId
+									 thread:self.threadId replyTo:self.replyToId];
+		} else if (self.markdownComposing && options){
+			[TGSnackbar showInView:self.view
+							  text:@"Sent as plain text: formatting needs a plain send"
+						   seconds:3 onCommit:nil];
+			[[TGClient shared] sendText:text toChat:self.chatId
+								 thread:self.threadId replyTo:self.replyToId
+								options:options completion:nil];
+		} else if (options)
 			[[TGClient shared] sendText:text toChat:self.chatId
 								 thread:self.threadId replyTo:self.replyToId
 								options:options completion:nil];
@@ -2721,6 +3954,8 @@ static const CGFloat kPhotoPageGap = 20.0f;
 	banner.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	[banner addTarget:self action:@selector(pinnedBannerTapped)
 	 forControlEvents:UIControlEventTouchUpInside];
+	[banner addGestureRecognizer:[[UILongPressGestureRecognizer alloc]
+			initWithTarget:self action:@selector(pinnedBannerHeld:)]];
 
 	UIView *rule = [[UIView alloc] initWithFrame:CGRectMake(9, 5, 2, height - 10)];
 	rule.backgroundColor = [[TGTheme shared] accentColour];
@@ -2765,6 +4000,36 @@ static const CGFloat kPhotoPageGap = 20.0f;
 - (void)pinnedBannerTapped {
 	if (self.pinnedMessageId != 0)
 		[self scrollToMessageId:self.pinnedMessageId];
+}
+
+/// Holding the banner is where "Unpin all" lives, behind the red button of a
+/// confirmation - it is not something a stray tap may do.
+- (void)pinnedBannerHeld:(UILongPressGestureRecognizer *)hold {
+	if (hold.state != UIGestureRecognizerStateBegan)
+		return;
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Pinned messages"
+													   delegate:self
+											  cancelButtonTitle:@"Cancel"
+										 destructiveButtonTitle:@"Unpin All Messages"
+											  otherButtonTitles:nil];
+	sheet.tag = kPinnedSheetTag;
+	[sheet showInView:self.view];
+}
+
+- (void)unpinEverything {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] unpinAllMessagesInChat:self.chatId completion:^(BOOL ok){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (!ok){
+			[me showAlertTitle:@"" message:@"The pinned messages could not be cleared."];
+			return;
+		}
+		me.pinnedMessageId = 0;
+		[me hidePinnedBanner];
+		[me reload];
+	}];
 }
 
 #pragma mark - search
@@ -2996,14 +4261,7 @@ static const CGFloat kPhotoPageGap = 20.0f;
 		[now timeIntervalSinceDate:self.lastTypingSent] < 4.0)
 		return;
 	self.lastTypingSent = now;
-
-	NSMutableDictionary *request = [NSMutableDictionary dictionaryWithDictionary:@{
-			@"@type" : @"sendChatAction",
-			@"chat_id" : @(self.chatId),
-			@"action" : @{@"@type" : @"chatActionTyping"}}];
-	if (self.threadId)
-		request[@"message_thread_id"] = @(self.threadId);
-	[[TGClient shared] send:request];
+	[[TGClient shared] sendChatAction:@"typing" toChat:self.chatId thread:self.threadId];
 }
 
 /// Their recording panel: a red dot, the running time, "Slide to cancel", and
@@ -3084,6 +4342,8 @@ static const CGFloat kPhotoPageGap = 20.0f;
 		return;
 	}
 	[self showRecordPanel];
+	[[TGClient shared] sendChatAction:@"recordingVoice" toChat:self.chatId
+							   thread:self.threadId];
 	self.recordTimer = [NSTimer scheduledTimerWithTimeInterval:0.5
 													   target:self
 													 selector:@selector(recordTick)
@@ -3097,12 +4357,22 @@ static const CGFloat kPhotoPageGap = 20.0f;
 	self.recordClock.text = [NSString stringWithFormat:@"%ld:%02ld,%ld",
 			(long)(d / 60), (long)((NSInteger)d % 60), (long)((NSInteger)(d * 10) % 10)];
 	self.recordDot.alpha = (self.recordDot.alpha < 1.0f) ? 1.0f : 0.25f;
+	NSDate *now = [NSDate date];
+	if (self.lastTypingSent &&
+		[now timeIntervalSinceDate:self.lastTypingSent] < 4.0)
+		return;
+	self.lastTypingSent = now;
+	[[TGClient shared] sendChatAction:@"recordingVoice" toChat:self.chatId
+							   thread:self.threadId];
 }
 
 - (void)recordFinish {
 	[self.recordTimer invalidate];
 	self.recordTimer = nil;
 	[self hideRecordPanel];
+	self.lastTypingSent = nil;
+	[[TGClient shared] sendChatAction:@"uploadingVoice" toChat:self.chatId
+							   thread:self.threadId];
 
 	__weak typeof(self) weakSelf = self;
 	[[TGVoiceRecorder shared] stopWithCompletion:^(NSString *path, NSTimeInterval seconds){
@@ -3122,6 +4392,8 @@ static const CGFloat kPhotoPageGap = 20.0f;
 	self.recordTimer = nil;
 	[self hideRecordPanel];
 	[[TGVoiceRecorder shared] cancel];
+	self.lastTypingSent = nil;
+	[[TGClient shared] sendChatAction:@"cancel" toChat:self.chatId thread:self.threadId];
 	[self clearComposeState];
 }
 
@@ -3333,6 +4605,30 @@ static const NSInteger kReportTextAlertTag  = 61;
 static const NSInteger kPastePhotoAlertTag  = 62;
 static const NSInteger kJoinLinkAlertTag    = 63;
 static const NSInteger kModerationSheetTag  = 50;
+static const NSInteger kAttachMoreSheetTag  = 51;
+static const NSInteger kLocationSheetTag    = 52;
+static const NSInteger kDiceSheetTag        = 53;
+static const NSInteger kTextToolsSheetTag   = 54;
+static const NSInteger kPinnedSheetTag      = 55;
+static const NSInteger kScheduledItemSheetTag = 56;
+static const NSInteger kSelectionMoreSheetTag = 57;
+static const NSInteger kVenueTitleAlertTag  = 64;
+static const NSInteger kVenueAddressAlertTag = 65;
+static const NSInteger kPollQuestionAlertTag = 66;
+static const NSInteger kPollOptionAlertTag  = 67;
+static const NSInteger kQuickReplyAlertTag  = 68;
+static const NSInteger kAlbumAlertTag       = 69;
+static const NSInteger kBotMenuSheetTag     = 90;
+static const NSInteger kBotButtonsSheetTag  = 91;
+static const NSInteger kBotCommandsSheetTag = 92;
+static const NSInteger kInlineResultsSheetTag = 93;
+static const NSInteger kSimilarBotsSheetTag = 94;
+static const NSInteger kRecentBotsSheetTag  = 95;
+static const NSInteger kChipsSheetTag       = 96;
+static const NSInteger kBotPasswordAlertTag = 97;
+static const NSInteger kInlineQueryAlertTag = 98;
+static const NSInteger kBotStartAlertTag    = 99;
+static const NSInteger kAllowBotAlertTag    = 100;
 
 - (Class)videoCaptureClass {
 	if (![UIImagePickerController isSourceTypeAvailable:
@@ -3369,6 +4665,7 @@ static const NSInteger kModerationSheetTag  = 50;
 	[titles addObject:@"Music"];
 	[titles addObject:@"Location"];
 	[titles addObject:@"Contact"];
+	[titles addObject:@"More"];
 
 	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
 													  delegate:self
@@ -3480,7 +4777,78 @@ static const NSInteger kModerationSheetTag  = 50;
 	}
 	if (sheet.tag == kScheduledListSheetTag){
 		if (index < (NSInteger)self.scheduledMessages.count)
-			[self sendScheduledMessageAtIndex:index];
+			[self showScheduledItemOptions:index];
+		return;
+	}
+	if (sheet.tag == kScheduledItemSheetTag){
+		NSString *chosen = [sheet buttonTitleAtIndex:index] ?: @"";
+		if ([chosen isEqualToString:@"Send Now"])
+			[self sendScheduledMessageAtIndex:self.scheduledItemIndex];
+		else if ([chosen isEqualToString:@"Reschedule"])
+			[self beginReschedulingItem:self.scheduledItemIndex];
+		return;
+	}
+	if (sheet.tag == kAttachMoreSheetTag){
+		[self runAttachMore:([sheet buttonTitleAtIndex:index] ?: @"")];
+		return;
+	}
+	if (sheet.tag == kBotMenuSheetTag){
+		[self runBotMenu:([sheet buttonTitleAtIndex:index] ?: @"")];
+		return;
+	}
+	if (sheet.tag == kBotButtonsSheetTag){
+		[self runBotButtonAtIndex:index];
+		return;
+	}
+	if (sheet.tag == kBotCommandsSheetTag){
+		if (index < (NSInteger)self.botCommandList.count){
+			NSString *command = self.botCommandList[index][@"command"];
+			if (command.length){
+				self.input.text = [NSString stringWithFormat:@"/%@", command];
+				[self inputChanged];
+				[self sendTapped];
+			}
+		}
+		return;
+	}
+	if (sheet.tag == kSimilarBotsSheetTag){
+		if (index < (NSInteger)self.similarBotList.count)
+			[self openBotFromEntry:self.similarBotList[index]];
+		return;
+	}
+	if (sheet.tag == kRecentBotsSheetTag){
+		if (index < (NSInteger)self.recentInlineBotList.count)
+			[self runInlineQueryForBot:[self.recentInlineBotList[index][@"id"] longLongValue]
+								 query:@""
+								offset:nil];
+		return;
+	}
+	if (sheet.tag == kInlineResultsSheetTag){
+		[self runInlineResultAtIndex:index];
+		return;
+	}
+	if (sheet.tag == kChipsSheetTag){
+		[self runChipsOption:([sheet buttonTitleAtIndex:index] ?: @"")];
+		return;
+	}
+	if (sheet.tag == kDiceSheetTag){
+		[self runDiceOption:([sheet buttonTitleAtIndex:index] ?: @"")];
+		return;
+	}
+	if (sheet.tag == kLocationSheetTag){
+		[self runLocationOption:([sheet buttonTitleAtIndex:index] ?: @"")];
+		return;
+	}
+	if (sheet.tag == kTextToolsSheetTag){
+		[self runTextTool:([sheet buttonTitleAtIndex:index] ?: @"")];
+		return;
+	}
+	if (sheet.tag == kPinnedSheetTag){
+		[self unpinEverything];
+		return;
+	}
+	if (sheet.tag == kSelectionMoreSheetTag){
+		[self runSelectionMore:([sheet buttonTitleAtIndex:index] ?: @"")];
 		return;
 	}
 	if (sheet.tag == kLinkSheetTag){
@@ -3519,9 +4887,325 @@ static const NSInteger kModerationSheetTag  = 50;
 	else if ([chosen isEqualToString:@"Video Message"])
 		[self captureVideoRound:YES];
 	else if ([chosen isEqualToString:@"Location"])
-		[self sendCurrentLocation];
+		[self showLocationOptions];
 	else if ([chosen isEqualToString:@"Contact"])
 		[self pickContact];
+	else if ([chosen isEqualToString:@"More"])
+		[self showAttachMore];
+}
+
+/// The second page of the attach menu: the things a chat sends rarely enough
+/// that they do not deserve a row of their own on the first one.
+- (void)showAttachMore {
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:@"Photo Album",
+															   @"Send as File",
+															   @"GIF",
+															   @"Poll",
+															   @"Dice", nil];
+	[sheet addButtonWithTitle:@"Inline Bot"];
+	if (self.chatIsWithBot)
+		[sheet addButtonWithTitle:@"Bot"];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = kAttachMoreSheetTag;
+	[sheet showInView:self.view];
+}
+
+- (void)runAttachMore:(NSString *)chosen {
+	if (self.postingBlocked)
+		return;
+	if ([chosen isEqualToString:@"Inline Bot"]){
+		[self askInlineBotQuery];
+		return;
+	}
+	if ([chosen isEqualToString:@"Bot"]){
+		[self showBotMenu];
+		return;
+	}
+	if ([chosen isEqualToString:@"Photo Album"]){
+		self.albumPaths = [NSMutableArray array];
+		self.attachMode = @"album";
+		[self pickMedia];
+		return;
+	}
+	if ([chosen isEqualToString:@"Send as File"]){
+		self.attachMode = @"document";
+		[self pickMedia];
+		return;
+	}
+	if ([chosen isEqualToString:@"GIF"]){
+		self.attachMode = @"animation";
+		[self pickMedia];
+		return;
+	}
+	if ([chosen isEqualToString:@"Poll"]){
+		[self askPollQuestion];
+		return;
+	}
+	if ([chosen isEqualToString:@"Dice"]){
+		UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Roll"
+														   delegate:self
+												  cancelButtonTitle:nil
+											 destructiveButtonTitle:nil
+												  otherButtonTitles:@"Dice",
+																   @"Darts",
+																   @"Basketball",
+																   @"Slot Machine", nil];
+		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+		sheet.tag = kDiceSheetTag;
+		[sheet showInView:self.view];
+	}
+}
+
+- (void)runDiceOption:(NSString *)chosen {
+	NSString *face = nil;
+	if ([chosen isEqualToString:@"Darts"])
+		face = @"\U0001F3AF";
+	else if ([chosen isEqualToString:@"Basketball"])
+		face = @"\U0001F3C0";
+	else if ([chosen isEqualToString:@"Slot Machine"])
+		face = @"\U0001F3B0";
+	[[TGClient shared] sendDice:face toChat:self.chatId thread:self.threadId];
+	[self clearComposeState];
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+			dispatch_get_main_queue(), ^{ [self reload]; });
+}
+
+#pragma mark - polls
+
+- (void)askPollQuestion {
+	self.pollQuestion = nil;
+	self.pollOptionsBeingWritten = [NSMutableArray array];
+	UIAlertView *ask = [[UIAlertView alloc] initWithTitle:@"New Poll"
+												  message:@"The question"
+												 delegate:self
+										cancelButtonTitle:@"Cancel"
+										otherButtonTitles:@"Next", nil];
+	if ([ask respondsToSelector:@selector(setAlertViewStyle:)])
+		ask.alertViewStyle = UIAlertViewStylePlainTextInput;
+	ask.tag = kPollQuestionAlertTag;
+	[ask show];
+}
+
+- (void)askPollOption {
+	NSUInteger next = self.pollOptionsBeingWritten.count + 1;
+	UIAlertView *ask = [[UIAlertView alloc] initWithTitle:@"New Poll"
+												  message:[NSString stringWithFormat:
+														  @"Option %lu", (unsigned long)next]
+												 delegate:self
+										cancelButtonTitle:@"Cancel"
+										otherButtonTitles:@"Add", @"Send", nil];
+	if ([ask respondsToSelector:@selector(setAlertViewStyle:)])
+		ask.alertViewStyle = UIAlertViewStylePlainTextInput;
+	ask.tag = kPollOptionAlertTag;
+	[ask show];
+}
+
+- (void)sendWrittenPoll {
+	if (self.pollOptionsBeingWritten.count < 2){
+		[self showAlertTitle:@"" message:@"A poll needs at least two options."];
+		return;
+	}
+	NSString *question = self.pollQuestion ?: @"";
+	NSArray *options = [self.pollOptionsBeingWritten copy];
+	self.pollQuestion = nil;
+	self.pollOptionsBeingWritten = nil;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] sendPollWithQuestion:question
+									options:options
+								  anonymous:YES
+							multipleAnswers:NO
+						  quizCorrectOption:-1
+									 toChat:self.chatId
+									 thread:self.threadId
+								 completion:^(int64_t messageId){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (!messageId){
+			[me showAlertTitle:@"" message:@"This poll was refused."];
+			return;
+		}
+		[me clearComposeState];
+		[me reload];
+	}];
+}
+
+#pragma mark - location
+
+- (void)showLocationOptions {
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Location"
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:nil];
+	[sheet addButtonWithTitle:@"Send My Location"];
+	if (self.liveLocationMessageId)
+		[sheet addButtonWithTitle:@"Stop Sharing"];
+	else
+		[sheet addButtonWithTitle:@"Share For 1 Hour"];
+	[sheet addButtonWithTitle:@"Send a Place"];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = kLocationSheetTag;
+	[sheet showInView:self.view];
+}
+
+- (void)runLocationOption:(NSString *)chosen {
+	if ([chosen isEqualToString:@"Send My Location"]){
+		self.locationMode = @"point";
+		[self sendCurrentLocation];
+		return;
+	}
+	if ([chosen isEqualToString:@"Share For 1 Hour"]){
+		self.locationMode = @"live";
+		[self sendCurrentLocation];
+		return;
+	}
+	if ([chosen isEqualToString:@"Stop Sharing"]){
+		[self stopSharingLiveLocation];
+		return;
+	}
+	if ([chosen isEqualToString:@"Send a Place"]){
+		UIAlertView *ask = [[UIAlertView alloc] initWithTitle:@"Place"
+													  message:@"Its name"
+													 delegate:self
+											cancelButtonTitle:@"Cancel"
+											otherButtonTitles:@"Next", nil];
+		if ([ask respondsToSelector:@selector(setAlertViewStyle:)])
+			ask.alertViewStyle = UIAlertViewStylePlainTextInput;
+		ask.tag = kVenueTitleAlertTag;
+		[ask show];
+	}
+}
+
+- (void)stopSharingLiveLocation {
+	if (!self.liveLocationMessageId)
+		return;
+	[[TGClient shared] stopLiveLocation:self.liveLocationMessageId inChat:self.chatId];
+	self.liveLocationMessageId = 0;
+	self.locationMode = nil;
+	[self.locationManager stopUpdatingLocation];
+	[TGSnackbar showInView:self.view text:@"Live location stopped" seconds:3 onCommit:nil];
+	[self reload];
+}
+
+#pragma mark - text tools
+
+- (void)showTextTools {
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Text"
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:nil];
+	[sheet addButtonWithTitle:(self.markdownComposing ? @"Send as Plain Text"
+													  : @"Send as Markdown")];
+	[sheet addButtonWithTitle:@"Preview Formatting"];
+	[sheet addButtonWithTitle:@"Translate Draft"];
+	[sheet addButtonWithTitle:@"Save as Quick Reply"];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = kTextToolsSheetTag;
+	[sheet showInView:self.view];
+}
+
+- (NSString *)composerText {
+	return [self.input.text stringByTrimmingCharactersInSet:
+			[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+
+- (void)runTextTool:(NSString *)chosen {
+	if ([chosen isEqualToString:@"Send as Markdown"] ||
+		[chosen isEqualToString:@"Send as Plain Text"]){
+		self.markdownComposing = !self.markdownComposing;
+		[TGSnackbar showInView:self.view
+						  text:(self.markdownComposing
+								? @"*bold*, _italic_ and `code` will be applied"
+								: @"Text will be sent exactly as typed")
+					   seconds:3 onCommit:nil];
+		return;
+	}
+
+	NSString *text = [self composerText];
+	if (!text.length){
+		[self showAlertTitle:@"" message:@"There is nothing in the message field."];
+		return;
+	}
+
+	__weak typeof(self) weakSelf = self;
+	if ([chosen isEqualToString:@"Preview Formatting"]){
+		[[TGClient shared] parseMarkdown:text completion:^(NSString *plainText, NSArray *entities){
+			TGChatViewController *me = weakSelf;
+			if (!me)
+				return;
+			[me showFormattingPreview:(plainText ?: text) markup:entities];
+		}];
+		return;
+	}
+
+	if ([chosen isEqualToString:@"Translate Draft"]){
+		NSString *preferred = [[NSLocale preferredLanguages] firstObject];
+		NSString *language = (preferred.length >= 2) ? [preferred substringToIndex:2] : @"en";
+		[[TGClient shared] translateText:text toLanguage:language tone:nil
+							  completion:^(NSString *translated){
+			TGChatViewController *me = weakSelf;
+			if (!me)
+				return;
+			if (!translated.length){
+				[me showAlertTitle:@"" message:@"This text could not be translated."];
+				return;
+			}
+			me.input.text = translated;
+			[me inputChanged];
+			[TGSnackbar showInView:me.view text:@"Draft translated" seconds:3 onCommit:nil];
+		}];
+		return;
+	}
+
+	if ([chosen isEqualToString:@"Save as Quick Reply"]){
+		UIAlertView *ask = [[UIAlertView alloc] initWithTitle:@"Quick Reply"
+													  message:@"A short name for it"
+													 delegate:self
+											cancelButtonTitle:@"Cancel"
+											otherButtonTitles:@"Save", nil];
+		if ([ask respondsToSelector:@selector(setAlertViewStyle:)])
+			ask.alertViewStyle = UIAlertViewStylePlainTextInput;
+		ask.tag = kQuickReplyAlertTag;
+		[ask show];
+	}
+}
+
+/// What the composer would actually send: the markers gone, and every run
+/// TDLib found in it - the ones the user typed and the ones it detects itself.
+- (void)showFormattingPreview:(NSString *)plainText markup:(NSArray *)markup {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] entitiesInText:plainText completion:^(NSArray *detected){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		NSMutableArray *lines = [NSMutableArray array];
+		for (NSDictionary *entity in markup)
+			[lines addObject:[NSString stringWithFormat:@"%@ %@",
+					(entity[@"kind"] ?: @"text"),
+					[me fragmentOf:plainText entity:entity]]];
+		for (NSDictionary *entity in detected)
+			[lines addObject:[NSString stringWithFormat:@"%@ %@",
+					(entity[@"kind"] ?: @"text"),
+					[me fragmentOf:plainText entity:entity]]];
+		[me showAlertTitle:plainText
+				   message:(lines.count ? [lines componentsJoinedByString:@"\n"]
+										: @"No formatting in this text.")];
+	}];
+}
+
+- (NSString *)fragmentOf:(NSString *)text entity:(NSDictionary *)entity {
+	NSUInteger offset = (NSUInteger)[entity[@"offset"] integerValue];
+	NSUInteger length = (NSUInteger)[entity[@"length"] integerValue];
+	if (offset + length > text.length || length == 0)
+		return @"";
+	return [text substringWithRange:NSMakeRange(offset, length)];
 }
 
 #pragma mark - links
@@ -3529,6 +5213,31 @@ static const NSInteger kModerationSheetTag  = 50;
 - (void)openLink:(NSString *)url {
 	if (!url.length)
 		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] botStartLinkInfo:url completion:^(NSDictionary *info){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		NSString *username = info[@"username"];
+		if (!username.length){
+			[me resolveAndOpenLink:url];
+			return;
+		}
+		me.pendingBotStartLink = url;
+		UIAlertView *ask = [[UIAlertView alloc] initWithTitle:
+				[NSString stringWithFormat:@"@%@", username]
+													  message:([info[@"inGroup"] boolValue]
+															   ? @"Start this bot?"
+															   : @"Start a chat with this bot?")
+													 delegate:me
+											cancelButtonTitle:@"Cancel"
+											otherButtonTitles:@"Start", nil];
+		ask.tag = kBotStartAlertTag;
+		[ask show];
+	}];
+}
+
+- (void)resolveAndOpenLink:(NSString *)url {
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] resolveLink:url completion:^(NSDictionary *link){
 		TGChatViewController *me = weakSelf;
@@ -3833,18 +5542,57 @@ static const NSInteger kModerationSheetTag  = 50;
 	[self showComposeBanner:[NSString stringWithFormat:@"Reply to: %@",
 			bodyText.length ? bodyText : (m[@"kind"] ?: @"message")]];
 	[self.input becomeFirstResponder];
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] viaBotForMessage:m completion:^(NSString *username){
+		TGChatViewController *me = weakSelf;
+		if (!me || !username.length || me.replyToId != [m[@"id"] longLongValue])
+			return;
+		[me showComposeBanner:[NSString stringWithFormat:@"Reply to @%@: %@",
+				username, bodyText.length ? bodyText : (m[@"kind"] ?: @"message")]];
+	}];
 }
 
-/// Holding the chips opens the strip of emoji the message accepts, over the
-/// bubble the chips belong to.
 - (void)chipsHeld:(UILongPressGestureRecognizer *)hold {
 	if (hold.state != UIGestureRecognizerStateBegan)
 		return;
 	TGReactionChipsView *chips = (TGReactionChipsView *)hold.view;
 	if (![chips isKindOfClass:TGReactionChipsView.class] || !chips.messageId)
 		return;
-	[self showReactionPickerForMessage:chips.messageId
-							  fromView:chips.superview ?: chips];
+	self.chipsSheetMessageId = chips.messageId;
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:@"React",
+																@"Who Reacted", nil];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = kChipsSheetTag;
+	[sheet showInView:self.view];
+}
+
+- (void)runChipsOption:(NSString *)chosen {
+	int64_t messageId = self.chipsSheetMessageId;
+	if (!messageId)
+		return;
+	if ([chosen isEqualToString:@"React"]){
+		UIView *source = self.table;
+		for (NSIndexPath *path in [self.table indexPathsForVisibleRows]){
+			if (path.row >= (NSInteger)self.messages.count)
+				continue;
+			NSDictionary *m = self.messages[path.row];
+			if ([m[@"id"] isKindOfClass:NSNumber.class] &&
+				[m[@"id"] longLongValue] == messageId){
+				UITableViewCell *cell = [self.table cellForRowAtIndexPath:path];
+				if ([cell isKindOfClass:TGBubbleCell.class])
+					source = ((TGBubbleCell *)cell).bubble;
+			}
+		}
+		[self showReactionPickerForMessage:messageId fromView:source];
+		return;
+	}
+	if ([chosen isEqualToString:@"Who Reacted"])
+		[self openReactionDetailForMessage:messageId];
 }
 
 - (void)showReactionPickerForMessage:(int64_t)messageId fromView:(UIView *)source {
@@ -3878,6 +5626,13 @@ static const NSInteger kModerationSheetTag  = 50;
 
 - (NSString *)originalTextOf:(NSDictionary *)m {
 	NSString *text = m[@"text"];
+	if ([text isKindOfClass:NSString.class] && text.length)
+		return text;
+	NSString *kind = [m[@"kind"] isKindOfClass:NSString.class] ? m[@"kind"] : nil;
+	NSString *placeholder = kind.length
+			? [[TGClient shared] placeholderTextForContentKind:kind] : nil;
+	if (placeholder.length)
+		return placeholder;
 	return [text isKindOfClass:NSString.class] ? text : nil;
 }
 
@@ -3890,6 +5645,19 @@ static const NSInteger kModerationSheetTag  = 50;
 	NSDictionary *m = self.messages[row];
 	if ([m[@"service"] boolValue])
 		return;
+	if (![m[@"id"] isKindOfClass:NSNumber.class])
+		return;
+	self.actionMessage = m;
+
+	if ([self offerBotButtonsForRow:row message:m])
+		return;
+	[self showActionsSheetForRow:row];
+}
+
+- (void)showActionsSheetForRow:(NSInteger)row {
+	if (row < 0 || row >= (NSInteger)self.messages.count)
+		return;
+	NSDictionary *m = self.messages[row];
 	if (![m[@"id"] isKindOfClass:NSNumber.class])
 		return;
 	self.actionMessage = m;
@@ -4469,9 +6237,65 @@ static const NSInteger kModerationSheetTag  = 50;
 - (void)locationManager:(CLLocationManager *)manager
 	 didUpdateLocations:(NSArray *)locations {
 	CLLocation *fix = [locations lastObject];
+	NSString *mode = self.locationMode ?: @"point";
+
+	if ([mode isEqualToString:@"tracking"]){
+		if (fix && self.liveLocationMessageId)
+			[[TGClient shared] updateLiveLocation:self.liveLocationMessageId
+										   inChat:self.chatId
+										 latitude:fix.coordinate.latitude
+										longitude:fix.coordinate.longitude];
+		return;
+	}
+
 	[manager stopUpdatingLocation];
 	if (!fix)
 		return;
+
+	if ([mode isEqualToString:@"live"]){
+		__weak typeof(self) weakSelf = self;
+		[[TGClient shared] sendLiveLocationWithLatitude:fix.coordinate.latitude
+											  longitude:fix.coordinate.longitude
+												 period:3600
+												 toChat:self.chatId
+											 completion:^(int64_t messageId){
+			TGChatViewController *me = weakSelf;
+			if (!me)
+				return;
+			if (!messageId){
+				me.locationMode = nil;
+				[me showAlertTitle:@"" message:@"Live location could not be started."];
+				return;
+			}
+			me.liveLocationMessageId = messageId;
+			me.locationMode = @"tracking";
+			me.locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters;
+			me.locationManager.distanceFilter = 50;
+			[me.locationManager startUpdatingLocation];
+			[TGSnackbar showInView:me.view text:@"Sharing your location for an hour"
+						   seconds:3 onCommit:nil];
+			[me reload];
+		}];
+		return;
+	}
+
+	if ([mode isEqualToString:@"venue"]){
+		NSString *title = self.venueTitle ?: @"Place";
+		[[TGClient shared] sendVenueWithTitle:title
+									  address:(self.venueAddress ?: @"")
+									 latitude:fix.coordinate.latitude
+									longitude:fix.coordinate.longitude
+									   toChat:self.chatId];
+		self.venueTitle = nil;
+		self.venueAddress = nil;
+		self.locationMode = nil;
+		[self clearComposeState];
+		dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+				dispatch_get_main_queue(), ^{ [self reload]; });
+		return;
+	}
+
+	self.locationMode = nil;
 	[[TGClient shared] sendLocation:fix.coordinate.latitude
 						  longitude:fix.coordinate.longitude
 							 toChat:self.chatId];
@@ -4515,6 +6339,11 @@ static const NSInteger kModerationSheetTag  = 50;
 	[picker dismissViewControllerAnimated:YES completion:nil];
 
 	NSURL *movie = info[UIImagePickerControllerMediaURL];
+	if (self.attachMode.length){
+		[self handleAttachPickOfMovie:movie.path
+								image:info[UIImagePickerControllerOriginalImage]];
+		return;
+	}
 	if (movie){
 		[[TGClient shared] sendVideoAtPath:movie.path toChat:self.chatId];
 		return;
@@ -4541,7 +6370,88 @@ static const NSInteger kModerationSheetTag  = 50;
 }
 
 - (void)imagePickerControllerDidCancel:(UIImagePickerController *)picker {
+	self.attachMode = nil;
+	self.albumPaths = nil;
 	[picker dismissViewControllerAnimated:YES completion:nil];
+}
+
+/// The three sends the picker is borrowed for: a file kept as a file, an mp4
+/// sent as a GIF, and a run of photos collected into one album bubble.
+- (void)handleAttachPickOfMovie:(NSString *)moviePath image:(UIImage *)image {
+	NSString *mode = self.attachMode;
+	self.attachMode = nil;
+	if (self.postingBlocked)
+		return;
+
+	if ([mode isEqualToString:@"animation"]){
+		if (!moviePath.length){
+			[self showAlertTitle:@"" message:@"A GIF is made from a video."];
+			return;
+		}
+		[[TGClient shared] sendAnimationAtPath:moviePath toChat:self.chatId
+										thread:self.threadId caption:@""];
+		[self clearComposeState];
+		dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+				dispatch_get_main_queue(), ^{ [self reload]; });
+		return;
+	}
+
+	if ([mode isEqualToString:@"document"]){
+		NSString *path = moviePath.length ? moviePath : [self stageImageForSending:image];
+		if (!path.length){
+			[self showAlertTitle:@"" message:@"This file could not be prepared."];
+			return;
+		}
+		[[TGClient shared] sendDocumentAtPath:path toChat:self.chatId
+									   thread:self.threadId caption:@""];
+		[self clearComposeState];
+		dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+				dispatch_get_main_queue(), ^{ [self reload]; });
+		return;
+	}
+
+	if (![mode isEqualToString:@"album"])
+		return;
+
+	NSString *path = [self stageImageForSending:image];
+	if (path.length)
+		[self.albumPaths addObject:path];
+	if (!self.albumPaths.count){
+		[self showAlertTitle:@"" message:@"No photo was picked."];
+		return;
+	}
+
+	UIAlertView *ask = [[UIAlertView alloc] initWithTitle:@"Photo Album"
+												  message:[NSString stringWithFormat:
+														  @"%lu photo%@ so far.",
+														  (unsigned long)self.albumPaths.count,
+														  (self.albumPaths.count == 1 ? @"" : @"s")]
+												 delegate:self
+										cancelButtonTitle:@"Add Another"
+										otherButtonTitles:@"Send", nil];
+	ask.tag = kAlbumAlertTag;
+	[ask show];
+}
+
+- (void)sendCollectedAlbum {
+	NSArray *paths = [self.albumPaths copy];
+	self.albumPaths = nil;
+	if (!paths.count)
+		return;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] sendPhotoAlbumAtPaths:paths toChat:self.chatId caption:@""
+								  completion:^(NSArray *messages){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (!messages.count){
+			[me showAlertTitle:@"" message:@"This album could not be sent."];
+			return;
+		}
+		[me clearComposeState];
+		[me reload];
+	}];
 }
 
 #pragma mark - taps
@@ -4585,6 +6495,14 @@ static const NSInteger kModerationSheetTag  = 50;
 	if ([kind isEqualToString:@"messagePoll"])
 		return;
 
+	if ([kind isEqualToString:@"messageVoiceNote"] || [kind isEqualToString:@"messageAudio"] ||
+		[kind isEqualToString:@"messageVideoNote"] || [kind isEqualToString:@"messageVideo"] ||
+		[kind isEqualToString:@"messagePhoto"]){
+		if ([m[@"id"] isKindOfClass:NSNumber.class])
+			[[TGClient shared] openContentOfMessage:[m[@"id"] longLongValue]
+											 inChat:self.chatId];
+	}
+
 	// A reply is unreadable if you cannot get to what it answers.
 	// The flattened message stores absent values as NSNull, which answers no
 	// number selector - asking it for a long long is what brought the app
@@ -4592,6 +6510,11 @@ static const NSInteger kModerationSheetTag  = 50;
 	NSNumber *replyTo = [m[@"replyId"] isKindOfClass:NSNumber.class] ? m[@"replyId"] : nil;
 	if (replyTo && [self scrollToMessageId:replyTo.longLongValue])
 		return;
+
+	if ([m[@"id"] isKindOfClass:NSNumber.class] && [self largeEmojiCountFor:m] > 0){
+		[self playAnimatedEmojiEffectFor:[m[@"id"] longLongValue]];
+		return;
+	}
 
 	// A theme file is the one document worth opening in place: tapping it
 	// applies the theme, the way the official clients do.
@@ -4701,6 +6624,40 @@ static const NSInteger kModerationSheetTag  = 50;
 		}];
 		return;
 	}
+}
+
+/// The effect is a sticker TDLib names for us: fetch it, show it over the
+/// chat for a moment, and let it go again - nothing is kept.
+- (void)playAnimatedEmojiEffectFor:(int64_t)messageId {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] clickAnimatedEmojiInMessage:messageId inChat:self.chatId
+										completion:^(NSInteger stickerFileId){
+		TGChatViewController *me = weakSelf;
+		if (!me || stickerFileId <= 0)
+			return;
+		[[TGClient shared] downloadFile:stickerFileId completion:^(NSString *path){
+			TGChatViewController *inner = weakSelf;
+			if (!inner || !path.length)
+				return;
+			UIImage *sticker = [UIImage imageWithContentsOfFile:path];
+			if (!sticker && [path.pathExtension.lowercaseString isEqualToString:@"webp"])
+				sticker = [UIImage convertFromWebP:path compressedData:nil error:nil];
+			if (!sticker)
+				return;
+			UIImageView *effect = [[UIImageView alloc] initWithImage:
+					TGImageDrawnAtPointSize(sticker, CGSizeMake(140, 140))];
+			effect.frame = CGRectMake(0, 0, 140, 140);
+			effect.center = CGPointMake(CGRectGetMidX(inner.view.bounds),
+										CGRectGetMidY(inner.view.bounds));
+			effect.userInteractionEnabled = NO;
+			[inner.view addSubview:effect];
+			[UIView animateWithDuration:0.9 animations:^{
+				effect.alpha = 0.0f;
+			} completion:^(BOOL finished){
+				[effect removeFromSuperview];
+			}];
+		}];
+	}];
 }
 
 - (void)playAudioMessage:(NSDictionary *)m fromSeconds:(NSTimeInterval)seconds {
@@ -5535,8 +7492,9 @@ static UIColor *TGSenderColour(int64_t userId) {
 		TGTheme *serviceTheme = [TGTheme shared];
 		// "joined the group" reads oddly with nobody attached to it.
 		NSString *who = [[TGClient shared] nameForUserId:[m[@"senderId"] longLongValue]];
-		NSString *body = [self textOf:m] ?: @"";
-		NSString *line = who.length
+		NSString *botLine = [[TGClient shared] botServiceTextForMessage:m];
+		NSString *body = botLine.length ? botLine : ([self textOf:m] ?: @"");
+		NSString *line = (who.length && !botLine.length)
 				? [NSString stringWithFormat:@"%@ %@", who, body]
 				: body;
 
@@ -6263,6 +8221,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 												 : @"Send Without Sound")];
 	[sheet addButtonWithTitle:(self.protectContent ? @"Allow Forwarding"
 												   : @"Protect Content")];
+	[sheet addButtonWithTitle:@"Text Tools"];
 	BOOL reminders = [self isRemindersChat];
 	[sheet addButtonWithTitle:(reminders ? @"Set a Reminder" : @"Schedule Message")];
 	if (self.scheduledMessages.count)
@@ -6290,6 +8249,10 @@ static UIColor *TGSenderColour(int64_t userId) {
 								? @"New messages cannot be forwarded or saved"
 								: @"New messages can be forwarded")
 					   seconds:3 onCommit:nil];
+		return;
+	}
+	if ([title isEqualToString:@"Text Tools"]){
+		[self showTextTools];
 		return;
 	}
 	if ([title isEqualToString:@"Schedule Message"] ||
@@ -6370,6 +8333,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 
 - (void)dismissSchedulePicker {
 	UIView *panel = self.datePickerPanel;
+	self.reschedulingMessageId = 0;
 	if (!panel)
 		return;
 	self.datePickerPanel = nil;
@@ -6385,12 +8349,18 @@ static UIColor *TGSenderColour(int64_t userId) {
 
 - (void)commitSchedulePicker {
 	NSDate *when = self.schedulePicker.date;
+	int64_t moving = self.reschedulingMessageId;
 	[self dismissSchedulePicker];
 	if (!when)
 		return;
 	NSTimeInterval stamp = [when timeIntervalSince1970];
 	if (stamp <= [[NSDate date] timeIntervalSince1970])
 		return;
+	if (moving){
+		self.reschedulingMessageId = moving;
+		[self rescheduleTo:stamp];
+		return;
+	}
 	self.scheduleWhenOnline = NO;
 	self.scheduledSendDate = stamp;
 	[self showComposeBanner:[NSString stringWithFormat:
@@ -6489,6 +8459,54 @@ static UIColor *TGSenderColour(int64_t userId) {
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 	sheet.tag = kScheduledListSheetTag;
 	[sheet showInView:self.view];
+}
+
+/// A scheduled message is worth two things, not one: sending it now, and
+/// moving it to another moment.
+- (void)showScheduledItemOptions:(NSInteger)index {
+	self.scheduledItemIndex = index;
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:@"Send Now",
+															   @"Reschedule", nil];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = kScheduledItemSheetTag;
+	[sheet showInView:self.view];
+}
+
+- (void)beginReschedulingItem:(NSInteger)index {
+	if (index < 0 || index >= (NSInteger)self.scheduledMessages.count)
+		return;
+	NSDictionary *m = self.scheduledMessages[index];
+	if (![m[@"id"] isKindOfClass:NSNumber.class])
+		return;
+	self.reschedulingMessageId = [m[@"id"] longLongValue];
+	[self showSchedulePicker];
+}
+
+- (void)rescheduleTo:(NSTimeInterval)stamp {
+	int64_t messageId = self.reschedulingMessageId;
+	self.reschedulingMessageId = 0;
+	if (!messageId)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] rescheduleMessage:messageId
+								  inChat:self.chatId
+								sendDate:stamp
+							  whenOnline:NO
+							  completion:^(BOOL ok){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (!ok){
+			[me showAlertTitle:@"" message:@"This message could not be moved."];
+			return;
+		}
+		[me loadScheduledMessages];
+		[TGSnackbar showInView:me.view text:@"Moved to another time" seconds:3 onCommit:nil];
+	}];
 }
 
 - (void)sendScheduledMessageAtIndex:(NSInteger)index {
@@ -6595,8 +8613,8 @@ static UIColor *TGSenderColour(int64_t userId) {
 	}
 
 	NSArray *titles = [[TGClient shared] isSecretChat:self.chatId]
-			? @[@"Delete"]
-			: @[@"Forward", @"Copy", @"Save", @"Delete"];
+			? @[@"More", @"Delete"]
+			: @[@"Forward", @"Copy", @"Save", @"More", @"Delete"];
 	CGFloat slice = b.size.width / titles.count;
 	for (NSUInteger i = 0; i < titles.count; i++){
 		UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -6634,8 +8652,71 @@ static UIColor *TGSenderColour(int64_t userId) {
 		[self copySelected];
 	else if ([title isEqualToString:@"Save"])
 		[self saveSelectedToCameraRoll];
+	else if ([title isEqualToString:@"More"])
+		[self showSelectionMore];
 	else
 		[self confirmDeleteSelected];
+}
+
+/// One message selected opens everything the chat knows about it; several
+/// share only the one action that makes sense in bulk.
+- (void)showSelectionMore {
+	if (self.selectedIds.count == 1){
+		[self openInfoForMessageId:[[self.selectedIds firstObject] longLongValue]];
+		return;
+	}
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:@"Try Again", nil];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = kSelectionMoreSheetTag;
+	[sheet showInView:self.view];
+}
+
+- (void)runSelectionMore:(NSString *)chosen {
+	if (![chosen isEqualToString:@"Try Again"] || !self.selectedIds.count)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] resendMessages:[self.selectedIds copy] inChat:self.chatId
+						   completion:^(NSArray *messages){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		[me endSelection];
+		if (!messages.count){
+			[me showAlertTitle:@"" message:@"None of these could be sent again."];
+			return;
+		}
+		[me reload];
+	}];
+}
+
+- (void)openInfoForMessageId:(int64_t)messageId {
+	NSDictionary *found = nil;
+	for (NSDictionary *m in self.messages){
+		if ([m[@"id"] isKindOfClass:NSNumber.class] &&
+			[m[@"id"] longLongValue] == messageId){
+			found = m;
+			break;
+		}
+	}
+	if (!found)
+		return;
+
+	TGMessageInfoViewController *info = [[TGMessageInfoViewController alloc] init];
+	info.chatId = self.chatId;
+	info.messageId = messageId;
+	info.message = found;
+	info.isGroup = self.isGroup;
+	info.canResend = [[self sendStateForMessage:found] isEqualToString:@"failed"];
+	__weak typeof(self) weakSelf = self;
+	info.onOpenChat = ^(int64_t targetChatId, NSString *title){
+		[weakSelf openChatId:targetChatId title:title isGroup:YES];
+	};
+	[self endSelection];
+	[self.navigationController pushViewController:info animated:YES];
 }
 
 - (void)forwardSelected {
@@ -6890,6 +8971,660 @@ static UIColor *TGSenderColour(int64_t userId) {
 	[self updateMentionButton];
 }
 
+#pragma mark - unread reactions
+
+- (void)loadUnreadReactions {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] unreadReactionsInChat:self.chatId
+							   fromMessageId:0
+									   limit:30
+								  completion:^(NSArray *messageIds){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		me.reactionMessageIds = [(messageIds ?: @[]) mutableCopy];
+		[me updateReactionButton];
+	}];
+}
+
+- (void)updateReactionButton {
+	if (!self.reactionMessageIds.count){
+		self.reactionButton.hidden = YES;
+		return;
+	}
+	if (!self.reactionButton){
+		self.reactionButton = [UIButton buttonWithType:UIButtonTypeCustom];
+		self.reactionButton.frame = CGRectMake(0, 0, 34, 34);
+		self.reactionButton.layer.cornerRadius = 17;
+		self.reactionButton.clipsToBounds = YES;
+		self.reactionButton.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.9f];
+		self.reactionButton.layer.borderWidth = 1.0f;
+		self.reactionButton.layer.borderColor = [[TGTheme shared] separatorColour].CGColor;
+		self.reactionButton.titleLabel.font = [UIFont boldSystemFontOfSize:13];
+		[self.reactionButton setTitleColor:[[TGTheme shared] accentColour]
+								  forState:UIControlStateNormal];
+		self.reactionButton.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin |
+											   UIViewAutoresizingFlexibleTopMargin;
+		[self.reactionButton addTarget:self action:@selector(reactionBadgeTapped)
+					  forControlEvents:UIControlEventTouchUpInside];
+		[self.view addSubview:self.reactionButton];
+	}
+	[self.reactionButton setTitle:[NSString stringWithFormat:@"♥%lu",
+			(unsigned long)self.reactionMessageIds.count] forState:UIControlStateNormal];
+	self.reactionButton.hidden = NO;
+	self.reactionButton.frame = CGRectMake(self.view.bounds.size.width - 44,
+			CGRectGetMinY(self.inputBar.frame) - 132, 34, 34);
+	[self.view bringSubviewToFront:self.reactionButton];
+}
+
+- (void)reactionBadgeTapped {
+	NSNumber *next = [self.reactionMessageIds firstObject];
+	if (!next){
+		[self updateReactionButton];
+		return;
+	}
+	[self.reactionMessageIds removeObjectAtIndex:0];
+	if (![self scrollToMessageId:next.longLongValue])
+		[self showAlertTitle:@"" message:@"That reaction is not in the loaded history."];
+	if (!self.reactionMessageIds.count)
+		[[TGClient shared] markReactionsReadInChat:self.chatId];
+	[self updateReactionButton];
+}
+
+- (void)openReactionDetailForMessage:(int64_t)messageId {
+	NSDictionary *found = nil;
+	for (NSDictionary *m in self.messages)
+		if ([m[@"id"] isKindOfClass:NSNumber.class] &&
+			[m[@"id"] longLongValue] == messageId)
+			found = m;
+	TGMessageReactionsViewController *screen =
+			[[TGMessageReactionsViewController alloc] init];
+	screen.chatId = self.chatId;
+	screen.messageId = messageId;
+	screen.message = found;
+	[self.navigationController pushViewController:screen animated:YES];
+}
+
+#pragma mark - bots
+
+- (int64_t)botChatUserId {
+	return (!self.isGroup && self.chatId > 0 &&
+			self.chatId != [[TGClient shared] savedMessagesChatId]) ? self.chatId : 0;
+}
+
+- (void)detectBotChat {
+	int64_t botId = [self botChatUserId];
+	if (!botId)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] botInfoForUser:botId completion:^(NSDictionary *info){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		me.chatIsWithBot = (info != nil);
+	}];
+}
+
+- (void)showBotMenu {
+	int64_t botId = [self botChatUserId];
+	if (!botId)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] canBotSendMessages:botId completion:^(BOOL allowed){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Bot"
+														   delegate:me
+												  cancelButtonTitle:nil
+											 destructiveButtonTitle:nil
+												  otherButtonTitles:@"Commands",
+																	@"About This Bot",
+																	@"Menu Button",
+																	@"Start Bot",
+																	@"Similar Bots", nil];
+		if (!allowed)
+			[sheet addButtonWithTitle:@"Allow Messages From This Bot"];
+		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+		sheet.tag = kBotMenuSheetTag;
+		[sheet showInView:me.view];
+	}];
+}
+
+- (void)runBotMenu:(NSString *)chosen {
+	int64_t botId = [self botChatUserId];
+	if (!botId)
+		return;
+	__weak typeof(self) weakSelf = self;
+
+	if ([chosen isEqualToString:@"Commands"]){
+		NSString *typed = [self composerText];
+		void (^show)(NSArray *) = ^(NSArray *commands){
+			TGChatViewController *me = weakSelf;
+			if (!me)
+				return;
+			if (!commands.count){
+				[me showAlertTitle:@"" message:@"This bot publishes no commands."];
+				return;
+			}
+			me.botCommandList = commands;
+			UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Commands"
+															   delegate:me
+													  cancelButtonTitle:nil
+												 destructiveButtonTitle:nil
+													  otherButtonTitles:nil];
+			NSUInteger shown = MIN((NSUInteger)8, commands.count);
+			for (NSUInteger i = 0; i < shown; i++){
+				NSDictionary *entry = commands[i];
+				NSString *description = entry[@"description"];
+				[sheet addButtonWithTitle:(description.length
+						? [NSString stringWithFormat:@"/%@ - %@", entry[@"command"], description]
+						: [NSString stringWithFormat:@"/%@", entry[@"command"]])];
+			}
+			sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+			sheet.tag = kBotCommandsSheetTag;
+			[sheet showInView:me.view];
+		};
+		if ([typed hasPrefix:@"/"] && typed.length > 1)
+			[[TGClient shared] botCommandsForUser:botId matchingPrefix:typed
+									   completion:show];
+		else
+			[[TGClient shared] botCommandsForUser:botId completion:show];
+		return;
+	}
+
+	if ([chosen isEqualToString:@"About This Bot"]){
+		[[TGClient shared] botInfoForUser:botId completion:^(NSDictionary *info){
+			TGChatViewController *me = weakSelf;
+			if (!me)
+				return;
+			if (!info){
+				[me showAlertTitle:@"" message:@"This chat is not with a bot."];
+				return;
+			}
+			NSString *description = info[@"description"];
+			if (!description.length)
+				description = info[@"shortDescription"];
+			NSInteger commandCount = [info[@"commands"] count];
+			NSMutableString *body = [NSMutableString string];
+			[body appendString:(description.length ? description : @"No description.")];
+			if (commandCount)
+				[body appendFormat:@"\n\n%ld commands", (long)commandCount];
+			[me showAlertTitle:(me.chatTitle ?: @"Bot") message:body];
+		}];
+		return;
+	}
+
+	if ([chosen isEqualToString:@"Menu Button"]){
+		[[TGClient shared] menuButtonForBot:botId completion:^(NSDictionary *button){
+			TGChatViewController *me = weakSelf;
+			if (!me)
+				return;
+			NSString *url = button[@"url"];
+			if (!url.length){
+				[me showAlertTitle:@"" message:@"This bot has no menu button."];
+				return;
+			}
+			[me openLink:url];
+		}];
+		return;
+	}
+
+	if ([chosen isEqualToString:@"Start Bot"]){
+		[[TGClient shared] startBot:botId inChat:self.chatId parameter:nil];
+		[TGSnackbar showInView:self.view text:@"Bot started" seconds:3 onCommit:nil];
+		dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+				dispatch_get_main_queue(), ^{ [weakSelf reload]; });
+		return;
+	}
+
+	if ([chosen isEqualToString:@"Similar Bots"]){
+		[[TGClient shared] similarBotsFor:botId completion:^(NSArray *bots, NSInteger total){
+			TGChatViewController *me = weakSelf;
+			if (!me)
+				return;
+			if (!bots.count){
+				[me showAlertTitle:@"" message:@"No similar bots were found."];
+				return;
+			}
+			me.similarBotList = bots;
+			UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:
+					[NSString stringWithFormat:@"Similar Bots (%ld)", (long)total]
+															   delegate:me
+													  cancelButtonTitle:nil
+												 destructiveButtonTitle:nil
+													  otherButtonTitles:nil];
+			NSUInteger shown = MIN((NSUInteger)8, bots.count);
+			for (NSUInteger i = 0; i < shown; i++)
+				[sheet addButtonWithTitle:(bots[i][@"name"] ?: bots[i][@"username"] ?: @"Bot")];
+			sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+			sheet.tag = kSimilarBotsSheetTag;
+			[sheet showInView:me.view];
+		}];
+		return;
+	}
+
+	if ([chosen isEqualToString:@"Allow Messages From This Bot"]){
+		UIAlertView *ask = [[UIAlertView alloc] initWithTitle:(self.chatTitle ?: @"Bot")
+													  message:@"Let this bot message you without being started?"
+													 delegate:self
+											cancelButtonTitle:@"Cancel"
+											otherButtonTitles:@"Allow", nil];
+		ask.tag = kAllowBotAlertTag;
+		[ask show];
+	}
+}
+
+- (void)openBotFromEntry:(NSDictionary *)entry {
+	int64_t userId = [entry[@"id"] longLongValue];
+	if (!userId)
+		return;
+	NSString *name = entry[@"name"] ?: entry[@"username"] ?: @"Bot";
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] privateChatWithUser:userId completion:^(int64_t openedChatId){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (!openedChatId){
+			[me showAlertTitle:@"" message:@"That bot could not be opened."];
+			return;
+		}
+		[me openChatId:openedChatId title:name isGroup:NO];
+	}];
+}
+
+#pragma mark - bot keyboards
+
+- (NSArray *)botButtonsForMessage:(NSDictionary *)m {
+	NSMutableArray *flat = [NSMutableArray array];
+	for (NSArray *row in [[TGClient shared] inlineKeyboardRowsForMessage:m])
+		for (NSDictionary *button in row)
+			if ([button isKindOfClass:NSDictionary.class])
+				[flat addObject:button];
+
+	NSDictionary *replyKeyboard = [[TGClient shared] replyKeyboardForMessage:m];
+	for (NSArray *row in replyKeyboard[@"rows"]){
+		for (NSDictionary *button in row){
+			if (![button isKindOfClass:NSDictionary.class])
+				continue;
+			NSMutableDictionary *copy = [button mutableCopy];
+			copy[@"replyKeyboard"] = @YES;
+			[flat addObject:copy];
+		}
+	}
+	return flat;
+}
+
+- (BOOL)offerBotButtonsForRow:(NSInteger)row message:(NSDictionary *)m {
+	NSArray *buttons = [self botButtonsForMessage:m];
+	if (!buttons.count)
+		return NO;
+
+	self.botButtons = buttons;
+	self.botButtonsMessageId = [m[@"id"] longLongValue];
+	self.botButtonsRow = row;
+
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Bot Buttons"
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:nil];
+	NSUInteger shown = MIN((NSUInteger)8, buttons.count);
+	for (NSUInteger i = 0; i < shown; i++){
+		NSString *text = buttons[i][@"text"];
+		[sheet addButtonWithTitle:(text.length ? text : @"Button")];
+	}
+	[sheet addButtonWithTitle:@"Message Actions"];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = kBotButtonsSheetTag;
+	[sheet showInView:self.view];
+	return YES;
+}
+
+- (void)runBotButtonAtIndex:(NSInteger)index {
+	NSUInteger shown = MIN((NSUInteger)8, self.botButtons.count);
+	if (index < 0 || index >= (NSInteger)shown){
+		[self showActionsSheetForRow:self.botButtonsRow];
+		return;
+	}
+	NSDictionary *button = self.botButtons[index];
+	NSString *kind = button[@"kind"];
+	int64_t messageId = self.botButtonsMessageId;
+	__weak typeof(self) weakSelf = self;
+
+	if ([button[@"replyKeyboard"] boolValue]){
+		[self runReplyKeyboardButton:button messageId:messageId];
+		return;
+	}
+
+	if ([kind isEqualToString:@"url"] || [kind isEqualToString:@"loginUrl"] ||
+		[kind isEqualToString:@"webApp"]){
+		[self openLink:button[@"url"]];
+		return;
+	}
+
+	if ([kind isEqualToString:@"copyText"]){
+		NSString *text = button[@"copyText"] ?: button[@"text"];
+		if (!text.length){
+			[self showAlertTitle:@"" message:@"This button has nothing to copy."];
+			return;
+		}
+		[UIPasteboard generalPasteboard].string = text;
+		[TGSnackbar showInView:self.view text:@"Copied" seconds:3 onCommit:nil];
+		return;
+	}
+
+	if ([kind isEqualToString:@"switchInline"]){
+		NSString *query = button[@"query"] ?: @"";
+		self.input.text = query;
+		[self inputChanged];
+		[self.input becomeFirstResponder];
+		[TGSnackbar showInView:self.view
+						  text:([button[@"target"] isEqualToString:@"current"]
+								? @"Query placed in the message field"
+								: @"Query placed in the message field for this chat")
+					   seconds:3 onCommit:nil];
+		return;
+	}
+
+	if ([kind isEqualToString:@"user"]){
+		int64_t userId = [button[@"userId"] longLongValue];
+		if (!userId){
+			[self showAlertTitle:@"" message:@"This button points at nobody."];
+			return;
+		}
+		[self openBotFromEntry:@{ @"id" : @(userId),
+								  @"name" : ([[TGClient shared] nameForUserId:userId]
+											 ?: (button[@"text"] ?: @"Chat")) }];
+		return;
+	}
+
+	if ([kind isEqualToString:@"callbackWithPassword"]){
+		self.pendingCallbackButton = button;
+		UIAlertView *ask = [[UIAlertView alloc] initWithTitle:(button[@"text"] ?: @"Password")
+													  message:@"Your two-step verification password"
+													 delegate:self
+											cancelButtonTitle:@"Cancel"
+											otherButtonTitles:@"Send", nil];
+		if ([ask respondsToSelector:@selector(setAlertViewStyle:)])
+			ask.alertViewStyle = UIAlertViewStyleSecureTextInput;
+		ask.tag = kBotPasswordAlertTag;
+		[ask show];
+		return;
+	}
+
+	if ([kind isEqualToString:@"callback"] || [kind isEqualToString:@"callbackGame"]){
+		[[TGClient shared] pressCallbackButton:button
+										inChat:self.chatId
+									   message:messageId
+									completion:^(NSDictionary *answer){
+			[weakSelf showCallbackAnswer:answer];
+		}];
+		return;
+	}
+
+	[self showAlertTitle:@"" message:@"This button cannot be used here."];
+}
+
+- (void)showCallbackAnswer:(NSDictionary *)answer {
+	if (!answer){
+		[self showAlertTitle:@"" message:@"The bot did not answer."];
+		return;
+	}
+	NSString *url = answer[@"url"];
+	if (url.length){
+		[self openLink:url];
+		return;
+	}
+	NSString *text = answer[@"text"];
+	if (!text.length){
+		[TGSnackbar showInView:self.view text:@"Done" seconds:2 onCommit:nil];
+		return;
+	}
+	if ([answer[@"showAlert"] boolValue])
+		[self showAlertTitle:@"" message:text];
+	else
+		[TGSnackbar showInView:self.view text:text seconds:3 onCommit:nil];
+}
+
+- (void)runReplyKeyboardButton:(NSDictionary *)button messageId:(int64_t)messageId {
+	NSString *kind = button[@"kind"];
+
+	if (!kind.length || [kind isEqualToString:@"text"]){
+		NSString *text = button[@"text"];
+		if (!text.length)
+			return;
+		self.input.text = text;
+		[self inputChanged];
+		[self sendTapped];
+		return;
+	}
+
+	if ([kind isEqualToString:@"requestLocation"]){
+		[self sendCurrentLocation];
+		return;
+	}
+
+	if ([kind isEqualToString:@"requestPoll"]){
+		[self askPollQuestion];
+		return;
+	}
+
+	if ([kind isEqualToString:@"webApp"]){
+		[self openLink:button[@"url"]];
+		return;
+	}
+
+	if ([kind isEqualToString:@"requestUsers"] || [kind isEqualToString:@"requestChat"]){
+		self.sharePickerKind = kind;
+		self.sharePickerButtonId = [button[@"buttonId"] integerValue];
+		self.sharePickerMessageId = messageId;
+		TGForwardPicker *picker = [[TGForwardPicker alloc] init];
+		__weak typeof(self) weakSelf = self;
+		picker.onPicked = ^(int64_t pickedChatId){
+			[weakSelf completeShareWithChatId:pickedChatId];
+		};
+		[self.navigationController pushViewController:picker animated:YES];
+		return;
+	}
+
+	[self showAlertTitle:@"" message:@"This button cannot be used here."];
+}
+
+- (void)completeShareWithChatId:(int64_t)pickedChatId {
+	if (!pickedChatId || !self.sharePickerKind.length)
+		return;
+
+	if ([self.sharePickerKind isEqualToString:@"requestUsers"]){
+		if (pickedChatId <= 0){
+			[self showAlertTitle:@"" message:@"The bot asked for a person, not a group."];
+			return;
+		}
+		[[TGClient shared] shareUsers:@[@(pickedChatId)]
+						withBotButton:self.sharePickerButtonId
+							   inChat:self.chatId
+							  message:self.sharePickerMessageId];
+	} else {
+		[[TGClient shared] shareChat:pickedChatId
+					   withBotButton:self.sharePickerButtonId
+							  inChat:self.chatId
+							 message:self.sharePickerMessageId];
+	}
+	self.sharePickerKind = nil;
+	[TGSnackbar showInView:self.view text:@"Sent to the bot" seconds:3 onCommit:nil];
+	__weak typeof(self) weakSelf = self;
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+			dispatch_get_main_queue(), ^{ [weakSelf reload]; });
+}
+
+#pragma mark - inline bots
+
+- (void)askInlineBotQuery {
+	NSString *typed = [self composerText];
+	UIAlertView *ask = [[UIAlertView alloc] initWithTitle:@"Inline Bot"
+												  message:@"Bot username and what to look for"
+												 delegate:self
+										cancelButtonTitle:@"Cancel"
+										otherButtonTitles:@"Search", nil];
+	if ([ask respondsToSelector:@selector(setAlertViewStyle:)]){
+		ask.alertViewStyle = UIAlertViewStylePlainTextInput;
+		[ask textFieldAtIndex:0].text = [typed hasPrefix:@"@"] ? typed : @"@";
+	}
+	ask.tag = kInlineQueryAlertTag;
+	[ask show];
+}
+
+- (void)runInlineBotEntry:(NSString *)entry {
+	NSString *trimmed = [entry stringByTrimmingCharactersInSet:
+			[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+	if ([trimmed hasPrefix:@"@"])
+		trimmed = [trimmed substringFromIndex:1];
+
+	NSRange space = [trimmed rangeOfString:@" "];
+	NSString *username = (space.location == NSNotFound)
+			? trimmed : [trimmed substringToIndex:space.location];
+	NSString *query = (space.location == NSNotFound)
+			? @"" : [trimmed substringFromIndex:space.location + 1];
+
+	if (!username.length){
+		[self showRecentInlineBots];
+		return;
+	}
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] publicChatWithUsername:username completion:^(NSDictionary *chat){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		int64_t botId = [chat[@"id"] longLongValue];
+		if (!botId)
+			botId = [chat[@"chatId"] longLongValue];
+		if (botId <= 0){
+			[me showAlertTitle:@"" message:@"There is no such bot."];
+			return;
+		}
+		[me runInlineQueryForBot:botId query:query offset:nil];
+	}];
+}
+
+- (void)showRecentInlineBots {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] recentInlineBotsWithCompletion:^(NSArray *bots){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (!bots.count){
+			[me showAlertTitle:@"" message:@"You have not used an inline bot yet."];
+			return;
+		}
+		me.recentInlineBotList = bots;
+		UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Recent Inline Bots"
+														   delegate:me
+												  cancelButtonTitle:nil
+											 destructiveButtonTitle:nil
+												  otherButtonTitles:nil];
+		NSUInteger shown = MIN((NSUInteger)8, bots.count);
+		for (NSUInteger i = 0; i < shown; i++)
+			[sheet addButtonWithTitle:[NSString stringWithFormat:@"@%@",
+					(bots[i][@"username"] ?: bots[i][@"name"] ?: @"bot")]];
+		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+		sheet.tag = kRecentBotsSheetTag;
+		[sheet showInView:me.view];
+	}];
+}
+
+- (void)runInlineQueryForBot:(int64_t)botId query:(NSString *)query offset:(NSString *)offset {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] inlineQueryToBot:botId
+								 inChat:self.chatId
+								  query:(query ?: @"")
+								 offset:offset
+							 completion:^(NSDictionary *results){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (!results){
+			[me showAlertTitle:@"" message:@"That bot did not answer an inline query."];
+			return;
+		}
+		me.inlineResults = results;
+		me.inlineBotId = botId;
+		me.inlineQueryText = query;
+		[me showInlineResults];
+	}];
+}
+
+- (void)showInlineResults {
+	NSArray *results = self.inlineResults[@"results"];
+	NSString *buttonText = self.inlineResults[@"buttonText"];
+	if (!results.count && !buttonText.length){
+		[self showAlertTitle:@"" message:@"Nothing was found."];
+		return;
+	}
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Results"
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:nil];
+	NSUInteger shown = MIN((NSUInteger)7, results.count);
+	for (NSUInteger i = 0; i < shown; i++){
+		NSDictionary *result = results[i];
+		NSString *title = result[@"title"];
+		if (!title.length)
+			title = result[@"description"];
+		if (!title.length)
+			title = result[@"kind"] ?: @"Result";
+		[sheet addButtonWithTitle:title];
+	}
+	if ([self.inlineResults[@"nextOffset"] length])
+		[sheet addButtonWithTitle:@"More Results"];
+	if (buttonText.length)
+		[sheet addButtonWithTitle:buttonText];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = kInlineResultsSheetTag;
+	[sheet showInView:self.view];
+}
+
+- (void)runInlineResultAtIndex:(NSInteger)index {
+	NSArray *results = self.inlineResults[@"results"];
+	NSUInteger shown = MIN((NSUInteger)7, results.count);
+	NSString *nextOffset = self.inlineResults[@"nextOffset"];
+	NSString *buttonText = self.inlineResults[@"buttonText"];
+
+	if (index >= 0 && index < (NSInteger)shown){
+		NSDictionary *result = results[index];
+		[[TGClient shared] sendInlineResult:result[@"id"]
+									queryId:self.inlineResults[@"queryId"]
+									 toChat:self.chatId
+									replyTo:self.replyToId
+									hideVia:NO];
+		[self clearComposeState];
+		self.input.text = @"";
+		[self inputChanged];
+		__weak typeof(self) weakSelf = self;
+		dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+				dispatch_get_main_queue(), ^{ [weakSelf reload]; });
+		return;
+	}
+
+	NSInteger cursor = (NSInteger)shown;
+	if (nextOffset.length){
+		if (index == cursor){
+			[self runInlineQueryForBot:self.inlineBotId
+								 query:self.inlineQueryText
+								offset:nextOffset];
+			return;
+		}
+		cursor++;
+	}
+	if (buttonText.length && index == cursor){
+		[[TGClient shared] startBot:self.inlineBotId
+							 inChat:self.chatId
+						  parameter:self.inlineResults[@"buttonParameter"]];
+		[TGSnackbar showInView:self.view text:@"Bot started" seconds:3 onCommit:nil];
+	}
+}
+
 #pragma mark - read state
 
 - (void)markVisibleMessagesRead {
@@ -7076,6 +9811,13 @@ static UIColor *TGSenderColour(int64_t userId) {
 
 #pragma mark - alerts
 
+- (NSString *)textInAlert:(UIAlertView *)alertView {
+	if (![alertView respondsToSelector:@selector(textFieldAtIndex:)])
+		return @"";
+	return [[alertView textFieldAtIndex:0].text stringByTrimmingCharactersInSet:
+			[NSCharacterSet whitespaceAndNewlineCharacterSet]] ?: @"";
+}
+
 - (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {
 	if (alertView.tag == kPastePhotoAlertTag){
 		if (buttonIndex == alertView.cancelButtonIndex){
@@ -7083,6 +9825,64 @@ static UIColor *TGSenderColour(int64_t userId) {
 			return;
 		}
 		[self sendPendingPastedImage];
+		return;
+	}
+	if (alertView.tag == kBotPasswordAlertTag){
+		NSDictionary *button = self.pendingCallbackButton;
+		self.pendingCallbackButton = nil;
+		if (buttonIndex == alertView.cancelButtonIndex || !button)
+			return;
+		NSString *password = [alertView respondsToSelector:@selector(textFieldAtIndex:)]
+				? [alertView textFieldAtIndex:0].text : @"";
+		__weak typeof(self) weakSelf = self;
+		[[TGClient shared] pressCallbackButton:button
+										inChat:self.chatId
+									   message:self.botButtonsMessageId
+									  password:(password ?: @"")
+									completion:^(NSDictionary *answer){
+			[weakSelf showCallbackAnswer:answer];
+		}];
+		return;
+	}
+	if (alertView.tag == kInlineQueryAlertTag){
+		if (buttonIndex == alertView.cancelButtonIndex)
+			return;
+		NSString *entry = [alertView respondsToSelector:@selector(textFieldAtIndex:)]
+				? [alertView textFieldAtIndex:0].text : @"";
+		[self runInlineBotEntry:(entry ?: @"")];
+		return;
+	}
+	if (alertView.tag == kAllowBotAlertTag){
+		if (buttonIndex == alertView.cancelButtonIndex)
+			return;
+		__weak typeof(self) weakSelf = self;
+		[[TGClient shared] allowBotToSendMessages:[self botChatUserId]
+									   completion:^(BOOL ok){
+			TGChatViewController *me = weakSelf;
+			if (!me)
+				return;
+			[me showAlertTitle:@""
+					   message:(ok ? @"This bot may now message you."
+								   : @"That permission could not be granted.")];
+		}];
+		return;
+	}
+	if (alertView.tag == kBotStartAlertTag){
+		NSString *link = self.pendingBotStartLink;
+		self.pendingBotStartLink = nil;
+		if (buttonIndex == alertView.cancelButtonIndex || !link.length)
+			return;
+		__weak typeof(self) weakSelf = self;
+		[[TGClient shared] openBotStartLink:link completion:^(int64_t openedChatId){
+			TGChatViewController *me = weakSelf;
+			if (!me)
+				return;
+			if (!openedChatId){
+				[me showAlertTitle:@"" message:@"That bot link could not be used."];
+				return;
+			}
+			[me openChatId:openedChatId title:@"Bot" isGroup:NO];
+		}];
 		return;
 	}
 	if (alertView.tag == kJoinLinkAlertTag){
@@ -7103,6 +9903,90 @@ static UIColor *TGSenderColour(int64_t userId) {
 			[me showAlertTitle:@""
 					   message:(requestSent ? @"Your request to join has been sent."
 										    : @"This invite link was refused.")];
+		}];
+		return;
+	}
+	if (alertView.tag == kAlbumAlertTag){
+		if (buttonIndex == alertView.cancelButtonIndex){
+			self.attachMode = @"album";
+			[self pickMedia];
+			return;
+		}
+		[self sendCollectedAlbum];
+		return;
+	}
+	if (alertView.tag == kVenueTitleAlertTag){
+		if (buttonIndex == alertView.cancelButtonIndex)
+			return;
+		self.venueTitle = [self textInAlert:alertView];
+		if (!self.venueTitle.length){
+			[self showAlertTitle:@"" message:@"A place needs a name."];
+			return;
+		}
+		UIAlertView *ask = [[UIAlertView alloc] initWithTitle:@"Place"
+													  message:@"Its address"
+													 delegate:self
+											cancelButtonTitle:@"Cancel"
+											otherButtonTitles:@"Send", nil];
+		if ([ask respondsToSelector:@selector(setAlertViewStyle:)])
+			ask.alertViewStyle = UIAlertViewStylePlainTextInput;
+		ask.tag = kVenueAddressAlertTag;
+		[ask show];
+		return;
+	}
+	if (alertView.tag == kVenueAddressAlertTag){
+		if (buttonIndex == alertView.cancelButtonIndex){
+			self.venueTitle = nil;
+			return;
+		}
+		self.venueAddress = [self textInAlert:alertView];
+		self.locationMode = @"venue";
+		[self sendCurrentLocation];
+		return;
+	}
+	if (alertView.tag == kPollQuestionAlertTag){
+		if (buttonIndex == alertView.cancelButtonIndex)
+			return;
+		self.pollQuestion = [self textInAlert:alertView];
+		if (!self.pollQuestion.length){
+			[self showAlertTitle:@"" message:@"A poll needs a question."];
+			return;
+		}
+		[self askPollOption];
+		return;
+	}
+	if (alertView.tag == kPollOptionAlertTag){
+		if (buttonIndex == alertView.cancelButtonIndex){
+			self.pollQuestion = nil;
+			self.pollOptionsBeingWritten = nil;
+			return;
+		}
+		NSString *option = [self textInAlert:alertView];
+		if (option.length)
+			[self.pollOptionsBeingWritten addObject:option];
+		if (buttonIndex == alertView.firstOtherButtonIndex &&
+			self.pollOptionsBeingWritten.count < 10){
+			[self askPollOption];
+			return;
+		}
+		[self sendWrittenPoll];
+		return;
+	}
+	if (alertView.tag == kQuickReplyAlertTag){
+		if (buttonIndex == alertView.cancelButtonIndex)
+			return;
+		NSString *name = [self textInAlert:alertView];
+		NSString *body = [self composerText];
+		if (!name.length || !body.length){
+			[self showAlertTitle:@"" message:@"A quick reply needs a name and some text."];
+			return;
+		}
+		__weak TGChatViewController *weakSelf = self;
+		[[TGClient shared] addQuickReplyShortcutNamed:name text:body
+										   completion:^(BOOL ok){
+			[weakSelf showAlertTitle:@""
+						 message:(ok ? @"Saved as a quick reply."
+									 : @"That name was refused.")];
 		}];
 		return;
 	}
@@ -7151,6 +10035,8 @@ static UIColor *TGSenderColour(int64_t userId) {
 			self.scrollDownButton.frame = CGRectMake(b.size.width - 44, top - 44, 34, 34);
 		if (self.mentionButton && !self.mentionButton.hidden)
 			self.mentionButton.frame = CGRectMake(b.size.width - 44, top - 88, 34, 34);
+		if (self.reactionButton && !self.reactionButton.hidden)
+			self.reactionButton.frame = CGRectMake(b.size.width - 44, top - 132, 34, 34);
 		if (self.selectionPanel){
 			CGRect panel = self.selectionPanel.frame;
 			panel.origin.y = top;

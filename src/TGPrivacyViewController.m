@@ -1,6 +1,7 @@
 #import "TGPrivacyViewController.h"
 #import "TGClient.h"
 #import "TGClient+Privacy.h"
+#import "TGClient+Account.h"
 #import "TGClient+Stories.h"
 #import "TGTheme.h"
 #import "TGIcons.h"
@@ -656,12 +657,16 @@ typedef void (^TGSecurityStepBlock)(TGSecurityStepViewController *step, NSString
 													  footer:[self hint].length
 							? [NSString stringWithFormat:@"Hint: %@", [self hint]]
 							: @"Enter the password you are using now."];
+	step.skipTitle = @"Forgot Password?";
 	step.onSubmit = ^(TGSecurityStepViewController *sender, NSString *text){
 		if (!text.length){
 			[sender refuseWithMessage:@"Please enter your password."];
 			return;
 		}
 		[weakSelf askNewPasswordWithOldPassword:text];
+	};
+	step.onSkip = ^{
+		[weakSelf startPasswordRecovery];
 	};
 	[self.navigationController pushViewController:step animated:YES];
 }
@@ -690,6 +695,10 @@ typedef void (^TGSecurityStepBlock)(TGSecurityStepViewController *step, NSString
 													  footer:@"Enter your password to turn "
 							@"two-step verification off."];
 	step.actionTitle = @"Done";
+	step.skipTitle = @"Forgot Password?";
+	step.onSkip = ^{
+		[weakSelf startPasswordRecovery];
+	};
 	step.onSubmit = ^(TGSecurityStepViewController *sender, NSString *text){
 		if (!text.length){
 			[sender refuseWithMessage:@"Please enter your password."];
@@ -722,18 +731,36 @@ typedef void (^TGSecurityStepBlock)(TGSecurityStepViewController *step, NSString
 			[sender refuseWithMessage:@"Please enter your password."];
 			return;
 		}
-		[weakSelf askRecoveryEmailWithPassword:text];
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		if (![strongSelf hasRecoveryEmail]){
+			[strongSelf askRecoveryEmailWithPassword:text current:nil];
+			return;
+		}
+		[sender setBusy:YES];
+		[[TGClient shared] recoveryEmailWithPassword:text completion:^(NSString *email){
+			__strong typeof(weakSelf) inner = weakSelf;
+			if (!inner)
+				return;
+			[sender setBusy:NO];
+			[inner askRecoveryEmailWithPassword:text
+										current:[email isKindOfClass:[NSString class]] ? email : nil];
+		}];
 	};
 	[self.navigationController pushViewController:step animated:YES];
 }
 
-- (void)askRecoveryEmailWithPassword:(NSString *)password {
+- (void)askRecoveryEmailWithPassword:(NSString *)password current:(NSString *)current {
 	__weak typeof(self) weakSelf = self;
+	NSString *footer = current.length
+			? [NSString stringWithFormat:@"Recovery is going to %@ at the moment. Telegram "
+										 @"sends a code to the new address to confirm it.", current]
+			: @"Telegram sends a code to this address to confirm it.";
 	TGSecurityStepViewController *step = [self stepWithTitle:@"Recovery"
 													 caption:@"Recovery e-mail"
 												 placeholder:@"E-Mail"
-													  footer:@"Telegram sends a code to this "
-							@"address to confirm it."];
+													  footer:footer];
 	step.secure = NO;
 	step.email = YES;
 	step.onSubmit = ^(TGSecurityStepViewController *sender, NSString *text){
@@ -795,6 +822,123 @@ typedef void (^TGSecurityStepBlock)(TGSecurityStepViewController *step, NSString
 		}
 		[self startDisablePassword];
 	}
+}
+
+#pragma mark - forgotten password
+
+- (void)startPasswordRecovery {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] requestPasswordRecoveryWithCompletion:
+			^(NSString *emailPattern, NSInteger codeLength){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		if (![emailPattern isKindOfClass:[NSString class]] || !emailPattern.length){
+			TGPrivacyComplain(@"No code could be sent. Without a recovery e-mail address "
+							  @"the password can only be reset after a waiting period.");
+			return;
+		}
+		[strongSelf askRecoveryCodeSentTo:emailPattern length:codeLength];
+	}];
+}
+
+- (void)askRecoveryCodeSentTo:(NSString *)pattern length:(NSInteger)codeLength {
+	__weak typeof(self) weakSelf = self;
+	NSString *footer = codeLength > 0
+			? [NSString stringWithFormat:@"We have sent a %d-digit code to %@.",
+					(int)codeLength, pattern]
+			: [NSString stringWithFormat:@"We have sent a code to %@.", pattern];
+	TGSecurityStepViewController *step = [self stepWithTitle:@"Code"
+													 caption:@"Recovery code"
+												 placeholder:@"Code"
+													  footer:footer];
+	step.secure = NO;
+	step.numeric = YES;
+	step.onSubmit = ^(TGSecurityStepViewController *sender, NSString *text){
+		if (!text.length){
+			[sender refuseWithMessage:@"Please enter the code."];
+			return;
+		}
+		[weakSelf askRecoveredPasswordForCode:text];
+	};
+	[self.navigationController pushViewController:step animated:YES];
+}
+
+- (void)askRecoveredPasswordForCode:(NSString *)code {
+	__weak typeof(self) weakSelf = self;
+	TGSecurityStepViewController *step = [self stepWithTitle:@"New Password"
+													 caption:@"Step 1 of 3"
+												 placeholder:@"Password"
+													  footer:@"Enter the password you want from "
+							@"now on."];
+	step.onSubmit = ^(TGSecurityStepViewController *sender, NSString *text){
+		if (!text.length){
+			[sender refuseWithMessage:@"Please enter a password."];
+			return;
+		}
+		[weakSelf askRecoveredPasswordAgain:text code:code];
+	};
+	[self.navigationController pushViewController:step animated:YES];
+}
+
+- (void)askRecoveredPasswordAgain:(NSString *)password code:(NSString *)code {
+	__weak typeof(self) weakSelf = self;
+	TGSecurityStepViewController *step = [self stepWithTitle:@"Re-enter"
+													 caption:@"Step 2 of 3"
+												 placeholder:@"Password"
+													  footer:@"Type the same password once more."];
+	step.onSubmit = ^(TGSecurityStepViewController *sender, NSString *text){
+		if (![text isEqualToString:password]){
+			[sender refuseWithMessage:@"The two passwords are different."];
+			return;
+		}
+		[weakSelf askRecoveredHintForPassword:password code:code];
+	};
+	[self.navigationController pushViewController:step animated:YES];
+}
+
+- (void)askRecoveredHintForPassword:(NSString *)password code:(NSString *)code {
+	__weak typeof(self) weakSelf = self;
+	TGSecurityStepViewController *step = [self stepWithTitle:@"Hint"
+													 caption:@"Step 3 of 3"
+												 placeholder:@"Hint"
+													  footer:@"A short reminder shown when the "
+							@"password is asked for."];
+	step.secure = NO;
+	step.actionTitle = @"Done";
+	step.skipTitle = @"Skip This Step";
+	step.onSubmit = ^(TGSecurityStepViewController *sender, NSString *text){
+		if ([text isEqualToString:password]){
+			[sender refuseWithMessage:@"The hint cannot be the password itself."];
+			return;
+		}
+		[weakSelf recoverPassword:password hint:text code:code fromStep:sender];
+	};
+	__weak TGSecurityStepViewController *weakStep = step;
+	step.onSkip = ^{
+		[weakSelf recoverPassword:password hint:nil code:code fromStep:weakStep];
+	};
+	[self.navigationController pushViewController:step animated:YES];
+}
+
+- (void)recoverPassword:(NSString *)password hint:(NSString *)hint code:(NSString *)code
+			   fromStep:(TGSecurityStepViewController *)step {
+	[step setBusy:YES];
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] recoverPasswordWithCode:code newPassword:password hint:hint
+									completion:^(BOOL ok){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		if (!ok){
+			if (step)
+				[step refuseWithMessage:@"That code is wrong or has expired."];
+			else
+				TGPrivacyComplain(@"That code is wrong or has expired.");
+			return;
+		}
+		[strongSelf popToSelfAnimated:YES];
+	}];
 }
 
 - (void)startPasswordReset {
@@ -1887,6 +2031,7 @@ typedef void (^TGPrivacyPickerBlock)(NSArray *userIds);
 @property (nonatomic, assign) BOOL passwordLoaded;
 @property (nonatomic, assign) NSInteger autoDeleteSeconds;
 @property (nonatomic, assign) BOOL autoDeleteLoaded;
+@property (nonatomic, strong) NSString *loginEmailPattern;
 @end
 
 @implementation TGPrivacyViewController
@@ -1934,6 +2079,9 @@ typedef void (^TGPrivacyPickerBlock)(NSArray *userIds);
 			return;
 		strongSelf.passwordLoaded = [state isKindOfClass:[NSDictionary class]];
 		strongSelf.passwordOn = [state[@"hasPassword"] boolValue];
+		id pattern = state[@"loginEmailPattern"];
+		strongSelf.loginEmailPattern =
+				([pattern isKindOfClass:[NSString class]] && [pattern length]) ? pattern : nil;
 		[strongSelf.tableView reloadData];
 	}];
 
@@ -2027,7 +2175,7 @@ typedef void (^TGPrivacyPickerBlock)(NSArray *userIds);
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
 	if (section == 0)
 		return (NSInteger)[self settings].count + 3;
-	return 4;
+	return 5;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
@@ -2041,7 +2189,8 @@ typedef void (^TGPrivacyPickerBlock)(NSArray *userIds);
 		return @"These settings decide who may see what about you, and who may "
 			   @"reach you.";
 	return @"Two-step verification asks for a password of your own when you log "
-		   @"in on a new device. The passcode only guards this phone.";
+		   @"in on a new device. The passcode only guards this phone. A login "
+		   @"e-mail is where the code for a new device is sent.";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -2100,8 +2249,16 @@ typedef void (^TGPrivacyPickerBlock)(NSArray *userIds);
 		cell.detailTextLabel.text = @"";
 		return cell;
 	}
-	cell.textLabel.text = @"Connected Websites";
-	cell.detailTextLabel.text = @"";
+	if (indexPath.row == 3){
+		cell.textLabel.text = @"Connected Websites";
+		cell.detailTextLabel.text = @"";
+		return cell;
+	}
+	cell.textLabel.text = @"Login E-Mail";
+	if (!self.passwordLoaded)
+		cell.detailTextLabel.text = @"...";
+	else
+		cell.detailTextLabel.text = self.loginEmailPattern ?: @"Off";
 	return cell;
 }
 
@@ -2146,8 +2303,90 @@ typedef void (^TGPrivacyPickerBlock)(NSArray *userIds);
 				[[TGSessionsViewController alloc] init] animated:YES];
 		return;
 	}
-	[self.navigationController pushViewController:
-			[[TGConnectedWebsitesViewController alloc] init] animated:YES];
+	if (indexPath.row == 3){
+		[self.navigationController pushViewController:
+				[[TGConnectedWebsitesViewController alloc] init] animated:YES];
+		return;
+	}
+	[self startLoginEmail];
+}
+
+- (void)startLoginEmail {
+	__weak typeof(self) weakSelf = self;
+	TGSecurityStepViewController *step = [[TGSecurityStepViewController alloc] init];
+	step.stepTitle = @"Login E-Mail";
+	step.stepCaption = @"Where log-in codes go";
+	step.placeholder = @"E-Mail";
+	step.secure = NO;
+	step.email = YES;
+	step.footerText = self.loginEmailPattern
+			? [NSString stringWithFormat:@"Log-in codes are going to %@ at the moment. Enter a "
+										 @"new address to move them.", self.loginEmailPattern]
+			: @"Telegram can send the code you need when logging in on a new device to an "
+			  @"e-mail address instead of a text message.";
+	step.onSubmit = ^(TGSecurityStepViewController *sender, NSString *text){
+		if ([text rangeOfString:@"@"].location == NSNotFound || text.length < 5){
+			[sender refuseWithMessage:@"That is not an e-mail address."];
+			return;
+		}
+		[sender setBusy:YES];
+		[[TGClient shared] setLoginEmailAddress:text
+									 completion:^(NSString *pattern, NSInteger codeLength){
+			__strong typeof(weakSelf) strongSelf = weakSelf;
+			if (!strongSelf)
+				return;
+			if (![pattern isKindOfClass:[NSString class]] || !pattern.length){
+				[sender refuseWithMessage:@"That address could not be used."];
+				return;
+			}
+			[sender setBusy:NO];
+			[strongSelf askLoginEmailCodeSentTo:pattern length:codeLength];
+		}];
+	};
+	[self.navigationController pushViewController:step animated:YES];
+}
+
+- (void)askLoginEmailCodeSentTo:(NSString *)pattern length:(NSInteger)codeLength {
+	__weak typeof(self) weakSelf = self;
+	TGSecurityStepViewController *step = [[TGSecurityStepViewController alloc] init];
+	step.stepTitle = @"Code";
+	step.stepCaption = @"Confirm your e-mail";
+	step.placeholder = @"Code";
+	step.secure = NO;
+	step.numeric = YES;
+	step.actionTitle = @"Done";
+	step.skipTitle = @"Send The Code Again";
+	step.footerText = codeLength > 0
+			? [NSString stringWithFormat:@"We have sent a %d-digit code to %@.",
+					(int)codeLength, pattern]
+			: [NSString stringWithFormat:@"We have sent a code to %@.", pattern];
+	step.onSubmit = ^(TGSecurityStepViewController *sender, NSString *text){
+		if (!text.length){
+			[sender refuseWithMessage:@"Please enter the code."];
+			return;
+		}
+		[sender setBusy:YES];
+		[[TGClient shared] checkLoginEmailAddressCode:text completion:^(BOOL ok){
+			__strong typeof(weakSelf) strongSelf = weakSelf;
+			if (!strongSelf)
+				return;
+			if (!ok){
+				[sender refuseWithMessage:@"That code is wrong."];
+				return;
+			}
+			[strongSelf.navigationController popToViewController:strongSelf animated:YES];
+			[strongSelf reload];
+		}];
+	};
+	step.onSkip = ^{
+		[[TGClient shared] resendLoginEmailAddressCodeWithCompletion:
+				^(NSString *newPattern, NSInteger newLength){
+			TGPrivacyComplain([newPattern isKindOfClass:[NSString class]] && [newPattern length]
+					? @"The code has been sent again."
+					: @"The code could not be sent again.");
+		}];
+	};
+	[self.navigationController pushViewController:step animated:YES];
 }
 
 @end

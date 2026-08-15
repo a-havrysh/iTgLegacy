@@ -532,6 +532,165 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 
 @end
 
+#pragma mark - the anti-spam review
+
+@interface TGChatEventsSpamController : UITableViewController
+
+@property (nonatomic, assign) int64_t chatId;
+@property (nonatomic, strong) NSArray *entries;
+@property (nonatomic, strong) NSMutableArray *selection;
+@property (nonatomic, strong) UIButton *reportButton;
+@property (nonatomic, copy) void (^completion)(NSArray *reportedMessageIds);
+
+- (instancetype)initWithEntries:(NSArray *)entries chatId:(int64_t)chatId;
+
+@end
+
+@implementation TGChatEventsSpamController
+
+- (instancetype)initWithEntries:(NSArray *)entries chatId:(int64_t)chatId {
+	self = [super initWithStyle:UITableViewStyleGrouped];
+	if (self){
+		_chatId = chatId;
+		_entries = [entries isKindOfClass:[NSArray class]] ? entries : [NSArray array];
+		_selection = [NSMutableArray array];
+	}
+	return self;
+}
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+	self.title = @"Anti-Spam";
+	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	self.tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
+
+	self.reportButton = [TGIcons headerButtonWithTitle:@"Report" bold:YES
+												target:self action:@selector(reportPressed)];
+	self.navigationItem.rightBarButtonItem =
+			[[UIBarButtonItem alloc] initWithCustomView:self.reportButton];
+	[self updateReportButton];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+	[super viewWillAppear:animated];
+	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+}
+
+- (void)updateReportButton {
+	BOOL enabled = self.selection.count != 0;
+	self.reportButton.enabled = enabled;
+	self.reportButton.alpha = enabled ? 1.0f : 0.4f;
+}
+
+- (NSDictionary *)entryAtRow:(NSInteger)row {
+	if (row < 0 || row >= (NSInteger)self.entries.count)
+		return nil;
+	NSDictionary *entry = self.entries[row];
+	return [entry isKindOfClass:[NSDictionary class]] ? entry : nil;
+}
+
+- (NSNumber *)messageIdAtRow:(NSInteger)row {
+	NSNumber *messageId = TGEventsNumber([self entryAtRow:row], @"messageId");
+	return [messageId longLongValue] != 0 ? messageId : nil;
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+	return 1;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	return (NSInteger)self.entries.count;
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
+	return @"Removed by the Filter";
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+	return @"Pick the messages the filter should not have removed and report "
+			@"them together. Reporting teaches the filter and does not bring "
+			@"the messages back.";
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
+	return 56;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"spam"];
+	if (!cell)
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+									  reuseIdentifier:@"spam"];
+	[[TGTheme shared] styleCell:cell];
+	cell.accessoryView = nil;
+	cell.accessoryType = UITableViewCellAccessoryNone;
+
+	NSDictionary *entry = [self entryAtRow:indexPath.row];
+	NSString *name = TGEventsText(entry, @"name");
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:16];
+	cell.textLabel.textColor = [[TGTheme shared] isDark]
+			? [[TGTheme shared] primaryTextColour] : [UIColor blackColor];
+	cell.textLabel.text = name.length ? name : @"Someone";
+
+	NSString *summary = TGEventsText(entry, @"text");
+	cell.detailTextLabel.font = [UIFont systemFontOfSize:13];
+	cell.detailTextLabel.textColor = [[TGTheme shared] secondaryTextColour];
+	cell.detailTextLabel.text = [NSString stringWithFormat:@"%@ · %@",
+			[TGDateUtils stringForShortTime:TGEventsInt(entry, @"date")],
+			summary.length ? summary : @"Message removed"];
+
+	NSNumber *messageId = [self messageIdAtRow:indexPath.row];
+	if (messageId && [self.selection containsObject:messageId])
+		cell.accessoryType = UITableViewCellAccessoryCheckmark;
+	return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	NSNumber *messageId = [self messageIdAtRow:indexPath.row];
+	if (!messageId)
+		return;
+	if ([self.selection containsObject:messageId])
+		[self.selection removeObject:messageId];
+	else
+		[self.selection addObject:messageId];
+	[self updateReportButton];
+	[tableView reloadRowsAtIndexPaths:@[indexPath]
+					 withRowAnimation:UITableViewRowAnimationNone];
+}
+
+- (void)showAlertWithMessage:(NSString *)message {
+	[[[TGAlertView alloc] initWithTitle:nil message:message cancelButtonTitle:@"OK"
+						  okButtonTitle:nil completionBlock:nil] show];
+}
+
+- (void)reportPressed {
+	if (!self.selection.count || self.chatId == 0)
+		return;
+	NSArray *messageIds = [NSArray arrayWithArray:self.selection];
+	self.reportButton.enabled = NO;
+	self.reportButton.alpha = 0.4f;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] reportNotSpamMessages:messageIds inChat:self.chatId
+								  completion:^(BOOL ok){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		if (!ok){
+			[strongSelf updateReportButton];
+			[strongSelf showAlertWithMessage:
+					@"These deletions could not be reported as false positives."];
+			return;
+		}
+		if (strongSelf.completion)
+			strongSelf.completion(messageIds);
+		[strongSelf.navigationController popViewControllerAnimated:YES];
+	}];
+}
+
+@end
+
 #pragma mark - the row
 
 @interface TGChatEventCell : UITableViewCell
@@ -647,6 +806,7 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 @property (nonatomic, strong) NSArray *userIds;
 @property (nonatomic, strong) NSArray *administrators;
 @property (nonatomic, strong) TGActionSheet *currentActionSheet;
+@property (nonatomic, strong) UIButton *spamBanner;
 @property (nonatomic, assign) long long oldestEventId;
 @property (nonatomic, assign) BOOL loading;
 @property (nonatomic, assign) BOOL loaded;
@@ -697,6 +857,16 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 	self.tableView.dataSource = self;
 	self.tableView.delegate = self;
 	[self.view addSubview:self.tableView];
+
+	self.spamBanner = [UIButton buttonWithType:UIButtonTypeCustom];
+	self.spamBanner.frame = CGRectMake(0, 0, self.view.bounds.size.width, 40);
+	self.spamBanner.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	self.spamBanner.titleLabel.font = [UIFont boldSystemFontOfSize:14];
+	self.spamBanner.contentHorizontalAlignment =
+			UIControlContentHorizontalAlignmentLeft;
+	self.spamBanner.contentEdgeInsets = UIEdgeInsetsMake(0, 10, 0, 10);
+	[self.spamBanner addTarget:self action:@selector(spamBannerPressed)
+			  forControlEvents:UIControlEventTouchUpInside];
 
 	self.messageView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 250, 60)];
 	self.messageView.backgroundColor = [UIColor clearColor];
@@ -755,6 +925,78 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 	self.view.backgroundColor = theme.isDark ? [theme listBackgroundColour]
 											 : [UIColor whiteColor];
 	self.tableView.backgroundColor = self.view.backgroundColor;
+	[self updateSpamBanner];
+	[self.tableView reloadData];
+}
+
+#pragma mark - anti-spam
+
+- (NSArray *)reportableEvents {
+	NSMutableArray *reportable = [NSMutableArray array];
+	for (NSDictionary *event in self.events){
+		if (![TGEventsNumber(event, @"canReportNotSpam") boolValue])
+			continue;
+		if (TGEventsLongLong(event, @"messageId") == 0)
+			continue;
+		[reportable addObject:event];
+	}
+	return reportable;
+}
+
+- (void)updateSpamBanner {
+	NSInteger count = (NSInteger)[self reportableEvents].count;
+	if (count == 0){
+		self.tableView.tableHeaderView = nil;
+		return;
+	}
+
+	BOOL dark = [[TGTheme shared] isDark];
+	self.spamBanner.backgroundColor = dark ? [[TGTheme shared] listBackgroundColour]
+										   : TGEventsRGB(0xf3f6fa);
+	[self.spamBanner setTitleColor:dark ? [[TGTheme shared] primaryTextColour]
+										: TGEventsRGB(0x345f8f)
+						  forState:UIControlStateNormal];
+	[self.spamBanner setTitle:[NSString stringWithFormat:
+			@"Anti-Spam · review %d removed", (int)count]
+					 forState:UIControlStateNormal];
+
+	CGRect frame = self.spamBanner.frame;
+	frame.size.width = self.tableView.bounds.size.width;
+	self.spamBanner.frame = frame;
+	self.tableView.tableHeaderView = self.spamBanner;
+}
+
+- (void)spamBannerPressed {
+	NSArray *reportable = [self reportableEvents];
+	if (!reportable.count)
+		return;
+
+	TGChatEventsSpamController *controller = [[TGChatEventsSpamController alloc]
+			initWithEntries:reportable chatId:self.chatId];
+	__weak typeof(self) weakSelf = self;
+	controller.completion = ^(NSArray *reportedMessageIds){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		[strongSelf markReported:reportedMessageIds];
+	};
+	[self.navigationController pushViewController:controller animated:YES];
+}
+
+- (void)markReported:(NSArray *)messageIds {
+	if (!messageIds.count)
+		return;
+	for (NSUInteger index = 0; index < self.events.count; index++){
+		NSDictionary *event = self.events[index];
+		NSNumber *messageId = TGEventsNumber(event, @"messageId");
+		if (!messageId || ![messageIds containsObject:messageId])
+			continue;
+		NSMutableDictionary *updated = [NSMutableDictionary dictionaryWithDictionary:event];
+		[updated setObject:[NSNumber numberWithBool:NO] forKey:@"canReportNotSpam"];
+		[self.events replaceObjectAtIndex:index withObject:updated];
+	}
+	[self rebuildSections];
+	[self updateSpamBanner];
 	[self.tableView reloadData];
 }
 
@@ -833,6 +1075,7 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 	self.oldestEventId = 0;
 	[self.events removeAllObjects];
 	[self rebuildSections];
+	[self updateSpamBanner];
 	[self.tableView reloadData];
 	[self showLoading];
 	[self loadNextPage];
@@ -895,6 +1138,7 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 	}
 
 	[self rebuildSections];
+	[self updateSpamBanner];
 	[self.tableView reloadData];
 	[self updateStates];
 }
@@ -1232,6 +1476,7 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 					@"This deletion could not be reported as a false positive."];
 			return;
 		}
+		[strongSelf markReported:@[[NSNumber numberWithLongLong:messageId]]];
 		[strongSelf showAlertWithMessage:
 				@"Thank you. The deletion was reported as a false positive."];
 	}];

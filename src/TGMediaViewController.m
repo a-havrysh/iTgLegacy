@@ -83,6 +83,9 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 	NSNumber *fullId = nil;
 	NSInteger duration = 0;
 	BOOL isVideo = NO;
+	NSArray *photoSizes = nil;
+	NSDictionary *minithumb = nil;
+	NSString *fileType = TGFileTypePhoto;
 
 	if ([kind isEqualToString:@"messagePhoto"]){
 		NSArray *sizes = content[@"photo"][@"sizes"];
@@ -92,12 +95,16 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 		NSDictionary *large = [client bestPhotoSizeIn:sizes forWidth:320.0f scale:scale];
 		thumbId = small[@"fileId"];
 		fullId = large[@"fileId"] ?: [sizes lastObject][@"photo"][@"id"];
+		photoSizes = sizes;
+		minithumb = content[@"photo"][@"minithumbnail"];
 
 	} else if ([kind isEqualToString:@"messageVideo"]){
 		NSDictionary *thumb = [client decodableThumbnail:content[@"video"][@"thumbnail"]];
 		thumbId = thumb[@"fileId"];
 		fullId = content[@"video"][@"video"][@"id"];
 		duration = [content[@"video"][@"duration"] integerValue];
+		minithumb = content[@"video"][@"minithumbnail"];
+		fileType = TGFileTypeVideo;
 		isVideo = YES;
 
 	} else if ([kind isEqualToString:@"messageAnimation"]){
@@ -105,6 +112,8 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 		thumbId = thumb[@"fileId"];
 		fullId = content[@"animation"][@"animation"][@"id"];
 		duration = [content[@"animation"][@"duration"] integerValue];
+		minithumb = content[@"animation"][@"minithumbnail"];
+		fileType = TGFileTypeAnimation;
 		isVideo = YES;
 
 	} else {
@@ -118,15 +127,21 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 	if (![caption isKindOfClass:NSString.class])
 		caption = @"";
 
-	return @{
+	NSMutableDictionary *item = [NSMutableDictionary dictionaryWithDictionary:@{
 		@"messageId" : message[@"id"] ?: @(0),
 		@"thumbId"   : [thumbId isKindOfClass:NSNumber.class] ? thumbId : (fullId ?: @(0)),
 		@"fullId"    : [fullId isKindOfClass:NSNumber.class] ? fullId : (thumbId ?: @(0)),
 		@"duration"  : @(duration),
 		@"isVideo"   : @(isVideo),
 		@"caption"   : caption,
+		@"fileType"  : fileType,
 		@"date"      : message[@"date"] ?: @(0),
-	};
+	}];
+	if ([photoSizes isKindOfClass:NSArray.class])
+		item[@"sizes"] = photoSizes;
+	if ([minithumb isKindOfClass:NSDictionary.class])
+		item[@"minithumb"] = minithumb;
+	return item;
 }
 
 static NSArray *TGMediaScopeTitles(void) {
@@ -215,6 +230,8 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	NSNumber *fileId = nil;
 	long long size = 0;
 	NSInteger duration = 0;
+	NSString *mime = @"";
+	NSString *fileType = TGFileTypeDocument;
 
 	if (scope == TGMediaScopeFiles){
 		if (![kind isEqualToString:@"messageDocument"])
@@ -228,6 +245,9 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 		if (size <= 0)
 			size = [file[@"expected_size"] longLongValue];
 		detail = TGMediaFormatBytes(size);
+		NSString *mimeType = document[@"mime_type"];
+		if ([mimeType isKindOfClass:NSString.class])
+			mime = mimeType;
 
 	} else if (scope == TGMediaScopeMusic){
 		if (![kind isEqualToString:@"messageAudio"])
@@ -241,6 +261,10 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 		duration = [audio[@"duration"] integerValue];
 		NSDictionary *file = audio[@"audio"];
 		fileId = file[@"id"];
+		fileType = TGFileTypeAudio;
+		NSString *mimeType = audio[@"mime_type"];
+		if ([mimeType isKindOfClass:NSString.class])
+			mime = mimeType;
 		size = [file[@"size"] longLongValue];
 		if (size <= 0)
 			size = [file[@"expected_size"] longLongValue];
@@ -273,6 +297,8 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 		@"fileId"    : [fileId isKindOfClass:NSNumber.class] ? fileId : @(0),
 		@"size"      : @(size),
 		@"duration"  : @(duration),
+		@"mime"      : mime,
+		@"fileType"  : fileType,
 		@"date"      : message[@"date"] ?: @(0),
 		@"list"      : @(YES),
 	};
@@ -547,6 +573,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 @property (nonatomic, strong) UIImageView *imageView;
 @property (nonatomic, assign) NSInteger pageIndex;
 @property (nonatomic, strong) NSNumber *loadingFileId;
+@property (nonatomic, assign) BOOL showingMinithumb;
 
 - (void)setPageImage:(UIImage *)image;
 - (void)resetZoom;
@@ -578,6 +605,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 
 - (void)setPageImage:(UIImage *)image {
 	_imageView.image = image;
+	_showingMinithumb = NO;
 	[self resetZoom];
 }
 
@@ -1043,9 +1071,20 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	[_failedPages removeObject:key];
 	[self updateLoadingChrome];
 
+	if (!page.imageView.image){
+		NSData *tiny = [[TGClient shared] minithumbnailData:item[@"minithumb"]];
+		if (tiny.length){
+			UIImage *blurred = [UIImage imageWithData:tiny];
+			if (blurred){
+				[page setPageImage:blurred];
+				page.showingMinithumb = YES;
+			}
+		}
+	}
+
 	NSNumber *thumbId = item[@"thumbId"];
 	if ([thumbId isKindOfClass:NSNumber.class] && ![thumbId isEqual:fileId] &&
-		!page.imageView.image)
+		(!page.imageView.image || page.showingMinithumb))
 		[self loadThumbnailForPageAtIndex:index fileId:thumbId];
 
 	CGFloat maxSide = MAX(self.view.bounds.size.width, self.view.bounds.size.height)
@@ -1058,7 +1097,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 								 completion:nil];
 
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] downloadFile:[fileId integerValue] completion:^(NSString *path){
+	void (^handlePath)(NSString *) = ^(NSString *path){
 		typeof(self) me = weakSelf;
 		if (!me)
 			return;
@@ -1091,7 +1130,21 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 				[strongMe updateLoadingChrome];
 			});
 		});
-	}];
+	};
+
+	NSArray *sizes = item[@"sizes"];
+	if ([sizes isKindOfClass:NSArray.class] && sizes.count > 0 &&
+		![item[@"isVideo"] boolValue]){
+		CGFloat wanted = self.view.bounds.size.width;
+		[[TGClient shared] downloadPhotoSizes:sizes
+									 forWidth:wanted
+										scale:[UIScreen mainScreen].scale
+								   completion:^(NSString *path, NSDictionary *size){
+			handlePath(path);
+		}];
+	} else {
+		[[TGClient shared] downloadFile:[fileId integerValue] completion:handlePath];
+	}
 
 	[self prefetchNeighboursOfIndex:index];
 }
@@ -1113,7 +1166,9 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 				if (!me)
 					return;
 				TGMediaPageView *target = me.visiblePages[key];
-				if (!target || target.imageView.image || me.imageCache[key])
+				if (!target || me.imageCache[key])
+					return;
+				if (target.imageView.image && !target.showingMinithumb)
 					return;
 				[target setPageImage:image];
 			});
@@ -1597,6 +1652,466 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 
 @end
 
+#pragma mark - file details
+
+static const long long TGMediaExportChunk = 256 * 1024;
+static const long long TGMediaExportLimit = 12 * 1024 * 1024;
+
+@interface TGFileDetailsViewController : UITableViewController
+		<UIActionSheetDelegate, UIDocumentInteractionControllerDelegate>
+
+@property (nonatomic, assign) NSInteger fileId;
+@property (nonatomic, copy) NSString *fileName;
+@property (nonatomic, copy) NSString *fileType;
+@property (nonatomic, copy) NSString *mimeType;
+@property (nonatomic, strong) NSDictionary *file;
+@property (nonatomic, copy) NSString *extension;
+@property (nonatomic, assign) long long prefixSize;
+@property (nonatomic, assign) BOOL busy;
+@property (nonatomic, strong) NSMutableArray *infoRows;
+@property (nonatomic, strong) NSArray *sheetActions;
+@property (nonatomic, strong) UIDocumentInteractionController *documentController;
+@property (nonatomic, copy) NSString *exportPath;
+@property (nonatomic, strong) NSFileHandle *exportHandle;
+@property (nonatomic, assign) long long exportOffset;
+@property (nonatomic, assign) long long exportTotal;
+
+@end
+
+@implementation TGFileDetailsViewController
+
+- (id)init {
+	self = [super initWithStyle:UITableViewStyleGrouped];
+	if (self){
+		_infoRows = [[NSMutableArray alloc] init];
+		_prefixSize = -1;
+	}
+	return self;
+}
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+
+	self.title = self.fileName.length ? self.fileName : @"File";
+	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	self.tableView.separatorColor = [[TGTheme shared] separatorColour];
+
+	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
+		self.edgesForExtendedLayout = UIRectEdgeNone;
+
+	[self reloadFile];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+	[super viewWillAppear:animated];
+	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+}
+
+- (void)setBusy:(BOOL)busy {
+	_busy = busy;
+	if (busy){
+		UIActivityIndicatorView *spinner = [[UIActivityIndicatorView alloc]
+				initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleGray];
+		[spinner startAnimating];
+		self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
+				initWithCustomView:spinner];
+	} else {
+		self.navigationItem.rightBarButtonItem = nil;
+	}
+	self.tableView.userInteractionEnabled = !busy;
+}
+
+- (void)showAlert:(NSString *)message {
+	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@""
+													message:message
+												   delegate:nil
+										  cancelButtonTitle:@"OK"
+										  otherButtonTitles:nil];
+	[alert show];
+}
+
+- (void)reloadFile {
+	if (self.fileId <= 0){
+		[self rebuildInfoRows];
+		return;
+	}
+
+	self.busy = YES;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] fileInfo:self.fileId completion:^(NSDictionary *file){
+		typeof(self) me = weakSelf;
+		if (!me || !me.isViewLoaded)
+			return;
+		me.busy = NO;
+		if (!file){
+			[me rebuildInfoRows];
+			[me showAlert:@"This file is no longer available on this device."];
+			return;
+		}
+		me.file = file;
+		[me rebuildInfoRows];
+		[me loadPrefixSize];
+		[me loadExtension];
+	}];
+}
+
+- (void)loadPrefixSize {
+	if (self.fileId <= 0)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] downloadedPrefixSizeForFile:self.fileId
+											offset:0
+										completion:^(long long size){
+		typeof(self) me = weakSelf;
+		if (!me || !me.isViewLoaded)
+			return;
+		me.prefixSize = size;
+		[me rebuildInfoRows];
+	}];
+}
+
+- (void)loadExtension {
+	if (self.mimeType.length == 0)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] fileExtensionForMimeType:self.mimeType
+									 completion:^(NSString *extension){
+		typeof(self) me = weakSelf;
+		if (!me || !me.isViewLoaded || extension.length == 0)
+			return;
+		me.extension = extension;
+		[me rebuildInfoRows];
+	}];
+}
+
+- (void)addInfoRow:(NSString *)title value:(NSString *)value {
+	if (value.length == 0)
+		return;
+	[self.infoRows addObject:@{@"title" : title, @"value" : value}];
+}
+
+- (void)rebuildInfoRows {
+	[self.infoRows removeAllObjects];
+
+	NSDictionary *file = self.file;
+	long long total = [file[@"size"] longLongValue];
+	if (total <= 0)
+		total = [file[@"expectedSize"] longLongValue];
+	long long got = [file[@"downloadedSize"] longLongValue];
+
+	NSString *status = @"Not downloaded";
+	if ([file[@"isDownloaded"] boolValue])
+		status = @"Downloaded";
+	else if ([file[@"isDownloading"] boolValue])
+		status = @"Downloading";
+	else if (got > 0)
+		status = @"Partly downloaded";
+
+	[self addInfoRow:@"Status" value:file ? status : @"Unknown"];
+	if (self.extension.length)
+		[self addInfoRow:@"Kind" value:[self.extension uppercaseString]];
+	else if (self.mimeType.length)
+		[self addInfoRow:@"Kind" value:self.mimeType];
+	if (total > 0)
+		[self addInfoRow:@"Size" value:TGMediaFormatBytes(total)];
+	if (got > 0)
+		[self addInfoRow:@"On this device" value:TGMediaFormatBytes(got)];
+	if (self.prefixSize >= 0)
+		[self addInfoRow:@"Playable from start"
+				   value:TGMediaFormatBytes(self.prefixSize)];
+
+	[self.tableView reloadData];
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+	return 2;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	return section == 0 ? (NSInteger)self.infoRows.count : 3;
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
+	return section == 0 ? @"File" : nil;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView
+		 cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	static NSString *infoIdentifier = @"TGFileInfo";
+	static NSString *actionIdentifier = @"TGFileAction";
+
+	if (indexPath.section == 0){
+		UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:infoIdentifier];
+		if (!cell){
+			cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
+										  reuseIdentifier:infoIdentifier];
+			cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		}
+		[[TGTheme shared] styleCell:cell];
+		NSDictionary *row = self.infoRows[indexPath.row];
+		cell.textLabel.text = row[@"title"];
+		cell.detailTextLabel.text = row[@"value"];
+		cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
+		cell.detailTextLabel.textColor = [[TGTheme shared] secondaryTextColour];
+		return cell;
+	}
+
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:actionIdentifier];
+	if (!cell){
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+									  reuseIdentifier:actionIdentifier];
+	}
+	[[TGTheme shared] styleCell:cell];
+	cell.accessoryType = UITableViewCellAccessoryNone;
+	cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
+	cell.textLabel.textAlignment = NSTextAlignmentLeft;
+
+	if (indexPath.row == 0){
+		cell.textLabel.text = @"Open a Copy";
+	} else if (indexPath.row == 1){
+		cell.textLabel.text = @"Download Priority";
+		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+	} else {
+		cell.textLabel.text = @"Fetch Again";
+	}
+	return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	if (indexPath.section != 1 || self.fileId <= 0)
+		return;
+
+	if (indexPath.row == 0){
+		[self exportCopy];
+	} else if (indexPath.row == 1){
+		[self askPriority];
+	} else {
+		[self fetchAgain];
+	}
+}
+
+#pragma mark - priority
+
+- (void)askPriority {
+	self.sheetActions = @[@(32), @(16), @(1)];
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Download Priority"
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:nil];
+	[sheet addButtonWithTitle:@"High"];
+	[sheet addButtonWithTitle:@"Normal"];
+	[sheet addButtonWithTitle:@"Low"];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	[sheet showInView:self.view];
+}
+
+- (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
+	if (index < 0 || index >= (NSInteger)self.sheetActions.count)
+		return;
+
+	NSInteger priority = [self.sheetActions[index] integerValue];
+	self.busy = YES;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] startDownloadingFile:self.fileId
+								   priority:priority
+								 completion:^(NSDictionary *file){
+		typeof(self) me = weakSelf;
+		if (!me || !me.isViewLoaded)
+			return;
+		me.busy = NO;
+		if (!file){
+			[me showAlert:@"Could not change the priority."];
+			return;
+		}
+		me.file = file;
+		[me rebuildInfoRows];
+	}];
+}
+
+#pragma mark - fetch again
+
+- (void)fetchAgain {
+	self.busy = YES;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] fileInfo:self.fileId completion:^(NSDictionary *file){
+		typeof(self) me = weakSelf;
+		if (!me || !me.isViewLoaded)
+			return;
+
+		if (file && [file[@"canBeDownloaded"] boolValue]){
+			me.file = file;
+			[me startDownloadOfFile:me.fileId];
+			return;
+		}
+
+		NSString *remoteId = file[@"remoteId"];
+		NSString *type = me.fileType.length ? me.fileType : TGFileTypeDocument;
+		if (![remoteId isKindOfClass:NSString.class] || remoteId.length == 0){
+			me.busy = NO;
+			[me showAlert:@"This file cannot be downloaded again."];
+			return;
+		}
+
+		[[TGClient shared] resolveRemoteFileId:remoteId type:type
+									completion:^(NSDictionary *resolved){
+			typeof(self) inner = weakSelf;
+			if (!inner || !inner.isViewLoaded)
+				return;
+			if (!resolved){
+				inner.busy = NO;
+				[inner showAlert:@"This file cannot be downloaded again."];
+				return;
+			}
+			inner.file = resolved;
+			inner.fileId = [resolved[@"id"] integerValue];
+			[inner startDownloadOfFile:inner.fileId];
+		}];
+	}];
+}
+
+- (void)startDownloadOfFile:(NSInteger)fileId {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] startDownloadingFile:fileId priority:16 completion:^(NSDictionary *file){
+		typeof(self) me = weakSelf;
+		if (!me || !me.isViewLoaded)
+			return;
+		me.busy = NO;
+		if (!file){
+			[me showAlert:@"Could not start the download."];
+			return;
+		}
+		me.file = file;
+		[me rebuildInfoRows];
+		[me loadPrefixSize];
+	}];
+}
+
+#pragma mark - export a copy
+
+- (void)exportCopy {
+	long long total = [self.file[@"size"] longLongValue];
+	if (total <= 0)
+		total = [self.file[@"expectedSize"] longLongValue];
+	if (total <= 0){
+		[self showAlert:@"The size of this file is not known yet."];
+		return;
+	}
+	if (total > TGMediaExportLimit){
+		[self showAlert:@"This file is too large to open here. Play or save it instead."];
+		return;
+	}
+
+	NSString *name = self.fileName.length ? [self.fileName lastPathComponent] : @"file";
+	if (self.extension.length && [[name pathExtension] length] == 0)
+		name = [name stringByAppendingPathExtension:self.extension];
+
+	NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:name];
+	[[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
+	if (![[NSFileManager defaultManager] createFileAtPath:path contents:nil attributes:nil]){
+		[self showAlert:@"Could not open a copy."];
+		return;
+	}
+
+	self.exportPath = path;
+	self.exportHandle = [NSFileHandle fileHandleForWritingAtPath:path];
+	self.exportOffset = 0;
+	self.exportTotal = total;
+	if (!self.exportHandle){
+		[self showAlert:@"Could not open a copy."];
+		return;
+	}
+
+	self.busy = YES;
+	[self pullNextChunk];
+}
+
+- (void)finishExportWithError:(NSString *)message {
+	[self.exportHandle closeFile];
+	self.exportHandle = nil;
+	self.busy = NO;
+
+	if (message.length){
+		[[NSFileManager defaultManager] removeItemAtPath:self.exportPath error:NULL];
+		self.exportPath = nil;
+		[self showAlert:message];
+		return;
+	}
+
+	self.documentController = [UIDocumentInteractionController
+			interactionControllerWithURL:[NSURL fileURLWithPath:self.exportPath]];
+	self.documentController.delegate = self;
+	if ([self.documentController presentPreviewAnimated:YES])
+		return;
+	if (![self.documentController presentOpenInMenuFromRect:self.view.bounds
+													 inView:self.view
+												   animated:YES])
+		[self showAlert:@"Nothing on this device can open that file."];
+}
+
+- (void)pullNextChunk {
+	long long remaining = self.exportTotal - self.exportOffset;
+	if (remaining <= 0){
+		[self finishExportWithError:nil];
+		return;
+	}
+
+	long long count = remaining < TGMediaExportChunk ? remaining : TGMediaExportChunk;
+	long long offset = self.exportOffset;
+	BOOL onDisk = [self.file[@"isDownloaded"] boolValue];
+
+	__weak typeof(self) weakSelf = self;
+	void (^handleData)(NSData *) = ^(NSData *data){
+		typeof(self) me = weakSelf;
+		if (!me || !me.isViewLoaded)
+			return;
+		if (data.length == 0){
+			[me finishExportWithError:@"Could not read the whole file."];
+			return;
+		}
+		@try {
+			[me.exportHandle writeData:data];
+		} @catch (NSException *exception){
+			[me finishExportWithError:@"Could not write the copy."];
+			return;
+		}
+		me.exportOffset += (long long)data.length;
+		[me pullNextChunk];
+	};
+
+	if (onDisk)
+		[[TGClient shared] readFile:self.fileId offset:offset count:count
+						 completion:handleData];
+	else
+		[[TGClient shared] streamFile:self.fileId offset:offset count:count
+						   completion:handleData];
+}
+
+- (UIViewController *)documentInteractionControllerViewControllerForPreview:
+		(UIDocumentInteractionController *)controller {
+	return self;
+}
+
+- (void)documentInteractionControllerDidEndPreview:(UIDocumentInteractionController *)controller {
+	if (self.exportPath.length){
+		[[NSFileManager defaultManager] removeItemAtPath:self.exportPath error:NULL];
+		self.exportPath = nil;
+	}
+}
+
+- (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)orientation {
+	return orientation != UIInterfaceOrientationPortraitUpsideDown;
+}
+
+- (void)dealloc {
+	[_exportHandle closeFile];
+	if (_exportPath.length)
+		[[NSFileManager defaultManager] removeItemAtPath:_exportPath error:NULL];
+}
+
+@end
+
 #pragma mark - shared media
 
 @interface TGMediaViewController ()
@@ -1622,6 +2137,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 @property (nonatomic, strong) UILabel *bannerDetail;
 @property (nonatomic, assign) BOOL bannerVisible;
 
+@property (nonatomic, strong) NSMutableDictionary *extensionCache;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @property (nonatomic, strong) UIView *emptyView;
 @property (nonatomic, strong) UIImageView *emptyImageView;
@@ -1654,6 +2170,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 
 	_items = [[NSMutableArray alloc] init];
 	_recycler = [[TGViewRecycler alloc] init];
+	_extensionCache = [[NSMutableDictionary alloc] init];
 	_canLoadMore = YES;
 	_itemsPerRow = [self itemsPerRowForWidth:self.view.bounds.size.width];
 
@@ -1668,6 +2185,11 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	_tableView.dataSource = self;
 	_tableView.delegate = self;
 	[self.view addSubview:_tableView];
+
+	UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc]
+			initWithTarget:self action:@selector(handleRowLongPress:)];
+	longPress.minimumPressDuration = 0.5;
+	[_tableView addGestureRecognizer:longPress];
 
 	_scopeBar = [[UIView alloc] initWithFrame:
 			CGRectMake(0, 0, self.view.bounds.size.width, TGMediaScopeHeight)];
@@ -2107,7 +2629,18 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 		if (indexPath.row < (NSInteger)_items.count){
 			NSDictionary *item = _items[indexPath.row];
 			cell.textLabel.text = item[@"title"];
-			cell.detailTextLabel.text = item[@"detail"];
+			NSString *detail = item[@"detail"];
+			NSString *mime = item[@"mime"];
+			if (_scope == TGMediaScopeFiles && [mime isKindOfClass:NSString.class]
+					&& mime.length){
+				NSString *known = _extensionCache[mime];
+				if (known.length)
+					detail = [NSString stringWithFormat:@"%@ · %@",
+							[known uppercaseString], detail];
+				else if (!known)
+					[self loadExtensionForMime:mime];
+			}
+			cell.detailTextLabel.text = detail;
 		}
 		return cell;
 	}
@@ -2221,6 +2754,49 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 		}
 		[me previewFileAtPath:path];
 	}];
+}
+
+- (void)loadExtensionForMime:(NSString *)mime {
+	if (mime.length == 0 || _extensionCache[mime])
+		return;
+	_extensionCache[mime] = @"";
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] fileExtensionForMimeType:mime completion:^(NSString *extension){
+		typeof(self) me = weakSelf;
+		if (!me || !me.isViewLoaded)
+			return;
+		if (extension.length == 0)
+			return;
+		me.extensionCache[mime] = extension;
+		if (me.scope == TGMediaScopeFiles)
+			[me.tableView reloadData];
+	}];
+}
+
+- (void)handleRowLongPress:(UILongPressGestureRecognizer *)recognizer {
+	if (recognizer.state != UIGestureRecognizerStateBegan)
+		return;
+	if (TGMediaScopeIsGrid(_scope) || _scope == TGMediaScopeLinks)
+		return;
+
+	CGPoint point = [recognizer locationInView:_tableView];
+	NSIndexPath *path = [_tableView indexPathForRowAtPoint:point];
+	if (!path || path.row >= (NSInteger)_items.count)
+		return;
+
+	NSDictionary *item = _items[path.row];
+	NSInteger fileId = [item[@"fileId"] integerValue];
+	if (fileId <= 0)
+		return;
+
+	TGFileDetailsViewController *details = [[TGFileDetailsViewController alloc] init];
+	details.fileId = fileId;
+	details.fileName = item[@"title"];
+	details.mimeType = item[@"mime"];
+	details.fileType = item[@"fileType"];
+	if (self.navigationController)
+		[self.navigationController pushViewController:details animated:YES];
 }
 
 - (void)showAlertMessage:(NSString *)message {
@@ -2354,9 +2930,11 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 
 @end
 
-@interface TGDownloadsViewController ()
+@interface TGDownloadsViewController () <UIActionSheetDelegate>
 
 @property (nonatomic, strong) UITableView *tableView;
+@property (nonatomic, strong) UILabel *storageLabel;
+@property (nonatomic, assign) BOOL storageLoaded;
 @property (nonatomic, strong) NSMutableArray *active;
 @property (nonatomic, strong) NSMutableArray *completed;
 @property (nonatomic, strong) UILabel *emptyLabel;
@@ -2407,12 +2985,53 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 					style:UIBarButtonItemStylePlain
 				   target:self
 				   action:@selector(clearTapped)];
+
+	_storageLabel = [[UILabel alloc] initWithFrame:
+			CGRectMake(0, 0, self.view.bounds.size.width, 44)];
+	_storageLabel.backgroundColor = [UIColor clearColor];
+	_storageLabel.textAlignment = NSTextAlignmentCenter;
+	_storageLabel.font = [UIFont systemFontOfSize:13];
+	_storageLabel.textColor = [[TGTheme shared] secondaryTextColour];
+	_storageLabel.numberOfLines = 2;
+	_storageLabel.text = @"Counting cached files…";
+	_tableView.tableFooterView = _storageLabel;
+}
+
+- (void)loadStorageSummary {
+	if (self.storageLoaded)
+		return;
+	self.storageLoaded = YES;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] storageStatisticsWithChatLimit:20 completion:^(NSDictionary *stats){
+		typeof(self) me = weakSelf;
+		if (!me || !me.isViewLoaded)
+			return;
+		if (!stats){
+			me.storageLabel.text = @"Cache size unavailable";
+			return;
+		}
+		long long size = [stats[@"size"] longLongValue];
+		NSInteger count = [stats[@"count"] integerValue];
+		NSArray *chats = stats[@"chats"];
+		NSString *top = @"";
+		if ([chats isKindOfClass:NSArray.class] && chats.count > 0){
+			NSDictionary *largest = chats[0];
+			NSString *title = largest[@"title"];
+			if ([title isKindOfClass:NSString.class] && title.length)
+				top = [NSString stringWithFormat:@"\nLargest: %@, %@", title,
+						TGMediaFormatBytes([largest[@"size"] longLongValue])];
+		}
+		me.storageLabel.text = [NSString stringWithFormat:@"%ld cached files, %@%@",
+				(long)count, TGMediaFormatBytes(size), top];
+	}];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
 	[self reload];
+	[self loadStorageSummary];
 	[self installProgressHook];
 
 	self.refreshTimer = [NSTimer scheduledTimerWithTimeInterval:3.0
@@ -2517,11 +3136,41 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 }
 
 - (void)clearTapped {
-	[[TGClient shared] removeAllDownloadsOnlyActive:NO onlyCompleted:NO deleteFromCache:NO];
-	[_active removeAllObjects];
-	[_completed removeAllObjects];
-	_emptyLabel.hidden = NO;
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Clear Downloads"
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:nil];
+	[sheet addButtonWithTitle:@"Clear Finished"];
+	[sheet addButtonWithTitle:@"Clear List"];
+	sheet.destructiveButtonIndex = [sheet addButtonWithTitle:@"Clear List and Delete Files"];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	[sheet showInView:self.view];
+}
+
+- (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
+	if (index < 0 || index > 2)
+		return;
+
+	if (index == 0){
+		[[TGClient shared] removeAllDownloadsOnlyActive:NO
+										  onlyCompleted:YES
+										deleteFromCache:NO];
+		[_completed removeAllObjects];
+	} else {
+		[[TGClient shared] removeAllDownloadsOnlyActive:NO
+										  onlyCompleted:NO
+										deleteFromCache:(index == 2)];
+		[_active removeAllObjects];
+		[_completed removeAllObjects];
+	}
+
+	_emptyLabel.hidden = (_active.count + _completed.count) != 0;
 	[_tableView reloadData];
+
+	self.storageLoaded = NO;
+	_storageLabel.text = @"Counting cached files…";
+	[self loadStorageSummary];
 }
 
 #pragma mark - table
@@ -2586,16 +3235,15 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 		cell.detailLabel.text = TGMediaFormatBytes(total > 0 ? total : got);
 	}
 
-	cell.selectionStyle = indexPath.section == 0
-			? UITableViewCellSelectionStyleBlue : UITableViewCellSelectionStyleNone;
+	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+	cell.accessoryType = indexPath.section == 0
+			? UITableViewCellAccessoryNone : UITableViewCellAccessoryDisclosureIndicator;
 	[cell setNeedsLayout];
 	return cell;
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
-	if (indexPath.section != 0)
-		return;
 
 	NSArray *entries = [self entriesForSection:indexPath.section];
 	if (indexPath.row >= (NSInteger)entries.count)
@@ -2603,6 +3251,19 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 
 	NSDictionary *entry = entries[indexPath.row];
 	NSInteger fileId = [entry[@"fileId"] integerValue];
+
+	if (indexPath.section != 0){
+		if (fileId <= 0)
+			return;
+		TGFileDetailsViewController *details = [[TGFileDetailsViewController alloc] init];
+		details.fileId = fileId;
+		details.fileName = entry[@"fileName"];
+		details.fileType = TGFileTypeDocument;
+		if (self.navigationController)
+			[self.navigationController pushViewController:details animated:YES];
+		return;
+	}
+
 	BOOL paused = [entry[@"isPaused"] boolValue];
 	[[TGClient shared] setDownloadOfFile:fileId paused:!paused];
 	[self reload];

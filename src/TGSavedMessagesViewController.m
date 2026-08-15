@@ -24,6 +24,10 @@ static const NSInteger kSavedRangeAlertTag = 72;
 static const NSInteger kSavedReminderAlertTag = 73;
 static const NSInteger kSavedRangeSheetTag = 74;
 static const NSInteger kSavedReminderSheetTag = 75;
+static const NSInteger kSavedPinnedSheetTag = 76;
+static const NSInteger kSavedJumpSheetTag = 77;
+static const NSInteger kSavedUnpinAllAlertTag = 78;
+static const NSInteger kSavedJumpStops = 6;
 static const CGFloat kSavedBannerHeight = 42.0f;
 
 static NSString *TGSavedDate(NSTimeInterval unix) {
@@ -44,6 +48,28 @@ static NSString *TGSavedDate(NSTimeInterval unix) {
 	if (age < 24 * 3600)     return [time stringFromDate:date];
 	if (age < 7 * 24 * 3600) return [weekday stringFromDate:date];
 	return [full stringFromDate:date];
+}
+
+static NSString *TGSavedDayStamp(NSTimeInterval unix) {
+	if (unix <= 0)
+		return @"";
+
+	static NSDateFormatter *day = nil;
+	if (!day){
+		day = [[NSDateFormatter alloc] init];
+		[day setLocale:[[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"]];
+		[day setDateFormat:@"d MMM yyyy"];
+	}
+	return [day stringFromDate:[NSDate dateWithTimeIntervalSince1970:unix]];
+}
+
+static NSString *TGSavedShortText(NSDictionary *message, NSUInteger limit) {
+	NSString *text = message[@"text"];
+	if (![text isKindOfClass:NSString.class] || !text.length)
+		text = @"Media";
+	if (text.length > limit)
+		text = [[text substringToIndex:limit] stringByAppendingString:@"…"];
+	return text;
 }
 
 static NSString *TGSavedTopicKind(NSDictionary *topic) {
@@ -69,7 +95,7 @@ static NSString *TGSavedTopicTitle(NSDictionary *topic) {
 
 #pragma mark - the messages of one topic
 
-@interface TGSavedTopicController : UITableViewController
+@interface TGSavedTopicController : UITableViewController <UIActionSheetDelegate, UIAlertViewDelegate>
 
 @property (nonatomic, assign) int64_t topicId;
 @property (nonatomic, copy)   NSString *topicTitle;
@@ -78,6 +104,13 @@ static NSString *TGSavedTopicTitle(NSDictionary *topic) {
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @property (nonatomic, assign) BOOL loading;
 @property (nonatomic, assign) BOOL exhausted;
+@property (nonatomic, strong) NSDictionary *pinnedMessage;
+@property (nonatomic, strong) UIButton *pinnedBanner;
+@property (nonatomic, strong) UILabel *countLabel;
+@property (nonatomic, strong) NSArray *jumpDates;
+@property (nonatomic, assign) NSInteger totalCount;
+@property (nonatomic, assign) int64_t menuMessageId;
+@property (nonatomic, assign) BOOL menuMessagePinned;
 
 @end
 
@@ -122,17 +155,377 @@ static NSString *TGSavedTopicTitle(NSDictionary *topic) {
 
 	self.tableView.backgroundView = background;
 
-	UIButton *chat = [TGIcons headerButtonWithTitle:@"Chat" bold:NO
-											 target:self action:@selector(openChat)];
+	UIButton *chat = [TGIcons headerButtonWithTitle:@"More" bold:NO
+											 target:self action:@selector(showTopicMenu)];
 	self.navigationItem.rightBarButtonItem =
 			[[UIBarButtonItem alloc] initWithCustomView:chat];
 
+	[self buildPinnedBanner];
+	[self buildCountFooter];
+
+	UILongPressGestureRecognizer *hold = [[UILongPressGestureRecognizer alloc]
+			initWithTarget:self action:@selector(messageHeld:)];
+	[self.tableView addGestureRecognizer:hold];
+
 	[self loadOlder];
+	[self reloadPinnedBanner];
+	[self reloadPositions];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+
+	NSDictionary *topic = [[TGClient shared] cachedSavedMessagesTopic:self.topicId];
+	if (topic){
+		NSString *title = TGSavedTopicTitle(topic);
+		if (title.length){
+			self.topicTitle = title;
+			self.title = title;
+		}
+	}
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+	[super viewWillDisappear:animated];
+	[TGPopupMenu dismiss];
+}
+
+#pragma mark - the pinned message of Saved Messages
+
+- (void)buildPinnedBanner {
+	TGTheme *theme = [TGTheme shared];
+
+	UIButton *banner = [UIButton buttonWithType:UIButtonTypeCustom];
+	banner.frame = CGRectMake(0, 0, self.tableView.bounds.size.width, kSavedBannerHeight);
+	banner.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	banner.backgroundColor = [theme listBackgroundColour];
+	banner.titleLabel.font = [UIFont systemFontOfSize:14];
+	banner.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
+	banner.contentEdgeInsets = UIEdgeInsetsMake(0, 12, 0, 12);
+	[banner setTitleColor:[theme accentColour] forState:UIControlStateNormal];
+	[banner addTarget:self action:@selector(showPinnedSheet)
+	 forControlEvents:UIControlEventTouchUpInside];
+
+	UIView *line = [[UIView alloc] initWithFrame:
+			CGRectMake(0, kSavedBannerHeight - 1, banner.bounds.size.width, 1)];
+	line.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	line.backgroundColor = [theme separatorColour];
+	[banner addSubview:line];
+
+	self.pinnedBanner = banner;
+}
+
+- (void)buildCountFooter {
+	UILabel *label = [[UILabel alloc] initWithFrame:
+			CGRectMake(0, 0, self.tableView.bounds.size.width, 34)];
+	label.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	label.backgroundColor = [UIColor clearColor];
+	label.textAlignment = NSTextAlignmentCenter;
+	label.font = [UIFont systemFontOfSize:13];
+	label.textColor = [[TGTheme shared] secondaryTextColour];
+	label.text = @"";
+	self.countLabel = label;
+}
+
+- (void)reloadPinnedBanner {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] savedMessagesPinnedMessageWithCompletion:^(NSDictionary *message){
+		TGSavedTopicController *me = weakSelf;
+		if (!me)
+			return;
+		me.pinnedMessage = [message isKindOfClass:NSDictionary.class] ? message : nil;
+		[me updatePinnedBanner];
+	}];
+}
+
+- (void)updatePinnedBanner {
+	if (!self.pinnedMessage){
+		self.tableView.tableHeaderView = nil;
+		return;
+	}
+
+	[self.pinnedBanner setTitle:[NSString stringWithFormat:@"Pinned: %@",
+			TGSavedShortText(self.pinnedMessage, 30)] forState:UIControlStateNormal];
+	if (self.tableView.tableHeaderView != self.pinnedBanner)
+		self.tableView.tableHeaderView = self.pinnedBanner;
+}
+
+- (void)showPinnedSheet {
+	if (!self.pinnedMessage)
+		return;
+
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:
+			TGSavedShortText(self.pinnedMessage, 60)
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:nil];
+	[sheet addButtonWithTitle:@"Unpin"];
+	[sheet addButtonWithTitle:@"Unpin All"];
+	[sheet addButtonWithTitle:@"Cancel"];
+	sheet.cancelButtonIndex = 2;
+	sheet.tag = kSavedPinnedSheetTag;
+	[sheet showInView:self.navigationController.view];
+}
+
+- (void)unpinPinnedMessage {
+	int64_t messageId = [self.pinnedMessage[@"id"] longLongValue];
+	if (!messageId)
+		return;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] unpinSavedMessage:messageId completion:^(BOOL ok){
+		TGSavedTopicController *me = weakSelf;
+		if (!me)
+			return;
+		if (!ok)
+			[me showError:@"Could not unpin that message."];
+		[me reloadPinnedBanner];
+	}];
+}
+
+- (void)confirmUnpinAll {
+	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Unpin All"
+													message:@"Unpin every message in Saved Messages?"
+												   delegate:self
+										  cancelButtonTitle:@"Cancel"
+										  otherButtonTitles:@"Unpin All", nil];
+	alert.tag = kSavedUnpinAllAlertTag;
+	[alert show];
+}
+
+- (void)showError:(NSString *)message {
+	[[[UIAlertView alloc] initWithTitle:nil message:message delegate:nil
+					  cancelButtonTitle:@"OK" otherButtonTitles:nil] show];
+}
+
+#pragma mark - positions and jumping to a date
+
+- (void)reloadPositions {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] savedMessagesSparsePositionsForTopic:self.topicId
+												fromMessage:0
+													  limit:0
+												 completion:^(NSArray *positions, NSInteger totalCount){
+		TGSavedTopicController *me = weakSelf;
+		if (!me)
+			return;
+		me.totalCount = totalCount;
+
+		NSMutableArray *dates = [NSMutableArray array];
+		if ([positions isKindOfClass:NSArray.class] && positions.count){
+			NSInteger step = ((NSInteger)positions.count + kSavedJumpStops - 1) / kSavedJumpStops;
+			if (step < 1)
+				step = 1;
+			for (NSInteger i = 0; i < (NSInteger)positions.count; i += step){
+				id entry = positions[(NSUInteger)i];
+				if (![entry isKindOfClass:NSDictionary.class])
+					continue;
+				NSInteger date = [entry[@"date"] integerValue];
+				if (date > 0 && ![dates containsObject:@(date)])
+					[dates addObject:@(date)];
+			}
+		}
+		me.jumpDates = dates;
+
+		if (totalCount > 0){
+			me.countLabel.text = (totalCount == 1)
+					? @"1 message"
+					: [NSString stringWithFormat:@"%d messages", (int)totalCount];
+			me.tableView.tableFooterView = me.countLabel;
+		}
+	}];
+}
+
+- (void)showJumpSheet {
+	if (self.jumpDates.count == 0){
+		[self showError:@"No dates to jump to yet."];
+		return;
+	}
+
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Jump to Date"
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:nil];
+	for (NSNumber *date in self.jumpDates)
+		[sheet addButtonWithTitle:TGSavedDayStamp([date doubleValue])];
+
+	[sheet addButtonWithTitle:@"Cancel"];
+	sheet.cancelButtonIndex = (NSInteger)self.jumpDates.count;
+	sheet.tag = kSavedJumpSheetTag;
+	[sheet showInView:self.navigationController.view];
+}
+
+- (void)jumpToDate:(NSInteger)date {
+	[self.spinner startAnimating];
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] savedMessagesTopic:self.topicId
+							messageAtDate:date
+							   completion:^(NSDictionary *message){
+		TGSavedTopicController *me = weakSelf;
+		if (!me)
+			return;
+		[me.spinner stopAnimating];
+
+		if (![message isKindOfClass:NSDictionary.class] || ![message[@"id"] longLongValue]){
+			[me showError:@"No message on that date."];
+			return;
+		}
+
+		me.messages = [NSMutableArray arrayWithObject:message];
+		me.exhausted = NO;
+		me.loading = NO;
+		me.emptyLabel.hidden = YES;
+		[me.tableView reloadData];
+		[me.tableView scrollRectToVisible:CGRectMake(0, 0, 1, 1) animated:NO];
+		[me loadOlder];
+	}];
+}
+
+#pragma mark - menus
+
+- (void)showTopicMenu {
+	NSMutableArray *items = [NSMutableArray array];
+	NSMutableArray *keys = [NSMutableArray array];
+
+	[items addObject:@{@"title" : @"Open Chat", @"icon" : @"chat"}];
+	[keys addObject:@"chat"];
+
+	[items addObject:@{@"title" : @"Jump to Date", @"icon" : @"search"}];
+	[keys addObject:@"jump"];
+
+	if (self.pinnedMessage){
+		[items addObject:@{@"title" : @"Pinned Message", @"icon" : @"pin"}];
+		[keys addObject:@"pinned"];
+	}
+
+	CGPoint where = CGPointMake(self.navigationController.view.bounds.size.width - 30, 44);
+
+	__weak typeof(self) weakSelf = self;
+	[TGPopupMenu showItems:items atPoint:where inView:self.navigationController.view
+				  onChoice:^(NSInteger choice, NSString *title){
+		TGSavedTopicController *me = weakSelf;
+		if (!me || choice < 0 || choice >= (NSInteger)keys.count)
+			return;
+		NSString *key = keys[choice];
+		if ([key isEqualToString:@"chat"])
+			[me openChat];
+		else if ([key isEqualToString:@"jump"])
+			[me showJumpSheet];
+		else if ([key isEqualToString:@"pinned"])
+			[me showPinnedSheet];
+	}];
+}
+
+- (void)messageHeld:(UILongPressGestureRecognizer *)hold {
+	if (hold.state != UIGestureRecognizerStateBegan)
+		return;
+
+	NSIndexPath *path = [self.tableView indexPathForRowAtPoint:
+			[hold locationInView:self.tableView]];
+	if (!path || path.row >= (NSInteger)self.messages.count)
+		return;
+
+	NSDictionary *message = self.messages[path.row];
+	int64_t messageId = [message[@"id"] longLongValue];
+	if (!messageId)
+		return;
+
+	self.menuMessageId = messageId;
+	self.menuMessagePinned = [message[@"isPinned"] boolValue];
+
+	NSArray *items = @[@{@"title" : (self.menuMessagePinned ? @"Unpin" : @"Pin"),
+						 @"icon"  : (self.menuMessagePinned ? @"unpin" : @"pin")}];
+
+	CGRect rect = [self.tableView rectForRowAtIndexPath:path];
+	CGPoint where = [self.tableView convertPoint:
+			CGPointMake(120, CGRectGetMaxY(rect) - 10) toView:self.navigationController.view];
+
+	__weak typeof(self) weakSelf = self;
+	[TGPopupMenu showItems:items atPoint:where inView:self.navigationController.view
+				  onChoice:^(NSInteger choice, NSString *title){
+		if (choice == 0)
+			[weakSelf togglePinOfMenuMessage];
+	}];
+}
+
+- (void)togglePinOfMenuMessage {
+	int64_t messageId = self.menuMessageId;
+	if (!messageId)
+		return;
+	BOOL pinned = self.menuMessagePinned;
+	self.menuMessageId = 0;
+
+	__weak typeof(self) weakSelf = self;
+	void (^done)(BOOL) = ^(BOOL ok){
+		TGSavedTopicController *me = weakSelf;
+		if (!me)
+			return;
+		if (!ok){
+			[me showError:pinned ? @"Could not unpin that message."
+								 : @"Could not pin that message."];
+			return;
+		}
+		[me markMessage:messageId pinned:!pinned];
+		[me reloadPinnedBanner];
+	};
+
+	if (pinned)
+		[[TGClient shared] unpinSavedMessage:messageId completion:done];
+	else
+		[[TGClient shared] pinSavedMessage:messageId completion:done];
+}
+
+- (void)markMessage:(int64_t)messageId pinned:(BOOL)pinned {
+	for (NSUInteger i = 0; i < self.messages.count; i++){
+		NSDictionary *message = self.messages[i];
+		if ([message[@"id"] longLongValue] != messageId)
+			continue;
+		NSMutableDictionary *updated = [message mutableCopy];
+		updated[@"isPinned"] = @(pinned);
+		self.messages[i] = updated;
+		[self.tableView reloadData];
+		return;
+	}
+}
+
+#pragma mark - sheets and alerts
+
+- (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
+	if (index == sheet.cancelButtonIndex)
+		return;
+
+	if (sheet.tag == kSavedPinnedSheetTag){
+		if (index == 0)
+			[self unpinPinnedMessage];
+		else if (index == 1)
+			[self confirmUnpinAll];
+		return;
+	}
+
+	if (sheet.tag == kSavedJumpSheetTag){
+		if (index < 0 || index >= (NSInteger)self.jumpDates.count)
+			return;
+		[self jumpToDate:[self.jumpDates[index] integerValue]];
+	}
+}
+
+- (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {
+	if (alertView.tag != kSavedUnpinAllAlertTag || buttonIndex == alertView.cancelButtonIndex)
+		return;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] unpinAllSavedMessagesWithCompletion:^(BOOL ok){
+		TGSavedTopicController *me = weakSelf;
+		if (!me)
+			return;
+		if (!ok)
+			[me showError:@"Could not unpin the messages."];
+		[me reloadPinnedBanner];
+	}];
 }
 
 - (void)openChat {
@@ -226,10 +619,11 @@ static NSString *TGSavedTopicTitle(NSDictionary *topic) {
 		tagLine = [NSString stringWithFormat:@"%@  ", [tags componentsJoinedByString:@" "]];
 
 	int date = [message[@"date"] intValue];
+	NSString *pinMark = [message[@"isPinned"] boolValue] ? @"Pinned  " : @"";
 	cell.detailTextLabel.font = [UIFont systemFontOfSize:13];
 	cell.detailTextLabel.textColor = [theme secondaryTextColour];
-	cell.detailTextLabel.text = [NSString stringWithFormat:@"%@%@",
-			tagLine, date ? TGSavedDate(date) : @""];
+	cell.detailTextLabel.text = [NSString stringWithFormat:@"%@%@%@",
+			pinMark, tagLine, date ? TGSavedDate(date) : @""];
 	return cell;
 }
 
@@ -562,6 +956,18 @@ static NSString *TGSavedTopicTitle(NSDictionary *topic) {
 	[super viewWillDisappear:animated];
 	[[TGClient shared] setSavedMessagesTopicsChangedHandler:nil];
 	[TGPopupMenu dismiss];
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+	[super viewDidDisappear:animated];
+
+	UINavigationController *nav = self.navigationController;
+	if (nav && [nav.viewControllers containsObject:self])
+		return;
+
+	[self.avatars removeAllObjects];
+	[self.avatarsRequested removeAllObjects];
+	[[TGClient shared] resetSavedMessagesTopicsCache];
 }
 
 - (void)themeChanged {

@@ -84,6 +84,9 @@ static const NSInteger TGLoginAlertDeleteAccount = 102;
 @property (nonatomic, assign) NSInteger termsMinUserAge;
 @property (nonatomic, strong) NSTimer *authPollTimer;
 @property (nonatomic, assign) BOOL passwordResetPending;
+@property (nonatomic, copy) NSString *lastQueriedPhonePrefix;
+@property (nonatomic, assign) BOOL countryCodeEdited;
+@property (nonatomic, assign) BOOL didPrefillGuessedCountry;
 
 @end
 
@@ -475,6 +478,7 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     self.countryCodeField.keyboardType = UIKeyboardTypeNumberPad;
     self.countryCodeField.delegate = self;
     [self.countryCodeField addTarget:self action:@selector(countryCodeChanged) forControlEvents:UIControlEventEditingChanged];
+    [self.countryCodeField addTarget:self action:@selector(phoneFieldsDidEndEditing) forControlEvents:UIControlEventEditingDidEnd];
     [self.view addSubview:self.countryCodeField];
 
     TGBackspaceTextField *phoneField = [[TGBackspaceTextField alloc] initWithFrame:CGRectZero];
@@ -489,6 +493,7 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     self.inputField.autocorrectionType = UITextAutocorrectionTypeNo;
     self.inputField.autocapitalizationType = UITextAutocapitalizationTypeNone;
     [self.inputField addTarget:self action:@selector(inputChanged) forControlEvents:UIControlEventEditingChanged];
+    [self.inputField addTarget:self action:@selector(phoneFieldsDidEndEditing) forControlEvents:UIControlEventEditingDidEnd];
     [self.view addSubview:self.inputField];
 
     self.lastNameBackgroundView = [[UIImageView alloc] initWithFrame:CGRectZero];
@@ -574,6 +579,71 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     dispatch_async(dispatch_get_main_queue(), ^{
         [self.inputField becomeFirstResponder];
     });
+
+    [self prefillGuessedCountry];
+}
+
+- (void)prefillGuessedCountry {
+    if (self.didPrefillGuessedCountry || self.countryCodeEdited)
+        return;
+    self.didPrefillGuessedCountry = YES;
+
+    __weak TGLoginViewController *weakSelf = self;
+    [[TGClient shared] guessedCountryCodeWithCompletion:^(NSString *countryCode) {
+        TGLoginViewController *me = weakSelf;
+        if (me == nil)
+            return;
+        if (countryCode.length == 0) {
+            me.didPrefillGuessedCountry = NO;
+            return;
+        }
+        if (me.currentStep != TGLoginStepPhone || me.countryCodeEdited)
+            return;
+        if ([me digitsOnly:me.inputField.text].length > 0)
+            return;
+
+        NSString *dial = [tgDialCodes() objectForKey:[countryCode uppercaseString]];
+        if (dial.length == 0)
+            return;
+
+        me.countryCodeField.text = dial;
+        [me setMatchedCountryTitle:[me countryNameForId:[countryCode uppercaseString]]];
+        [me updateNextEnabled];
+    }];
+}
+
+- (void)phoneFieldsDidEndEditing {
+    if (self.currentStep != TGLoginStepPhone)
+        return;
+
+    NSString *dialDigits = [self digitsOnly:self.countryCodeField.text];
+    if (dialDigits.length == 0)
+        return;
+
+    NSString *prefix = [NSString stringWithFormat:@"+%@%@", dialDigits, [self digitsOnly:self.inputField.text]];
+    if ([prefix isEqualToString:self.lastQueriedPhonePrefix])
+        return;
+    self.lastQueriedPhonePrefix = prefix;
+
+    __weak TGLoginViewController *weakSelf = self;
+    [[TGClient shared] phoneNumberInfo:prefix completion:^(NSDictionary *info) {
+        TGLoginViewController *me = weakSelf;
+        if (me == nil || me.currentStep != TGLoginStepPhone)
+            return;
+        if (![prefix isEqualToString:me.lastQueriedPhonePrefix])
+            return;
+
+        NSString *callingCode = [info objectForKey:@"callingCode"];
+        if ([callingCode isKindOfClass:[NSString class]] && callingCode.length > 0
+                && ![callingCode isEqualToString:[me digitsOnly:me.countryCodeField.text]])
+            return;
+
+        NSString *countryName = [info objectForKey:@"countryName"];
+        if ([countryName isKindOfClass:[NSString class]] && countryName.length > 0)
+            [me setMatchedCountryTitle:countryName];
+        else
+            [me updateCountryNameForDialCode];
+    }];
 }
 
 - (NSString *)currentCountryId {
@@ -645,8 +715,11 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
             return;
         if (name.length > 0)
             [me setMatchedCountryTitle:name];
-        if (dialCode.length > 0)
+        if (dialCode.length > 0) {
             me.countryCodeField.text = dialCode;
+            me.countryCodeEdited = YES;
+            me.lastQueriedPhonePrefix = nil;
+        }
         [me reformatPhoneField];
         [me updateNextEnabled];
         [me dismissViewControllerAnimated:YES completion:nil];
@@ -1015,6 +1088,8 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     if (digits.length > 4)
         digits = [digits substringToIndex:4];
     self.countryCodeField.text = [@"+" stringByAppendingString:digits];
+    self.countryCodeEdited = YES;
+    self.lastQueriedPhonePrefix = nil;
     [self updateCountryNameForDialCode];
     [self reformatPhoneField];
     [self updateNextEnabled];
@@ -1043,9 +1118,20 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
         NSString *code = [self digitsOnly:self.countryCodeField.text];
         NSString *fullPhone = [NSString stringWithFormat:@"+%@%@", code, [self digitsOnly:text]];
         self.savedPhoneNumber = fullPhone;
-        if (self.onPhoneSubmitted) {
-            self.onPhoneSubmitted(fullPhone);
-        }
+        __weak TGLoginViewController *weakSelf = self;
+        [[TGClient shared] startLoginWithPhoneNumber:fullPhone
+                                     isCurrentNumber:NO
+                                          completion:^(BOOL ok) {
+            TGLoginViewController *me = weakSelf;
+            if (me == nil || ok)
+                return;
+            if (me.currentStep != TGLoginStepPhone)
+                return;
+            [me setBusy:NO];
+            [me shakeInputRow];
+            [me showLoginAlert:@"This phone number was not accepted. Please check it and try again."];
+            [me.inputField becomeFirstResponder];
+        }];
     } else if (self.currentStep == TGLoginStepCode) {
         if (self.onCodeSubmitted) {
             self.onCodeSubmitted(self.codeIsText ? text : [self digitsOnly:text]);
@@ -1363,6 +1449,7 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     self.codeIsText = NO;
     self.codeIsPhrase = NO;
     self.passwordResetPending = NO;
+    self.lastQueriedPhonePrefix = nil;
 
     [self stopResendCountdown];
     [self stopQrRefresh];
@@ -1371,6 +1458,7 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     [self layoutInterface];
     [self updateNextEnabled];
     [self.inputField becomeFirstResponder];
+    [self prefillGuessedCountry];
 }
 
 - (void)optionsTapped {
@@ -1721,8 +1809,7 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
 - (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {
     if (alertView.tag == TGLoginAlertTerms) {
         if (buttonIndex == alertView.cancelButtonIndex) {
-            [[TGClient shared] logOut];
-            [self showPhoneStep];
+            [self logOutAndReturnToPhoneStep];
             return;
         }
         if (self.currentStep == TGLoginStepRegistration)
@@ -1788,7 +1875,17 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
         return;
     }
 
-    [[TGClient shared] logOut];
+    [self logOutAndReturnToPhoneStep];
+}
+
+- (void)logOutAndReturnToPhoneStep {
+    __weak TGLoginViewController *weakSelf = self;
+    [[TGClient shared] logOutWithCompletion:^(BOOL ok) {
+        TGLoginViewController *me = weakSelf;
+        if (me == nil || ok)
+            return;
+        [me showLoginAlert:@"Could not start over. Please try again."];
+    }];
     [self showPhoneStep];
 }
 

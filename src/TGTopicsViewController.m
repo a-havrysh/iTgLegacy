@@ -287,6 +287,252 @@ static UIImage *TGTopicAvatarImage(NSString *initials, CGFloat size, NSInteger r
 
 static const NSInteger kTopicNameAlertEdit = 92;
 static const NSInteger kTopicDeleteAlert = 93;
+static const NSInteger kTopicUnpinAllAlert = 94;
+
+static NSString *TGTopicMuteText(NSInteger seconds) {
+	if (seconds <= 0)
+		return @"Enabled";
+	if (seconds >= 366 * 24 * 3600)
+		return @"Muted";
+	if (seconds >= 24 * 3600)
+		return [NSString stringWithFormat:@"Muted %ldd", (long)(seconds / (24 * 3600))];
+	if (seconds >= 3600)
+		return [NSString stringWithFormat:@"Muted %ldh", (long)(seconds / 3600)];
+	return [NSString stringWithFormat:@"Muted %ldm", (long)MAX((NSInteger)1, seconds / 60)];
+}
+
+@interface TGTopicInfoController : UITableViewController <UIAlertViewDelegate>
+@property (nonatomic, assign) int64_t chatId;
+@property (nonatomic, assign) int32_t topicId;
+@property (nonatomic, copy)   NSString *topicName;
+@property (nonatomic, assign) BOOL canManage;
+@property (nonatomic, strong) NSDictionary *topic;
+@property (nonatomic, strong) NSArray *details;
+@property (nonatomic, strong) NSArray *recent;
+@end
+
+@implementation TGTopicInfoController
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+	self.title = @"Topic Info";
+	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+
+	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
+		self.edgesForExtendedLayout = UIRectEdgeNone;
+
+	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	self.tableView.separatorColor = [[TGTheme shared] separatorColour];
+	self.details = @[];
+	self.recent = @[];
+
+	[self rebuildDetails];
+	[self loadTopic];
+	[self loadRecent];
+}
+
+- (void)loadTopic {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] forumTopic:self.topicId inChat:self.chatId
+					   completion:^(NSDictionary *topic){
+		TGTopicInfoController *me = weakSelf;
+		if (!me)
+			return;
+		if (![topic isKindOfClass:NSDictionary.class]){
+			if (!me.topic)
+				[[[UIAlertView alloc] initWithTitle:nil
+											message:@"Could not load the topic."
+										   delegate:nil cancelButtonTitle:@"OK"
+								  otherButtonTitles:nil] show];
+			return;
+		}
+		me.topic = topic;
+		NSString *name = TGTopicString(topic, @"name");
+		if (name.length)
+			me.topicName = name;
+		[me rebuildDetails];
+		[me.tableView reloadData];
+	}];
+}
+
+- (void)loadRecent {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] forumTopicHistoryForChat:self.chatId
+										  topic:self.topicId
+									fromMessage:0
+										  limit:5
+									 completion:^(NSArray *messages){
+		TGTopicInfoController *me = weakSelf;
+		if (!me)
+			return;
+		NSMutableArray *clean = [NSMutableArray array];
+		if ([messages isKindOfClass:NSArray.class]){
+			for (id message in messages){
+				if ([message isKindOfClass:NSDictionary.class])
+					[clean addObject:message];
+			}
+		}
+		me.recent = clean;
+		[me.tableView reloadData];
+	}];
+}
+
+- (void)rebuildDetails {
+	NSDictionary *t = self.topic;
+	NSMutableArray *rows = [NSMutableArray array];
+
+	NSString *name = self.topicName.length ? self.topicName : @"Topic";
+	[rows addObject:@[@"Name", name]];
+
+	if (t){
+		[rows addObject:@[@"Status", TGTopicFlag(t, @"isClosed") ? @"Closed" : @"Open"]];
+		if (TGTopicFlag(t, @"isGeneral"))
+			[rows addObject:@[@"General", TGTopicFlag(t, @"isHidden") ? @"Hidden" : @"Shown"]];
+		[rows addObject:@[@"Pinned", TGTopicFlag(t, @"isPinned") ? @"Yes" : @"No"]];
+		[rows addObject:@[@"Notifications",
+						  TGTopicMuteText(TGTopicInteger(t, @"muteFor"))]];
+		[rows addObject:@[@"Unread",
+						  [NSString stringWithFormat:@"%ld", (long)TGTopicInteger(t, @"unread")]]];
+		NSInteger mentions = TGTopicInteger(t, @"unreadMentions");
+		NSInteger reactions = TGTopicInteger(t, @"unreadReactions");
+		if (mentions > 0)
+			[rows addObject:@[@"Mentions", [NSString stringWithFormat:@"%ld", (long)mentions]]];
+		if (reactions > 0)
+			[rows addObject:@[@"Reactions", [NSString stringWithFormat:@"%ld", (long)reactions]]];
+		double date = TGTopicDouble(t, @"date");
+		if (date > 0)
+			[rows addObject:@[@"Last Message", TGTopicDate(date)]];
+	}
+
+	self.details = rows;
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+	return self.canManage ? 3 : 2;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	if (section == 0)
+		return self.details.count;
+	if (section == 1)
+		return MAX((NSInteger)1, (NSInteger)self.recent.count);
+	return 1;
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
+	if (section == 1)
+		return @"RECENT MESSAGES";
+	return nil;
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
+	return indexPath.section == 1 ? 52.0f : 44.0f;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView
+		 cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	TGTheme *theme = [TGTheme shared];
+
+	if (indexPath.section == 1){
+		static NSString *reuse = @"TGTopicInfoMessage";
+		UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
+		if (!cell){
+			cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+										  reuseIdentifier:reuse];
+			cell.detailTextLabel.font = [UIFont systemFontOfSize:12];
+			cell.textLabel.font = [UIFont systemFontOfSize:15];
+			cell.textLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+		}
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		cell.accessoryType = UITableViewCellAccessoryNone;
+		cell.textLabel.textColor = [theme primaryTextColour];
+		cell.detailTextLabel.textColor = [theme secondaryTextColour];
+
+		if (self.recent.count == 0){
+			cell.textLabel.text = @"No messages yet";
+			cell.textLabel.textColor = [theme secondaryTextColour];
+			cell.detailTextLabel.text = @"";
+			return cell;
+		}
+
+		NSDictionary *message = self.recent[self.recent.count - 1 - (NSUInteger)indexPath.row];
+		NSString *text = TGTopicString(message, @"text");
+		cell.textLabel.text = text.length ? text : @"Attachment";
+		NSString *when = TGTopicDate(TGTopicDouble(message, @"date"));
+		cell.detailTextLabel.text = TGTopicFlag(message, @"outgoing")
+				? [NSString stringWithFormat:@"You · %@", when]
+				: when;
+		return cell;
+	}
+
+	if (indexPath.section == 2){
+		static NSString *reuse = @"TGTopicInfoAction";
+		UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
+		if (!cell){
+			cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+										  reuseIdentifier:reuse];
+			cell.textLabel.textAlignment = NSTextAlignmentCenter;
+			cell.textLabel.font = [UIFont boldSystemFontOfSize:16];
+		}
+		cell.textLabel.text = @"Unpin All Messages";
+		cell.textLabel.textColor = [UIColor colorWithRed:0.72f green:0.13f blue:0.13f alpha:1.0f];
+		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+		return cell;
+	}
+
+	static NSString *reuse = @"TGTopicInfoDetail";
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
+	if (!cell)
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
+									  reuseIdentifier:reuse];
+	cell.selectionStyle = UITableViewCellSelectionStyleNone;
+	cell.textLabel.textColor = [theme primaryTextColour];
+	cell.detailTextLabel.textColor = [theme secondaryTextColour];
+
+	if (indexPath.row < (NSInteger)self.details.count){
+		NSArray *pair = self.details[indexPath.row];
+		cell.textLabel.text = pair[0];
+		cell.detailTextLabel.text = pair[1];
+	}
+	return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	if (indexPath.section != 2)
+		return;
+
+	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Unpin All Messages"
+													message:@"Unpin every pinned message in this topic?"
+												   delegate:self
+										  cancelButtonTitle:@"Cancel"
+										  otherButtonTitles:@"Unpin", nil];
+	alert.tag = kTopicUnpinAllAlert;
+	[alert show];
+}
+
+- (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {
+	if (alertView.tag != kTopicUnpinAllAlert || buttonIndex == alertView.cancelButtonIndex)
+		return;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] unpinAllMessagesInForumTopicInChat:self.chatId
+													topic:self.topicId
+											   completion:^(BOOL success){
+		TGTopicInfoController *me = weakSelf;
+		if (!me)
+			return;
+		[[[UIAlertView alloc] initWithTitle:nil
+									message:success ? @"Pinned messages removed."
+													: @"Could not unpin the messages."
+								   delegate:nil cancelButtonTitle:@"OK"
+						  otherButtonTitles:nil] show];
+		[me loadTopic];
+		[me loadRecent];
+	}];
+}
+
+@end
 
 static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 	UIGraphicsBeginImageContextWithOptions(CGSizeMake(size, size), NO, 0);
@@ -1124,6 +1370,9 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 	[items addObject:@{@"title" : @"Copy Link", @"icon" : @"copy"}];
 	[keys addObject:@"link"];
 
+	[items addObject:@{@"title" : @"Topic Info", @"icon" : @"more"}];
+	[keys addObject:@"info"];
+
 	if (pinned && !self.searchResults && self.canManageTopics && [self pinnedCount] > 1){
 		[items addObject:@{@"title" : @"Reorder Pins", @"icon" : @"pin"}];
 		[keys addObject:@"reorder"];
@@ -1160,6 +1409,22 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 
 	if ([key isEqualToString:@"edit"]){
 		[self askTopicNameForEdit:t];
+		return;
+	}
+
+	if ([key isEqualToString:@"info"]){
+		self.actionTopic = nil;
+		if (topicId == 0){
+			[self showError:@"Could not load the topic."];
+			return;
+		}
+		TGTopicInfoController *info = [[TGTopicInfoController alloc]
+				initWithStyle:UITableViewStyleGrouped];
+		info.chatId = self.chatId;
+		info.topicId = topicId;
+		info.topicName = TGTopicString(t, @"name");
+		info.canManage = self.canManageTopics;
+		[self.navigationController pushViewController:info animated:YES];
 		return;
 	}
 

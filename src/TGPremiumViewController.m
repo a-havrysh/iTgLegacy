@@ -2,9 +2,11 @@
 #import "TGClient.h"
 #import "TGClient+Premium.h"
 #import "TGClient+Network.h"
+#import "TGClient+ChatList.h"
 #import "TGTheme.h"
 #import "TGIcons.h"
 #import "TGAlertView.h"
+#import "TGActionSheet.h"
 
 static const CGFloat kPremiumHeaderHeight = 86.0f;
 static const CGFloat kPremiumSectionHeaderHeight = 46.0f;
@@ -15,6 +17,634 @@ static inline UIColor *TGPremiumRGB(unsigned int value) {
 							blue:(value & 0xff) / 255.0f
 						   alpha:1.0f];
 }
+
+static NSString *TGPremiumDateText(id value) {
+	if (![value isKindOfClass:[NSNumber class]] || [value doubleValue] <= 0)
+		return @"";
+	static NSDateFormatter *formatter = nil;
+	if (!formatter){
+		formatter = [[NSDateFormatter alloc] init];
+		formatter.dateStyle = NSDateFormatterMediumStyle;
+		formatter.timeStyle = NSDateFormatterNoStyle;
+	}
+	return [formatter stringFromDate:
+			[NSDate dateWithTimeIntervalSince1970:[value doubleValue]]];
+}
+
+enum {
+	TGPremiumListGiftCodes = 0,
+	TGPremiumListGiveaways,
+	TGPremiumListBoostSlots,
+	TGPremiumListBoostLevels,
+	TGPremiumListBoosters,
+	TGPremiumListBusiness
+};
+
+enum {
+	TGPremiumRowPlain = 0,
+	TGPremiumRowTappable,
+	TGPremiumRowLevel,
+	TGPremiumRowLoadMore
+};
+
+@interface TGPremiumListViewController : UITableViewController
+@property (nonatomic, assign) NSInteger mode;
+@property (nonatomic, assign) int64_t chatId;
+@property (nonatomic, strong) NSMutableArray *rows;
+@property (nonatomic, strong) NSString *nextOffset;
+@property (nonatomic, strong) NSString *statusText;
+@property (nonatomic, assign) BOOL loading;
+@property (nonatomic, assign) int64_t sheetChatId;
+- (id)initWithMode:(NSInteger)mode chatId:(int64_t)chatId title:(NSString *)title;
+@end
+
+@implementation TGPremiumListViewController
+
+- (id)initWithMode:(NSInteger)mode chatId:(int64_t)chatId title:(NSString *)title {
+	self = [super initWithStyle:UITableViewStyleGrouped];
+	if (self){
+		_mode = mode;
+		_chatId = chatId;
+		_rows = [[NSMutableArray alloc] init];
+		_nextOffset = @"";
+		_statusText = @"Loading...";
+		self.title = title;
+	}
+	return self;
+}
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
+		self.edgesForExtendedLayout = UIRectEdgeNone;
+	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	self.tableView.separatorColor = [[TGTheme shared] separatorColour];
+	if (self.navigationController.navigationBar)
+		[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+	[self load];
+}
+
+- (void)addRowWithTitle:(NSString *)title
+				 detail:(NSString *)detail
+				   kind:(NSInteger)kind
+				payload:(NSDictionary *)payload
+{
+	NSMutableDictionary *row = [NSMutableDictionary dictionaryWithCapacity:4];
+	row[@"title"] = title.length ? title : @" ";
+	row[@"detail"] = detail.length ? detail : @"";
+	row[@"kind"] = @(kind);
+	if (payload)
+		row[@"payload"] = payload;
+	[self.rows addObject:row];
+}
+
+- (void)finishedWithEmptyText:(NSString *)text {
+	self.loading = NO;
+	self.statusText = self.rows.count ? @"" : text;
+	[self.tableView reloadData];
+}
+
+- (void)load {
+	if (self.loading)
+		return;
+	self.loading = YES;
+	switch (self.mode){
+		case TGPremiumListGiftCodes:   [self loadGiftCodes]; break;
+		case TGPremiumListGiveaways:   [self loadGiveaways]; break;
+		case TGPremiumListBoostSlots:  [self loadBoostSlots]; break;
+		case TGPremiumListBoostLevels: [self loadBoostLevels]; break;
+		case TGPremiumListBoosters:    [self loadBoosters]; break;
+		default:                       [self loadBusinessFeatures]; break;
+	}
+}
+
+- (void)loadGiftCodes {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] accountGiftCodesWithLimit:0 completion:^(NSArray *codes){
+		if (!weakSelf)
+			return;
+		[weakSelf.rows removeAllObjects];
+		for (id raw in ([codes isKindOfClass:[NSArray class]] ? codes : @[])){
+			if (![raw isKindOfClass:[NSDictionary class]])
+				continue;
+			NSDictionary *entry = raw;
+			NSString *code = [entry[@"code"] isKindOfClass:[NSString class]]
+					? entry[@"code"] : @"";
+			long long stars = [entry[@"stars"] longLongValue];
+			NSMutableString *detail = [NSMutableString string];
+			if (stars > 0)
+				[detail appendFormat:@"%lld Stars", stars];
+			else if ([entry[@"months"] integerValue] > 0)
+				[detail appendFormat:@"%d months", (int)[entry[@"months"] integerValue]];
+			if ([entry[@"unclaimed"] boolValue])
+				[detail appendString:detail.length ? @" · unclaimed" : @"unclaimed"];
+			NSString *date = TGPremiumDateText(entry[@"date"]);
+			if (date.length)
+				[detail appendString:detail.length ?
+						[NSString stringWithFormat:@" · %@", date] : date];
+			NSString *title = code.length ? code : @"Star prize";
+			[weakSelf addRowWithTitle:title
+							   detail:detail
+								 kind:code.length ? TGPremiumRowTappable : TGPremiumRowPlain
+							  payload:entry];
+		}
+		[weakSelf finishedWithEmptyText:@"No gift codes have been sent to this account."];
+	}];
+}
+
+- (void)loadGiveaways {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] enteredGiveawaysWithLimit:0 completion:^(NSArray *giveaways){
+		if (!weakSelf)
+			return;
+		[weakSelf.rows removeAllObjects];
+		for (id raw in ([giveaways isKindOfClass:[NSArray class]] ? giveaways : @[])){
+			if (![raw isKindOfClass:[NSDictionary class]])
+				continue;
+			NSDictionary *entry = raw;
+			NSString *title = [entry[@"chatTitle"] isKindOfClass:[NSString class]]
+					&& [entry[@"chatTitle"] length] ? entry[@"chatTitle"] : @"Channel";
+			NSString *status = [entry[@"statusText"] isKindOfClass:[NSString class]]
+					? entry[@"statusText"] : @"";
+			if (!status.length)
+				status = [entry[@"ongoing"] boolValue] ? @"Ongoing" : @"Finished";
+			[weakSelf addRowWithTitle:title
+							   detail:status
+								 kind:TGPremiumRowTappable
+							  payload:entry];
+		}
+		[weakSelf finishedWithEmptyText:
+				@"This account has not entered any giveaway in a channel it boosts."];
+	}];
+}
+
+- (void)loadBoostSlots {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] availableBoostSlotsWithCompletion:^(NSArray *slots){
+		if (!weakSelf)
+			return;
+		[weakSelf.rows removeAllObjects];
+		for (id raw in ([slots isKindOfClass:[NSArray class]] ? slots : @[])){
+			if (![raw isKindOfClass:[NSDictionary class]])
+				continue;
+			NSDictionary *slot = raw;
+			int64_t slotChat = [slot[@"chatId"] longLongValue];
+			NSString *title = [NSString stringWithFormat:@"Slot %d",
+					(int)[slot[@"slotId"] integerValue]];
+			if (slotChat == 0 || [slot[@"free"] boolValue]){
+				[weakSelf addRowWithTitle:title detail:@"Free"
+									 kind:TGPremiumRowPlain payload:slot];
+				continue;
+			}
+			NSString *detail = [slot[@"reassignable"] boolValue]
+					? @"In use · can be moved" : @"In use";
+			[weakSelf addRowWithTitle:title detail:detail
+								 kind:TGPremiumRowTappable payload:slot];
+			NSUInteger index = weakSelf.rows.count - 1;
+			[[TGClient shared] titleForChatId:slotChat completion:^(NSString *chatTitle){
+				if (!weakSelf || index >= weakSelf.rows.count || !chatTitle.length)
+					return;
+				NSMutableDictionary *row = weakSelf.rows[index];
+				row[@"title"] = chatTitle;
+				[weakSelf.tableView reloadData];
+			}];
+		}
+		[weakSelf finishedWithEmptyText:
+				@"Boost slots come with a Premium subscription."];
+	}];
+}
+
+- (void)loadBoostLevels {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] boostFeaturesForChannel:YES completion:^(NSArray *levels){
+		if (!weakSelf)
+			return;
+		[weakSelf.rows removeAllObjects];
+		for (id raw in ([levels isKindOfClass:[NSArray class]] ? levels : @[])){
+			if (![raw isKindOfClass:[NSDictionary class]])
+				continue;
+			NSDictionary *level = raw;
+			[weakSelf addRowWithTitle:[NSString stringWithFormat:@"Level %d",
+							(int)[level[@"level"] integerValue]]
+							   detail:@""
+								 kind:TGPremiumRowLevel
+							  payload:nil];
+			id features = level[@"features"];
+			if (![features isKindOfClass:[NSArray class]])
+				continue;
+			for (id line in features){
+				if ([line isKindOfClass:[NSString class]])
+					[weakSelf addRowWithTitle:line detail:@""
+										 kind:TGPremiumRowPlain payload:nil];
+			}
+		}
+		[weakSelf finishedWithEmptyText:@"The boost level table is unavailable."];
+	}];
+}
+
+- (void)loadBoosters {
+	__weak typeof(self) weakSelf = self;
+	NSString *offset = self.nextOffset.length ? self.nextOffset : @"";
+	[[TGClient shared] boostersInChat:self.chatId
+						onlyGiftCodes:NO
+							   offset:offset
+								limit:20
+						   completion:^(NSDictionary *page){
+		if (!weakSelf)
+			return;
+		if (![page isKindOfClass:[NSDictionary class]]){
+			[weakSelf finishedWithEmptyText:@"The booster list is unavailable."];
+			return;
+		}
+		if (weakSelf.rows.count
+				&& [weakSelf.rows.lastObject[@"kind"] integerValue] == TGPremiumRowLoadMore)
+			[weakSelf.rows removeLastObject];
+		id boosts = page[@"boosts"];
+		for (id raw in ([boosts isKindOfClass:[NSArray class]] ? boosts : @[])){
+			if (![raw isKindOfClass:[NSDictionary class]])
+				continue;
+			NSDictionary *boost = raw;
+			NSString *name = [boost[@"name"] isKindOfClass:[NSString class]]
+					? boost[@"name"] : @"";
+			if (!name.length)
+				name = [boost[@"unclaimed"] boolValue] ? @"Unclaimed prize" : @"Booster";
+			NSString *source = [boost[@"source"] isKindOfClass:[NSString class]]
+					? boost[@"source"] : @"";
+			NSInteger count = [boost[@"count"] integerValue];
+			NSMutableString *detail = [NSMutableString string];
+			if (count > 1)
+				[detail appendFormat:@"%d boosts", (int)count];
+			if (source.length)
+				[detail appendString:detail.length
+						? [NSString stringWithFormat:@" · %@", source] : source];
+			[weakSelf addRowWithTitle:name detail:detail
+								 kind:TGPremiumRowPlain payload:boost];
+		}
+		NSString *next = [page[@"nextOffset"] isKindOfClass:[NSString class]]
+				? page[@"nextOffset"] : @"";
+		weakSelf.nextOffset = next;
+		if (next.length && weakSelf.rows.count)
+			[weakSelf addRowWithTitle:@"Show More" detail:@""
+								 kind:TGPremiumRowLoadMore payload:nil];
+		NSInteger total = [page[@"totalCount"] integerValue];
+		if (total > 0)
+			weakSelf.title = [NSString stringWithFormat:@"Boosters (%d)", (int)total];
+		[weakSelf finishedWithEmptyText:@"Nobody has boosted this channel yet."];
+	}];
+}
+
+- (void)loadBusinessFeatures {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] businessFeaturesWithCompletion:^(NSArray *features){
+		if (!weakSelf)
+			return;
+		[weakSelf.rows removeAllObjects];
+		for (id raw in ([features isKindOfClass:[NSArray class]] ? features : @[])){
+			if (![raw isKindOfClass:[NSDictionary class]])
+				continue;
+			NSDictionary *feature = raw;
+			NSString *title = [feature[@"title"] isKindOfClass:[NSString class]]
+					&& [feature[@"title"] length] ? feature[@"title"] : feature[@"type"];
+			NSString *subtitle = [feature[@"subtitle"] isKindOfClass:[NSString class]]
+					? feature[@"subtitle"] : @"";
+			[weakSelf addRowWithTitle:title
+							   detail:subtitle
+								 kind:subtitle.length ? TGPremiumRowTappable : TGPremiumRowPlain
+							  payload:feature];
+		}
+		[weakSelf finishedWithEmptyText:@"The Business feature list is unavailable."];
+	}];
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+	return 1;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	return self.rows.count ? (NSInteger)self.rows.count : 1;
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
+	if (!self.rows.count)
+		return 54;
+	NSDictionary *row = self.rows[indexPath.row];
+	if ([row[@"kind"] integerValue] == TGPremiumRowLevel)
+		return 34;
+	if ([row[@"detail"] length] > 34)
+		return 58;
+	return 44;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView
+		 cellForRowAtIndexPath:(NSIndexPath *)indexPath
+{
+	if (!self.rows.count){
+		static NSString *emptyId = @"TGPremiumListEmpty";
+		UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:emptyId];
+		if (!cell)
+			cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+										  reuseIdentifier:emptyId];
+		[[TGTheme shared] styleCell:cell];
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		cell.accessoryType = UITableViewCellAccessoryNone;
+		cell.textLabel.numberOfLines = 0;
+		cell.textLabel.textAlignment = NSTextAlignmentCenter;
+		cell.textLabel.font = [UIFont systemFontOfSize:15];
+		cell.textLabel.textColor = [[TGTheme shared] secondaryTextColour];
+		cell.textLabel.text = self.loading ? @"Loading..." : self.statusText;
+		return cell;
+	}
+
+	NSDictionary *row = self.rows[indexPath.row];
+	NSInteger kind = [row[@"kind"] integerValue];
+	NSString *reuseId = kind == TGPremiumRowLevel ? @"TGPremiumListLevel"
+												  : @"TGPremiumListRow";
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuseId];
+	if (!cell)
+		cell = [[UITableViewCell alloc]
+				initWithStyle:kind == TGPremiumRowLevel ? UITableViewCellStyleDefault
+													   : UITableViewCellStyleSubtitle
+			  reuseIdentifier:reuseId];
+	[[TGTheme shared] styleCell:cell];
+	cell.textLabel.numberOfLines = 1;
+	cell.textLabel.textAlignment = NSTextAlignmentLeft;
+	cell.textLabel.text = row[@"title"];
+	cell.detailTextLabel.numberOfLines = 2;
+	cell.detailTextLabel.font = [UIFont systemFontOfSize:13];
+	cell.detailTextLabel.textColor = [[TGTheme shared] secondaryTextColour];
+	cell.detailTextLabel.text = row[@"detail"];
+
+	if (kind == TGPremiumRowLevel){
+		cell.textLabel.font = [UIFont boldSystemFontOfSize:14];
+		cell.textLabel.textColor = [[TGTheme shared] secondaryTextColour];
+		cell.accessoryType = UITableViewCellAccessoryNone;
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		return cell;
+	}
+
+	cell.textLabel.font = [UIFont systemFontOfSize:16];
+	cell.textLabel.textColor = kind == TGPremiumRowLoadMore
+			? [[TGTheme shared] accentColour]
+			: [[TGTheme shared] primaryTextColour];
+	cell.accessoryType = kind == TGPremiumRowTappable
+			? UITableViewCellAccessoryDisclosureIndicator
+			: UITableViewCellAccessoryNone;
+	cell.selectionStyle = kind == TGPremiumRowPlain
+			? UITableViewCellSelectionStyleNone
+			: UITableViewCellSelectionStyleBlue;
+	return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	if (!self.rows.count)
+		return;
+	NSDictionary *row = self.rows[indexPath.row];
+	NSInteger kind = [row[@"kind"] integerValue];
+	if (kind == TGPremiumRowLoadMore){
+		[self load];
+		return;
+	}
+	if (kind != TGPremiumRowTappable)
+		return;
+
+	NSDictionary *payload = row[@"payload"];
+	switch (self.mode){
+		case TGPremiumListGiftCodes:  [self showGiftCode:payload]; break;
+		case TGPremiumListGiveaways:  [self showGiveaway:payload]; break;
+		case TGPremiumListBoostSlots: [self showSlotActions:payload]; break;
+		case TGPremiumListBusiness: {
+			TGAlertView *alert = [[TGAlertView alloc] initWithTitle:row[@"title"]
+															message:row[@"detail"]
+												  cancelButtonTitle:@"OK"
+													  okButtonTitle:nil
+													completionBlock:nil];
+			[alert show];
+			break;
+		}
+		default: break;
+	}
+}
+
+- (void)showGiftCode:(NSDictionary *)entry {
+	NSString *code = [entry[@"code"] isKindOfClass:[NSString class]] ? entry[@"code"] : @"";
+	if (!code.length)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] checkGiftCode:code completion:^(NSDictionary *info){
+		if (![info isKindOfClass:[NSDictionary class]]){
+			TGAlertView *fail = [[TGAlertView alloc] initWithTitle:@"Gift Code"
+														   message:@"This code could not be checked."
+												 cancelButtonTitle:@"OK"
+													 okButtonTitle:nil
+												   completionBlock:nil];
+			[fail show];
+			return;
+		}
+		NSMutableString *message = [NSMutableString stringWithString:code];
+		NSInteger months = [info[@"months"] integerValue];
+		if (months > 0)
+			[message appendFormat:@"\n%d months of Premium", (int)months];
+		if ([info[@"fromGiveaway"] boolValue])
+			[message appendString:@"\nFrom a giveaway"];
+		NSString *created = TGPremiumDateText(info[@"creationDate"]);
+		if (created.length)
+			[message appendFormat:@"\nCreated %@", created];
+		BOOL used = [info[@"used"] boolValue];
+		if (used){
+			NSString *usedDate = TGPremiumDateText(info[@"useDate"]);
+			[message appendFormat:@"\nAlready used%@",
+					usedDate.length ? [NSString stringWithFormat:@" on %@", usedDate] : @""];
+			TGAlertView *alert = [[TGAlertView alloc] initWithTitle:@"Gift Code"
+															message:message
+												  cancelButtonTitle:@"OK"
+													  okButtonTitle:nil
+													completionBlock:nil];
+			[alert show];
+			return;
+		}
+		[message appendString:@"\nNot used yet"];
+		TGAlertView *alert = [[TGAlertView alloc] initWithTitle:@"Gift Code"
+														message:message
+											  cancelButtonTitle:@"Close"
+												  okButtonTitle:@"Redeem"
+												completionBlock:^(bool okPressed){
+			if (!okPressed)
+				return;
+			[[TGClient shared] applyGiftCode:code completion:^(BOOL ok, NSString *error){
+				TGAlertView *result = [[TGAlertView alloc]
+						initWithTitle:ok ? @"Gift Code" : @"Gift Code Failed"
+							  message:ok ? @"The code was applied to this account."
+										 : (error.length ? error
+														 : @"The code could not be redeemed.")
+					cancelButtonTitle:@"OK"
+						okButtonTitle:nil
+					  completionBlock:nil];
+				[result show];
+				if (ok && weakSelf)
+					[weakSelf load];
+			}];
+		}];
+		[alert show];
+	}];
+}
+
+- (void)showGiveaway:(NSDictionary *)entry {
+	int64_t messageId = [entry[@"messageId"] longLongValue];
+	int64_t chatId = [entry[@"chatId"] longLongValue];
+	NSString *title = [entry[@"chatTitle"] isKindOfClass:[NSString class]]
+			&& [entry[@"chatTitle"] length] ? entry[@"chatTitle"] : @"Giveaway";
+	if (messageId == 0 || chatId == 0)
+		return;
+	[[TGClient shared] giveawayInfoForMessage:messageId
+									   inChat:chatId
+								   completion:^(NSDictionary *info){
+		NSString *message = nil;
+		if (![info isKindOfClass:[NSDictionary class]]){
+			message = @"This giveaway could not be loaded.";
+		} else {
+			NSMutableString *text = [NSMutableString string];
+			NSString *status = [info[@"statusText"] isKindOfClass:[NSString class]]
+					? info[@"statusText"] : @"";
+			if (status.length)
+				[text appendString:status];
+			BOOL ongoing = [info[@"ongoing"] boolValue];
+			if (!ongoing){
+				NSString *winners = TGPremiumDateText(info[@"winnersDate"]);
+				if (winners.length)
+					[text appendFormat:@"%@Winners picked %@",
+							text.length ? @"\n" : @"", winners];
+				NSInteger winnerCount = [info[@"winnerCount"] integerValue];
+				if (winnerCount > 0)
+					[text appendFormat:@"\n%d winners", (int)winnerCount];
+				if ([info[@"refunded"] boolValue])
+					[text appendString:@"\nThe giveaway was refunded."];
+				NSString *code = [info[@"giftCode"] isKindOfClass:[NSString class]]
+						? info[@"giftCode"] : @"";
+				if ([info[@"winner"] boolValue])
+					[text appendFormat:@"\nThis account won%@",
+							code.length ? [NSString stringWithFormat:@": %@", code] : @""];
+			} else {
+				NSString *created = TGPremiumDateText(info[@"creationDate"]);
+				if (created.length)
+					[text appendFormat:@"%@Started %@", text.length ? @"\n" : @"", created];
+			}
+			message = text.length ? text : @"No details for this giveaway.";
+		}
+		TGAlertView *alert = [[TGAlertView alloc] initWithTitle:title
+														message:message
+											  cancelButtonTitle:@"OK"
+												  okButtonTitle:nil
+												completionBlock:nil];
+		[alert show];
+	}];
+}
+
+- (void)showSlotActions:(NSDictionary *)slot {
+	int64_t slotChat = [slot[@"chatId"] longLongValue];
+	if (slotChat == 0)
+		return;
+	self.sheetChatId = slotChat;
+
+	NSArray *actions = @[
+		[[TGActionSheetAction alloc] initWithTitle:@"Boost Status" action:@"status"],
+		[[TGActionSheetAction alloc] initWithTitle:@"Who Boosted" action:@"boosters"],
+		[[TGActionSheetAction alloc] initWithTitle:@"Copy Boost Link" action:@"link"],
+		[[TGActionSheetAction alloc] initWithTitle:@"Cancel" action:@"cancel"
+											  type:TGActionSheetActionTypeCancel]
+	];
+
+	__weak typeof(self) weakSelf = self;
+	TGActionSheet *sheet = [[TGActionSheet alloc]
+			initWithTitle:nil
+				  actions:actions
+			  actionBlock:^(id target, NSString *action){
+		if (!weakSelf)
+			return;
+		if ([action isEqualToString:@"status"])
+			[weakSelf showBoostStatusForChat:weakSelf.sheetChatId];
+		else if ([action isEqualToString:@"boosters"])
+			[weakSelf pushBoostersForChat:weakSelf.sheetChatId];
+		else if ([action isEqualToString:@"link"])
+			[weakSelf copyBoostLinkForChat:weakSelf.sheetChatId];
+	}
+				   target:self];
+	[sheet showInView:self.view];
+}
+
+- (void)pushBoostersForChat:(int64_t)chatId {
+	TGPremiumListViewController *list = [[TGPremiumListViewController alloc]
+			initWithMode:TGPremiumListBoosters chatId:chatId title:@"Boosters"];
+	[self.navigationController pushViewController:list animated:YES];
+}
+
+- (void)copyBoostLinkForChat:(int64_t)chatId {
+	[[TGClient shared] chatBoostLinkForChat:chatId
+								 completion:^(NSString *url, BOOL isPublic){
+		NSString *message = nil;
+		if (url.length){
+			[[UIPasteboard generalPasteboard] setString:url];
+			message = [NSString stringWithFormat:@"%@\n\nCopied to the clipboard.%@",
+					url, isPublic ? @"" : @" This chat is private, so the link only "
+									"works for people who can already see it."];
+		} else {
+			message = @"The boost link could not be fetched.";
+		}
+		TGAlertView *alert = [[TGAlertView alloc] initWithTitle:@"Boost Link"
+														message:message
+											  cancelButtonTitle:@"OK"
+												  okButtonTitle:nil
+												completionBlock:nil];
+		[alert show];
+	}];
+}
+
+- (void)showBoostStatusForChat:(int64_t)chatId {
+	[[TGClient shared] chatBoostStatusForChat:chatId
+								   completion:^(NSDictionary *status){
+		NSString *message = nil;
+		if (![status isKindOfClass:[NSDictionary class]]){
+			message = @"The boost status could not be fetched.";
+		} else {
+			NSMutableString *text = [NSMutableString string];
+			[text appendFormat:@"Level %d", (int)[status[@"level"] integerValue]];
+			[text appendFormat:@"\n%d boosts", (int)[status[@"boostCount"] integerValue]];
+			NSInteger next = [status[@"nextLevelBoostCount"] integerValue];
+			NSInteger current = [status[@"boostCount"] integerValue];
+			if (next > current)
+				[text appendFormat:@"\n%d more for the next level", (int)(next - current)];
+			NSInteger gifted = [status[@"giftCodeBoostCount"] integerValue];
+			if (gifted > 0)
+				[text appendFormat:@"\n%d from gift codes", (int)gifted];
+			NSInteger premiumMembers = [status[@"premiumMemberCount"] integerValue];
+			if (premiumMembers > 0)
+				[text appendFormat:@"\n%d Premium members (%.1f%%)", (int)premiumMembers,
+						[status[@"premiumMemberPercentage"] doubleValue]];
+			if ([status[@"boosted"] boolValue])
+				[text appendString:@"\nThis account boosts this chat."];
+			id prepaid = status[@"prepaidGiveaways"];
+			if ([prepaid isKindOfClass:[NSArray class]] && [prepaid count])
+				[text appendFormat:@"\n%d prepaid giveaways waiting to be launched.",
+						(int)[prepaid count]];
+			message = text;
+		}
+		TGAlertView *alert = [[TGAlertView alloc] initWithTitle:@"Boosts"
+														message:message
+											  cancelButtonTitle:@"OK"
+												  okButtonTitle:nil
+												completionBlock:nil];
+		[alert show];
+	}];
+}
+
+@end
+
+enum {
+	TGPremiumPromptNone = 0,
+	TGPremiumPromptRedeem,
+	TGPremiumPromptCheck,
+	TGPremiumPromptBoostLink
+};
 
 enum {
 	TGPremiumSectionAccount = 0,
@@ -43,6 +673,8 @@ enum {
 @property (nonatomic, strong) UILabel *headerTitleLabel;
 @property (nonatomic, strong) UILabel *headerStatusLabel;
 @property (nonatomic, strong) UIImageView *headerBadgeView;
+@property (nonatomic, assign) BOOL stickerShown;
+@property (nonatomic, assign) NSInteger prompt;
 @end
 
 @implementation TGPremiumViewController
@@ -164,8 +796,9 @@ enum {
 	if (!line.length)
 		line = active ? @"Active on this account" : @"Not active on this account";
 	self.headerStatusLabel.text = line;
-	self.headerBadgeView.image = [TGIcons avatarWithInitials:@"★" size:70
-													colourId:active ? 2 : 6];
+	if (!self.stickerShown)
+		self.headerBadgeView.image = [TGIcons avatarWithInitials:@"★" size:70
+														colourId:active ? 2 : 6];
 }
 
 #pragma mark - loading
@@ -198,12 +831,38 @@ enum {
 		[weakSelf.tableView reloadData];
 	}];
 
+	if (!self.stickerShown)
+		[self loadHeaderSticker];
+
 	[self loadTranscriptionTrial];
 
 	[[TGClient shared] availableBoostSlotsWithCompletion:^(NSArray *slots){
 		weakSelf.slots = [slots isKindOfClass:[NSArray class]] ? slots : @[];
 		weakSelf.slotsLoaded = YES;
 		[weakSelf.tableView reloadData];
+	}];
+}
+
+- (void)loadHeaderSticker {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] premiumInfoStickerForMonths:0 completion:^(NSDictionary *sticker){
+		if (![sticker isKindOfClass:[NSDictionary class]])
+			return;
+		NSInteger fileId = [sticker[@"thumbnailFileId"] integerValue];
+		if (fileId <= 0)
+			fileId = [sticker[@"fileId"] integerValue];
+		if (fileId <= 0)
+			return;
+		[[TGClient shared] downloadFile:fileId completion:^(NSString *path){
+			if (!path.length || !weakSelf)
+				return;
+			UIImage *image = [UIImage imageWithContentsOfFile:path];
+			if (!image)
+				return;
+			weakSelf.stickerShown = YES;
+			weakSelf.headerBadgeView.contentMode = UIViewContentModeScaleAspectFit;
+			weakSelf.headerBadgeView.image = image;
+		}];
 	}];
 }
 
@@ -302,9 +961,11 @@ enum {
 		case TGPremiumSectionLimits:
 			return self.limits.count ? (NSInteger)self.limits.count : 1;
 		case TGPremiumSectionFeatures:
-			return self.features.count ? (NSInteger)self.features.count : 1;
+			return self.features.count ? (NSInteger)self.features.count + 1 : 1;
+		case TGPremiumSectionBoosts:
+			return self.slotsLoaded ? 4 : 1;
 		default:
-			return 1;
+			return 3;
 	}
 }
 
@@ -555,6 +1216,7 @@ enum {
 		NSString *title = limit[@"title"];
 		cell.textLabel.text = [title isKindOfClass:[NSString class]] && title.length
 				? title : limit[@"type"];
+		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
 		[self setComparisonOnCell:cell
 							 free:[self formattedNumber:limit[@"default"]]
 						  premium:[self formattedNumber:limit[@"premium"]]];
@@ -566,6 +1228,15 @@ enum {
 			return [self statusCellInTable:tableView
 									  text:self.featuresLoaded ? @"Feature list unavailable"
 															   : @"Loading features..."];
+		if (indexPath.row == (NSInteger)self.features.count){
+			UITableViewCell *cell = [self plainCellInTable:tableView
+													 style:UITableViewCellStyleValue1
+												   reuseId:@"TGPremiumBusiness"];
+			cell.textLabel.text = @"Telegram Business";
+			cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+			cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+			return cell;
+		}
 		id rawFeature = self.features[indexPath.row];
 		if (![rawFeature isKindOfClass:[NSDictionary class]])
 			return [self statusCellInTable:tableView text:@"-"];
@@ -597,27 +1268,57 @@ enum {
 	if (indexPath.section == TGPremiumSectionBoosts){
 		if (!self.slotsLoaded)
 			return [self statusCellInTable:tableView text:@"Loading boost slots..."];
-		NSInteger free = 0;
-		for (NSDictionary *slot in self.slots){
-			if ([slot isKindOfClass:[NSDictionary class]] && [slot[@"free"] boolValue])
-				free++;
-		}
 		UITableViewCell *cell = [self plainCellInTable:tableView
 												 style:UITableViewCellStyleValue1
 											   reuseId:@"TGPremiumBoost"];
-		cell.textLabel.text = @"Boost slots";
-		cell.detailTextLabel.text = self.slots.count
-				? [NSString stringWithFormat:@"%d free of %d",
-						(int)free, (int)self.slots.count]
-				: @"None";
+		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+		switch (indexPath.row){
+			case 0: {
+				NSInteger free = 0;
+				for (NSDictionary *slot in self.slots){
+					if ([slot isKindOfClass:[NSDictionary class]]
+							&& [slot[@"free"] boolValue])
+						free++;
+				}
+				cell.textLabel.text = @"Boost slots";
+				cell.detailTextLabel.text = self.slots.count
+						? [NSString stringWithFormat:@"%d free of %d",
+								(int)free, (int)self.slots.count]
+						: @"None";
+				break;
+			}
+			case 1:
+				cell.textLabel.text = @"What Boosts Unlock";
+				break;
+			case 2:
+				cell.textLabel.text = @"Giveaways I Entered";
+				break;
+			default:
+				cell.textLabel.text = @"Open a Boost Link...";
+				cell.accessoryType = UITableViewCellAccessoryNone;
+				break;
+		}
+		return cell;
+	}
+
+	if (indexPath.row == 0){
+		UITableViewCell *cell = [self plainCellInTable:tableView
+												 style:UITableViewCellStyleValue1
+											   reuseId:@"TGPremiumBoost"];
+		cell.textLabel.text = @"Codes Sent to Me";
+		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
 		return cell;
 	}
 
 	UITableViewCell *cell = [self plainCellInTable:tableView
 											 style:UITableViewCellStyleDefault
 										   reuseId:@"TGPremiumAction"];
-	cell.textLabel.text = @"Redeem a Gift Code...";
-	cell.textLabel.font = [UIFont boldSystemFontOfSize:16];
+	cell.textLabel.text = indexPath.row == 1 ? @"Check a Code..."
+											 : @"Redeem a Gift Code...";
+	cell.textLabel.font = indexPath.row == 1 ? [UIFont systemFontOfSize:16]
+											 : [UIFont boldSystemFontOfSize:16];
 	cell.textLabel.textAlignment = NSTextAlignmentCenter;
 	cell.textLabel.textColor = [[TGTheme shared] accentColour];
 	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
@@ -632,7 +1333,40 @@ enum {
 	if ([self isCommentRow:indexPath])
 		return;
 
+	if (indexPath.section == TGPremiumSectionLimits && self.limits.count){
+		id rawLimit = self.limits[indexPath.row];
+		if (![rawLimit isKindOfClass:[NSDictionary class]])
+			return;
+		[self showLimitDetail:rawLimit];
+		return;
+	}
+
+	if (indexPath.section == TGPremiumSectionBoosts && self.slotsLoaded){
+		switch (indexPath.row){
+			case 0:
+				[self pushListWithMode:TGPremiumListBoostSlots title:@"Boost Slots"];
+				break;
+			case 1:
+				[self pushListWithMode:TGPremiumListBoostLevels title:@"Boost Levels"];
+				break;
+			case 2:
+				[self pushListWithMode:TGPremiumListGiveaways title:@"Giveaways"];
+				break;
+			default:
+				[self promptWithKind:TGPremiumPromptBoostLink
+							   title:@"Boost Link"
+							 message:@"Paste a t.me/boost link to see the channel's boosts."
+								  ok:@"Open"];
+				break;
+		}
+		return;
+	}
+
 	if (indexPath.section == TGPremiumSectionFeatures && self.features.count){
+		if (indexPath.row == (NSInteger)self.features.count){
+			[self pushListWithMode:TGPremiumListBusiness title:@"Telegram Business"];
+			return;
+		}
 		id rawFeature = self.features[indexPath.row];
 		if (![rawFeature isKindOfClass:[NSDictionary class]])
 			return;
@@ -654,35 +1388,122 @@ enum {
 		return;
 	}
 
-	if (indexPath.section == TGPremiumSectionGiftCode)
-		[self askForGiftCode];
+	if (indexPath.section != TGPremiumSectionGiftCode)
+		return;
+
+	if (indexPath.row == 0){
+		[self pushListWithMode:TGPremiumListGiftCodes title:@"Gift Codes"];
+		return;
+	}
+	if (indexPath.row == 1){
+		[self promptWithKind:TGPremiumPromptCheck
+					   title:@"Check a Code"
+					 message:@"Enter a gift code to look it up without using it."
+						  ok:@"Check"];
+		return;
+	}
+	[self askForGiftCode];
 }
 
-- (void)askForGiftCode {
-	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Gift Code"
-													message:@"Enter the code from a t.me/giftcode link."
+- (void)pushListWithMode:(NSInteger)mode title:(NSString *)title {
+	TGPremiumListViewController *list = [[TGPremiumListViewController alloc]
+			initWithMode:mode chatId:0 title:title];
+	[self.navigationController pushViewController:list animated:YES];
+}
+
+- (void)showLimitDetail:(NSDictionary *)limit {
+	NSString *type = [limit[@"type"] isKindOfClass:[NSString class]] ? limit[@"type"] : @"";
+	NSString *title = [limit[@"title"] isKindOfClass:[NSString class]]
+			&& [limit[@"title"] length] ? limit[@"title"] : type;
+	if (!type.length)
+		return;
+	BOOL premium = [[TGClient shared] isPremiumAccount];
+	[[TGClient shared] premiumLimit:type completion:^(NSDictionary *fresh){
+		NSDictionary *shown = [fresh isKindOfClass:[NSDictionary class]] ? fresh : limit;
+		NSString *message = [NSString stringWithFormat:
+				@"Without Premium: %d\nWith Premium: %d\n\nThis account: %d",
+				(int)[shown[@"default"] integerValue],
+				(int)[shown[@"premium"] integerValue],
+				(int)[shown[premium ? @"premium" : @"default"] integerValue]];
+		TGAlertView *alert = [[TGAlertView alloc] initWithTitle:title
+														message:message
+											  cancelButtonTitle:@"OK"
+												  okButtonTitle:nil
+												completionBlock:nil];
+		[alert show];
+	}];
+}
+
+- (void)promptWithKind:(NSInteger)kind
+				 title:(NSString *)title
+			   message:(NSString *)message
+					ok:(NSString *)ok
+{
+	self.prompt = kind;
+	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:title
+													message:message
 												   delegate:self
 										  cancelButtonTitle:@"Cancel"
-										  otherButtonTitles:@"Redeem", nil];
+										  otherButtonTitles:ok, nil];
 	if ([alert respondsToSelector:@selector(setAlertViewStyle:)])
 		alert.alertViewStyle = UIAlertViewStylePlainTextInput;
 	[alert show];
 }
 
+- (void)askForGiftCode {
+	[self promptWithKind:TGPremiumPromptRedeem
+				   title:@"Gift Code"
+				 message:@"Enter the code from a t.me/giftcode link."
+					  ok:@"Redeem"];
+}
+
+- (void)showBoostsForLink:(NSString *)url {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] chatBoostLinkInfo:url completion:^(int64_t chatId, BOOL isPublic){
+		if (chatId == 0){
+			TGAlertView *alert = [[TGAlertView alloc] initWithTitle:@"Boost Link"
+															message:@"That link could not be resolved."
+												  cancelButtonTitle:@"OK"
+													  okButtonTitle:nil
+													completionBlock:nil];
+			[alert show];
+			return;
+		}
+		if (!weakSelf)
+			return;
+		TGPremiumListViewController *list = [[TGPremiumListViewController alloc]
+				initWithMode:TGPremiumListBoosters chatId:chatId title:@"Boosters"];
+		[weakSelf.navigationController pushViewController:list animated:YES];
+	}];
+}
+
 - (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {
+	NSInteger kind = self.prompt;
+	self.prompt = TGPremiumPromptNone;
 	if (buttonIndex == alertView.cancelButtonIndex)
 		return;
 	if (![alertView respondsToSelector:@selector(textFieldAtIndex:)])
 		return;
 
-	NSString *code = [[alertView textFieldAtIndex:0].text
+	NSString *entered = [[alertView textFieldAtIndex:0].text
 			stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-	if (!code.length)
+	if (!entered.length)
 		return;
 
+	if (kind == TGPremiumPromptBoostLink){
+		[self showBoostsForLink:entered];
+		return;
+	}
+
+	NSString *code = entered;
 	NSRange slash = [code rangeOfString:@"/" options:NSBackwardsSearch];
 	if (slash.location != NSNotFound && slash.location + 1 < code.length)
 		code = [code substringFromIndex:slash.location + 1];
+
+	if (kind == TGPremiumPromptCheck){
+		[self checkCode:code];
+		return;
+	}
 
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] redeemGiftCode:code
@@ -704,6 +1525,67 @@ enum {
 		[result show];
 		if (ok)
 			[weakSelf reloadTapped];
+	}];
+}
+
+- (void)checkCode:(NSString *)code {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] checkGiftCode:code completion:^(NSDictionary *info){
+		if (![info isKindOfClass:[NSDictionary class]]){
+			TGAlertView *fail = [[TGAlertView alloc] initWithTitle:@"Gift Code"
+														   message:@"That code is not valid."
+												 cancelButtonTitle:@"OK"
+													 okButtonTitle:nil
+												   completionBlock:nil];
+			[fail show];
+			return;
+		}
+		NSMutableString *message = [NSMutableString string];
+		NSInteger months = [info[@"months"] integerValue];
+		if (months > 0)
+			[message appendFormat:@"%d months of Premium\n", (int)months];
+		if ([info[@"fromGiveaway"] boolValue])
+			[message appendString:@"From a giveaway\n"];
+		NSString *created = TGPremiumDateText(info[@"creationDate"]);
+		if (created.length)
+			[message appendFormat:@"Created %@\n", created];
+
+		if ([info[@"used"] boolValue]){
+			NSString *usedDate = TGPremiumDateText(info[@"useDate"]);
+			[message appendFormat:@"Already used%@",
+					usedDate.length ? [NSString stringWithFormat:@" on %@", usedDate] : @""];
+			TGAlertView *alert = [[TGAlertView alloc] initWithTitle:@"Gift Code"
+															message:message
+												  cancelButtonTitle:@"OK"
+													  okButtonTitle:nil
+													completionBlock:nil];
+			[alert show];
+			return;
+		}
+
+		[message appendString:@"Not used yet"];
+		TGAlertView *alert = [[TGAlertView alloc] initWithTitle:@"Gift Code"
+														message:message
+											  cancelButtonTitle:@"Close"
+												  okButtonTitle:@"Redeem"
+												completionBlock:^(bool okPressed){
+			if (!okPressed)
+				return;
+			[[TGClient shared] applyGiftCode:code completion:^(BOOL ok, NSString *error){
+				TGAlertView *result = [[TGAlertView alloc]
+						initWithTitle:ok ? @"Gift Code" : @"Gift Code Failed"
+							  message:ok ? @"The code was applied to this account."
+										 : (error.length ? error
+														 : @"The code could not be redeemed.")
+					cancelButtonTitle:@"OK"
+						okButtonTitle:nil
+					  completionBlock:nil];
+				[result show];
+				if (ok)
+					[weakSelf reloadTapped];
+			}];
+		}];
+		[alert show];
 	}];
 }
 

@@ -345,6 +345,1193 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 
 @end
 
+typedef enum
+{
+	TGStoryListMenu = 0,
+	TGStoryListArchive,
+	TGStoryListProfile,
+	TGStoryListAlbums,
+	TGStoryListAlbum,
+	TGStoryListForwards,
+	TGStoryListTag,
+	TGStoryListSettings,
+	TGStoryListHidden,
+	TGStoryListExceptions
+} TGStoryListMode;
+
+@interface TGStoryListViewController : UIViewController <UITableViewDataSource, UITableViewDelegate>
+
+@property (nonatomic, assign) TGStoryListMode mode;
+@property (nonatomic, assign) int64_t chatId;
+@property (nonatomic, assign) NSInteger storyId;
+@property (nonatomic, assign) NSInteger albumId;
+@property (nonatomic, copy) NSString *tag;
+
++ (void)pushMode:(TGStoryListMode)mode
+		  chatId:(int64_t)chatId
+		   title:(NSString *)title
+			from:(UIViewController *)host;
+
+@end
+
+@implementation TGStoryListViewController
+{
+	UITableView *_tableView;
+	NSMutableArray *_rows;
+	NSMutableArray *_pinned;
+	NSString *_nextOffset;
+	NSInteger _fromStoryId;
+	BOOL _loading;
+	BOOL _exhausted;
+	NSInteger _archiveTotal;
+	NSInteger _profileTotal;
+	NSInteger _albumCount;
+	NSInteger _closeFriendsCount;
+	NSInteger _hiddenCount;
+	NSInteger _exceptionCount;
+}
+
++ (void)pushMode:(TGStoryListMode)mode
+		  chatId:(int64_t)chatId
+		   title:(NSString *)title
+			from:(UIViewController *)host
+{
+	if (host.navigationController == nil)
+		return;
+	TGStoryListViewController *list = [[TGStoryListViewController alloc] init];
+	list.mode = mode;
+	list.chatId = chatId;
+	list.title = title;
+	[host.navigationController pushViewController:list animated:YES];
+}
+
+- (BOOL)isGrouped
+{
+	return self.mode == TGStoryListMenu || self.mode == TGStoryListSettings;
+}
+
+- (BOOL)isStoryList
+{
+	return self.mode == TGStoryListArchive || self.mode == TGStoryListProfile ||
+			self.mode == TGStoryListAlbum || self.mode == TGStoryListTag;
+}
+
+- (void)viewDidLoad
+{
+	[super viewDidLoad];
+
+	_rows = [[NSMutableArray alloc] init];
+	_pinned = [[NSMutableArray alloc] init];
+
+	UITableViewStyle style = [self isGrouped]
+			? UITableViewStyleGrouped
+			: UITableViewStylePlain;
+	_tableView = [[UITableView alloc] initWithFrame:self.view.bounds style:style];
+	_tableView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+	_tableView.dataSource = self;
+	_tableView.delegate = self;
+	_tableView.rowHeight = 44.0f;
+	_tableView.separatorColor = [[TGTheme shared] separatorColour];
+	_tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	[self.view addSubview:_tableView];
+
+	if ([self isStoryList] || self.mode == TGStoryListAlbums)
+	{
+		UILongPressGestureRecognizer *hold = [[UILongPressGestureRecognizer alloc]
+				initWithTarget:self action:@selector(rowHeld:)];
+		hold.minimumPressDuration = 0.5;
+		[_tableView addGestureRecognizer:hold];
+	}
+
+	if (self.mode == TGStoryListAlbums)
+	{
+		self.navigationItem.rightBarButtonItem =
+				[[UIBarButtonItem alloc] initWithTitle:@"New"
+												 style:UIBarButtonItemStyleBordered
+												target:self
+												action:@selector(createAlbumPressed)];
+	}
+
+	[self reload];
+}
+
+- (void)reload
+{
+	[_rows removeAllObjects];
+	[_pinned removeAllObjects];
+	_nextOffset = nil;
+	_fromStoryId = 0;
+	_loading = NO;
+	_exhausted = NO;
+	[_tableView reloadData];
+	[self loadMore];
+}
+
+- (void)showMessage:(NSString *)message
+{
+	[[[TGAlertView alloc] initWithTitle:nil
+								message:message
+					  cancelButtonTitle:@"OK"
+						  okButtonTitle:nil
+						completionBlock:nil] show];
+}
+
+#pragma mark - loading
+
+- (void)loadMore
+{
+	if (_loading || _exhausted)
+		return;
+	_loading = YES;
+
+	__weak TGStoryListViewController *weakSelf = self;
+
+	if (self.mode == TGStoryListMenu)
+	{
+		_exhausted = YES;
+		_loading = NO;
+		int64_t chatId = self.chatId;
+		[[TGClient shared] archivedStoriesInChat:chatId
+									 fromStoryId:0
+										   limit:1
+									  completion:^(NSArray *stories, NSInteger total)
+		{
+			(void)stories;
+			TGStoryListViewController *strongSelf = weakSelf;
+			if (strongSelf == nil)
+				return;
+			strongSelf->_archiveTotal = total;
+			[strongSelf->_tableView reloadData];
+		}];
+		[[TGClient shared] profileStoriesInChat:chatId
+									fromStoryId:0
+										  limit:1
+									 completion:^(NSArray *stories, NSArray *pinnedIds, NSInteger total)
+		{
+			(void)stories;
+			(void)pinnedIds;
+			TGStoryListViewController *strongSelf = weakSelf;
+			if (strongSelf == nil)
+				return;
+			strongSelf->_profileTotal = total;
+			[strongSelf->_tableView reloadData];
+		}];
+		[[TGClient shared] storyAlbumsInChat:chatId completion:^(NSArray *albums)
+		{
+			TGStoryListViewController *strongSelf = weakSelf;
+			if (strongSelf == nil)
+				return;
+			strongSelf->_albumCount = (NSInteger)albums.count;
+			[strongSelf->_tableView reloadData];
+		}];
+		return;
+	}
+
+	if (self.mode == TGStoryListSettings)
+	{
+		_exhausted = YES;
+		_loading = NO;
+		[[TGClient shared] closeFriendsWithCompletion:^(NSArray *users)
+		{
+			TGStoryListViewController *strongSelf = weakSelf;
+			if (strongSelf == nil)
+				return;
+			strongSelf->_closeFriendsCount = (NSInteger)users.count;
+			[strongSelf->_tableView reloadData];
+		}];
+		[[TGClient shared] hiddenStoryPostersWithCompletion:^(NSArray *users)
+		{
+			TGStoryListViewController *strongSelf = weakSelf;
+			if (strongSelf == nil)
+				return;
+			strongSelf->_hiddenCount = (NSInteger)users.count;
+			[strongSelf->_tableView reloadData];
+		}];
+		[[TGClient shared] storyNotificationExceptionsWithCompletion:^(NSArray *chats)
+		{
+			TGStoryListViewController *strongSelf = weakSelf;
+			if (strongSelf == nil)
+				return;
+			strongSelf->_exceptionCount = (NSInteger)chats.count;
+			[strongSelf->_tableView reloadData];
+		}];
+		return;
+	}
+
+	void (^appendStories)(NSArray *, BOOL) = ^(NSArray *stories, BOOL more)
+	{
+		TGStoryListViewController *strongSelf = weakSelf;
+		if (strongSelf == nil)
+			return;
+		strongSelf->_loading = NO;
+		if ([stories isKindOfClass:[NSArray class]] && stories.count > 0)
+		{
+			[strongSelf->_rows addObjectsFromArray:stories];
+			NSDictionary *last = [stories objectAtIndex:stories.count - 1];
+			strongSelf->_fromStoryId = TGStoryNumber(last, @"id");
+		}
+		else
+		{
+			more = NO;
+		}
+		strongSelf->_exhausted = !more;
+		[strongSelf->_tableView reloadData];
+	};
+
+	if (self.mode == TGStoryListArchive)
+	{
+		[[TGClient shared] archivedStoriesInChat:self.chatId
+									 fromStoryId:_fromStoryId
+										   limit:30
+									  completion:^(NSArray *stories, NSInteger total)
+		{
+			TGStoryListViewController *strongSelf = weakSelf;
+			BOOL more = strongSelf != nil &&
+					((NSInteger)strongSelf->_rows.count + (NSInteger)stories.count) < total;
+			appendStories(stories, more);
+		}];
+		return;
+	}
+
+	if (self.mode == TGStoryListProfile)
+	{
+		[[TGClient shared] profileStoriesInChat:self.chatId
+									fromStoryId:_fromStoryId
+										  limit:30
+									 completion:^(NSArray *stories, NSArray *pinnedIds, NSInteger total)
+		{
+			TGStoryListViewController *strongSelf = weakSelf;
+			if (strongSelf != nil && [pinnedIds isKindOfClass:[NSArray class]])
+			{
+				[strongSelf->_pinned removeAllObjects];
+				[strongSelf->_pinned addObjectsFromArray:pinnedIds];
+			}
+			BOOL more = strongSelf != nil &&
+					((NSInteger)strongSelf->_rows.count + (NSInteger)stories.count) < total;
+			appendStories(stories, more);
+		}];
+		return;
+	}
+
+	if (self.mode == TGStoryListAlbum)
+	{
+		NSInteger offset = (NSInteger)_rows.count;
+		[[TGClient shared] storiesInAlbum:self.albumId
+								   inChat:self.chatId
+								   offset:offset
+									limit:30
+							   completion:^(NSArray *stories, NSInteger total)
+		{
+			TGStoryListViewController *strongSelf = weakSelf;
+			BOOL more = strongSelf != nil &&
+					((NSInteger)strongSelf->_rows.count + (NSInteger)stories.count) < total;
+			appendStories(stories, more);
+		}];
+		return;
+	}
+
+	if (self.mode == TGStoryListTag)
+	{
+		[[TGClient shared] searchStoriesWithTag:(self.tag ?: @"")
+								   posterChatId:0
+										 offset:_nextOffset
+										  limit:20
+									 completion:^(NSArray *stories, NSString *nextOffset, NSInteger total)
+		{
+			(void)total;
+			TGStoryListViewController *strongSelf = weakSelf;
+			if (strongSelf == nil)
+				return;
+			strongSelf->_nextOffset = nextOffset;
+			appendStories(stories, nextOffset.length > 0);
+		}];
+		return;
+	}
+
+	if (self.mode == TGStoryListForwards)
+	{
+		[[TGClient shared] publicForwardsOfStory:self.storyId
+										  inChat:self.chatId
+										  offset:_nextOffset
+										   limit:20
+									  completion:^(NSArray *forwards, NSString *nextOffset)
+		{
+			TGStoryListViewController *strongSelf = weakSelf;
+			if (strongSelf == nil)
+				return;
+			strongSelf->_loading = NO;
+			strongSelf->_nextOffset = nextOffset;
+			if ([forwards isKindOfClass:[NSArray class]])
+				[strongSelf->_rows addObjectsFromArray:forwards];
+			strongSelf->_exhausted = (nextOffset.length == 0 || forwards.count == 0);
+			[strongSelf->_tableView reloadData];
+		}];
+		return;
+	}
+
+	if (self.mode == TGStoryListAlbums)
+	{
+		[[TGClient shared] storyAlbumsInChat:self.chatId completion:^(NSArray *albums)
+		{
+			TGStoryListViewController *strongSelf = weakSelf;
+			if (strongSelf == nil)
+				return;
+			strongSelf->_loading = NO;
+			strongSelf->_exhausted = YES;
+			if ([albums isKindOfClass:[NSArray class]])
+				[strongSelf->_rows addObjectsFromArray:albums];
+			[strongSelf->_tableView reloadData];
+		}];
+		return;
+	}
+
+	if (self.mode == TGStoryListHidden)
+	{
+		[[TGClient shared] hiddenStoryPostersWithCompletion:^(NSArray *users)
+		{
+			TGStoryListViewController *strongSelf = weakSelf;
+			if (strongSelf == nil)
+				return;
+			strongSelf->_loading = NO;
+			strongSelf->_exhausted = YES;
+			if ([users isKindOfClass:[NSArray class]])
+				[strongSelf->_rows addObjectsFromArray:users];
+			[strongSelf->_tableView reloadData];
+		}];
+		return;
+	}
+
+	if (self.mode == TGStoryListExceptions)
+	{
+		[[TGClient shared] storyNotificationExceptionsWithCompletion:^(NSArray *chats)
+		{
+			TGStoryListViewController *strongSelf = weakSelf;
+			if (strongSelf == nil)
+				return;
+			strongSelf->_loading = NO;
+			strongSelf->_exhausted = YES;
+			if ([chats isKindOfClass:[NSArray class]])
+				[strongSelf->_rows addObjectsFromArray:chats];
+			[strongSelf->_tableView reloadData];
+		}];
+		return;
+	}
+
+	_loading = NO;
+	_exhausted = YES;
+}
+
+#pragma mark - table
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView
+{
+	(void)tableView;
+	if (self.mode == TGStoryListMenu)
+		return 2;
+	if (self.mode == TGStoryListSettings)
+		return 3;
+	return 1;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section
+{
+	(void)tableView;
+	if (self.mode == TGStoryListMenu)
+		return section == 0 ? 3 : 1;
+	if (self.mode == TGStoryListSettings)
+		return 2;
+	return (NSInteger)_rows.count;
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section
+{
+	(void)tableView;
+	if (self.mode != TGStoryListSettings)
+		return nil;
+	if (section == 0)
+		return @"Story Notifications";
+	if (section == 1)
+		return @"Preload Stories";
+	return @"Privacy";
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section
+{
+	(void)tableView;
+	if (self.mode == TGStoryListSettings && section == 1)
+		return @"Fetching stories ahead of time uses more memory and data.";
+	return nil;
+}
+
+- (NSString *)reactionSource
+{
+	NSString *value = [[NSUserDefaults standardUserDefaults] stringForKey:@"TGStoryReactionSource"];
+	return value.length > 0 ? value : @"all";
+}
+
+- (NSString *)reactionSourceTitle
+{
+	NSString *source = [self reactionSource];
+	if ([source isEqualToString:@"contacts"])
+		return @"My Contacts";
+	if ([source isEqualToString:@"none"])
+		return @"Nobody";
+	return @"Everybody";
+}
+
+- (BOOL)preloadOnNetwork:(NSString *)type
+{
+	NSString *key = [@"TGStoryPreload_" stringByAppendingString:type];
+	return [[NSUserDefaults standardUserDefaults] boolForKey:key];
+}
+
+- (NSString *)storySummary:(NSDictionary *)story
+{
+	NSString *caption = TGStoryString(story, @"caption");
+	if (caption.length > 0)
+		return caption;
+	NSString *kind = TGStoryString(story, @"kind");
+	if ([kind isEqualToString:@"video"])
+		return @"Video";
+	if ([kind isEqualToString:@"live"])
+		return @"Live";
+	return @"Photo";
+}
+
+- (UITableViewCell *)menuCellIn:(UITableView *)tableView indexPath:(NSIndexPath *)indexPath
+{
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"menu"];
+	if (cell == nil)
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
+									  reuseIdentifier:@"menu"];
+	cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+	cell.accessoryView = nil;
+	cell.detailTextLabel.text = @"";
+
+	if (indexPath.section == 1)
+	{
+		cell.textLabel.text = @"Story Settings";
+		[[TGTheme shared] styleCell:cell];
+		return cell;
+	}
+
+	if (indexPath.row == 0)
+	{
+		cell.textLabel.text = @"Archive";
+		cell.detailTextLabel.text = [NSString stringWithFormat:@"%d", (int)_archiveTotal];
+	}
+	else if (indexPath.row == 1)
+	{
+		cell.textLabel.text = @"On Profile";
+		cell.detailTextLabel.text = [NSString stringWithFormat:@"%d", (int)_profileTotal];
+	}
+	else
+	{
+		cell.textLabel.text = @"Albums";
+		cell.detailTextLabel.text = [NSString stringWithFormat:@"%d", (int)_albumCount];
+	}
+	[[TGTheme shared] styleCell:cell];
+	return cell;
+}
+
+- (UITableViewCell *)settingsCellIn:(UITableView *)tableView indexPath:(NSIndexPath *)indexPath
+{
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"setting"];
+	if (cell == nil)
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
+									  reuseIdentifier:@"setting"];
+	cell.accessoryType = UITableViewCellAccessoryNone;
+	cell.accessoryView = nil;
+	cell.detailTextLabel.text = @"";
+	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+
+	if (indexPath.section == 0)
+	{
+		if (indexPath.row == 0)
+		{
+			cell.textLabel.text = @"Reactions";
+			cell.detailTextLabel.text = [self reactionSourceTitle];
+		}
+		else
+		{
+			cell.textLabel.text = @"Exceptions";
+			cell.detailTextLabel.text = [NSString stringWithFormat:@"%d", (int)_exceptionCount];
+			cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+		}
+	}
+	else if (indexPath.section == 1)
+	{
+		NSString *type = indexPath.row == 0 ? @"mobile" : @"wifi";
+		cell.textLabel.text = indexPath.row == 0 ? @"Mobile Data" : @"Wi-Fi";
+		UISwitch *toggle = [[UISwitch alloc] initWithFrame:CGRectZero];
+		toggle.tag = indexPath.row == 0 ? 1 : 2;
+		toggle.on = [self preloadOnNetwork:type];
+		[toggle addTarget:self
+				   action:@selector(preloadToggled:)
+		 forControlEvents:UIControlEventValueChanged];
+		cell.accessoryView = toggle;
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+	}
+	else
+	{
+		if (indexPath.row == 0)
+		{
+			cell.textLabel.text = @"Close Friends";
+			cell.detailTextLabel.text = [NSString stringWithFormat:@"%d", (int)_closeFriendsCount];
+		}
+		else
+		{
+			cell.textLabel.text = @"Hidden Posters";
+			cell.detailTextLabel.text = [NSString stringWithFormat:@"%d", (int)_hiddenCount];
+			cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+		}
+	}
+
+	[[TGTheme shared] styleCell:cell];
+	return cell;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath
+{
+	if (self.mode == TGStoryListMenu)
+		return [self menuCellIn:tableView indexPath:indexPath];
+	if (self.mode == TGStoryListSettings)
+		return [self settingsCellIn:tableView indexPath:indexPath];
+
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"row"];
+	if (cell == nil)
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+									  reuseIdentifier:@"row"];
+	cell.accessoryType = UITableViewCellAccessoryNone;
+
+	if (indexPath.row >= (NSInteger)_rows.count)
+		return cell;
+	NSDictionary *row = [_rows objectAtIndex:(NSUInteger)indexPath.row];
+
+	if (self.mode == TGStoryListAlbums)
+	{
+		cell.textLabel.text = TGStoryString(row, @"name");
+		cell.detailTextLabel.text = @"";
+		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+	}
+	else if (self.mode == TGStoryListHidden || self.mode == TGStoryListExceptions)
+	{
+		NSString *name = TGStoryString(row, @"name");
+		if (name.length == 0)
+			name = TGStoryString(row, @"title");
+		cell.textLabel.text = name;
+		cell.detailTextLabel.text = @"";
+	}
+	else if (self.mode == TGStoryListForwards)
+	{
+		cell.textLabel.text = TGStoryString(row, @"title");
+		cell.detailTextLabel.text = TGStoryAgeText((int)TGStoryNumber(row, @"date"));
+		if (TGStoryFlag(row, @"isStory"))
+			cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+	}
+	else
+	{
+		cell.textLabel.text = [self storySummary:row];
+		NSString *age = TGStoryAgeText((int)TGStoryNumber(row, @"date"));
+		BOOL isPinned = [_pinned containsObject:[NSNumber numberWithInteger:TGStoryNumber(row, @"id")]];
+		cell.detailTextLabel.text = isPinned
+				? [NSString stringWithFormat:@"Pinned · %@", age]
+				: age;
+	}
+
+	[[TGTheme shared] styleCell:cell];
+
+	if (indexPath.row + 5 >= (NSInteger)_rows.count)
+		[self loadMore];
+	return cell;
+}
+
+#pragma mark - selection
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath
+{
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+
+	if (self.mode == TGStoryListMenu)
+	{
+		if (indexPath.section == 1)
+		{
+			[TGStoryListViewController pushMode:TGStoryListSettings
+										 chatId:self.chatId
+										  title:@"Story Settings"
+										   from:self];
+			return;
+		}
+		if (indexPath.row == 0)
+			[TGStoryListViewController pushMode:TGStoryListArchive
+										 chatId:self.chatId
+										  title:@"Archive"
+										   from:self];
+		else if (indexPath.row == 1)
+			[TGStoryListViewController pushMode:TGStoryListProfile
+										 chatId:self.chatId
+										  title:@"On Profile"
+										   from:self];
+		else
+			[TGStoryListViewController pushMode:TGStoryListAlbums
+										 chatId:self.chatId
+										  title:@"Albums"
+										   from:self];
+		return;
+	}
+
+	if (self.mode == TGStoryListSettings)
+	{
+		if (indexPath.section == 0 && indexPath.row == 0)
+		{
+			[self askReactionSource];
+			return;
+		}
+		if (indexPath.section == 0 && indexPath.row == 1)
+		{
+			[TGStoryListViewController pushMode:TGStoryListExceptions
+										 chatId:self.chatId
+										  title:@"Exceptions"
+										   from:self];
+			return;
+		}
+		if (indexPath.section == 2 && indexPath.row == 0)
+		{
+			[self editCloseFriends];
+			return;
+		}
+		if (indexPath.section == 2 && indexPath.row == 1)
+		{
+			[TGStoryListViewController pushMode:TGStoryListHidden
+										 chatId:self.chatId
+										  title:@"Hidden Posters"
+										   from:self];
+		}
+		return;
+	}
+
+	if (indexPath.row >= (NSInteger)_rows.count)
+		return;
+	NSDictionary *row = [_rows objectAtIndex:(NSUInteger)indexPath.row];
+
+	if (self.mode == TGStoryListAlbums)
+	{
+		TGStoryListViewController *list = [[TGStoryListViewController alloc] init];
+		list.mode = TGStoryListAlbum;
+		list.chatId = self.chatId;
+		list.albumId = TGStoryNumber(row, @"id");
+		list.title = TGStoryString(row, @"name");
+		[self.navigationController pushViewController:list animated:YES];
+		return;
+	}
+
+	if (self.mode == TGStoryListHidden)
+	{
+		[self unhidePoster:row];
+		return;
+	}
+
+	if (self.mode == TGStoryListExceptions)
+	{
+		[self askMutingForChat:row];
+		return;
+	}
+
+	if (self.mode == TGStoryListForwards)
+	{
+		if (!TGStoryFlag(row, @"isStory"))
+			return;
+		[self openStory:TGStoryNumber(row, @"storyId")
+				 inChat:TGStoryChatId(row, @"chatId")
+				   name:TGStoryString(row, @"title")];
+		return;
+	}
+
+	[self openStory:TGStoryNumber(row, @"id")
+			 inChat:(TGStoryChatId(row, @"chatId") != 0 ? TGStoryChatId(row, @"chatId") : self.chatId)
+			   name:self.title];
+}
+
+- (void)openStory:(NSInteger)storyId inChat:(int64_t)chatId name:(NSString *)name
+{
+	if (storyId == 0 || chatId == 0)
+		return;
+	NSArray *ids = [NSArray arrayWithObject:[NSNumber numberWithInteger:storyId]];
+	TGStoriesViewController *viewer =
+			[[TGStoriesViewController alloc] initWithChatId:chatId storyIds:ids startIndex:0];
+	viewer.posterName = name;
+	[self.navigationController pushViewController:viewer animated:YES];
+}
+
+#pragma mark - settings actions
+
+- (void)preloadToggled:(UISwitch *)toggle
+{
+	NSString *type = (toggle.tag == 1) ? @"mobile" : @"wifi";
+	[[TGClient shared] setStoryPreloading:toggle.on onNetwork:type];
+	[[NSUserDefaults standardUserDefaults] setBool:toggle.on
+											forKey:[@"TGStoryPreload_" stringByAppendingString:type]];
+	[[NSUserDefaults standardUserDefaults] synchronize];
+}
+
+- (void)askReactionSource
+{
+	NSArray *titles = [NSArray arrayWithObjects:@"Everybody", @"My Contacts", @"Nobody", nil];
+	NSArray *values = [NSArray arrayWithObjects:@"all", @"contacts", @"none", nil];
+
+	NSMutableArray *actions = [[NSMutableArray alloc] init];
+	for (NSString *title in titles)
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:title action:title]];
+
+	__weak TGStoryListViewController *weakSelf = self;
+	TGActionSheet *sheet = [[TGActionSheet alloc] initWithTitle:@"Reaction notifications from"
+													   actions:actions
+												   actionBlock:^(id target, NSString *action)
+	{
+		(void)target;
+		TGStoryListViewController *strongSelf = weakSelf;
+		if (strongSelf == nil)
+			return;
+		NSUInteger index = [titles indexOfObject:action];
+		if (index == NSNotFound)
+			return;
+		NSString *source = [values objectAtIndex:index];
+		[[TGClient shared] setStoryReactionNotificationSource:source];
+		[[NSUserDefaults standardUserDefaults] setObject:source forKey:@"TGStoryReactionSource"];
+		[[NSUserDefaults standardUserDefaults] synchronize];
+		[strongSelf->_tableView reloadData];
+	}
+														target:self];
+	[sheet showInView:self.view];
+}
+
+- (void)editCloseFriends
+{
+	__weak TGStoryListViewController *weakSelf = self;
+	[[TGClient shared] closeFriendsWithCompletion:^(NSArray *users)
+	{
+		TGStoryListViewController *strongSelf = weakSelf;
+		if (strongSelf == nil)
+			return;
+
+		NSMutableArray *current = [[NSMutableArray alloc] init];
+		for (NSDictionary *user in users)
+		{
+			if ([user isKindOfClass:[NSDictionary class]])
+				[current addObject:[NSNumber numberWithLongLong:TGStoryChatId(user, @"id")]];
+		}
+
+		[TGStoryContactPicker presentFrom:strongSelf
+									title:@"Close Friends"
+							  preselected:current
+								   picked:^(NSArray *userIds)
+		{
+			TGStoryListViewController *inner = weakSelf;
+			if (inner == nil || userIds == nil)
+				return;
+			[[TGClient shared] setCloseFriends:userIds];
+			inner->_closeFriendsCount = (NSInteger)userIds.count;
+			[inner->_tableView reloadData];
+		}];
+	}];
+}
+
+- (void)unhidePoster:(NSDictionary *)user
+{
+	int64_t userId = TGStoryChatId(user, @"id");
+	if (userId == 0)
+		return;
+	NSString *name = TGStoryString(user, @"name");
+	__weak TGStoryListViewController *weakSelf = self;
+	[[[TGAlertView alloc] initWithTitle:nil
+								message:[NSString stringWithFormat:@"Show stories from %@?", name]
+					  cancelButtonTitle:@"Cancel"
+						  okButtonTitle:@"Show"
+						completionBlock:^(bool okButtonPressed)
+	{
+		if (!okButtonPressed)
+			return;
+		[[TGClient shared] setUser:userId storiesHidden:NO];
+		[weakSelf reload];
+	}] show];
+}
+
+- (void)askMutingForChat:(NSDictionary *)chat
+{
+	int64_t chatId = TGStoryChatId(chat, @"id");
+	if (chatId == 0)
+		return;
+
+	NSArray *actions = [NSArray arrayWithObjects:
+			[[TGActionSheetAction alloc] initWithTitle:@"Mute Stories" action:@"mute"],
+			[[TGActionSheetAction alloc] initWithTitle:@"Unmute Stories" action:@"unmute"], nil];
+
+	__weak TGStoryListViewController *weakSelf = self;
+	TGActionSheet *sheet = [[TGActionSheet alloc] initWithTitle:TGStoryString(chat, @"title")
+													   actions:actions
+												   actionBlock:^(id target, NSString *action)
+	{
+		(void)target;
+		[[TGClient shared] setChat:chatId storiesMuted:[action isEqualToString:@"mute"]];
+		[weakSelf reload];
+	}
+														target:self];
+	[sheet showInView:self.view];
+}
+
+#pragma mark - albums
+
+- (void)createAlbumPressed
+{
+	__weak TGStoryListViewController *weakSelf = self;
+	TGAlertView *alert = nil;
+	__block __weak TGAlertView *weakAlert = nil;
+	alert = [[TGAlertView alloc] initWithTitle:nil
+									   message:@"Album name"
+							 cancelButtonTitle:@"Cancel"
+								 okButtonTitle:@"Create"
+							   completionBlock:^(bool okButtonPressed)
+	{
+		TGStoryListViewController *strongSelf = weakSelf;
+		if (strongSelf == nil || !okButtonPressed)
+			return;
+		NSString *name = nil;
+		if ([weakAlert respondsToSelector:@selector(textFieldAtIndex:)])
+			name = [weakAlert textFieldAtIndex:0].text;
+		if (name.length == 0)
+			return;
+		[[TGClient shared] createStoryAlbumInChat:strongSelf.chatId
+											 name:name
+										 storyIds:[NSArray array]
+									   completion:^(NSDictionary *album)
+		{
+			TGStoryListViewController *inner = weakSelf;
+			if (inner == nil)
+				return;
+			if (![album isKindOfClass:[NSDictionary class]])
+			{
+				[inner showMessage:@"Could not create the album"];
+				return;
+			}
+			[inner reload];
+		}];
+	}];
+	weakAlert = alert;
+	if ([alert respondsToSelector:@selector(setAlertViewStyle:)])
+		alert.alertViewStyle = UIAlertViewStylePlainTextInput;
+	[alert show];
+}
+
+- (void)renameAlbum:(NSDictionary *)album
+{
+	NSInteger albumId = TGStoryNumber(album, @"id");
+	__weak TGStoryListViewController *weakSelf = self;
+	TGAlertView *alert = nil;
+	__block __weak TGAlertView *weakAlert = nil;
+	alert = [[TGAlertView alloc] initWithTitle:nil
+									   message:@"Album name"
+							 cancelButtonTitle:@"Cancel"
+								 okButtonTitle:@"Save"
+							   completionBlock:^(bool okButtonPressed)
+	{
+		TGStoryListViewController *strongSelf = weakSelf;
+		if (strongSelf == nil || !okButtonPressed)
+			return;
+		NSString *name = nil;
+		if ([weakAlert respondsToSelector:@selector(textFieldAtIndex:)])
+			name = [weakAlert textFieldAtIndex:0].text;
+		if (name.length == 0)
+			return;
+		[[TGClient shared] renameStoryAlbum:albumId
+									 inChat:strongSelf.chatId
+									   name:name
+								 completion:^(NSDictionary *updated)
+		{
+			TGStoryListViewController *inner = weakSelf;
+			if (inner == nil)
+				return;
+			if (![updated isKindOfClass:[NSDictionary class]])
+			{
+				[inner showMessage:@"Could not rename the album"];
+				return;
+			}
+			[inner reload];
+		}];
+	}];
+	weakAlert = alert;
+	if ([alert respondsToSelector:@selector(setAlertViewStyle:)])
+	{
+		alert.alertViewStyle = UIAlertViewStylePlainTextInput;
+		[alert textFieldAtIndex:0].text = TGStoryString(album, @"name");
+	}
+	[alert show];
+}
+
+- (void)deleteAlbum:(NSDictionary *)album
+{
+	NSInteger albumId = TGStoryNumber(album, @"id");
+	int64_t chatId = self.chatId;
+	__weak TGStoryListViewController *weakSelf = self;
+	[[[TGAlertView alloc] initWithTitle:nil
+								message:@"Delete this album?"
+					  cancelButtonTitle:@"Cancel"
+						  okButtonTitle:@"Delete"
+						completionBlock:^(bool okButtonPressed)
+	{
+		if (!okButtonPressed)
+			return;
+		[[TGClient shared] deleteStoryAlbum:albumId inChat:chatId];
+		[weakSelf reload];
+	}] show];
+}
+
+- (void)moveAlbumUp:(NSUInteger)index
+{
+	if (index == 0 || index >= _rows.count)
+		return;
+	NSMutableArray *ordered = [_rows mutableCopy];
+	id album = [ordered objectAtIndex:index];
+	[ordered removeObjectAtIndex:index];
+	[ordered insertObject:album atIndex:index - 1];
+
+	NSMutableArray *ids = [[NSMutableArray alloc] init];
+	for (NSDictionary *entry in ordered)
+		[ids addObject:[NSNumber numberWithInteger:TGStoryNumber(entry, @"id")]];
+
+	[[TGClient shared] reorderStoryAlbums:ids inChat:self.chatId];
+	[_rows removeAllObjects];
+	[_rows addObjectsFromArray:ordered];
+	[_tableView reloadData];
+}
+
+- (void)moveStoryUp:(NSUInteger)index
+{
+	if (index == 0 || index >= _rows.count)
+		return;
+	NSMutableArray *ordered = [_rows mutableCopy];
+	id story = [ordered objectAtIndex:index];
+	[ordered removeObjectAtIndex:index];
+	[ordered insertObject:story atIndex:index - 1];
+
+	NSMutableArray *ids = [[NSMutableArray alloc] init];
+	for (NSDictionary *entry in ordered)
+		[ids addObject:[NSNumber numberWithInteger:TGStoryNumber(entry, @"id")]];
+
+	__weak TGStoryListViewController *weakSelf = self;
+	[[TGClient shared] reorderStories:ids
+							  inAlbum:self.albumId
+							   inChat:self.chatId
+						   completion:^(NSDictionary *album)
+	{
+		TGStoryListViewController *strongSelf = weakSelf;
+		if (strongSelf == nil)
+			return;
+		if (![album isKindOfClass:[NSDictionary class]])
+		{
+			[strongSelf showMessage:@"Could not reorder the album"];
+			[strongSelf reload];
+			return;
+		}
+		[strongSelf->_rows removeAllObjects];
+		[strongSelf->_rows addObjectsFromArray:ordered];
+		[strongSelf->_tableView reloadData];
+	}];
+}
+
+- (void)addStoryToAlbum:(NSInteger)storyId
+{
+	int64_t chatId = self.chatId;
+	__weak TGStoryListViewController *weakSelf = self;
+	[[TGClient shared] storyAlbumsInChat:chatId completion:^(NSArray *albums)
+	{
+		TGStoryListViewController *strongSelf = weakSelf;
+		if (strongSelf == nil)
+			return;
+		if (![albums isKindOfClass:[NSArray class]] || albums.count == 0)
+		{
+			[strongSelf showMessage:@"No albums yet"];
+			return;
+		}
+
+		NSMutableArray *actions = [[NSMutableArray alloc] init];
+		NSMutableDictionary *byTitle = [[NSMutableDictionary alloc] init];
+		for (NSDictionary *album in albums)
+		{
+			if (![album isKindOfClass:[NSDictionary class]])
+				continue;
+			NSString *name = TGStoryString(album, @"name");
+			if (name.length == 0)
+				continue;
+			[byTitle setObject:[NSNumber numberWithInteger:TGStoryNumber(album, @"id")] forKey:name];
+			[actions addObject:[[TGActionSheetAction alloc] initWithTitle:name action:name]];
+		}
+		if (actions.count == 0)
+		{
+			[strongSelf showMessage:@"No albums yet"];
+			return;
+		}
+
+		TGActionSheet *sheet = [[TGActionSheet alloc] initWithTitle:@"Add to album"
+														   actions:actions
+													   actionBlock:^(id target, NSString *action)
+		{
+			(void)target;
+			TGStoryListViewController *inner = weakSelf;
+			if (inner == nil)
+				return;
+			NSNumber *albumId = [byTitle objectForKey:action];
+			if (albumId == nil)
+				return;
+			[[TGClient shared] addStories:[NSArray arrayWithObject:
+											[NSNumber numberWithInteger:storyId]]
+								  toAlbum:[albumId integerValue]
+								   inChat:chatId
+							   completion:^(NSDictionary *album)
+			{
+				TGStoryListViewController *host = weakSelf;
+				if (host == nil)
+					return;
+				[host showMessage:[album isKindOfClass:[NSDictionary class]]
+						? @"Added to the album"
+						: @"Could not add to the album"];
+			}];
+		}
+															target:strongSelf];
+		[sheet showInView:strongSelf.view];
+	}];
+}
+
+- (void)removeStoryFromAlbum:(NSInteger)storyId
+{
+	__weak TGStoryListViewController *weakSelf = self;
+	[[TGClient shared] removeStories:[NSArray arrayWithObject:[NSNumber numberWithInteger:storyId]]
+						   fromAlbum:self.albumId
+							  inChat:self.chatId
+						  completion:^(NSDictionary *album)
+	{
+		TGStoryListViewController *strongSelf = weakSelf;
+		if (strongSelf == nil)
+			return;
+		if (![album isKindOfClass:[NSDictionary class]])
+		{
+			[strongSelf showMessage:@"Could not remove the story"];
+			return;
+		}
+		[strongSelf reload];
+	}];
+}
+
+- (void)togglePinnedForStory:(NSInteger)storyId
+{
+	NSNumber *key = [NSNumber numberWithInteger:storyId];
+	NSMutableArray *ids = [_pinned mutableCopy];
+	if ([ids containsObject:key])
+		[ids removeObject:key];
+	else
+		[ids insertObject:key atIndex:0];
+
+	[[TGClient shared] setPinnedStories:ids inChat:self.chatId];
+	[_pinned removeAllObjects];
+	[_pinned addObjectsFromArray:ids];
+	[_tableView reloadData];
+}
+
+#pragma mark - long press
+
+- (void)rowHeld:(UILongPressGestureRecognizer *)recognizer
+{
+	if (recognizer.state != UIGestureRecognizerStateBegan)
+		return;
+
+	CGPoint point = [recognizer locationInView:_tableView];
+	NSIndexPath *indexPath = [_tableView indexPathForRowAtPoint:point];
+	if (indexPath == nil || indexPath.row >= (NSInteger)_rows.count)
+		return;
+
+	NSUInteger index = (NSUInteger)indexPath.row;
+	NSDictionary *row = [_rows objectAtIndex:index];
+	NSInteger storyId = TGStoryNumber(row, @"id");
+
+	NSMutableArray *actions = [[NSMutableArray alloc] init];
+
+	if (self.mode == TGStoryListProfile)
+	{
+		BOOL isPinned = [_pinned containsObject:[NSNumber numberWithInteger:storyId]];
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:(isPinned ? @"Unpin" : @"Pin to Top")
+															   action:@"pin"]];
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Add to Album"
+															   action:@"album"]];
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Remove from Profile"
+															   action:@"unprofile"
+																 type:TGActionSheetActionTypeDestructive]];
+	}
+	else if (self.mode == TGStoryListArchive)
+	{
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Save to Profile"
+															   action:@"profile"]];
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Add to Album"
+															   action:@"album"]];
+	}
+	else if (self.mode == TGStoryListAlbum)
+	{
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Move Up" action:@"up"]];
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Remove from Album"
+															   action:@"remove"
+																 type:TGActionSheetActionTypeDestructive]];
+	}
+	else if (self.mode == TGStoryListAlbums)
+	{
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Rename" action:@"rename"]];
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Move Up" action:@"albumup"]];
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Delete Album"
+															   action:@"deletealbum"
+																 type:TGActionSheetActionTypeDestructive]];
+	}
+
+	if (actions.count == 0)
+		return;
+
+	__weak TGStoryListViewController *weakSelf = self;
+	TGActionSheet *sheet = [[TGActionSheet alloc] initWithTitle:nil
+													   actions:actions
+												   actionBlock:^(id target, NSString *action)
+	{
+		(void)target;
+		TGStoryListViewController *strongSelf = weakSelf;
+		if (strongSelf == nil)
+			return;
+
+		if ([action isEqualToString:@"pin"])
+			[strongSelf togglePinnedForStory:storyId];
+		else if ([action isEqualToString:@"album"])
+			[strongSelf addStoryToAlbum:storyId];
+		else if ([action isEqualToString:@"unprofile"])
+		{
+			[[TGClient shared] setStory:storyId inChat:strongSelf.chatId onProfile:NO];
+			[strongSelf reload];
+		}
+		else if ([action isEqualToString:@"profile"])
+		{
+			[[TGClient shared] setStory:storyId inChat:strongSelf.chatId onProfile:YES];
+			[strongSelf showMessage:@"Saved to your profile"];
+		}
+		else if ([action isEqualToString:@"up"])
+			[strongSelf moveStoryUp:index];
+		else if ([action isEqualToString:@"remove"])
+			[strongSelf removeStoryFromAlbum:storyId];
+		else if ([action isEqualToString:@"rename"])
+			[strongSelf renameAlbum:row];
+		else if ([action isEqualToString:@"albumup"])
+			[strongSelf moveAlbumUp:index];
+		else if ([action isEqualToString:@"deletealbum"])
+			[strongSelf deleteAlbum:row];
+	}
+														target:self];
+	[sheet showInView:self.view];
+}
+
+@end
+
 @interface TGStoryPage : UIView
 
 @property (nonatomic, assign) NSInteger pageIndex;
@@ -503,7 +1690,8 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 
 @end
 
-@interface TGStoriesViewController () <UIScrollViewDelegate, UIGestureRecognizerDelegate>
+@interface TGStoriesViewController () <UIScrollViewDelegate, UIGestureRecognizerDelegate,
+		UIImagePickerControllerDelegate, UINavigationControllerDelegate>
 {
 	NSArray *_storyIds;
 	NSInteger _index;
@@ -1696,10 +2884,7 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 		NSString *link = TGStoryString(area, @"url");
 		if (link.length == 0)
 			return NO;
-		NSURL *url = [NSURL URLWithString:link];
-		if (url == nil)
-			return NO;
-		[[UIApplication sharedApplication] openURL:url];
+		[self openLink:link];
 		return YES;
 	}
 
@@ -1718,6 +2903,56 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 	}
 
 	return NO;
+}
+
+- (void)openLink:(NSString *)link
+{
+	NSURL *url = [NSURL URLWithString:link];
+	if ([link rangeOfString:@"/s/"].location == NSNotFound &&
+		[link rangeOfString:@"story"].location == NSNotFound)
+	{
+		if (url != nil)
+			[[UIApplication sharedApplication] openURL:url];
+		return;
+	}
+
+	__weak TGStoriesViewController *weakSelf = self;
+	[[TGClient shared] resolveStoryLink:link completion:^(int64_t chatId, NSInteger storyId)
+	{
+		TGStoriesViewController *strongSelf = weakSelf;
+		if (strongSelf == nil)
+			return;
+		if (chatId == 0 || storyId == 0)
+		{
+			if (url != nil)
+				[[UIApplication sharedApplication] openURL:url];
+			return;
+		}
+		TGStoriesViewController *viewer = [[TGStoriesViewController alloc]
+				initWithChatId:chatId
+					  storyIds:[NSArray arrayWithObject:[NSNumber numberWithInteger:storyId]]
+					startIndex:0];
+		[strongSelf.navigationController pushViewController:viewer animated:YES];
+	}];
+}
+
+- (NSString *)hashtagInCaption
+{
+	NSDictionary *story = [self currentStory];
+	NSString *caption = story != nil ? TGStoryString(story, @"caption") : @"";
+	NSRange hash = [caption rangeOfString:@"#"];
+	if (hash.location == NSNotFound || hash.location + 1 >= caption.length)
+		return nil;
+
+	NSCharacterSet *stop = [NSCharacterSet characterSetWithCharactersInString:@" \n\t,.!?;:#"];
+	NSRange rest = NSMakeRange(hash.location + 1, caption.length - hash.location - 1);
+	NSRange end = [caption rangeOfCharacterFromSet:stop options:0 range:rest];
+	NSUInteger length = (end.location == NSNotFound)
+			? rest.length
+			: end.location - rest.location;
+	if (length == 0)
+		return nil;
+	return [caption substringWithRange:NSMakeRange(rest.location, length)];
 }
 
 #pragma mark - actions
@@ -1899,10 +3134,41 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 
 	if (![self isOwnStory])
 	{
+		if ([self unreadStoryIds].count > 0)
+		{
+			[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Mark All as Read"
+																   action:@"markread"]];
+		}
 		NSString *hide = [NSString stringWithFormat:@"Hide Stories from %@",
 				[self resolvedPosterName]];
 		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:hide action:@"hide"]];
 		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Report" action:@"report"]];
+	}
+
+	NSString *hashtag = [self hashtagInCaption];
+	if (hashtag.length > 0)
+	{
+		[actions addObject:[[TGActionSheetAction alloc]
+				initWithTitle:[NSString stringWithFormat:@"Search #%@", hashtag]
+					   action:@"hashtag"]];
+	}
+
+	if (story != nil && TGStoryNumber(story, @"forwards") > 0)
+	{
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Reposts"
+															   action:@"forwards"]];
+	}
+
+	if (story != nil && TGStoryFlag(story, @"canEdit"))
+	{
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Replace Photo"
+															   action:@"replace"]];
+	}
+
+	if ([[TGClient shared] me] != nil)
+	{
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"My Stories"
+															   action:@"mystories"]];
 	}
 
 	if (story != nil && TGStoryFlag(story, @"canToggleProfile"))
@@ -2066,6 +3332,183 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 		[self reportWithOptionId:nil text:nil];
 		return;
 	}
+
+	if ([action isEqualToString:@"markread"])
+	{
+		[self markRemainingRead];
+		return;
+	}
+
+	if ([action isEqualToString:@"hashtag"])
+	{
+		NSString *hashtag = [self hashtagInCaption];
+		if (hashtag.length == 0 || self.navigationController == nil)
+			return;
+		TGStoryListViewController *list = [[TGStoryListViewController alloc] init];
+		list.mode = TGStoryListTag;
+		list.tag = hashtag;
+		list.title = [NSString stringWithFormat:@"#%@", hashtag];
+		[self.navigationController pushViewController:list animated:YES];
+		return;
+	}
+
+	if ([action isEqualToString:@"forwards"])
+	{
+		if (self.navigationController == nil)
+			return;
+		TGStoryListViewController *list = [[TGStoryListViewController alloc] init];
+		list.mode = TGStoryListForwards;
+		list.chatId = _chatId;
+		list.storyId = storyId;
+		list.title = @"Reposts";
+		[self.navigationController pushViewController:list animated:YES];
+		return;
+	}
+
+	if ([action isEqualToString:@"replace"])
+	{
+		[self replacePhoto];
+		return;
+	}
+
+	if ([action isEqualToString:@"mystories"])
+	{
+		NSDictionary *me = [[TGClient shared] me];
+		if (me == nil)
+			return;
+		[TGStoryListViewController pushMode:TGStoryListMenu
+									 chatId:TGStoryChatId(me, @"id")
+									  title:@"My Stories"
+									   from:self];
+		return;
+	}
+}
+
+- (NSArray *)unreadStoryIds
+{
+	NSMutableArray *unread = [[NSMutableArray alloc] init];
+	for (NSNumber *key in _storyIds)
+	{
+		if (![_seen containsObject:key])
+			[unread addObject:key];
+	}
+	return unread;
+}
+
+- (void)markRemainingRead
+{
+	NSArray *unread = [self unreadStoryIds];
+	for (NSNumber *key in unread)
+	{
+		[[TGClient shared] markStoryRead:[key integerValue] inChat:_chatId];
+		[_seen addObject:key];
+	}
+	[self updateStrip];
+}
+
+- (void)replacePhoto
+{
+	if (![UIImagePickerController isSourceTypeAvailable:UIImagePickerControllerSourceTypePhotoLibrary])
+	{
+		[[[TGAlertView alloc] initWithTitle:nil
+									message:@"No photo library"
+						  cancelButtonTitle:@"OK"
+							  okButtonTitle:nil
+							completionBlock:nil] show];
+		return;
+	}
+
+	[self setModalPaused:YES];
+	UIImagePickerController *picker = [[UIImagePickerController alloc] init];
+	picker.sourceType = UIImagePickerControllerSourceTypePhotoLibrary;
+	picker.allowsEditing = YES;
+	picker.delegate = self;
+	[self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)imagePickerControllerDidCancel:(UIImagePickerController *)picker
+{
+	(void)picker;
+	[self dismissViewControllerAnimated:YES completion:nil];
+	[self setModalPaused:NO];
+}
+
+- (void)imagePickerController:(UIImagePickerController *)picker
+		didFinishPickingMediaWithInfo:(NSDictionary *)info
+{
+	(void)picker;
+	[self dismissViewControllerAnimated:YES completion:nil];
+	[self setModalPaused:NO];
+
+	NSInteger storyId = [self currentStoryId];
+	if (storyId == 0)
+		return;
+
+	UIImage *image = [info objectForKey:UIImagePickerControllerEditedImage];
+	if (![image isKindOfClass:[UIImage class]])
+		image = [info objectForKey:UIImagePickerControllerOriginalImage];
+	if (![image isKindOfClass:[UIImage class]])
+		return;
+
+	NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:@"storyedit.jpg"];
+	BOOL written = NO;
+
+	@autoreleasepool
+	{
+		CGFloat side = MAX(image.size.width, image.size.height);
+		UIImage *scaled = image;
+		if (side > 720.0f)
+		{
+			CGFloat factor = 720.0f / side;
+			CGSize target = CGSizeMake(floorf(image.size.width * factor),
+									   floorf(image.size.height * factor));
+			UIGraphicsBeginImageContextWithOptions(target, YES, 1.0f);
+			[image drawInRect:CGRectMake(0, 0, target.width, target.height)];
+			scaled = UIGraphicsGetImageFromCurrentImageContext();
+			UIGraphicsEndImageContext();
+		}
+		image = nil;
+
+		NSData *data = UIImageJPEGRepresentation(scaled, 0.87f);
+		scaled = nil;
+		if (data.length != 0)
+			written = [data writeToFile:path atomically:YES];
+	}
+
+	if (!written)
+	{
+		[[[TGAlertView alloc] initWithTitle:nil
+									message:@"Could not prepare the photo"
+						  cancelButtonTitle:@"OK"
+							  okButtonTitle:nil
+							completionBlock:nil] show];
+		return;
+	}
+
+	NSDictionary *story = [self currentStory];
+	NSString *caption = story != nil ? TGStoryString(story, @"caption") : @"";
+	[[TGClient shared] editStory:storyId inChat:_chatId photoPath:path caption:caption];
+
+	NSNumber *key = [self currentStoryKey];
+	int64_t chatId = _chatId;
+	__weak TGStoriesViewController *weakSelf = self;
+	[[TGClient shared] storyWithId:storyId inChat:chatId completion:^(NSDictionary *updated)
+	{
+		TGStoriesViewController *strongSelf = weakSelf;
+		if (strongSelf == nil || key == nil || strongSelf->_chatId != chatId)
+			return;
+		if (![updated isKindOfClass:[NSDictionary class]])
+			return;
+		[strongSelf->_stories setObject:updated forKey:key];
+		TGStoryPage *page = [strongSelf pageForIndex:strongSelf->_index];
+		if (page != nil && [page.itemId isEqual:key])
+		{
+			[page setCaption:TGStoryString(updated, @"caption")];
+			[page setAreas:[updated objectForKey:@"areas"]];
+			[strongSelf loadPhotoForPage:page story:updated];
+		}
+		[strongSelf updateChrome];
+	}];
 }
 
 - (void)reportWithOptionId:(NSString *)optionId text:(NSString *)text

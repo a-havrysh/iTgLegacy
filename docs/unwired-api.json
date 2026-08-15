@@ -1,0 +1,2420 @@
+[
+ {
+  "name": "acceptTermsOfService",
+  "sig": "- (void)acceptTermsOfService:(NSString *)termsId completion:(void (^)(BOOL ok))completion",
+  "doc": "Accept updated terms of service pushed at us after login. `termsId` comes from an updateTermsOfService update, not from -registrationTermsWithCompletion:.",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "accountInfoWithCompletion",
+  "sig": "- (void)accountInfoWithCompletion:(void (^)(NSDictionary *info))completion",
+  "doc": "The signed-in user, flattened for the settings header. Keys: \"id\" (NSNumber int64), \"firstName\", \"lastName\", \"name\" (both joined), \"username\" (editable one, may be empty), \"phoneNumber\" (no \"+\"), \"isPremium\" (NSNumber bool), \"isVerified\" (NSNumber bool), \"smallFileId\" / \"bigFileId\" (NSNumber, profile photo, 0 when none). Nil on failure.",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "checkChangePhoneNumberCode",
+  "sig": "- (void)checkChangePhoneNumberCode:(NSString *)code completion:(void (^)(BOOL ok))completion",
+  "doc": "Confirm the change with the code that arrived at the new number.",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "checkEmailAddressVerificationCode",
+  "sig": "- (void)checkEmailAddressVerificationCode:(NSString *)code completion:(void (^)(BOOL ok))completion",
+  "doc": "",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "checkLoginEmailAddressCode",
+  "sig": "- (void)checkLoginEmailAddressCode:(NSString *)code completion:(void (^)(BOOL ok))completion",
+  "doc": "",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "clearBirthdateWithCompletion",
+  "sig": "- (void)clearBirthdateWithCompletion:(void (^)(BOOL ok))completion",
+  "doc": "Clear the birthday.",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "confirmQrCodeLogin",
+  "sig": "- (void)confirmQrCodeLogin:(NSString *)link completion:(void (^)(NSDictionary *session))completion",
+  "doc": "The other side of the same feature: this device is already signed in and has scanned a QR code shown by a device that wants to log in. `session` describes the device being authorised, so the confirm sheet can name it: \"id\" (NSNumber int64), \"appName\", \"deviceModel\", \"platform\", \"ip\", \"location\". Nil when the link was invalid or expired.",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "countriesWithCompletion",
+  "sig": "- (void)countriesWithCompletion:(void (^)(NSArray *countries))completion",
+  "doc": "Every country Telegram knows, for the country picker. Each entry: \"code\" (ISO two-letter, e.g. \"CH\"), \"name\" (localised), \"englishName\", \"flag\" (emoji, useless on this OS but harmless), \"callingCodes\" (NSArray of NSString without the \"+\"). Hidden countries are dropped. Empty array on failure.",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "currentSessionWithCompletion",
+  "sig": "- (void)currentSessionWithCompletion:(void (^)(NSDictionary *session))completion",
+  "doc": "This device's own session, flattened like -sessionInfoForId:completion:. Nil when the list cannot be read. Lets the sessions screen render its \"current session\" block without diffing the whole list itself.",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "deleteProfilePhoto",
+  "sig": "- (void)deleteProfilePhoto:(long long)photoId completion:(void (^)(BOOL ok))completion",
+  "doc": "Remove one profile photo. Pass 0 to drop the current one.",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "guessedCountryCodeWithCompletion",
+  "sig": "- (void)guessedCountryCodeWithCompletion:(void (^)(NSString *countryCode))completion",
+  "doc": "ISO country code Telegram guesses for this device from its IP, e.g. \"CH\". Used to preselect a row in the country picker. Nil on failure.",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "logOutWithCompletion",
+  "sig": "- (void)logOutWithCompletion:(void (^)(BOOL ok))completion",
+  "doc": "Log out and hear back. TGClient's -logOut is the fire-and-forget form; the authorization-state callback still fires either way.",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "phoneNumberInfo",
+  "sig": "- (void)phoneNumberInfo:(NSString *)phoneNumberPrefix completion:(void (^)(NSDictionary *info))completion",
+  "doc": "Country and formatting for a phone number or number prefix, as the user types. `info` has \"countryCode\", \"countryName\", \"callingCode\" (without \"+\") and \"formatted\" (the number grouped the way that country writes it). Nil when the prefix matches no country yet. TDLib also offers a synchronous variant of this; it needs td_json_client_execute, which this client does not expose, so this one is a normal round trip and must not be called on every keystroke.",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "preferredLanguageForCountry",
+  "sig": "- (void)preferredLanguageForCountry:(NSString *)countryCode completion:(void (^)(NSString *languageCode))completion",
+  "doc": "Language pack id Telegram suggests for a country (\"de\", \"ru\", ...), so the login screen can switch localisation after the country is picked. Nil when Telegram has no preference.",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "profileInfoWithCompletion",
+  "sig": "- (void)profileInfoWithCompletion:(void (^)(NSDictionary *info))completion",
+  "doc": "Everything -accountInfoWithCompletion: returns plus the full-info parts the profile edit form needs: \"bio\" (NSString, plain text), \"birthdayDay\" \"birthdayMonth\" / \"birthdayYear\" (NSNumber, 0 when unset), \"personalChatId\" (NSNumber int64, 0 when none). Nil on failure.",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "profilePhotosWithCompletion",
+  "sig": "- (void)profilePhotosWithCompletion:(void (^)(NSArray *photos))completion",
+  "doc": "Our profile photos, newest first, for the avatar gallery. Each entry: \"id\" (NSNumber int64, pass to -deleteProfilePhoto:completion:), \"fileId\" (NSNumber, the big size, feed to -downloadFile:completion:), \"smallFileId\" (NSNumber), \"date\" (NSNumber, unix time).",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "publicLinkWithCompletion",
+  "sig": "- (void)publicLinkWithCompletion:(void (^)(NSString *url, NSInteger expiresIn))completion",
+  "doc": "Our public link. `url` is the https://t.me/... form to copy, share or render as a QR code; `expiresIn` is seconds until it stops working (0 means it does not expire, which is the case when we have a username).",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "reorderActiveUsernames",
+  "sig": "- (void)reorderActiveUsernames:(NSArray *)usernames completion:(void (^)(BOOL ok))completion",
+  "doc": "Persist a drag-reorder of the active usernames. `usernames` must contain exactly the active ones, in the new order.",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "reportChangePhoneNumberCodeMissing",
+  "sig": "- (void)reportChangePhoneNumberCodeMissing:(NSString *)mobileNetworkCode completion:(void (^)(BOOL ok))completion",
+  "doc": "Tell Telegram the change-number SMS never arrived.",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "resendChangePhoneNumberCodeWithCompletion",
+  "sig": "- (void)resendChangePhoneNumberCodeWithCompletion:(void (^)(NSDictionary *info))completion",
+  "doc": "Resend that code. `info` is the refreshed code info, nil on failure.",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "resendEmailAddressVerificationCodeWithCompletion",
+  "sig": "- (void)resendEmailAddressVerificationCodeWithCompletion:(void (^)(NSString *pattern, NSInteger codeLength))completion",
+  "doc": "",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "resendLoginEmailAddressCodeWithCompletion",
+  "sig": "- (void)resendLoginEmailAddressCodeWithCompletion:(void (^)(NSString *pattern, NSInteger codeLength))completion",
+  "doc": "",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "searchUserByToken",
+  "sig": "- (void)searchUserByToken:(NSString *)token completion:(void (^)(NSDictionary *user))completion",
+  "doc": "Resolve a temporary link token scanned from someone else's profile QR code. `user` has \"id\" (NSNumber int64), \"name\" and \"username\". Nil when the token is unknown or expired.",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "sendChangePhoneNumberCode",
+  "sig": "- (void)sendChangePhoneNumberCode:(NSString *)phoneNumber completion:(void (^)(NSDictionary *info))completion",
+  "doc": "Start \"Change Number\": sends a code to the new number. `info` is the same shape as -authenticationCodeInfoWithCompletion:, so the login code screen can be reused as is. Nil when the number was refused (already taken, banned, flood wait).",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "sendEmailAddressVerificationCode",
+  "sig": "- (void)sendEmailAddressVerificationCode:(NSString *)emailAddress completion:(void (^)(NSString *pattern, NSInteger codeLength))completion",
+  "doc": "The plain \"prove you own this address\" flow, used by support and passport screens. Unrelated to the login email above.",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "setBirthdateDay",
+  "sig": "- (void)setBirthdateDay:(NSInteger)day month:(NSInteger)month year:(NSInteger)year completion:(void (^)(BOOL ok))completion",
+  "doc": "Birthday shown on our profile. `year` may be 0 to keep it private.",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "setFirstName",
+  "sig": "- (void)setFirstName:(NSString *)firstName lastName:(NSString *)lastName completion:(void (^)(BOOL ok))completion",
+  "doc": "Rename ourselves and hear back. TGClient's -setName:last: is the fire-and-forget form. `lastName` may be nil or empty.",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "setLoginEmailAddress",
+  "sig": "- (void)setLoginEmailAddress:(NSString *)emailAddress completion:(void (^)(NSString *pattern, NSInteger codeLength))completion",
+  "doc": "Set or change the login email of an account that is already signed in. `pattern` and `codeLength` describe the confirmation code, nil pattern on failure. Reading the current address is part of -passwordStateWithCompletion: on TGClient+Privacy (\"loginEmailPattern\").",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "setPersonalChat",
+  "sig": "- (void)setPersonalChat:(int64_t)chatId completion:(void (^)(BOOL ok))completion",
+  "doc": "Channel or group featured on our profile. Pass 0 to remove it.",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "setProfilePhotoAtPath",
+  "sig": "- (void)setProfilePhotoAtPath:(NSString *)path completion:(void (^)(BOOL ok))completion",
+  "doc": "Replace our profile photo with a JPEG already on disk.",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "startLoginWithPhoneNumber",
+  "sig": "- (void)startLoginWithPhoneNumber:(NSString *)phoneNumber isCurrentNumber:(BOOL)isCurrentNumber completion:(void (^)(BOOL ok))completion",
+  "doc": "Hand Telegram the phone number, with the authentication settings this hardware can honour. TGClient's -sendPhoneNumber: is the fire-and-forget version that also survives being called before TDLib is up; use this one when the login screen has to show a spinner and then an error. `isCurrentNumber` is YES only when the number was filled in for the user rather than typed. `ok` NO means the number was rejected.",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "usernamesWithCompletion",
+  "sig": "- (void)usernamesWithCompletion:(void (^)(NSDictionary *info))completion",
+  "doc": "Usernames on our account. `info` has \"editable\" (the main one, may be empty), \"active\" (NSArray of NSString, the ones that resolve, editable one included) and \"disabled\" (NSArray of NSString). Nil on failure. Setting the editable username is -setUsername:completion: on TGClient.",
+  "header": "TGClient+Account.h"
+ },
+ {
+  "name": "chatThemeEmojiForChat",
+  "sig": "- (void)chatThemeEmojiForChat:(int64_t)chatId completion:(void (^)(NSString *emoji))completion",
+  "doc": "The emoji theme currently applied to a chat, or nil when it uses the default one.",
+  "header": "TGClient+AppSettings.h"
+ },
+ {
+  "name": "removeInstalledBackgroundId",
+  "sig": "- (void)removeInstalledBackgroundId:(NSString *)backgroundId",
+  "doc": "Remove one background from the installed list, or empty the list.",
+  "header": "TGClient+AppSettings.h"
+ },
+ {
+  "name": "resetInstalledBackgrounds",
+  "sig": "- (void)resetInstalledBackgrounds",
+  "doc": "",
+  "header": "TGClient+AppSettings.h"
+ },
+ {
+  "name": "setDefaultBackgroundAtPath",
+  "sig": "- (void)setDefaultBackgroundAtPath:(NSString *)path blurred:(BOOL)blurred forDarkTheme:(BOOL)forDarkTheme completion:(void (^)(NSDictionary *background))completion",
+  "doc": "Upload a local image file as the wallpaper.",
+  "header": "TGClient+AppSettings.h"
+ },
+ {
+  "name": "setDefaultBackgroundColor",
+  "sig": "- (void)setDefaultBackgroundColor:(NSInteger)color forDarkTheme:(BOOL)forDarkTheme completion:(void (^)(NSDictionary *background))completion",
+  "doc": "Plain colour wallpaper. `color` is 0xRRGGBB. Nothing is downloaded, which makes this the cheap option on this hardware.",
+  "header": "TGClient+AppSettings.h"
+ },
+ {
+  "name": "setDefaultBackgroundGradientTop",
+  "sig": "- (void)setDefaultBackgroundGradientTop:(NSInteger)topColor bottom:(NSInteger)bottomColor rotation:(NSInteger)rotation forDarkTheme:(BOOL)forDarkTheme completion:(void (^)(NSDictionary *background))completion",
+  "doc": "Two-colour linear gradient wallpaper. `rotation` is in degrees, 0..359, and TDLib only accepts multiples of 45.",
+  "header": "TGClient+AppSettings.h"
+ },
+ {
+  "name": "shareUrlForBackgroundNamed",
+  "sig": "- (void)shareUrlForBackgroundNamed:(NSString *)name kind:(NSString *)kind completion:(void (^)(NSString *url))completion",
+  "doc": "Shareable https://t.me/bg/... link for a background. `name` and `kind` come from a list entry; `kind` decides which BackgroundType is described. `completion` gets the url, or nil.",
+  "header": "TGClient+AppSettings.h"
+ },
+ {
+  "name": "allowBotToSendMessages",
+  "sig": "- (void)allowBotToSendMessages:(int64_t)botUserId completion:(void (^)(BOOL ok))completion",
+  "doc": "Grant that permission, after the user confirmed in an action sheet.",
+  "header": "TGClient+Bots.h"
+ },
+ {
+  "name": "botCommandsForUser",
+  "sig": "- (void)botCommandsForUser:(int64_t)userId matchingPrefix:(NSString *)prefix completion:(void (^)(NSArray *commands))completion",
+  "doc": "Commands filtered by a typed prefix, e.g. \"/se\" or \"se\". Convenience over -botCommandsForUser:, ordered as the bot declared them.",
+  "header": "TGClient+Bots.h"
+ },
+ {
+  "name": "botInfoForUser",
+  "sig": "- (void)botInfoForUser:(int64_t)userId completion:(void (^)(NSDictionary *info))completion",
+  "doc": "Everything a bot chat header and profile needs, or nil when the user is not a bot. Keys: \"description\", \"shortDescription\" (NSStrings, may be empty), \"commands\" (NSArray of dictionaries with \"command\" - without the slash - and \"description\"), \"menuButtonText\" and \"menuButtonUrl\" (NSStrings, empty when the bot has no menu button).",
+  "header": "TGClient+Bots.h"
+ },
+ {
+  "name": "botServiceTextForMessage",
+  "sig": "- (NSString *)botServiceTextForMessage:(NSDictionary *)message",
+  "doc": "Grey service line for the bot-related service messages: write access allowed, users shared, chat shared, web app data sent. Nil for anything else, so the caller can fall through to its own service-text handling.",
+  "header": "TGClient+Bots.h"
+ },
+ {
+  "name": "botStartLinkInfo",
+  "sig": "- (void)botStartLinkInfo:(NSString *)link completion:(void (^)(NSDictionary *info))completion",
+  "doc": "Resolve a t.me link that starts a bot. The completion gets nil when the link is not a bot-start link, otherwise a dictionary with \"username\", \"parameter\" (NSString, may be empty) and \"inGroup\" (NSNumber BOOL).",
+  "header": "TGClient+Bots.h"
+ },
+ {
+  "name": "canBotSendMessages",
+  "sig": "- (void)canBotSendMessages:(int64_t)botUserId completion:(void (^)(BOOL allowed))completion",
+  "doc": "Whether the bot is allowed to message the user without being started.",
+  "header": "TGClient+Bots.h"
+ },
+ {
+  "name": "inlineKeyboardRowsForMessage",
+  "sig": "- (NSArray *)inlineKeyboardRowsForMessage:(NSDictionary *)message",
+  "doc": "Inline keyboard of a message, as rows of buttons, or nil when the message carries none. Pass the flattened message dictionary the chat list and -historyForChat:... hand out, or a raw TDLib message; both work. Each button is a dictionary with: \"text\"       NSString, the label \"kind\"       NSString, one of \"url\", \"callback\", \"callbackWithPassword\", \"callbackGame\", \"switchInline\", \"user\", \"copyText\", \"buy\", \"loginUrl\", \"webApp\", \"unsupported\" \"url\"        NSString, for \"url\", \"loginUrl\" and \"webApp\" \"data\"       NSString, base64 callback payload, for the callback kinds \"query\"      NSString, for \"switchInline\" \"target\"     NSString, for \"switchInline\": \"current\", \"chosen\" or \"link\" \"userId\"     NSNumber, for \"user\" \"copyText\"   NSString, for \"copyText\" A button is always safe to hand straight back to -pressCallbackButton:inChat:message:completion:.",
+  "header": "TGClient+Bots.h"
+ },
+ {
+  "name": "inlineQueryToBot",
+  "sig": "- (void)inlineQueryToBot:(int64_t)botUserId inChat:(int64_t)chatId query:(NSString *)query offset:(NSString *)offset completion:(void (^)(NSDictionary *results))completion",
+  "doc": "Ask an inline bot for results. `query` is the text after the bot username, `offset` is nil for the first page or the \"nextOffset\" of the previous one. The completion gets a dictionary with: \"queryId\"     NSNumber, needed to send a result \"nextOffset\"  NSString, empty when there is no further page \"buttonText\"  NSString, empty when the bot sent no switch-pm button \"buttonParameter\" NSString, start parameter for that button \"results\"     NSArray of dictionaries with \"id\" (NSString, result id), \"kind\" (\"article\", \"photo\", \"sticker\", \"animation\", \"video\", \"audio\", \"voiceNote\", \"document\", \"location\", \"venue\", \"contact\", \"game\"), \"title\", \"description\", \"url\", \"thumbId\" (NSNumber file id or absent) and \"fileId\" (NSNumber file id of the full media, or absent). Nil when the bot answered with an error or is not an inline bot.",
+  "header": "TGClient+Bots.h"
+ },
+ {
+  "name": "menuButtonForBot",
+  "sig": "- (void)menuButtonForBot:(int64_t)userId completion:(void (^)(NSDictionary *button))completion",
+  "doc": "The bot's menu button, straight from TDLib rather than from bot_info: \"text\" and \"url\", both possibly empty.",
+  "header": "TGClient+Bots.h"
+ },
+ {
+  "name": "openBotStartLink",
+  "sig": "- (void)openBotStartLink:(NSString *)link completion:(void (^)(int64_t chatId))completion",
+  "doc": "Open a bot-start link end to end: resolves the link, finds or creates the bot's private chat and sends the start message. The completion gets the chat id to push, or 0 when the link could not be used.",
+  "header": "TGClient+Bots.h"
+ },
+ {
+  "name": "pressCallbackButton",
+  "sig": "- (void)pressCallbackButton:(NSDictionary *)button inChat:(int64_t)chatId message:(int64_t)messageId password:(NSString *)password completion:(void (^)(NSDictionary *answer))completion",
+  "doc": "Same, for a button of kind \"callbackWithPassword\": ask the user for their 2FA password first and pass it here. Same answer shape.",
+  "header": "TGClient+Bots.h"
+ },
+ {
+  "name": "recentInlineBotsWithCompletion",
+  "sig": "- (void)recentInlineBotsWithCompletion:(void (^)(NSArray *bots))completion",
+  "doc": "Bots the user has recently used inline, for the bare \"@\" suggestion list. Each entry: \"id\", \"name\", \"username\".",
+  "header": "TGClient+Bots.h"
+ },
+ {
+  "name": "replyKeyboardForMessage",
+  "sig": "- (NSDictionary *)replyKeyboardForMessage:(NSDictionary *)message",
+  "doc": "Custom reply keyboard attached to a message, or nil when there is none. Keys: \"mode\"        NSString, \"show\", \"remove\" or \"forceReply\" \"rows\"        NSArray of NSArray of button dictionaries (see below); empty for \"remove\" and \"forceReply\" \"resize\"      NSNumber BOOL, shrink the panel to fit its rows \"oneTime\"     NSNumber BOOL, hide the panel after one press \"persistent\"  NSNumber BOOL, keep the panel instead of the text keyboard \"placeholder\" NSString, input-bar placeholder, may be empty Reply-keyboard buttons carry \"text\" plus \"kind\", one of \"text\", \"requestPhoneNumber\", \"requestLocation\", \"requestPoll\", \"requestUsers\", \"requestChat\", \"webApp\", \"unsupported\". Request buttons also carry \"buttonId\" (NSNumber) which -shareUsers:... needs, and the request-users ones carry \"maxQuantity\", \"userIsBot\", \"userIsPremium\" (NSNumbers).",
+  "header": "TGClient+Bots.h"
+ },
+ {
+  "name": "sendInlineResult",
+  "sig": "- (void)sendInlineResult:(NSString *)resultId queryId:(NSNumber *)queryId toChat:(int64_t)chatId replyTo:(int64_t)replyToId hideVia:(BOOL)hideVia",
+  "doc": "Send one inline result into a chat. `queryId` and `resultId` come from -inlineQueryToBot:...; `hideVia` drops the \"via @bot\" attribution.",
+  "header": "TGClient+Bots.h"
+ },
+ {
+  "name": "shareChat",
+  "sig": "- (void)shareChat:(int64_t)sharedChatId withBotButton:(NSInteger)buttonId inChat:(int64_t)chatId message:(int64_t)messageId",
+  "doc": "The same for a \"requestChat\" button.",
+  "header": "TGClient+Bots.h"
+ },
+ {
+  "name": "shareUsers",
+  "sig": "- (void)shareUsers:(NSArray *)userIds withBotButton:(NSInteger)buttonId inChat:(int64_t)chatId message:(int64_t)messageId",
+  "doc": "Answer a \"requestUsers\" reply-keyboard button. `messageId` is the message the keyboard came with. Fire and forget; the bot gets a service message.",
+  "header": "TGClient+Bots.h"
+ },
+ {
+  "name": "similarBotsFor",
+  "sig": "- (void)similarBotsFor:(int64_t)botUserId completion:(void (^)(NSArray *bots, NSInteger total))completion",
+  "doc": "Bots similar to a given bot, for the \"Similar bots\" profile section. Same entry shape as -recentInlineBotsWithCompletion:. `total` is what the server says exists, which can exceed the number of entries returned.",
+  "header": "TGClient+Bots.h"
+ },
+ {
+  "name": "startBot",
+  "sig": "- (void)startBot:(int64_t)botUserId inChat:(int64_t)chatId parameter:(NSString *)parameter",
+  "doc": "Press START in an empty bot chat. `parameter` is the deep-link payload, or nil/empty for a plain start.",
+  "header": "TGClient+Bots.h"
+ },
+ {
+  "name": "viaBotForMessage",
+  "sig": "- (void)viaBotForMessage:(NSDictionary *)message completion:(void (^)(NSString *username))completion",
+  "doc": "\"via @bot\" attribution for a message sent through an inline bot, or nil. The completion runs on the main queue once the bot's username is known.",
+  "header": "TGClient+Bots.h"
+ },
+ {
+  "name": "setSessionId",
+  "sig": "- (void)setSessionId:(int64_t)sessionId canAcceptCalls:(BOOL)canAccept completion:(void (^)(BOOL ok))completion",
+  "doc": "\"Use less data for calls\" is NOT declared here: TGClient+Network already owns -setUseLessDataForCalls:completion:, and its auto-download settings dictionary exposes the current value under the \"useLessDataForCalls\" key. Use those; a second wrapper would be a duplicate category implementation. Whether an authorized session may accept incoming calls. `sessionId` comes from the active-sessions list. `completion` receives YES on success.",
+  "header": "TGClient+Calls.h"
+ },
+ {
+  "name": "boostLevelFeatureTableForChannel",
+  "sig": "- (void)boostLevelFeatureTableForChannel:(BOOL)isChannel completion:(void (^)(NSArray *levels, NSDictionary *minimums))completion",
+  "doc": "Full per-level feature table for the boost explainer. `levels` is an array of the same dictionaries as -boostLevelFeaturesForChannel:level:completion:, `minimums` maps each \"min_*_boost_level\" key to an NSNumber. Both nil on failure. Named apart from TGClient+Premium's -boostFeaturesForChannel:completion:, which wraps the same TDLib call with a one-argument completion.",
+  "header": "TGClient+Channels.h"
+ },
+ {
+  "name": "boostLevelFeaturesForChannel",
+  "sig": "- (void)boostLevelFeaturesForChannel:(BOOL)isChannel level:(NSInteger)level completion:(void (^)(NSDictionary *features))completion",
+  "doc": "Feature checklist for a single boost level. `features` is nil on failure, otherwise the flattened chatBoostLevelFeatures fields (\"level\", \"story_per_day_count\", \"custom_emoji_reaction_count\", \"title_color_count\", \"profile_accent_color_count\", \"accent_color_count\", \"chat_theme_background_count\", \"can_set_profile_background_custom_emoji\", \"can_set_background_custom_emoji\", \"can_set_emoji_status\", \"can_set_custom_background\", \"can_set_custom_emoji_sticker_set\", \"can_enable_automatic_translation\", \"can_recognize_speech\", \"can_disable_sponsored_messages\").",
+  "header": "TGClient+Channels.h"
+ },
+ {
+  "name": "boostsByUser",
+  "sig": "- (void)boostsByUser:(int64_t)userId inChat:(int64_t)chatId completion:(void (^)(NSArray *boosts))completion",
+  "doc": "Boosts one specific user applied to a chat, same entry shape as -boostsForChat:onlyGiftCodes:offset:limit:completion:.",
+  "header": "TGClient+Channels.h"
+ },
+ {
+  "name": "isAllHistoryAvailableForChat",
+  "sig": "- (void)isAllHistoryAvailableForChat:(int64_t)chatId completion:(void (^)(BOOL available))completion",
+  "doc": "Whether new subscribers of a linked discussion group see the old history.",
+  "header": "TGClient+Channels.h"
+ },
+ {
+  "name": "publicForwardsOfMessage",
+  "sig": "- (void)publicForwardsOfMessage:(int64_t)messageId inChat:(int64_t)chatId offset:(NSString *)offset limit:(NSInteger)limit completion:(void (^)(NSArray *forwards, NSString *nextOffset, NSInteger totalCount))completion",
+  "doc": "Public channels that reposted a message, for the per-post statistics screen. Each entry is {\"chat_id\", \"message_id\", \"title\", \"view_count\"} for a message repost, or {\"story_id\", \"sender_chat_id\", \"title\"} for a story. Pass @\"\" as `offset` for the first page. `nextOffset` is empty at the end.",
+  "header": "TGClient+Channels.h"
+ },
+ {
+  "name": "resolveBoostLink",
+  "sig": "- (void)resolveBoostLink:(NSString *)url completion:(void (^)(NSNumber *chatId, BOOL isPublic))completion",
+  "doc": "Resolves a t.me boost URL into a chat to open the boost sheet for. `chatId` is nil when the link cannot be resolved.",
+  "header": "TGClient+Channels.h"
+ },
+ {
+  "name": "setAllHistoryAvailable",
+  "sig": "- (void)setAllHistoryAvailable:(BOOL)available forChat:(int64_t)chatId completion:(void (^)(BOOL ok))completion",
+  "doc": "Toggles history visibility for new members of a discussion group.",
+  "header": "TGClient+Channels.h"
+ },
+ {
+  "name": "statisticsForMessage",
+  "sig": "- (void)statisticsForMessage:(int64_t)messageId inChat:(int64_t)chatId isDark:(BOOL)isDark completion:(void (^)(NSArray *graphs))completion",
+  "doc": "Per-post statistics. `graphs` has the same shape as the \"graphs\" entry of -statisticsForChat:isDark:completion:, with keys \"message_interaction\" and \"message_reaction\". Nil on failure.",
+  "header": "TGClient+Channels.h"
+ },
+ {
+  "name": "addNewChats",
+  "sig": "- (void)addNewChats:(NSArray *)chatIds toFolder:(NSInteger)folderId",
+  "doc": "Accept some of those new chats; pass nil to dismiss the banner without joining anything.",
+  "header": "TGClient+ChatList.h"
+ },
+ {
+  "name": "chatMarkedAsUnread",
+  "sig": "- (void)chatMarkedAsUnread:(int64_t)chatId completion:(void (^)(BOOL marked))completion",
+  "doc": "The authoritative answer, straight from TDLib; also refreshes the cache the synchronous accessor reads.",
+  "header": "TGClient+ChatList.h"
+ },
+ {
+  "name": "checkFolderInviteLink",
+  "sig": "- (void)checkFolderInviteLink:(NSString *)link completion:(void (^)(NSDictionary *info))completion",
+  "doc": "What a t.me/addlist link would do, without joining. Keys: \"title\", \"folderId\" (NSNumber, 0 when the folder is new), \"missingChatIds\" (chats the user is not in yet - these are what the confirm sheet lists) and \"addedChatIds\". Nil when the link is invalid or expired.",
+  "header": "TGClient+ChatList.h"
+ },
+ {
+  "name": "joinFolderByInviteLink",
+  "sig": "- (void)joinFolderByInviteLink:(NSString *)link chatIds:(NSArray *)chatIds completion:(void (^)(BOOL ok))completion",
+  "doc": "Accept an invite link, joining exactly `chatIds` (a subset of \"missingChatIds\"). `completion` gets NO when TDLib refused.",
+  "header": "TGClient+ChatList.h"
+ },
+ {
+  "name": "listsToAddChat",
+  "sig": "- (void)listsToAddChat:(int64_t)chatId completion:(void (^)(NSArray *lists))completion",
+  "doc": "Lists this chat may still be added to, for an \"Add to folder\" sheet. Each entry: \"list\" (NSNumber TGChatListId) and \"title\".",
+  "header": "TGClient+ChatList.h"
+ },
+ {
+  "name": "newChatsInFolder",
+  "sig": "- (void)newChatsInFolder:(NSInteger)folderId completion:(void (^)(NSArray *chats))completion",
+  "doc": "Chats added to a shared folder by its owner that the user has not joined, for the \"add N chats\" banner. Empty when there is nothing to offer.",
+  "header": "TGClient+ChatList.h"
+ },
+ {
+  "name": "recentlyOpenedChatsWithCompletion",
+  "sig": "- (void)recentlyOpenedChatsWithCompletion:(void (^)(NSArray *chats))completion",
+  "doc": "Chats opened lately, newest first.",
+  "header": "TGClient+ChatList.h"
+ },
+ {
+  "name": "removeTopChat",
+  "sig": "- (void)removeTopChat:(int64_t)chatId",
+  "doc": "Drop a chat from the top-chats suggestions.",
+  "header": "TGClient+ChatList.h"
+ },
+ {
+  "name": "rowDetailForChat",
+  "sig": "- (void)rowDetailForChat:(int64_t)chatId completion:(void (^)(NSDictionary *detail))completion",
+  "doc": "Everything the subtitle line of a chat row needs beyond the cached fields. Keys: \"draft\" (NSString, empty when there is none - render it with the red \"Draft:\" prefix and let it win over the last message), \"markedUnread\" (NSNumber BOOL, the blue dot), \"unread\", \"isPinned\", \"isMuted\", and \"source\" - \"\" for a normal chat, \"psa\" for a public service announcement (which also fills \"sourceText\") or \"proxy\" for an MTProto proxy sponsor. Rows with a source sit at the top of the list and must not be reordered.",
+  "header": "TGClient+ChatList.h"
+ },
+ {
+  "name": "searchChatList",
+  "sig": "- (void)searchChatList:(NSString *)query completion:(void (^)(NSArray *local, NSArray *global))completion",
+  "doc": "Chat-list search. `local` holds chats the user already has, `global` holds public chats found by username. Both are chat rows.",
+  "header": "TGClient+ChatList.h"
+ },
+ {
+  "name": "setPinnedChats",
+  "sig": "- (void)setPinnedChats:(NSArray *)chatIds inList:(TGChatListId)list",
+  "doc": "Replace the whole pinned set of a list, in the order given. This is what a table view in edit mode should send after a reorder: pass the chat ids of the pinned section, top first, as NSNumbers.",
+  "header": "TGClient+ChatList.h"
+ },
+ {
+  "name": "titlesForChatIds",
+  "sig": "- (void)titlesForChatIds:(NSArray *)chatIds completion:(void (^)(NSDictionary *titles))completion",
+  "doc": "Titles for many ids at once, for a folder's chat section. `chatIds` are NSNumbers; the completion gets a dictionary keyed by those same NSNumbers, with ids TDLib could not name simply missing. One round trip per unknown id only - anything already cached costs nothing.",
+  "header": "TGClient+ChatList.h"
+ },
+ {
+  "name": "convertChatToBroadcastGroup",
+  "sig": "- (void)convertChatToBroadcastGroup:(int64_t)chatId completion:(void (^)(BOOL ok))completion",
+  "doc": "Turn a channel's discussion group into a broadcast group. Irreversible; the caller must confirm with the user first.",
+  "header": "TGClient+ChatManagement.h"
+ },
+ {
+  "name": "inviteLinkCountsForChat",
+  "sig": "- (void)inviteLinkCountsForChat:(int64_t)chatId completion:(void (^)(NSArray *counts))completion",
+  "doc": "How many links each other administrator made: \"userId\", \"linkCount\", \"revokedLinkCount\".",
+  "header": "TGClient+ChatManagement.h"
+ },
+ {
+  "name": "membersJoinedViaInviteLink",
+  "sig": "- (void)membersJoinedViaInviteLink:(NSString *)link inChat:(int64_t)chatId limit:(NSInteger)limit completion:(void (^)(NSArray *members, NSInteger total))completion",
+  "doc": "Who joined through one link: \"userId\", \"name\", \"date\" (NSNumber unix time), \"approverId\". `total` is the full count, which can exceed the page `limit`.",
+  "header": "TGClient+ChatManagement.h"
+ },
+ {
+  "name": "membersJoinedViaPrimaryInviteLinkInChat",
+  "sig": "- (void)membersJoinedViaPrimaryInviteLinkInChat:(int64_t)chatId limit:(NSInteger)limit completion:(void (^)(NSArray *members, NSInteger total))completion",
+  "doc": "The same, for whichever link is the chat's primary one. Answers an empty array when the chat has no primary link.",
+  "header": "TGClient+ChatManagement.h"
+ },
+ {
+  "name": "pendingJoinRequestCountForChat",
+  "sig": "- (void)pendingJoinRequestCountForChat:(int64_t)chatId completion:(void (^)(NSInteger count))completion",
+  "doc": "Number of join requests waiting, as the chat record already knows it. Cheap enough for a profile row; -managementInfoForChat: has it too.",
+  "header": "TGClient+ChatManagement.h"
+ },
+ {
+  "name": "removePhotoForChat",
+  "sig": "- (void)removePhotoForChat:(int64_t)chatId completion:(void (^)(BOOL ok))completion",
+  "doc": "Remove the chat photo entirely.",
+  "header": "TGClient+ChatManagement.h"
+ },
+ {
+  "name": "reportNotSpamMessages",
+  "sig": "- (void)reportNotSpamMessages:(NSArray *)messageIds inChat:(int64_t)chatId completion:(void (^)(BOOL ok))completion",
+  "doc": "Tell the server a message the anti-spam filter removed was not spam.",
+  "header": "TGClient+ChatManagement.h"
+ },
+ {
+  "name": "setDescription",
+  "sig": "- (void)setDescription:(NSString *)description forChat:(int64_t)chatId completion:(void (^)(BOOL ok))completion",
+  "doc": "Change the About text of a group or channel. Pass @\"\" to clear it.",
+  "header": "TGClient+ChatManagement.h"
+ },
+ {
+  "name": "setPreviousPhotoId",
+  "sig": "- (void)setPreviousPhotoId:(long long)photoId forChat:(int64_t)chatId completion:(void (^)(BOOL ok))completion",
+  "doc": "Reuse a photo the chat had before, by the chatPhoto id TDLib gave it.",
+  "header": "TGClient+ChatManagement.h"
+ },
+ {
+  "name": "addContactWithUserId",
+  "sig": "- (void)addContactWithUserId:(int64_t)userId phone:(NSString *)phone firstName:(NSString *)firstName lastName:(NSString *)lastName sharePhoneNumber:(BOOL)share completion:(void (^)(BOOL ok))completion",
+  "doc": "Add a user you already know the id of to the contact list, optionally letting them see your phone number. `phone` may be empty when the user was found by username. `completion` gets NO when Telegram refused.",
+  "header": "TGClient+Contacts.h"
+ },
+ {
+  "name": "checkUsernameAvailable",
+  "sig": "- (void)checkUsernameAvailable:(NSString *)username completion:(void (^)(NSString *status))completion",
+  "doc": "Whether a username may be taken, before the field is saved. `status` is one of \"ok\", \"invalid\", \"occupied\", \"purchasable\", \"too_many\", \"unavailable\" or \"error\", ready to pick a message from.",
+  "header": "TGClient+Contacts.h"
+ },
+ {
+  "name": "contactFlagsForUser",
+  "sig": "- (void)contactFlagsForUser:(int64_t)userId completion:(void (^)(NSDictionary *flags))completion",
+  "doc": "Contact-relationship flags for one user, without the caller having to know the user record: \"isContact\", \"isMutualContact\", \"isCloseFriend\", \"isPremium\", \"isSupport\" (all NSNumber BOOL). Nil if the user is unknown.",
+  "header": "TGClient+Contacts.h"
+ },
+ {
+  "name": "deleteMyProfilePhoto",
+  "sig": "- (void)deleteMyProfilePhoto:(long long)photoId completion:(void (^)(BOOL ok))completion",
+  "doc": "Remove one of the signed-in user's profile photos, by the id that -profilePhotosForUser:... returned in \"photoId\".",
+  "header": "TGClient+Contacts.h"
+ },
+ {
+  "name": "hideContactCloseBirthdays",
+  "sig": "- (void)hideContactCloseBirthdays",
+  "doc": "Dismiss the \"birthdays today\" section at the top of the Contacts tab. The section's contents arrive in TDLib's updateContactCloseBirthdays, which the update dispatcher in TGClient.m has to surface.",
+  "header": "TGClient+Contacts.h"
+ },
+ {
+  "name": "mainProfileTabForUser",
+  "sig": "- (void)mainProfileTabForUser:(int64_t)userId completion:(void (^)(NSString *tab))completion",
+  "doc": "The same name for a user's profile, or nil when they set none.",
+  "header": "TGClient+Contacts.h"
+ },
+ {
+  "name": "myUsernamesWithCompletion",
+  "sig": "- (void)myUsernamesWithCompletion:(void (^)(NSDictionary *usernames))completion",
+  "doc": "Usernames of the signed-in account: \"active\" (NSArray of NSString, in the order they are shown), \"disabled\" (NSArray), \"editable\" (NSString, the one the Edit Profile field writes to; empty when none).",
+  "header": "TGClient+Contacts.h"
+ },
+ {
+  "name": "removePersonalPhotoForUser",
+  "sig": "- (void)removePersonalPhotoForUser:(int64_t)userId completion:(void (^)(BOOL ok))completion",
+  "doc": "Drop the personal photo you had set for a contact.",
+  "header": "TGClient+Contacts.h"
+ },
+ {
+  "name": "searchContacts",
+  "sig": "- (void)searchContacts:(NSString *)query limit:(NSInteger)limit completion:(void (^)(NSArray *users))completion",
+  "doc": "Search the user's own Telegram contacts by name or username. `completion` gets an array of flattened users, empty when nothing matched.",
+  "header": "TGClient+Contacts.h"
+ },
+ {
+  "name": "setMainProfileTab",
+  "sig": "- (void)setMainProfileTab:(NSString *)tab completion:(void (^)(BOOL ok))completion",
+  "doc": "Which tab a profile opens on. `tab` is a bare name: \"posts\", \"gifts\", \"media\", \"files\", \"links\", \"music\", \"voice\" or \"gifs\".",
+  "header": "TGClient+Contacts.h"
+ },
+ {
+  "name": "setMyBirthdateDay",
+  "sig": "- (void)setMyBirthdateDay:(NSInteger)day month:(NSInteger)month year:(NSInteger)year completion:(void (^)(BOOL ok))completion",
+  "doc": "Set the signed-in user's birthdate. Pass 0 for `year` when it is not shared; pass 0 for `day` to clear the birthdate entirely.",
+  "header": "TGClient+Contacts.h"
+ },
+ {
+  "name": "setMyProfilePhotoAtPath",
+  "sig": "- (void)setMyProfilePhotoAtPath:(NSString *)path isPublic:(BOOL)isPublic completion:(void (^)(BOOL ok))completion",
+  "doc": "Set the signed-in user's profile photo from a local file. `isPublic` puts it on the profile everyone sees rather than only contacts.",
+  "header": "TGClient+Contacts.h"
+ },
+ {
+  "name": "setPersonalPhotoAtPath",
+  "sig": "- (void)setPersonalPhotoAtPath:(NSString *)path forUser:(int64_t)userId suggest:(BOOL)suggest completion:(void (^)(BOOL ok))completion",
+  "doc": "Set a photo that only you see for a contact (\"Set Photo for <name>\"), or suggest one to them when `suggest` is YES.",
+  "header": "TGClient+Contacts.h"
+ },
+ {
+  "name": "sharePhoneNumberWithUser",
+  "sig": "- (void)sharePhoneNumberWithUser:(int64_t)userId",
+  "doc": "Give a user your phone number after they asked for it - the banner shown when userFullInfo said need_phone_number_privacy_exception.",
+  "header": "TGClient+Contacts.h"
+ },
+ {
+  "name": "suggestBirthdateToUser",
+  "sig": "- (void)suggestBirthdateToUser:(int64_t)userId day:(NSInteger)day month:(NSInteger)month year:(NSInteger)year completion:(void (^)(BOOL ok))completion",
+  "doc": "Ask a contact to publish their birthdate, prefilled with what you think it is. Posts a service message with an Accept button in their chat.",
+  "header": "TGClient+Contacts.h"
+ },
+ {
+  "name": "suitablePersonalChatsWithCompletion",
+  "sig": "- (void)suitablePersonalChatsWithCompletion:(void (^)(NSArray *chats))completion",
+  "doc": "Channels of yours that may be shown on your profile: \"id\" and \"title\".",
+  "header": "TGClient+Contacts.h"
+ },
+ {
+  "name": "supportContactWithCompletion",
+  "sig": "- (void)supportContactWithCompletion:(void (^)(NSDictionary *support))completion",
+  "doc": "Telegram's support account, for an \"Ask a Question\" row: \"userId\" (NSNumber), \"chatId\" (NSNumber, ready to open) and \"name\" (the support person's display name, may be empty). Nil when support is unavailable.",
+  "header": "TGClient+Contacts.h"
+ },
+ {
+  "name": "toggleUsername",
+  "sig": "- (void)toggleUsername:(NSString *)username active:(BOOL)active completion:(void (^)(BOOL ok))completion",
+  "doc": "Switch one of the account's usernames on or off.",
+  "header": "TGClient+Contacts.h"
+ },
+ {
+  "name": "userForToken",
+  "sig": "- (void)userForToken:(NSString *)token completion:(void (^)(NSDictionary *user))completion",
+  "doc": "Resolve a t.me temporary contact token (the one behind an add-me QR code) to a user. `completion` gets a flattened user, or nil.",
+  "header": "TGClient+Contacts.h"
+ },
+ {
+  "name": "cancelUploadOfFile",
+  "sig": "- (void)cancelUploadOfFile:(NSInteger)fileId",
+  "doc": "Cancel an upload started by uploadFileAtPath:. This does NOT cancel media already attached to a message being sent; for that, delete the pending message instead.",
+  "header": "TGClient+Files.h"
+ },
+ {
+  "name": "downloadPhotoSizes",
+  "sig": "- (void)downloadPhotoSizes:(NSArray *)sizes forWidth:(CGFloat)width scale:(CGFloat)scale completion:(void (^)(NSString *path, NSDictionary *size))completion",
+  "doc": "Pick the right size out of a photo and download it. Completion gets the local path, or nil. This is the whole \"show a photo bubble\" fetch.",
+  "header": "TGClient+Files.h"
+ },
+ {
+  "name": "downloadedPrefixSizeForFile",
+  "sig": "- (void)downloadedPrefixSizeForFile:(NSInteger)fileId offset:(long long)offset completion:(void (^)(long long size))completion",
+  "doc": "Bytes already on disk in one run starting at `offset`. This is what an AVAssetResourceLoader needs to know before it asks for a range. Completion gets the count, 0 if nothing is there.",
+  "header": "TGClient+Files.h"
+ },
+ {
+  "name": "fileExtensionForMimeType",
+  "sig": "- (void)fileExtensionForMimeType:(NSString *)mimeType completion:(void (^)(NSString *extension))completion",
+  "doc": "File extension guessed from a MIME type, for the document row's icon and label. Completion gets the extension without a dot, or nil.",
+  "header": "TGClient+Files.h"
+ },
+ {
+  "name": "fileInfo",
+  "sig": "- (void)fileInfo:(NSInteger)fileId completion:(void (^)(NSDictionary *file))completion",
+  "doc": "Current state of a file without starting a download. Completion gets a file dictionary, or nil on error.",
+  "header": "TGClient+Files.h"
+ },
+ {
+  "name": "minithumbnailData",
+  "sig": "- (NSData *)minithumbnailData:(NSDictionary *)minithumbnail",
+  "doc": "Bytes of a TDLib \"minithumbnail\" object, ready for UIImage imageWithData:. It is a tiny stripped JPEG that decodes instantly and is meant as the blurred placeholder behind a bubble. Returns nil if there is none.",
+  "header": "TGClient+Files.h"
+ },
+ {
+  "name": "readFile",
+  "sig": "- (void)readFile:(NSInteger)fileId offset:(long long)offset count:(long long)count completion:(void (^)(NSData *data))completion",
+  "doc": "Read bytes out of a file through TDLib rather than off the filesystem, for files whose path our sandbox cannot open. Completion gets the data, or nil.",
+  "header": "TGClient+Files.h"
+ },
+ {
+  "name": "resetNetworkStatistics",
+  "sig": "- (void)resetNetworkStatistics",
+  "doc": "Zero the network counters.",
+  "header": "TGClient+Files.h"
+ },
+ {
+  "name": "resolveRemoteFileId",
+  "sig": "- (void)resolveRemoteFileId:(NSString *)remoteId type:(NSString *)type completion:(void (^)(NSDictionary *file))completion",
+  "doc": "Turn a persisted remote file id back into a live local file id. `type` is one of the TGFileType* constants. Completion gets a file dictionary, or nil.",
+  "header": "TGClient+Files.h"
+ },
+ {
+  "name": "storageStatisticsWithChatLimit",
+  "sig": "- (void)storageStatisticsWithChatLimit:(NSInteger)chatLimit completion:(void (^)(NSDictionary *stats))completion",
+  "doc": "Full storage breakdown per chat. Slow on old hardware because it walks every cached file, so show a spinner and keep `chatLimit` small (20 is plenty). Completion gets, or nil: { \"size\"  : NSNumber total bytes \"count\" : NSNumber total files \"chats\" : NSArray, largest first, of { \"chatId\" : NSNumber, 0 for files owned by no chat \"title\"  : NSString, empty if the chat is unknown \"size\"   : NSNumber \"count\"  : NSNumber \"byType\" : NSArray of { \"type\" : NSString TDLib FileType name, \"size\", \"count\" } } }",
+  "header": "TGClient+Files.h"
+ },
+ {
+  "name": "streamFile",
+  "sig": "- (void)streamFile:(NSInteger)fileId offset:(long long)offset count:(long long)count completion:(void (^)(NSData *data))completion",
+  "doc": "Download a byte range if needed and hand the bytes back: the one call a resource-loader delegate makes per requested range. Completion gets exactly `count` bytes when possible, fewer at the end of the file, or nil on error.",
+  "header": "TGClient+Files.h"
+ },
+ {
+  "name": "uploadFileAtPath",
+  "sig": "- (void)uploadFileAtPath:(NSString *)path type:(NSString *)type priority:(NSInteger)priority completion:(void (^)(NSDictionary *file))completion",
+  "doc": "Upload a local file ahead of sending a message with it, so the send is instant. `type` is one of the TGFileType* constants. Completion gets the file dictionary; watch onFileProgress for the upload bar.",
+  "header": "TGClient+Files.h"
+ },
+ {
+  "name": "forumTopic",
+  "sig": "- (void)forumTopic:(int32_t)topicId inChat:(int64_t)chatId completion:(void (^)(NSDictionary *topic))completion",
+  "doc": "One topic, freshly fetched. Completion receives the same dictionary shape as a row of the list, or nil on error.",
+  "header": "TGClient+Forums.h"
+ },
+ {
+  "name": "forumTopicHistoryForChat",
+  "sig": "- (void)forumTopicHistoryForChat:(int64_t)chatId topic:(int32_t)topicId fromMessage:(int64_t)fromMessageId limit:(NSInteger)limit completion:(void (^)(NSArray *messages))completion",
+  "doc": "Messages of one topic, oldest first. Pass 0 for `fromMessageId` to start at the newest message. Each entry has \"id\", \"text\", \"date\", \"outgoing\" and \"senderId\"; this is a reduced flattening, richer message fields still come from the chat-level history calls in TGClient.h.",
+  "header": "TGClient+Forums.h"
+ },
+ {
+  "name": "forumTopicRowsForChat",
+  "sig": "- (void)forumTopicRowsForChat:(int64_t)chatId completion:(void (^)(NSArray *topics))completion",
+  "doc": "First page of topics (up to 100), same dictionary shape as above. Convenience over the paging method; named differently from the older -forumTopicsForChat:completion: in TGClient.h, which returns fewer fields.",
+  "header": "TGClient+Forums.h"
+ },
+ {
+  "name": "setSupergroup",
+  "sig": "- (void)setSupergroup:(int64_t)supergroupId isForum:(BOOL)isForum hasTabs:(BOOL)hasTabs completion:(void (^)(BOOL success))completion",
+  "doc": "Turn a supergroup into a forum, or back. Requires owner rights. `hasTabs` is passed straight through and should be NO for this client.",
+  "header": "TGClient+Forums.h"
+ },
+ {
+  "name": "unpinAllMessagesInForumTopicInChat",
+  "sig": "- (void)unpinAllMessagesInForumTopicInChat:(int64_t)chatId topic:(int32_t)topicId completion:(void (^)(BOOL success))completion",
+  "doc": "Unpin every pinned message inside a topic.",
+  "header": "TGClient+Forums.h"
+ },
+ {
+  "name": "addMembers",
+  "sig": "- (void)addMembers:(NSArray *)userIds toGroup:(int64_t)chatId completion:(void (^)(NSArray *failedUserIds))completion",
+  "doc": "Add users to a group. `completion` gets the user ids that were refused (privacy settings, usually); an empty array means everyone got in.",
+  "header": "TGClient+Groups.h"
+ },
+ {
+  "name": "administratorsInGroup",
+  "sig": "- (void)administratorsInGroup:(int64_t)chatId completion:(void (^)(NSArray *admins))completion",
+  "doc": "The administrators list, creator first. Each entry: \"id\", \"name\", \"customTitle\", \"isOwner\", \"canBeEdited\".",
+  "header": "TGClient+Groups.h"
+ },
+ {
+  "name": "bannedMembersInGroup",
+  "sig": "- (void)bannedMembersInGroup:(int64_t)chatId limit:(NSInteger)limit completion:(void (^)(NSArray *members))completion",
+  "doc": "The \"Removed Users\" list. Same entry shape as -membersInGroup:.",
+  "header": "TGClient+Groups.h"
+ },
+ {
+  "name": "checkGroupUsername",
+  "sig": "- (void)checkGroupUsername:(NSString *)username forChat:(int64_t)chatId completion:(void (^)(NSString *status))completion",
+  "doc": "Ask the server whether a username can be taken for this group. `status` is \"ok\", \"invalid\", \"occupied\", \"purchasable\", \"too-many\" (this account already has the maximum number of public chats), \"unavailable\", or \"error\".",
+  "header": "TGClient+Groups.h"
+ },
+ {
+  "name": "convertGroupToBroadcastGroup",
+  "sig": "- (void)convertGroupToBroadcastGroup:(int64_t)chatId completion:(void (^)(BOOL ok))completion",
+  "doc": "Convert a supergroup into a broadcast group. One-way and irreversible.",
+  "header": "TGClient+Groups.h"
+ },
+ {
+  "name": "createInviteLinkInGroup",
+  "sig": "- (void)createInviteLinkInGroup:(int64_t)chatId name:(NSString *)name expirationDate:(NSInteger)expirationDate memberLimit:(NSInteger)memberLimit createsJoinRequest:(BOOL)createsJoinRequest completion:(void (^)(NSDictionary *link))completion",
+  "doc": "Create an extra invite link. `name` may be nil, `expirationDate` is a unix time (0 = never), `memberLimit` 0 = unlimited.",
+  "header": "TGClient+Groups.h"
+ },
+ {
+  "name": "createSupergroupWithTitle",
+  "sig": "- (void)createSupergroupWithTitle:(NSString *)title description:(NSString *)description isChannel:(BOOL)isChannel isForum:(BOOL)isForum completion:(void (^)(int64_t chatId))completion",
+  "doc": "Create a supergroup or a channel. `description` may be nil. `completion` gets the new chat id, or 0.",
+  "header": "TGClient+Groups.h"
+ },
+ {
+  "name": "createdPublicChatsWithCompletion",
+  "sig": "- (void)createdPublicChatsWithCompletion:(void (^)(NSArray *chats))completion",
+  "doc": "Public chats this account has created, for the \"too many public groups\" screen. Each entry: \"id\", \"title\".",
+  "header": "TGClient+Groups.h"
+ },
+ {
+  "name": "eventLogForGroup",
+  "sig": "- (void)eventLogForGroup:(int64_t)chatId query:(NSString *)query limit:(NSInteger)limit completion:(void (^)(NSArray *events))completion",
+  "doc": "The admin event log (\"Recent Actions\"). Each entry: \"id\" (NSString, the event id, which is an int64 and would not survive as a plain number), \"date\", \"userId\", \"name\", \"action\" (the TDLib action type with the \"chatEvent\" prefix stripped, e.g. \"MemberPromoted\", \"TitleChanged\") and \"raw\" (the full action object, for actions the UI wants to detail). `query` may be nil.",
+  "header": "TGClient+Groups.h"
+ },
+ {
+  "name": "groupMemberCount",
+  "sig": "- (void)groupMemberCount:(int64_t)chatId completion:(void (^)(NSInteger count))completion",
+  "doc": "Number of members in a group; 0 for anything else.",
+  "header": "TGClient+Groups.h"
+ },
+ {
+  "name": "inviteLinkCountsInGroup",
+  "sig": "- (void)inviteLinkCountsInGroup:(int64_t)chatId completion:(void (^)(NSArray *counts))completion",
+  "doc": "How many links each administrator of the group has made. Each entry: \"id\", \"name\", \"linkCount\", \"revokedLinkCount\".",
+  "header": "TGClient+Groups.h"
+ },
+ {
+  "name": "inviteLinksInGroup",
+  "sig": "- (void)inviteLinksInGroup:(int64_t)chatId revoked:(BOOL)revoked limit:(NSInteger)limit completion:(void (^)(NSArray *links))completion",
+  "doc": "Invite links of this group, either the live ones or the revoked ones.",
+  "header": "TGClient+Groups.h"
+ },
+ {
+  "name": "joinGroupByInviteLink",
+  "sig": "- (void)joinGroupByInviteLink:(NSString *)inviteLink completion:(void (^)(int64_t chatId, BOOL requestSent))completion",
+  "doc": "Join through an invite link. `chatId` is the chat to open, 0 when the group only took a join request - `requestSent` is YES in that case.",
+  "header": "TGClient+Groups.h"
+ },
+ {
+  "name": "joinRequestsInGroup",
+  "sig": "- (void)joinRequestsInGroup:(int64_t)chatId limit:(NSInteger)limit completion:(void (^)(NSArray *requests, NSInteger totalCount))completion",
+  "doc": "Pending join requests. Each entry: \"id\" (user id), \"name\", \"bio\", \"date\".",
+  "header": "TGClient+Groups.h"
+ },
+ {
+  "name": "previewGroupInviteLink",
+  "sig": "- (void)previewGroupInviteLink:(NSString *)inviteLink completion:(void (^)(NSDictionary *info))completion",
+  "doc": "Look at a t.me invite link without joining, for the preview alert. Keys: \"chatId\" (0 when we are not a member yet), \"title\", \"photoFileId\" (NSNumber or nil), \"description\", \"memberCount\", \"isChannel\", \"createsJoinRequest\", \"isPublic\". Nil when the link is dead.",
+  "header": "TGClient+Groups.h"
+ },
+ {
+  "name": "primaryInviteLinkForGroup",
+  "sig": "- (void)primaryInviteLinkForGroup:(int64_t)chatId completion:(void (^)(NSDictionary *link))completion",
+  "doc": "Flattened chatInviteLink keys used below: \"link\", \"name\", \"creatorUserId\", \"date\", \"expirationDate\", \"memberLimit\", \"memberCount\", \"pendingJoinRequestCount\", \"createsJoinRequest\", \"isPrimary\", \"isRevoked\". The group's primary t.me invite link, creating it if the group has none.",
+  "header": "TGClient+Groups.h"
+ },
+ {
+  "name": "processAllJoinRequestsInGroup",
+  "sig": "- (void)processAllJoinRequestsInGroup:(int64_t)chatId approve:(BOOL)approve completion:(void (^)(BOOL ok))completion",
+  "doc": "Approve or dismiss every pending request at once.",
+  "header": "TGClient+Groups.h"
+ },
+ {
+  "name": "replacePrimaryInviteLinkForGroup",
+  "sig": "- (void)replacePrimaryInviteLinkForGroup:(int64_t)chatId completion:(void (^)(NSDictionary *link))completion",
+  "doc": "Revoke the primary link and get the replacement. The old link stops working immediately.",
+  "header": "TGClient+Groups.h"
+ },
+ {
+  "name": "reportGroup",
+  "sig": "- (void)reportGroup:(int64_t)chatId optionId:(NSString *)optionId text:(NSString *)text completion:(void (^)(NSString *status, NSString *title, NSArray *options, BOOL optional))completion",
+  "doc": "Report a group. Telegram drives this as a small wizard: call with a nil `optionId` first, and `completion` answers with what to do next. `status` is \"ok\" (accepted, done), \"options\" (show `title` and `options`, each an entry with \"id\" and \"text\", then call again with that id), \"text\" (ask for free text and call again with the same option id, `optional` says whether it may be empty) or \"error\".",
+  "header": "TGClient+Groups.h"
+ },
+ {
+  "name": "setChannel",
+  "sig": "- (void)setChannel:(int64_t)channelChatId discussionGroup:(int64_t)groupChatId completion:(void (^)(BOOL ok))completion",
+  "doc": "Link a discussion group to a channel; pass 0 to unlink.",
+  "header": "TGClient+Groups.h"
+ },
+ {
+  "name": "setDefaultPermissions",
+  "sig": "- (void)setDefaultPermissions:(NSDictionary *)permissions inGroup:(int64_t)chatId completion:(void (^)(BOOL ok))completion",
+  "doc": "Replace the default permissions. Same key set; missing keys mean \"off\".",
+  "header": "TGClient+Groups.h"
+ },
+ {
+  "name": "setGroup",
+  "sig": "- (void)setGroup:(int64_t)chatId stickerSetName:(NSString *)name completion:(void (^)(BOOL ok))completion",
+  "doc": "The group's sticker set, by set name (the part after t.me/addstickers/). Pass nil to remove it. `completion` is NO when there is no such set.",
+  "header": "TGClient+Groups.h"
+ },
+ {
+  "name": "setGroupChat",
+  "sig": "- (void)setGroupChat:(int64_t)chatId username:(NSString *)username active:(BOOL)active completion:(void (^)(BOOL ok))completion",
+  "doc": "Turn one of a supergroup's usernames on or off without losing it.",
+  "header": "TGClient+Groups.h"
+ },
+ {
+  "name": "suitableDiscussionGroupsWithCompletion",
+  "sig": "- (void)suitableDiscussionGroupsWithCompletion:(void (^)(NSArray *chats))completion",
+  "doc": "Groups this account could attach to a channel as its discussion group. Each entry: \"id\", \"title\".",
+  "header": "TGClient+Groups.h"
+ },
+ {
+  "name": "upgradeBasicGroupToSupergroup",
+  "sig": "- (void)upgradeBasicGroupToSupergroup:(int64_t)chatId completion:(void (^)(int64_t newChatId))completion",
+  "doc": "Convert a basic group into a supergroup. The chat id changes, so an open chat screen must be reopened with the id the completion carries (0 on failure). One-way; there is no downgrade.",
+  "header": "TGClient+Groups.h"
+ },
+ {
+  "name": "clickAnimatedEmojiInMessage",
+  "sig": "- (void)clickAnimatedEmojiInMessage:(int64_t)messageId inChat:(int64_t)chatId completion:(void (^)(NSInteger stickerFileId))completion",
+  "doc": "Tapping a large animated emoji plays an effect for both sides. `completion` gets the file id of the effect sticker to play, or 0 when there is none.",
+  "header": "TGClient+MessageContent.h"
+ },
+ {
+  "name": "editCaptionOfMessage",
+  "sig": "- (void)editCaptionOfMessage:(int64_t)messageId inChat:(int64_t)chatId caption:(NSString *)caption completion:(void (^)(BOOL ok))completion",
+  "doc": "Replace the caption of a photo, video, document or audio message already sent. `caption` is parsed as Markdown. `completion` gets YES on success.",
+  "header": "TGClient+MessageContent.h"
+ },
+ {
+  "name": "entitiesInText",
+  "sig": "- (void)entitiesInText:(NSString *)text completion:(void (^)(NSArray *entities))completion",
+  "doc": "Entities TDLib finds in plain text without any markup: urls, mentions, hashtags, bot commands, phone numbers, e-mail addresses. Each entry is \"offset\" and \"length\" (NSNumber, UTF-16 units, usable with NSRange), \"kind\" (NSString, the TextEntityType name without the \"textEntityType\" prefix, e.g. \"Bold\", \"TextUrl\", \"Spoiler\", \"BlockQuote\", \"MediaTimestamp\"), \"url\" (NSString, empty unless the entity carries one), \"userId\" (NSNumber, 0 unless a mention of a user without a username), \"language\" (NSString, the syntax of a PreCode block), \"timestamp\" (NSNumber, seconds into the referenced media for a MediaTimestamp entity).",
+  "header": "TGClient+MessageContent.h"
+ },
+ {
+  "name": "formattedTextForMessage",
+  "sig": "- (void)formattedTextForMessage:(int64_t)messageId inChat:(int64_t)chatId completion:(void (^)(NSString *text, NSArray *entities))completion",
+  "doc": "The text or caption of one message together with its entities, which the flattened message form does not carry. `completion` gets the plain text and the same entity dictionaries as above; both are empty when the message has no text.",
+  "header": "TGClient+MessageContent.h"
+ },
+ {
+  "name": "mapThumbnailForLatitude",
+  "sig": "- (void)mapThumbnailForLatitude:(double)latitude longitude:(double)longitude zoom:(NSInteger)zoom width:(NSInteger)width height:(NSInteger)height scale:(NSInteger)scale inChat:(int64_t)chatId completion:(void (^)(NSInteger fileId))completion",
+  "doc": "A rendered map tile around a point, as a TDLib file id to hand to -downloadFile:completion:. `zoom` is 13..20, `width`/`height` 16..1024, `scale` 1..3. `completion` gets 0 when the tile is unavailable.",
+  "header": "TGClient+MessageContent.h"
+ },
+ {
+  "name": "mediaInfoForMessage",
+  "sig": "- (void)mediaInfoForMessage:(int64_t)messageId inChat:(int64_t)chatId completion:(void (^)(NSDictionary *info))completion",
+  "doc": "Everything the UI needs to draw and open a media message, flattened out of whatever content type it turns out to be. `completion` gets nil for a message with no media, otherwise a dictionary with: \"kind\"        the TDLib content type name, e.g. \"messageVideo\" \"fileId\"      NSNumber, the file to download and open (0 when there is none) \"thumbId\"     NSNumber, a small file to show while waiting (0 when none) \"fileName\"    NSString, may be empty \"mimeType\"    NSString, may be empty \"size\"        NSNumber, bytes of the main file \"width\"/\"height\"  NSNumber pixels, 0 when not applicable \"duration\"    NSNumber seconds, 0 when not applicable \"caption\"     NSString \"title\"/\"performer\"  NSString, audio only \"waveform\"    NSData, voice notes only, five bits per sample \"hasSpoiler\"  NSNumber BOOL, media the sender covered up \"isSecret\"    NSNumber BOOL, self-destructing media \"isViewed\"    NSNumber BOOL, video/voice notes already played \"minithumb\"   NSData, a tiny JPEG TDLib ships inline, or empty",
+  "header": "TGClient+MessageContent.h"
+ },
+ {
+  "name": "openContentOfMessage",
+  "sig": "- (void)openContentOfMessage:(int64_t)messageId inChat:(int64_t)chatId",
+  "doc": "Tell TDLib the user actually opened this message: marks a voice note or video note as listened/viewed and starts the timer of self-destructing media. Call it when playback starts or a viewer is pushed.",
+  "header": "TGClient+MessageContent.h"
+ },
+ {
+  "name": "parseMarkdown",
+  "sig": "- (void)parseMarkdown:(NSString *)text completion:(void (^)(NSString *plainText, NSArray *entities))completion",
+  "doc": "Run TDLib's Markdown parser over composer text. `completion` gets the plain text with the markers removed, and the entities as flattened dictionaries (see -entitiesInText:completion: for their shape). On a parse failure it gets the original text and an empty array, never nil.",
+  "header": "TGClient+MessageContent.h"
+ },
+ {
+  "name": "placeholderTextForContentKind",
+  "sig": "- (NSString *)placeholderTextForContentKind:(NSString *)kind",
+  "doc": "The line to show for content this client cannot render - expired photos and videos, expired voice and video notes, unsupported content. Returns nil for a kind that is not one of those, so callers can fall through to their own drawing. `kind` is the \"kind\" of a flattened message.",
+  "header": "TGClient+MessageContent.h"
+ },
+ {
+  "name": "sendAnimationAtPath",
+  "sig": "- (void)sendAnimationAtPath:(NSString *)path toChat:(int64_t)chatId thread:(int64_t)threadId caption:(NSString *)caption",
+  "doc": "Send an MP4 as a Telegram GIF, which is what \"animation\" means here.",
+  "header": "TGClient+MessageContent.h"
+ },
+ {
+  "name": "sendDice",
+  "sig": "- (void)sendDice:(NSString *)emoji toChat:(int64_t)chatId thread:(int64_t)threadId",
+  "doc": "Send a dice or slot machine. `emoji` is the face to roll - the die, the dart, the basketball, the slot machine - or nil for the plain die.",
+  "header": "TGClient+MessageContent.h"
+ },
+ {
+  "name": "sendDocumentAtPath",
+  "sig": "- (void)sendDocumentAtPath:(NSString *)path toChat:(int64_t)chatId thread:(int64_t)threadId caption:(NSString *)caption",
+  "doc": "Send any file as a document, without letting the server guess a nicer type for it.",
+  "header": "TGClient+MessageContent.h"
+ },
+ {
+  "name": "sendLiveLocationWithLatitude",
+  "sig": "- (void)sendLiveLocationWithLatitude:(double)latitude longitude:(double)longitude period:(NSInteger)period toChat:(int64_t)chatId completion:(void (^)(int64_t messageId))completion",
+  "doc": "Start sharing a moving location for `period` seconds (Telegram accepts 60..86400). `completion` gets the message id to keep updating, or 0.",
+  "header": "TGClient+MessageContent.h"
+ },
+ {
+  "name": "sendMarkdown",
+  "sig": "- (void)sendMarkdown:(NSString *)text toChat:(int64_t)chatId thread:(int64_t)threadId replyTo:(int64_t)replyToId",
+  "doc": "Parse `text` as Markdown and send the result, so bold, italic, code and [links](url) typed in the composer survive. `threadId` and `replyToId` may be 0.",
+  "header": "TGClient+MessageContent.h"
+ },
+ {
+  "name": "sendPollWithQuestion",
+  "sig": "- (void)sendPollWithQuestion:(NSString *)question options:(NSArray *)options anonymous:(BOOL)anonymous multipleAnswers:(BOOL)multipleAnswers quizCorrectOption:(NSInteger)quizCorrectOption toChat:(int64_t)chatId thread:(int64_t)threadId completion:(void (^)(int64_t messageId))completion",
+  "doc": "Create a poll. `options` are plain strings. For a quiz pass the index of the right answer in `quizCorrectOption`; pass -1 for a regular poll, where `multipleAnswers` decides whether several options can be picked. `completion` gets the new message id, or 0 when the poll was rejected.",
+  "header": "TGClient+MessageContent.h"
+ },
+ {
+  "name": "sendVenueWithTitle",
+  "sig": "- (void)sendVenueWithTitle:(NSString *)title address:(NSString *)address latitude:(double)latitude longitude:(double)longitude toChat:(int64_t)chatId",
+  "doc": "Send a named place rather than a bare point: the bubble shows title and address over the map.",
+  "header": "TGClient+MessageContent.h"
+ },
+ {
+  "name": "stopLiveLocation",
+  "sig": "- (void)stopLiveLocation:(int64_t)messageId inChat:(int64_t)chatId",
+  "doc": "Stop sharing before the period runs out.",
+  "header": "TGClient+MessageContent.h"
+ },
+ {
+  "name": "stopPoll",
+  "sig": "- (void)stopPoll:(int64_t)messageId inChat:(int64_t)chatId",
+  "doc": "Close a poll so no more votes are taken. Only the sender may do it.",
+  "header": "TGClient+MessageContent.h"
+ },
+ {
+  "name": "storyForMessage",
+  "sig": "- (void)storyForMessage:(int64_t)messageId inChat:(int64_t)chatId completion:(void (^)(NSDictionary *story))completion",
+  "doc": "The story behind a \"story shared\" bubble. `completion` gets nil when it is gone, otherwise \"caption\", \"date\" (NSNumber), \"isVideo\" (NSNumber BOOL), \"fileId\" and \"thumbId\" (NSNumbers).",
+  "header": "TGClient+MessageContent.h"
+ },
+ {
+  "name": "updateLiveLocation",
+  "sig": "- (void)updateLiveLocation:(int64_t)messageId inChat:(int64_t)chatId latitude:(double)latitude longitude:(double)longitude",
+  "doc": "Move a live location that is already being shared.",
+  "header": "TGClient+MessageContent.h"
+ },
+ {
+  "name": "votersForPollOption",
+  "sig": "- (void)votersForPollOption:(NSInteger)optionIndex ofMessage:(int64_t)messageId inChat:(int64_t)chatId limit:(NSInteger)limit completion:(void (^)(NSArray *voters, NSInteger total))completion",
+  "doc": "Who voted for one option, newest first. `optionIndex` is the index into the poll's options. Each entry is \"id\" (NSNumber user id) and \"name\". Empty for an anonymous poll, which never reveals its voters.",
+  "header": "TGClient+MessageContent.h"
+ },
+ {
+  "name": "addLocalTextMessage",
+  "sig": "- (void)addLocalTextMessage:(NSString *)text toChat:(int64_t)chatId senderUserId:(int64_t)senderUserId replyTo:(int64_t)replyToId completion:(void (^)(NSDictionary *message))completion",
+  "doc": "Insert a message into the local history without sending it anywhere. Used for optimistic echo and for local notices. `senderUserId` of 0 means the signed-in user. `completion` gets the flattened local message.",
+  "header": "TGClient+Messages.h"
+ },
+ {
+  "name": "addQuickReplyShortcutNamed",
+  "sig": "- (void)addQuickReplyShortcutNamed:(NSString *)name text:(NSString *)text completion:(void (^)(BOOL ok))completion",
+  "doc": "Create a quick-reply shortcut, or append a message to an existing one of that name. TDLib only hands the shortcut list back through updates, which this client does not observe, so a shortcut is addressed by name here and by id once one has been seen. `completion` gets NO when the name is refused.",
+  "header": "TGClient+Messages.h"
+ },
+ {
+  "name": "deleteMessagesFromUser",
+  "sig": "- (void)deleteMessagesFromUser:(int64_t)userId inChat:(int64_t)chatId completion:(void (^)(BOOL ok))completion",
+  "doc": "Delete everything one member ever posted in a group.",
+  "header": "TGClient+Messages.h"
+ },
+ {
+  "name": "deleteMessagesInChat",
+  "sig": "- (void)deleteMessagesInChat:(int64_t)chatId fromDate:(NSTimeInterval)minDate toDate:(NSTimeInterval)maxDate forEveryone:(BOOL)forEveryone completion:(void (^)(BOOL ok))completion",
+  "doc": "Delete a chat's messages inside a date range, inclusive. Dates are unix times; the day picker in the UI supplies the start and end of a day.",
+  "header": "TGClient+Messages.h"
+ },
+ {
+  "name": "messageLinkInfoForUrl",
+  "sig": "- (void)messageLinkInfoForUrl:(NSString *)url completion:(void (^)(int64_t chatId, int64_t messageId, NSDictionary *message))completion",
+  "doc": "Resolve a t.me message link the user tapped or pasted, so the app can jump to it. `chatId` and `messageId` are 0 when the link points nowhere we can open; `message` is the flattened target when TDLib already has it.",
+  "header": "TGClient+Messages.h"
+ },
+ {
+  "name": "pinnedMessageIdInChat",
+  "sig": "- (void)pinnedMessageIdInChat:(int64_t)chatId completion:(void (^)(int64_t messageId))completion",
+  "doc": "The id of the chat's currently pinned message, 0 when there is none.",
+  "header": "TGClient+Messages.h"
+ },
+ {
+  "name": "pressInlineButtonWithData",
+  "sig": "- (void)pressInlineButtonWithData:(NSString *)data onMessage:(int64_t)messageId inChat:(int64_t)chatId completion:(void (^)(NSString *text, BOOL showAlert, NSString *url))completion",
+  "doc": "Press an inline keyboard button under a bot message. `data` is the button's base64 payload exactly as it arrived in the reply markup. `completion` gets the bot's answer: `text` to show, `showAlert` whether it wants a modal rather than a toast, and `url` when the button opens a page instead.",
+  "header": "TGClient+Messages.h"
+ },
+ {
+  "name": "readDateOfMessage",
+  "sig": "- (void)readDateOfMessage:(int64_t)messageId inChat:(int64_t)chatId completion:(void (^)(NSString *status, NSTimeInterval date))completion",
+  "doc": "When the other side read an outgoing message in a private chat. `status` is \"read\", \"unread\", \"tooOld\", \"theirPrivacy\" or \"myPrivacy\"; `date` is the unix time and is 0 unless `status` is \"read\".",
+  "header": "TGClient+Messages.h"
+ },
+ {
+  "name": "replacePhotoInMessage",
+  "sig": "- (void)replacePhotoInMessage:(int64_t)messageId inChat:(int64_t)chatId path:(NSString *)path caption:(NSString *)caption completion:(void (^)(BOOL ok))completion",
+  "doc": "Swap the photo of an already-sent media message for a local file, keeping the message in place. Pass nil for `caption` to keep no caption.",
+  "header": "TGClient+Messages.h"
+ },
+ {
+  "name": "replaceVideoInMessage",
+  "sig": "- (void)replaceVideoInMessage:(int64_t)messageId inChat:(int64_t)chatId path:(NSString *)path caption:(NSString *)caption completion:(void (^)(BOOL ok))completion",
+  "doc": "The same for a video file.",
+  "header": "TGClient+Messages.h"
+ },
+ {
+  "name": "rescheduleMessage",
+  "sig": "- (void)rescheduleMessage:(int64_t)messageId inChat:(int64_t)chatId sendDate:(NSTimeInterval)sendDate whenOnline:(BOOL)whenOnline completion:(void (^)(BOOL ok))completion",
+  "doc": "Move a scheduled message to another moment. `sendDate` of 0 together with `whenOnline` YES means \"send when the recipient is next online\".",
+  "header": "TGClient+Messages.h"
+ },
+ {
+  "name": "resendMessages",
+  "sig": "- (void)resendMessages:(NSArray *)messageIds inChat:(int64_t)chatId completion:(void (^)(NSArray *messages))completion",
+  "doc": "Retry messages whose send failed. `completion` gets the flattened messages TDLib re-queued, or an empty array when none could be retried.",
+  "header": "TGClient+Messages.h"
+ },
+ {
+  "name": "sendChatAction",
+  "sig": "- (void)sendChatAction:(NSString *)action toChat:(int64_t)chatId thread:(int64_t)threadId",
+  "doc": "Tell the other side what the user is doing. `action` is \"typing\", \"recordingVoice\", \"uploadingVoice\", \"recordingVideo\", \"uploadingVideo\", \"uploadingPhoto\", \"uploadingDocument\", \"choosingSticker\", \"choosingLocation\", \"choosingContact\" or \"cancel\". Telegram forgets an action after a few seconds, so a typing indicator has to be repeated.",
+  "header": "TGClient+Messages.h"
+ },
+ {
+  "name": "sendPhotoAlbumAtPaths",
+  "sig": "- (void)sendPhotoAlbumAtPaths:(NSArray *)paths toChat:(int64_t)chatId caption:(NSString *)caption completion:(void (^)(NSArray *messages))completion",
+  "doc": "Send several photos as one grouped album bubble. `paths` are local files. The caption, if any, is attached to the first item, which is how Telegram shows an album caption. `completion` gets the flattened messages.",
+  "header": "TGClient+Messages.h"
+ },
+ {
+  "name": "sendQuickReplyShortcut",
+  "sig": "- (void)sendQuickReplyShortcut:(NSInteger)shortcutId toChat:(int64_t)chatId completion:(void (^)(NSArray *messages))completion",
+  "doc": "Send every message of a shortcut into a chat.",
+  "header": "TGClient+Messages.h"
+ },
+ {
+  "name": "threadForMessage",
+  "sig": "- (void)threadForMessage:(int64_t)messageId inChat:(int64_t)chatId completion:(void (^)(NSDictionary *thread))completion",
+  "doc": "The comment thread hanging off a channel post. Keys: \"chatId\" (the discussion group), \"threadId\", \"replies\" (NSNumber), \"unread\" (NSNumber). `completion` gets nil when the post has no thread.",
+  "header": "TGClient+Messages.h"
+ },
+ {
+  "name": "unpinAllMessagesInChat",
+  "sig": "- (void)unpinAllMessagesInChat:(int64_t)chatId completion:(void (^)(BOOL ok))completion",
+  "doc": "Unpin every pinned message in a chat - the \"Unpin all\" confirmation.",
+  "header": "TGClient+Messages.h"
+ },
+ {
+  "name": "viewersOfMessage",
+  "sig": "- (void)viewersOfMessage:(int64_t)messageId inChat:(int64_t)chatId completion:(void (^)(NSArray *viewers))completion",
+  "doc": "Who has seen a message in a small group. Each entry: \"id\" (NSNumber user id), \"name\" (NSString) and \"date\" (NSNumber unix time).",
+  "header": "TGClient+Messages.h"
+ },
+ {
+  "name": "activeProxyIdWithCompletion",
+  "sig": "- (void)activeProxyIdWithCompletion:(void (^)(NSInteger proxyId))completion",
+  "doc": "The id of the proxy in use, or a negative number when the connection is direct. Cheaper to compare against a row than the whole dictionary.",
+  "header": "TGClient+Network.h"
+ },
+ {
+  "name": "activeProxyWithCompletion",
+  "sig": "- (void)activeProxyWithCompletion:(void (^)(NSDictionary *proxy))completion",
+  "doc": "The proxy traffic is currently routed through, or nil when the connection is direct. Same dictionary shape as -proxiesWithCompletion: entries, so a screen can read \"id\", \"server\" and \"type\" straight off it. TDLib has no dedicated getter, so this reads the list once and picks the entry whose \"isEnabled\" is true; it saves every caller from writing that filter itself.",
+  "header": "TGClient+Network.h"
+ },
+ {
+  "name": "addCallStatisticsSent",
+  "sig": "- (void)addCallStatisticsSent:(long long)sentBytes received:(long long)receivedBytes duration:(double)seconds networkKind:(NSString *)kind",
+  "doc": "Fold the traffic of a finished voice call into the statistics. Call it from TGCall when a call ends; TDLib cannot see call traffic on its own. `kind` is a network-type name as in -setNetworkTypeKind:.",
+  "header": "TGClient+Network.h"
+ },
+ {
+  "name": "connectionStateTitleForState",
+  "sig": "- (NSString *)connectionStateTitleForState:(TGConnectionState)state",
+  "doc": "Wording for an arbitrary state, for a notification observer that gets the state in userInfo. Nil when `state` is ready.",
+  "header": "TGClient+Network.h"
+ },
+ {
+  "name": "setDataSaverEnabled",
+  "sig": "- (void)setDataSaverEnabled:(BOOL)enabled completion:(void (^)(BOOL ok))completion",
+  "doc": "The Data Saver master switch: applies the \"low\" preset to mobile, roaming and Wi-Fi when on, and the \"high\" preset when off. There is no server-side data-saver flag, so this is exactly what the modern client does.",
+  "header": "TGClient+Network.h"
+ },
+ {
+  "name": "setNetworkTypeKind",
+  "sig": "- (void)setNetworkTypeKind:(NSString *)kind",
+  "doc": "Tell TDLib what the device is connected to, so it can size its requests and bill data usage to the right bucket. `kind` is \"none\", \"mobile\", \"mobileRoaming\", \"wifi\" or \"other\"; anything else is treated as \"other\". Push this on every reachability change and when the app foregrounds.",
+  "header": "TGClient+Network.h"
+ },
+ {
+  "name": "setProxy",
+  "sig": "- (void)setProxy:(NSInteger)proxyId enabled:(BOOL)enabled completion:(void (^)(BOOL ok))completion",
+  "doc": "Enable `proxyId` when `enabled` is YES, otherwise go direct. Exactly what a per-row switch needs, without the caller branching over two selectors.",
+  "header": "TGClient+Network.h"
+ },
+ {
+  "name": "addSavedNotificationSoundAtPath",
+  "sig": "- (void)addSavedNotificationSoundAtPath:(NSString *)path completion:(void (^)(NSDictionary *sound))completion",
+  "doc": "Upload a local audio file as a saved notification sound. `completion` gets the new sound in the same shape as above, or nil.",
+  "header": "TGClient+Notifications.h"
+ },
+ {
+  "name": "alertForNotification",
+  "sig": "- (NSDictionary *)alertForNotification:(NSDictionary *)notification chatName:(NSString *)chatName",
+  "doc": "Turn a TDLib \"notification\" object into what a UILocalNotification needs: \"title\" (chat or sender name, may be empty), \"body\", and \"chatId\" (NSNumber, 0 when the notification does not point at a chat). nil when the notification carries nothing worth showing.",
+  "header": "TGClient+Notifications.h"
+ },
+ {
+  "name": "clearNotificationExceptionsForScope",
+  "sig": "- (void)clearNotificationExceptionsForScope:(NSString *)scope completion:(void (^)(NSInteger resetCount))completion",
+  "doc": "Reset every exception of one scope (or of all scopes when `scope` is nil) back to the default. `completion` gets the number of chats reset.",
+  "header": "TGClient+Notifications.h"
+ },
+ {
+  "name": "previewTextForPushContent",
+  "sig": "- (NSString *)previewTextForPushContent:(NSDictionary *)content",
+  "doc": "One line of preview text for a TDLib PushMessageContent object, e.g. \"Photo\", \"Voice message\", or the text of a plain message. Pure function, safe to call on any queue; answers an empty string for anything unknown.",
+  "header": "TGClient+Notifications.h"
+ },
+ {
+  "name": "removeNotification",
+  "sig": "- (void)removeNotification:(NSInteger)notificationId inGroup:(NSInteger)groupId",
+  "doc": "Tell TDLib a notification the user has seen may be dropped. Call when a chat is opened, so the same alert does not come back after a restart.",
+  "header": "TGClient+Notifications.h"
+ },
+ {
+  "name": "removeNotificationGroup",
+  "sig": "- (void)removeNotificationGroup:(NSInteger)groupId upToNotificationId:(NSInteger)maxNotificationId",
+  "doc": "Drop every notification of a group up to and including `maxNotificationId`. Pass NSIntegerMax to clear the whole group.",
+  "header": "TGClient+Notifications.h"
+ },
+ {
+  "name": "removeSavedNotificationSound",
+  "sig": "- (void)removeSavedNotificationSound:(long long)soundId",
+  "doc": "Delete a saved sound by its id.",
+  "header": "TGClient+Notifications.h"
+ },
+ {
+  "name": "savedNotificationSoundsWithCompletion",
+  "sig": "- (void)savedNotificationSoundsWithCompletion:(void (^)(NSArray *sounds))completion",
+  "doc": "Notification sounds saved on the account. Each entry: \"id\" (NSNumber int64, the sound_id to write into settings), \"title\", \"duration\" (NSNumber seconds), \"date\" (NSNumber unix time), \"fileId\" (NSNumber, pass to -downloadFile:completion: to preview it). Note that the server stores MP3/OGG, which iOS 6 will not play as an alert sound - previewing works in-app, but a UILocalNotification can only use a bundled CAF.",
+  "header": "TGClient+Notifications.h"
+ },
+ {
+  "name": "setReactionNotificationsSource",
+  "sig": "- (void)setReactionNotificationsSource:(NSString *)source pollVoteSource:(NSString *)pollVoteSource showPreview:(BOOL)showPreview soundId:(long long)soundId",
+  "doc": "Who may trigger a reaction or poll-vote notification. `source` and `pollVoteSource` are \"all\", \"contacts\" or \"none\". `soundId` is 0 for the default sound. There is no TDLib getter for these, so the UI has to keep the picked values itself (NSUserDefaults) and write the whole struct here.",
+  "header": "TGClient+Notifications.h"
+ },
+ {
+  "name": "updateChat",
+  "sig": "- (void)updateChat:(int64_t)chatId values:(NSDictionary *)changes completion:(void (^)(BOOL ok))completion",
+  "doc": "Change some per-chat values without touching the rest, reading the chat's current settings first. `changes` uses the keys of -notificationSettingsForChat:; setting a \"useDefault...\" key to @YES hands that one value back to the scope default. `completion` gets YES when the write went out.",
+  "header": "TGClient+Notifications.h"
+ },
+ {
+  "name": "addGiftIds",
+  "sig": "- (void)addGiftIds:(NSArray *)giftIds toCollection:(int32_t)collectionId completion:(void (^)(NSDictionary *collection))completion",
+  "doc": "",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "allowUnpaidMessagesFromUser",
+  "sig": "- (void)allowUnpaidMessagesFromUser:(int64_t)userId refundPayments:(BOOL)refund",
+  "doc": "Let a user write to us for free from now on. `refund` also returns the stars they have already paid.",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "applyPremiumGiftCode",
+  "sig": "- (void)applyPremiumGiftCode:(NSString *)code completion:(void (^)(BOOL ok))completion",
+  "doc": "Redeem a gift code on the signed-in account.",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "availableGiftsWithCompletion",
+  "sig": "- (void)availableGiftsWithCompletion:(void (^)(NSArray *gifts))completion",
+  "doc": "Gifts that can be bought and sent right now. Each entry: \"id\" (NSNumber int64 - the gift id sendGift wants), \"title\", \"starCount\" (NSNumber), \"upgradeStarCount\" (NSNumber, 0 when it cannot be upgraded), \"stickerFileId\" (NSNumber or absent), \"emoji\", \"isPremium\" and \"isForBirthday\" (NSNumber BOOL), \"resaleCount\" (NSNumber) and \"minResaleStarCount\" (NSNumber).",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "buyResoldGiftNamed",
+  "sig": "- (void)buyResoldGiftNamed:(NSString *)name forStarCount:(long long)starCount completion:(void (^)(BOOL ok))completion",
+  "doc": "Buy a resold unique gift by its name (the t.me/nft slug) for the signed-in user, at the price the listing showed.",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "cancelPaidReactionsOnMessage",
+  "sig": "- (void)cancelPaidReactionsOnMessage:(int64_t)messageId inChat:(int64_t)chatId",
+  "doc": "",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "checkPremiumGiftCode",
+  "sig": "- (void)checkPremiumGiftCode:(NSString *)code completion:(void (^)(NSDictionary *info))completion",
+  "doc": "Look up a t.me/giftcode link before applying it. `info` carries \"creatorId\" (NSNumber), \"creationDate\", \"monthCount\", \"dayCount\", \"isFromGiveaway\" (NSNumber BOOL), \"userId\" (NSNumber, who used it, 0 when unused) and \"useDate\" (NSNumber, 0 when unused). Nil when the code is not valid, which is what the alert should say.",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "clearSavedPaymentInfoWithCompletion",
+  "sig": "- (void)clearSavedPaymentInfoWithCompletion:(void (^)(BOOL ok))completion",
+  "doc": "Forget the saved card and the saved shipping details. This is the destructive \"Clear saved payment info\" row in Privacy settings.",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "createGiftCollectionNamed",
+  "sig": "- (void)createGiftCollectionNamed:(NSString *)name giftIds:(NSArray *)giftIds completion:(void (^)(NSDictionary *collection))completion",
+  "doc": "Create a collection holding the given received gift ids. `collection` is the new collection, or nil on failure.",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "deleteGiftCollection",
+  "sig": "- (void)deleteGiftCollection:(int32_t)collectionId",
+  "doc": "",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "dropOriginalDetailsOfGift",
+  "sig": "- (void)dropOriginalDetailsOfGift:(NSString *)giftId starCount:(long long)starCount completion:(void (^)(BOOL ok))completion",
+  "doc": "Erase the \"originally sent by\" line from a unique gift, for a price.",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "giftCollectionsWithCompletion",
+  "sig": "- (void)giftCollectionsWithCompletion:(void (^)(NSArray *collections))completion",
+  "doc": "The signed-in user's gift collections: \"id\" (NSNumber int32), \"name\", \"giftCount\" (NSNumber) and \"stickerFileId\" (NSNumber or absent).",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "giftPremiumWithStarsToUser",
+  "sig": "- (void)giftPremiumWithStarsToUser:(int64_t)userId starCount:(long long)starCount months:(NSInteger)months text:(NSString *)text completion:(void (^)(BOOL ok))completion",
+  "doc": "Gift Premium to a user, paid for with stars. `starCount` and `months` come from one row of -premiumGiftOptionsWithCompletion: (TGClient+Premium.h).",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "giftSettingsWithCompletion",
+  "sig": "- (void)giftSettingsWithCompletion:(void (^)(NSDictionary *settings))completion",
+  "doc": "Who may send the signed-in user gifts, and whether the profile shows a Gift button. All flags are BOOL. Reads the current values first, so a screen may set only what its switches changed by passing the dictionary it got from -giftSettingsWithCompletion: with one key replaced. Keys: \"showGiftButton\", \"unlimited\", \"limited\", \"upgraded\", \"fromChannels\", \"premiumSubscription\".",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "giftUpgradePreviewForGiftId",
+  "sig": "- (void)giftUpgradePreviewForGiftId:(long long)giftId completion:(void (^)(NSDictionary *preview))completion",
+  "doc": "What a gift would look like upgraded: \"models\", \"symbols\" and \"backdrops\", each an array of {\"name\", \"rarity\" (NSNumber per-mille), \"stickerFileId\"}, and \"starCount\" (NSNumber, the current upgrade price).",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "giftsForResaleWithGiftId",
+  "sig": "- (void)giftsForResaleWithGiftId:(long long)giftId offset:(NSString *)offset limit:(NSInteger)limit completion:(void (^)(NSArray *gifts, NSString *nextOffset, NSInteger total))completion",
+  "doc": "Unique gifts of one gift kind offered for resale, cheapest first. Each entry adds \"resaleStarCount\" (NSNumber) to the unique-gift shape.",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "paidMessageRevenueFromUser",
+  "sig": "- (void)paidMessageRevenueFromUser:(int64_t)userId completion:(void (^)(long long stars))completion",
+  "doc": "Stars a given user has already paid us for messages.",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "payCardPaymentForm",
+  "sig": "- (void)payCardPaymentForm:(NSDictionary *)form savedCredentialsId:(NSString *)savedCredentialsId newCredentialsData:(NSString *)newCredentialsData allowSaveCard:(BOOL)allowSave orderInfoId:(NSString *)orderInfoId shippingOptionId:(NSString *)shippingOptionId tipAmount:(long long)tipAmount completion:(void (^)(BOOL ok, NSString *verificationUrl))completion",
+  "doc": "Pay a regular (card) form. Exactly one of `savedCredentialsId` and `newCredentialsData` must be set: the id of a row from the form's \"savedCredentials\", or a provider payment token JSON string obtained from the card entry screen. `orderInfoId` and `shippingOptionId` may be nil when the invoice does not need them. `tipAmount` is in the currency's smallest unit, 0 for none. `verificationUrl` is non-nil when the bank wants a 3-D Secure page opened before the payment completes.",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "payStarsPaymentForm",
+  "sig": "- (void)payStarsPaymentForm:(NSDictionary *)form completion:(void (^)(BOOL ok))completion",
+  "doc": "Pay a stars-priced form. `form` is what -paymentFormFor... answered. `ok` is YES when Telegram accepted the payment; the message updates itself afterwards, so the caller only has to dismiss its sheet.",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "paymentFormForInvoiceName",
+  "sig": "- (void)paymentFormForInvoiceName:(NSString *)name completion:(void (^)(NSDictionary *form))completion",
+  "doc": "The same, for an invoice reached by its t.me/invoice name (the deep link slug), rather than by a message.",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "paymentFormForMessage",
+  "sig": "- (void)paymentFormForMessage:(int64_t)messageId inChat:(int64_t)chatId completion:(void (^)(NSDictionary *form))completion",
+  "doc": "Payment form for an invoice sent as a message (bot invoice bubble, or a paid-media bubble). The form must be paid with one of the -pay... methods below, and it expires, so do not cache it across screens.  The form: \"formId\" (NSNumber int64), \"isStars\" (NSNumber BOOL), \"starCount\" (NSNumber, stars-priced forms only), \"sellerBotUserId\" (NSNumber), \"title\", \"description\", \"photoFileId\" (NSNumber or absent), \"currency\" (NSString, regular forms only), \"totalAmount\" (NSNumber, in the currency's smallest unit), \"priceParts\" (NSArray of {\"label\", \"amount\"}), \"needsName\" / \"needsPhone\" / \"needsEmail\" / \"needsShippingAddress\" / \"isFlexible\" / \"canSaveCredentials\" / \"needsPassword\" (NSNumber BOOL), \"savedCredentials\" (NSArray of {\"id\", \"title\"}), \"savedOrderInfo\" (NSDictionary or absent), \"maxTipAmount\" (NSNumber), \"suggestedTips\" (NSArray of NSNumber) and \"invoice\" - an opaque dictionary that must be handed straight back to the pay methods.",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "paymentReceiptForMessage",
+  "sig": "- (void)paymentReceiptForMessage:(int64_t)messageId inChat:(int64_t)chatId completion:(void (^)(NSDictionary *receipt))completion",
+  "doc": "Receipt of a completed payment, reached from the \"payment successful\" service message. Keys: \"date\" (NSNumber), \"title\", \"description\", \"photoFileId\" (NSNumber or absent), \"sellerBotUserId\" (NSNumber), \"isStars\" (NSNumber BOOL), \"starCount\" (NSNumber, stars receipts), \"transactionId\" (NSString, stars receipts), \"currency\", \"totalAmount\", \"tipAmount\", \"priceParts\", \"credentialsTitle\" and \"shippingOption\" (regular receipts).",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "receivedGiftWithId",
+  "sig": "- (void)receivedGiftWithId:(NSString *)giftId completion:(void (^)(NSDictionary *gift))completion",
+  "doc": "One received gift by its id, same shape as a list entry.",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "receivedGiftsForChat",
+  "sig": "- (void)receivedGiftsForChat:(int64_t)chatId collectionId:(int32_t)collectionId offset:(NSString *)offset limit:(NSInteger)limit completion:(void (^)(NSArray *gifts, NSString *nextOffset, NSInteger total))completion",
+  "doc": "The same for a channel's gift shelf.",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "refundStarPaymentWithChargeId",
+  "sig": "- (void)refundStarPaymentWithChargeId:(NSString *)chargeId toUserId:(int64_t)userId completion:(void (^)(BOOL ok))completion",
+  "doc": "Refund a star payment a bot of ours received. `chargeId` is the \"telegram_payment_charge_id\" a receipt carries. `ok` is NO on failure.",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "removeGiftIds",
+  "sig": "- (void)removeGiftIds:(NSArray *)giftIds fromCollection:(int32_t)collectionId completion:(void (^)(NSDictionary *collection))completion",
+  "doc": "",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "renameGiftCollection",
+  "sig": "- (void)renameGiftCollection:(int32_t)collectionId to:(NSString *)name completion:(void (^)(NSDictionary *collection))completion",
+  "doc": "",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "reorderGiftCollections",
+  "sig": "- (void)reorderGiftCollections:(NSArray *)collectionIds",
+  "doc": "Reorder the tab strip. `collectionIds` is every collection, in the wanted order, as NSNumber int32.",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "sendGiftWithId",
+  "sig": "- (void)sendGiftWithId:(long long)giftId toChat:(int64_t)chatId text:(NSString *)text isPrivate:(BOOL)isPrivate payForUpgrade:(BOOL)payForUpgrade completion:(void (^)(BOOL ok))completion",
+  "doc": "The same, for a channel that accepts gifts.",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "setGiftSettings",
+  "sig": "- (void)setGiftSettings:(NSDictionary *)settings",
+  "doc": "",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "setPaidReactionAnonymous",
+  "sig": "- (void)setPaidReactionAnonymous:(BOOL)anonymous onMessage:(int64_t)messageId inChat:(int64_t)chatId",
+  "doc": "Change how an already-sent paid reaction is attributed.",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "setPinnedGiftIds",
+  "sig": "- (void)setPinnedGiftIds:(NSArray *)giftIds",
+  "doc": "Replace the pinned set on the signed-in user's own profile, in order.",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "starGiftPaymentOptionsForUser",
+  "sig": "- (void)starGiftPaymentOptionsForUser:(int64_t)userId completion:(void (^)(NSArray *options))completion",
+  "doc": "The same list, but for buying stars as a gift for `userId`. Same shape.",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "starPaymentOptionsWithCompletion",
+  "sig": "- (void)starPaymentOptionsWithCompletion:(void (^)(NSArray *options))completion",
+  "doc": "The star packs this account may buy, cheapest first. Each option: \"stars\" (NSNumber), \"currency\" (NSString, ISO code), \"amount\" (NSNumber, the price in the currency's smallest unit), \"storeProductId\" (NSString, may be empty) and \"isAdditional\" (NSNumber BOOL - a pack the UI hides behind a \"show more\" row). Buying itself needs the App Store, which this client has no route to, so the list is informational.",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "starTransactionsWithDirection",
+  "sig": "- (void)starTransactionsWithDirection:(NSString *)direction offset:(NSString *)offset limit:(NSInteger)limit completion:(void (^)(NSArray *transactions, NSString *nextOffset))completion",
+  "doc": "Star transaction history, newest first. `direction` is @\"incoming\", @\"outgoing\" or nil for both. `offset` is @\"\" for the first page, otherwise the `nextOffset` of the previous page; `nextOffset` is empty at the end.  Each transaction: \"id\" (NSString), \"date\" (NSNumber unix time), \"stars\" (NSNumber, signed - negative when spent), \"isRefund\" (NSNumber BOOL), \"type\" (NSString, the TDLib StarTransactionType name without the \"starTransactionType\" prefix), \"title\" (NSString, a short human label), \"description\" (NSString, may be empty), \"userId\" / \"chatId\" (NSNumber, 0 when the transaction has no counterparty) and \"photoFileId\" (NSNumber file id of the product photo or gift sticker, or absent).",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "transferReceivedGift",
+  "sig": "- (void)transferReceivedGift:(NSString *)giftId toUser:(int64_t)userId starCount:(long long)starCount completion:(void (^)(BOOL ok))completion",
+  "doc": "Give a unique gift to somebody else. `starCount` is the gift's \"transferStarCount\"; 0 when the transfer is free.",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "unlockPaidMediaInMessage",
+  "sig": "- (void)unlockPaidMediaInMessage:(int64_t)messageId inChat:(int64_t)chatId completion:(void (^)(BOOL ok))completion",
+  "doc": "Unlock paid media in a message: fetches the form and pays it with stars in one step. `ok` is NO when the balance is short or the call failed.",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "validateOrderInfo",
+  "sig": "- (void)validateOrderInfo:(NSDictionary *)orderInfo forPaymentForm:(NSDictionary *)form save:(BOOL)save completion:(void (^)(NSString *orderInfoId, NSArray *shippingOptions))completion",
+  "doc": "Validate the shipping/contact details of a regular (card) form before paying. `orderInfo` takes \"name\", \"phone\", \"email\" and, when the form needs an address, \"countryCode\", \"state\", \"city\", \"street1\", \"street2\" and \"postalCode\". `save` asks Telegram to remember it for next time. `orderInfoId` is what -payCardPaymentForm... wants; `shippingOptions` is an array of {\"id\", \"title\", \"amount\"} and is empty for a non-flexible invoice.",
+  "header": "TGClient+Payments.h"
+ },
+ {
+  "name": "accountGiftCodesWithLimit",
+  "sig": "- (void)accountGiftCodesWithLimit:(NSInteger)limit completion:(void (^)(NSArray *codes))completion",
+  "doc": "Every gift code this account has received, newest first, scraped from the service chat with Telegram (user 777000) where gift-code and giveaway-prize notifications are delivered. `limit` is the number of service messages to scan, 0 for the default of 100. `completion` receives an array of: \"code\"        NSString, the gift code, \"\" for a star prize \"months\"      NSNumber, subscription length \"days\"        NSNumber \"stars\"       NSNumber, non-zero for a star giveaway prize \"fromGiveaway\" NSNumber BOOL \"unclaimed\"   NSNumber BOOL, YES while the code has not been redeemed \"creatorId\"   NSNumber, the user or chat that sent it \"creatorIsChat\" NSNumber BOOL \"creatorName\" NSString, \"\" when unknown \"chatId\"      NSNumber, the chat the notification lives in \"messageId\"   NSNumber, the notification message \"boostedChatId\" NSNumber, the channel a star prize boosted, 0 otherwise \"giveawayMessageId\" NSNumber, 0 when not from a giveaway \"date\"        NSNumber unix date \"text\"        NSString, the plain caption Telegram sent, may be \"\" The array is empty when nothing was found. Feed \"code\" to -checkGiftCode:completion: for the redeemed/unredeemed detail.",
+  "header": "TGClient+Premium.h"
+ },
+ {
+  "name": "applyGiftCode",
+  "sig": "- (void)applyGiftCode:(NSString *)code completion:(void (^)(BOOL ok, NSString *error))completion",
+  "doc": "Redeem a gift code on this account. `completion` receives YES on success, or NO with a short server error message suitable for an alert.",
+  "header": "TGClient+Premium.h"
+ },
+ {
+  "name": "boostFeaturesForChannel",
+  "sig": "- (void)boostFeaturesForChannel:(BOOL)isChannel completion:(void (^)(NSArray *levels))completion",
+  "doc": "The \"what boosts unlock\" table. `completion` receives an array of dictionaries, one per level, sorted by level: \"level\" (NSNumber) and \"features\", an array of NSString lines already written for display (\"8 custom reactions\", \"Custom chat background\", ...). Empty on failure.",
+  "header": "TGClient+Premium.h"
+ },
+ {
+  "name": "boostersInChat",
+  "sig": "- (void)boostersInChat:(int64_t)chatId onlyGiftCodes:(BOOL)onlyGiftCodes offset:(NSString *)offset limit:(NSInteger)limit completion:(void (^)(NSDictionary *page))completion",
+  "doc": "Who boosted a chat, paginated. Pass an empty or nil `offset` for the first page and the returned \"nextOffset\" for the following ones. `completion` receives a dictionary with \"totalCount\" (NSNumber), \"nextOffset\" (NSString, empty at the end) and \"boosts\", an array of: \"id\" NSString, \"count\" NSNumber (how many boosts this entry is worth), \"startDate\", \"expirationDate\" (NSNumbers), \"userId\" (NSNumber, 0 for an unclaimed giveaway prize), \"name\" (NSString, the cached display name or \"\"), \"source\" NSString (\"premium\", \"giftCode\" or \"giveaway\"), \"giftCode\" NSString, \"giveawayMessageId\" NSNumber, \"unclaimed\" NSNumber BOOL. nil on failure.",
+  "header": "TGClient+Premium.h"
+ },
+ {
+  "name": "businessFeaturesWithCompletion",
+  "sig": "- (void)businessFeaturesWithCompletion:(void (^)(NSArray *features))completion",
+  "doc": "The Telegram Business feature list, same shape as -premiumFeaturesWithCompletion:.",
+  "header": "TGClient+Premium.h"
+ },
+ {
+  "name": "chatBoostLinkForChat",
+  "sig": "- (void)chatBoostLinkForChat:(int64_t)chatId completion:(void (^)(NSString *url, BOOL isPublic))completion",
+  "doc": "The shareable boost link for a chat. `completion` receives the url and whether the chat is public; url is nil on failure.",
+  "header": "TGClient+Premium.h"
+ },
+ {
+  "name": "chatBoostLinkInfo",
+  "sig": "- (void)chatBoostLinkInfo:(NSString *)url completion:(void (^)(int64_t chatId, BOOL isPublic))completion",
+  "doc": "Resolve a t.me boost url back to a chat. `completion` receives the chat id (0 on failure) and whether the chat is public.",
+  "header": "TGClient+Premium.h"
+ },
+ {
+  "name": "chatBoostStatusForChat",
+  "sig": "- (void)chatBoostStatusForChat:(int64_t)chatId completion:(void (^)(NSDictionary *status))completion",
+  "doc": "The boost block for a channel profile. `completion` receives: \"level\", \"boostCount\", \"giftCodeBoostCount\", \"currentLevelBoostCount\", \"nextLevelBoostCount\", \"premiumMemberCount\" (NSNumbers), \"premiumMemberPercentage\" (NSNumber double), \"progress\" (NSNumber double 0..1 through the current level - already clamped, so a progress bar can use it directly), \"boostUrl\" (NSString), \"appliedSlotIds\" (NSArray of NSNumber, the slots this account has already spent on the chat), \"boosted\" (NSNumber BOOL, whether this account boosts the chat), \"prepaidGiveaways\" (NSArray of dictionaries: \"id\" NSNumber, \"winnerCount\", \"boostCount\", \"paymentDate\", \"prizeMonths\", \"prizeStars\"). nil on failure.",
+  "header": "TGClient+Premium.h"
+ },
+ {
+  "name": "checkGiftCode",
+  "sig": "- (void)checkGiftCode:(NSString *)code completion:(void (^)(NSDictionary *info))completion",
+  "doc": "Look up a t.me/giftcode code without consuming it. `completion` receives: \"code\"        NSString, echoed back \"creatorId\"   NSNumber, the user or chat id that created it, 0 if unknown \"creatorIsChat\" NSNumber BOOL \"creationDate\" NSNumber unix date \"fromGiveaway\" NSNumber BOOL \"giveawayMessageId\" NSNumber \"months\"      NSNumber, the length of the subscription it grants \"days\"        NSNumber \"userId\"      NSNumber, who redeemed it, 0 when still unused \"useDate\"     NSNumber unix date, 0 when still unused \"used\"        NSNumber BOOL nil when the code is invalid or the lookup failed.",
+  "header": "TGClient+Premium.h"
+ },
+ {
+  "name": "clickPremiumSubscriptionButton",
+  "sig": "- (void)clickPremiumSubscriptionButton",
+  "doc": "Tell the server the subscribe button was tapped. Fire and forget.",
+  "header": "TGClient+Premium.h"
+ },
+ {
+  "name": "enteredGiveawaysWithLimit",
+  "sig": "- (void)enteredGiveawaysWithLimit:(NSInteger)limit completion:(void (^)(NSArray *giveaways))completion",
+  "doc": "The giveaways this account has taken part in, found by scanning the recent history of every channel this account currently boosts (a boost is how a giveaway is entered) for giveaway messages and asking the server for this account's status in each. `limit` caps the number of giveaways returned, 0 for the default of 20. Costs one request per boosted chat plus one per giveaway found, so call it once per screen and cache the result. `completion` receives an array, newest first, of: \"chatId\"      NSNumber, the channel that runs the giveaway \"chatTitle\"   NSString, \"\" when unknown \"messageId\"   NSNumber, the giveaway message \"date\"        NSNumber unix date of the giveaway message \"winnerCount\" NSNumber \"months\"      NSNumber, Premium months at stake, 0 for a star giveaway \"stars\"       NSNumber, star prize, 0 for a Premium giveaway \"winnersDate\" NSNumber unix date the winners are picked plus every key of -giveawayInfoForMessage:inChat:completion: merged in (\"ongoing\", \"status\", \"statusText\", \"winner\", \"giftCode\", ...).",
+  "header": "TGClient+Premium.h"
+ },
+ {
+  "name": "giftPremiumToUser",
+  "sig": "- (void)giftPremiumToUser:(int64_t)userId months:(NSInteger)months stars:(long long)stars message:(NSString *)message completion:(void (^)(BOOL ok, NSString *error))completion",
+  "doc": "The durations Premium can be gifted for live in TGClient+Payments as -premiumGiftOptionsWithCompletion:; use that one, its rows carry the same month/star pairs this method needs. Gift Premium to a user, paid from this account's star balance. `stars` and `months` must be a pair taken from -premiumGiftOptionsWithCompletion:. `message` is an optional plain-text note shown with the gift, may be nil. `completion` receives YES, or NO with a server message - most commonly a \"not enough stars\" error.",
+  "header": "TGClient+Premium.h"
+ },
+ {
+  "name": "giveawayInfoForMessage",
+  "sig": "- (void)giveawayInfoForMessage:(int64_t)messageId inChat:(int64_t)chatId completion:(void (^)(NSDictionary *info))completion",
+  "doc": "The \"How it works\" sheet behind a giveaway message. `completion` receives: \"ongoing\"       NSNumber BOOL, NO when the giveaway is finished \"creationDate\"  NSNumber unix date \"ended\"         NSNumber BOOL (ongoing giveaways whose winners are being picked) \"status\"        NSString short tag: \"eligible\", \"participating\", \"alreadyWasMember\", \"administrator\", \"disallowedCountry\" or \"\" for a finished giveaway \"statusText\"    NSString, one ready-to-show sentence for the sheet \"joinedDate\"    NSNumber, for \"alreadyWasMember\" \"adminChatId\"   NSNumber, for \"administrator\" \"countryCode\"   NSString, for \"disallowedCountry\" and for finished giveaways additionally \"winnersDate\", \"winnerCount\", \"activationCount\" (NSNumbers), \"winner\", \"refunded\" (NSNumber BOOL), \"giftCode\" (NSString, non-empty only when this account won), \"wonStars\" (NSNumber). nil on failure.",
+  "header": "TGClient+Premium.h"
+ },
+ {
+  "name": "isPremiumUser",
+  "sig": "+ (BOOL)isPremiumUser:(NSDictionary *)user",
+  "doc": "YES when this user object (any raw TDLib user dictionary, e.g. from an update or from -userWithId:) is a Premium user. Use it to decide whether to draw the star badge next to a name.",
+  "header": "TGClient+Premium.h"
+ },
+ {
+  "name": "launchPrepaidGiveaway",
+  "sig": "- (void)launchPrepaidGiveaway:(long long)giveawayId inChat:(int64_t)chatId winnerCount:(NSInteger)winnerCount winnersDate:(NSTimeInterval)winnersDate onlyNewMembers:(BOOL)onlyNewMembers hasPublicWinners:(BOOL)hasPublicWinners countryCodes:(NSArray *)countryCodes prizeDescription:(NSString *)prizeDescription stars:(long long)stars completion:(void (^)(BOOL ok, NSString *error))completion",
+  "doc": "Start a giveaway a channel has already paid for, listed in the \"prepaid\" entries of -chatBoostStatusForChat:completion:. `winnersDate` is a unix date, `countryCodes` an array of two-letter NSString codes (may be nil for no restriction), `prizeDescription` may be nil. `stars` is 0 for a Premium prize giveaway and the prepaid star amount for a star giveaway. `completion` receives YES, or NO with a server message.",
+  "header": "TGClient+Premium.h"
+ },
+ {
+  "name": "premiumInfoStickerForMonths",
+  "sig": "- (void)premiumInfoStickerForMonths:(NSInteger)monthCount completion:(void (^)(NSDictionary *sticker))completion",
+  "doc": "The header sticker for a gift or promo screen. `monthCount` is 1, 3, 6, 12 or 0 for the generic one. `completion` receives a dictionary with \"fileId\" and \"thumbnailFileId\" (NSNumbers, feed either to -downloadFile:completion:), \"emoji\", \"width\" and \"height\", or nil on failure. The sticker is animated on the server side; download the thumbnail and show it as a still.",
+  "header": "TGClient+Premium.h"
+ },
+ {
+  "name": "premiumLimit",
+  "sig": "- (void)premiumLimit:(NSString *)limitType completion:(void (^)(NSDictionary *limit))completion",
+  "doc": "One limit, by its short tag (\"pinnedChatCount\", \"captionLength\", \"bioLength\", \"chatFolderCount\", \"supergroupCount\", \"savedAnimationCount\", \"favoriteStickerCount\", \"messageTextLength\", ... - the PremiumLimitType name with the \"premiumLimitType\" prefix removed, first letter lowercase). `completion` receives \"type\", \"title\", \"default\" and \"premium\" (NSNumbers), or nil on failure.",
+  "header": "TGClient+Premium.h"
+ },
+ {
+  "name": "recognizeSpeechInMessage",
+  "sig": "- (void)recognizeSpeechInMessage:(int64_t)messageId inChat:(int64_t)chatId completion:(void (^)(BOOL ok, NSString *error))completion",
+  "doc": "Ask the server to transcribe a voice or video note. The transcript is not returned here: it arrives as an updated message, so the bubble must re-read it with +speechRecognitionFromMessage:. `completion` receives YES when the request was accepted, or NO with a server message (a non-Premium account gets a limit error once its free quota is used).",
+  "header": "TGClient+Premium.h"
+ },
+ {
+  "name": "speechRecognitionFromMessage",
+  "sig": "+ (NSDictionary *)speechRecognitionFromMessage:(NSDictionary *)message",
+  "doc": "Read the transcription state off a raw TDLib message dictionary holding a voice or video note. Returns a dictionary with \"state\" (\"none\", \"pending\", \"text\" or \"error\") and \"text\" (the transcript, the partial text while pending, or the error message). Never nil.",
+  "header": "TGClient+Premium.h"
+ },
+ {
+  "name": "recoverPasswordWithCode",
+  "sig": "- (void)recoverPasswordWithCode:(NSString *)code newPassword:(NSString *)newPassword hint:(NSString *)hint completion:(void (^)(BOOL ok))completion",
+  "doc": "Use the mailed code to set a brand new password. `hint` may be nil.",
+  "header": "TGClient+Privacy.h"
+ },
+ {
+  "name": "recoveryEmailWithPassword",
+  "sig": "- (void)recoveryEmailWithPassword:(NSString *)password completion:(void (^)(NSString *email))completion",
+  "doc": "The recovery email currently on file; needs the password. Nil on failure.",
+  "header": "TGClient+Privacy.h"
+ },
+ {
+  "name": "reportChat",
+  "sig": "- (void)reportChat:(int64_t)chatId messageIds:(NSArray *)messageIds optionId:(NSString *)optionId text:(NSString *)text completion:(void (^)(NSDictionary *result))completion",
+  "doc": "Report a chat, or particular messages in it, for abuse. Telegram drives this as a small wizard: call it first with a nil `optionId`, and the reply tells you what it still needs. `result` keys: \"status\" - \"ok\" (done), \"options\" (show the list), \"text\" (ask for a comment), \"messages\" (make the user pick messages); \"title\" and \"options\" (NSArray of {\"id\", \"text\"}) when status is \"options\"; \"optionId\" and \"optional\" (NSNumber BOOL) when status is \"text\". Nil on failure. Feed the chosen option's \"id\" back in as `optionId`.",
+  "header": "TGClient+Privacy.h"
+ },
+ {
+  "name": "requestPasswordRecoveryWithCompletion",
+  "sig": "- (void)requestPasswordRecoveryWithCompletion:(void (^)(NSString *emailPattern, NSInteger codeLength))completion",
+  "doc": "\"Forgot password?\" - asks Telegram to mail a recovery code. `emailPattern` is the masked address to show (\"a**@g****.com\"), nil on failure; `codeLength` is how many digits the entry field wants.",
+  "header": "TGClient+Privacy.h"
+ },
+ {
+  "name": "addReaction",
+  "sig": "- (void)addReaction:(NSString *)emoji toMessage:(int64_t)messageId inChat:(int64_t)chatId big:(BOOL)big",
+  "doc": "Add one emoji reaction to a message. `big` asks other clients to play the large animation; we cannot play it ourselves but the flag is honoured remotely. Fire and forget - the chip row updates through the message.",
+  "header": "TGClient+Reactions.h"
+ },
+ {
+  "name": "clearRecentReactions",
+  "sig": "- (void)clearRecentReactions",
+  "doc": "Forget the recently used reactions the emoji picker suggests.",
+  "header": "TGClient+Reactions.h"
+ },
+ {
+  "name": "emojiReactionInfo",
+  "sig": "- (void)emojiReactionInfo:(NSString *)emoji completion:(void (^)(NSDictionary *info))completion",
+  "doc": "Static metadata for one emoji reaction, for the picker grid. `completion` receives \"emoji\", \"title\", \"isActive\" (NSNumber BOOL) and \"iconFileId\" (NSNumber, the static_icon sticker file - download it with the usual file path API; the animated variants are deliberately not exposed). Nil on failure.",
+  "header": "TGClient+Reactions.h"
+ },
+ {
+  "name": "markReactionsReadInChat",
+  "sig": "- (void)markReactionsReadInChat:(int64_t)chatId forumTopicId:(int64_t)topicId",
+  "doc": "Mark every unread reaction inside one forum topic as read. Only meaningful for a forum supergroup.",
+  "header": "TGClient+Reactions.h"
+ },
+ {
+  "name": "paidReactorsFromMessage",
+  "sig": "+ (NSArray *)paidReactorsFromMessage:(NSDictionary *)message",
+  "doc": "Top paid (star) reactors on a channel post, read-only - we cannot send paid reactions. Array of dictionaries with \"senderId\" (NSNumber, 0 when anonymous), \"name\", \"stars\" (NSNumber), \"isTop\" and \"isAnonymous\" (NSNumber BOOL). Empty when the post has none.",
+  "header": "TGClient+Reactions.h"
+ },
+ {
+  "name": "reactionChipsFromMessage",
+  "sig": "+ (NSArray *)reactionChipsFromMessage:(NSDictionary *)message",
+  "doc": "Reaction chips for one message: an array of dictionaries with \"emoji\" (NSString, a star for custom/paid reactions we cannot draw), \"count\" (NSNumber), \"chosen\" (NSNumber BOOL, YES when the signed-in user picked it) and \"custom\" (NSNumber BOOL). Empty array when there are none. Pass the raw TDLib message dictionary, e.g. from an update.",
+  "header": "TGClient+Reactions.h"
+ },
+ {
+  "name": "removeReaction",
+  "sig": "- (void)removeReaction:(NSString *)emoji fromMessage:(int64_t)messageId inChat:(int64_t)chatId",
+  "doc": "Remove one emoji reaction the signed-in user has previously added.",
+  "header": "TGClient+Reactions.h"
+ },
+ {
+  "name": "setAvailableReactionsInChat",
+  "sig": "- (void)setAvailableReactionsInChat:(int64_t)chatId emojis:(NSArray *)emojis maxCount:(NSInteger)maxCount",
+  "doc": "Admin: set the reactions a chat allows. Pass nil for `emojis` to allow all of them, an empty array to switch reactions off entirely, or a list to allow exactly those. `maxCount` below 1 falls back to 1.",
+  "header": "TGClient+Reactions.h"
+ },
+ {
+  "name": "setQuickReactionEmoji",
+  "sig": "- (void)setQuickReactionEmoji:(NSString *)emoji",
+  "doc": "Set the global default (quick) reaction. Also updates -quickReactionEmoji.",
+  "header": "TGClient+Reactions.h"
+ },
+ {
+  "name": "setReactionWatchInterval",
+  "sig": "- (void)setReactionWatchInterval:(NSTimeInterval)seconds",
+  "doc": "Poll interval of the shared watch timer, in seconds. Defaults to 5, which is what the 4S can carry with a couple of visible messages watched. Values below 2 are clamped to 2. Applies from the next timer restart.",
+  "header": "TGClient+Reactions.h"
+ },
+ {
+  "name": "setReactions",
+  "sig": "- (void)setReactions:(NSArray *)emojis onMessage:(int64_t)messageId inChat:(int64_t)chatId big:(BOOL)big",
+  "doc": "Replace the user's whole reaction set on a message in one call. `emojis` is an array of NSString; pass an empty array to clear all of them. Respect the max count from -availableReactionsInChat:completion: before calling.",
+  "header": "TGClient+Reactions.h"
+ },
+ {
+  "name": "unreadReactionsInChat",
+  "sig": "- (void)unreadReactionsInChat:(int64_t)chatId fromMessageId:(int64_t)fromMessageId limit:(NSInteger)limit completion:(void (^)(NSArray *messageIds))completion",
+  "doc": "Messages in a chat that carry a reaction the user has not seen yet, oldest first, for the jump-to-next-reaction badge. `fromMessageId` is 0 to start from the newest. `completion` receives an array of NSNumber message ids.",
+  "header": "TGClient+Reactions.h"
+ },
+ {
+  "name": "unwatchAllReactions",
+  "sig": "- (void)unwatchAllReactions",
+  "doc": "Stop every reaction watch and shut the shared timer down.",
+  "header": "TGClient+Reactions.h"
+ },
+ {
+  "name": "cachedSavedMessagesTopic",
+  "sig": "- (NSDictionary *)cachedSavedMessagesTopic:(int64_t)topicId",
+  "doc": "One cached topic by id, or nil when it has not been received yet.",
+  "header": "TGClient+SavedMessages.h"
+ },
+ {
+  "name": "linkOpensSavedMessages",
+  "sig": "- (void)linkOpensSavedMessages:(NSString *)link completion:(void (^)(BOOL isSavedMessages))completion",
+  "doc": "YES when `link` is a tg://saved style link, i.e. the URL handler should open Saved Messages. Completion gets NO for anything else, including errors.",
+  "header": "TGClient+SavedMessages.h"
+ },
+ {
+  "name": "pinSavedMessage",
+  "sig": "- (void)pinSavedMessage:(int64_t)messageId completion:(void (^)(BOOL ok))completion",
+  "doc": "Pins a message inside the Saved Messages chat. Pinning is per chat, not per topic, so the banner is the same in every topic.",
+  "header": "TGClient+SavedMessages.h"
+ },
+ {
+  "name": "resetSavedMessagesTopicsCache",
+  "sig": "- (void)resetSavedMessagesTopicsCache",
+  "doc": "Drops the cached topics, e.g. when leaving the topics screen for good.",
+  "header": "TGClient+SavedMessages.h"
+ },
+ {
+  "name": "savedMessagesPinnedMessageWithCompletion",
+  "sig": "- (void)savedMessagesPinnedMessageWithCompletion:(void (^)(NSDictionary *message))completion",
+  "doc": "The currently pinned message of Saved Messages for the banner, flattened like a history row, or nil when nothing is pinned.",
+  "header": "TGClient+SavedMessages.h"
+ },
+ {
+  "name": "savedMessagesSparsePositionsForTopic",
+  "sig": "- (void)savedMessagesSparsePositionsForTopic:(int64_t)topicId fromMessage:(int64_t)fromMessageId limit:(NSInteger)limit completion:(void (^)(NSArray *positions, NSInteger totalCount))completion",
+  "doc": "",
+  "header": "TGClient+SavedMessages.h"
+ },
+ {
+  "name": "savedMessagesTopic",
+  "sig": "- (void)savedMessagesTopic:(int64_t)topicId messageAtDate:(NSInteger)date completion:(void (^)(NSDictionary *message))completion",
+  "doc": "The first message of a topic sent on or after `date` (unix time), in the same flattened shape as the history rows. Use it to jump to a date. Completion gets nil when there is none.",
+  "header": "TGClient+SavedMessages.h"
+ },
+ {
+  "name": "unpinAllSavedMessagesWithCompletion",
+  "sig": "- (void)unpinAllSavedMessagesWithCompletion:(void (^)(BOOL ok))completion",
+  "doc": "Unpins every message of the Saved Messages chat.",
+  "header": "TGClient+SavedMessages.h"
+ },
+ {
+  "name": "unpinSavedMessage",
+  "sig": "- (void)unpinSavedMessage:(int64_t)messageId completion:(void (^)(BOOL ok))completion",
+  "doc": "Unpins one message of the Saved Messages chat.",
+  "header": "TGClient+SavedMessages.h"
+ },
+ {
+  "name": "indexesOfStrings",
+  "sig": "- (void)indexesOfStrings:(NSArray *)strings matchingPrefix:(NSString *)query limit:(NSInteger)limit completion:(void (^)(NSArray *indexes))completion",
+  "doc": "Which of `strings` start with `query`, for filtering a local list such as the country picker. `completion` gets an NSArray of NSNumber indexes into the array that was passed in.",
+  "header": "TGClient+Search.h"
+ },
+ {
+  "name": "messageCalendarForChat",
+  "sig": "- (void)messageCalendarForChat:(int64_t)chatId filter:(NSString *)filter fromMessageId:(int64_t)fromMessageId completion:(void (^)(NSArray *days, NSInteger totalCount))completion",
+  "doc": "Per-day message counts for a calendar view, newest day first. Each entry: \"date\" (NSNumber unix time of the day's first message), \"count\" (NSNumber) and \"messageId\" (NSNumber, the message to jump to for that day). `filter` narrows it to one media type, or nil for everything.",
+  "header": "TGClient+Search.h"
+ },
+ {
+  "name": "messageInChat",
+  "sig": "- (void)messageInChat:(int64_t)chatId closestToDate:(NSInteger)date completion:(void (^)(int64_t messageId))completion",
+  "doc": "Newest message sent at or before `date` in a chat, so the history can jump to a day. `completion` gets 0 when the chat has nothing that old.",
+  "header": "TGClient+Search.h"
+ },
+ {
+  "name": "positionOfQuote",
+  "sig": "- (void)positionOfQuote:(NSString *)quote inText:(NSString *)text completion:(void (^)(NSInteger position))completion",
+  "doc": "Character offset of `quote` inside `text`, for highlighting a quoted fragment. `completion` gets -1 when the quote is not in the text.",
+  "header": "TGClient+Search.h"
+ },
+ {
+  "name": "recentLocationMessagesInChat",
+  "sig": "- (void)recentLocationMessagesInChat:(int64_t)chatId limit:(NSInteger)limit completion:(void (^)(NSArray *messages))completion",
+  "doc": "Live location messages currently being shared in a chat.",
+  "header": "TGClient+Search.h"
+ },
+ {
+  "name": "searchCallMessagesOnlyMissed",
+  "sig": "- (void)searchCallMessagesOnlyMissed:(BOOL)onlyMissed offset:(NSString *)offset limit:(NSInteger)limit completion:(void (^)(NSArray *messages, NSString *nextOffset))completion",
+  "doc": "Call messages across all chats, for a recent-calls list. `onlyMissed` restricts it to calls that were never answered. Paged the same way as the global search.",
+  "header": "TGClient+Search.h"
+ },
+ {
+  "name": "searchOutgoingDocumentsWithQuery",
+  "sig": "- (void)searchOutgoingDocumentsWithQuery:(NSString *)query limit:(NSInteger)limit completion:(void (^)(NSArray *messages))completion",
+  "doc": "Documents the signed-in user has sent, for re-sharing a file.",
+  "header": "TGClient+Search.h"
+ },
+ {
+  "name": "sparseMessagePositionsInChat",
+  "sig": "- (void)sparseMessagePositionsInChat:(int64_t)chatId filter:(NSString *)filter fromMessageId:(int64_t)fromMessageId limit:(NSInteger)limit completion:(void (^)(NSArray *positions, NSInteger totalCount))completion",
+  "doc": "Sparse positions of messages in a chat, for a fast-scroll date indicator on a shared-media grid. Each entry: \"position\" (NSNumber, index from the newest message), \"messageId\" (NSNumber) and \"date\" (NSNumber).",
+  "header": "TGClient+Search.h"
+ },
+ {
+  "name": "autoDeleteLadder",
+  "sig": "+ (NSArray *)autoDeleteLadder",
+  "doc": "The classic timer ladder as the action sheet shows it. Each entry: \"seconds\" (NSNumber) and \"title\" (NSString, e.g. \"Off\", \"5 seconds\", \"1 week\").",
+  "header": "TGClient+SecretChats.h"
+ },
+ {
+  "name": "autoDeleteTimeForChat",
+  "sig": "- (void)autoDeleteTimeForChat:(int64_t)chatId completion:(void (^)(NSInteger seconds))completion",
+  "doc": "The chat's current self-destruct timer in seconds, 0 when off. Read from the cached chat record where possible, otherwise fetched.",
+  "header": "TGClient+SecretChats.h"
+ },
+ {
+  "name": "canSendInSecretChat",
+  "sig": "- (void)canSendInSecretChat:(int64_t)chatId completion:(void (^)(BOOL canSend, NSString *state))completion",
+  "doc": "Whether the composer may send at all - NO while the handshake is pending and after the chat was closed. `completion` also reports the state string.",
+  "header": "TGClient+SecretChats.h"
+ },
+ {
+  "name": "chatAllowsMessageEditing",
+  "sig": "- (BOOL)chatAllowsMessageEditing:(int64_t)chatId",
+  "doc": "Whether the message context menu may offer Edit / Schedule for this chat. Both are always unavailable in secret chats.",
+  "header": "TGClient+SecretChats.h"
+ },
+ {
+  "name": "closeSecretChatForChat",
+  "sig": "- (void)closeSecretChatForChat:(int64_t)chatId deleteHistory:(BOOL)deleteHistory",
+  "doc": "Terminate the secret chat behind an ordinary chat id and, when `deleteHistory` is YES, wipe its history and remove it from the chat list. This is the destructive row in the secret-chat profile screen.",
+  "header": "TGClient+SecretChats.h"
+ },
+ {
+  "name": "closeSecretChatId",
+  "sig": "- (void)closeSecretChatId:(int)secretChatId",
+  "doc": "Terminate a secret chat. Fire and forget; the chat stays in the list in the \"closed\" state until it is deleted.",
+  "header": "TGClient+SecretChats.h"
+ },
+ {
+  "name": "defaultAutoDeleteTimeWithCompletion",
+  "sig": "- (void)defaultAutoDeleteTimeWithCompletion:(void (^)(NSInteger seconds))completion",
+  "doc": "The account-wide default self-destruct timer for new chats, in seconds. `completion` receives 0 when the feature is off.",
+  "header": "TGClient+SecretChats.h"
+ },
+ {
+  "name": "encryptionKeyGridForChat",
+  "sig": "- (void)encryptionKeyGridForChat:(int64_t)chatId completion:(void (^)(NSArray *cells))completion",
+  "doc": "The key hash of a secret chat unpacked for the classic 12x12 identicon: `completion` receives an array of 144 NSNumbers, each 0..3, to be drawn in the four fixed colours, or nil when the key is not available yet (the handshake must be complete). Row-major, 12 per row.",
+  "header": "TGClient+SecretChats.h"
+ },
+ {
+  "name": "encryptionKeyHashForChat",
+  "sig": "- (void)encryptionKeyHashForChat:(int64_t)chatId completion:(void (^)(NSString *base64))completion",
+  "doc": "Raw base64 key hash, for the explanatory text under the grid. `completion` receives \"\" when no key is available.",
+  "header": "TGClient+SecretChats.h"
+ },
+ {
+  "name": "openSecretChatId",
+  "sig": "- (void)openSecretChatId:(int)secretChatId completion:(void (^)(int64_t chatId))completion",
+  "doc": "Resolve an existing secret chat id (as carried by chatTypeSecret, an update or a deep link) into an ordinary chat. `completion` receives the chat id, or 0 on failure.",
+  "header": "TGClient+SecretChats.h"
+ },
+ {
+  "name": "secretChat",
+  "sig": "- (BOOL)secretChat:(int64_t)chatId allowsInputMessage:(NSString *)kind",
+  "doc": "Whether a message type may be sent into this chat at all. `kind` is a TDLib InputMessageContent type name, e.g. \"inputMessagePoll\" or \"inputMessageForwarded\". Synchronous and cache-only: secret chats reject polls, checklists, forwards, stories and external-message replies, and this is the guard the attachment sheet and forward picker use so TDLib never returns an error the user cannot interpret.",
+  "header": "TGClient+SecretChats.h"
+ },
+ {
+  "name": "secretChatInfo",
+  "sig": "- (void)secretChatInfo:(int)secretChatId completion:(void (^)(NSDictionary *info))completion",
+  "doc": "Secret chat info by secret chat id. `completion` receives nil on failure.",
+  "header": "TGClient+SecretChats.h"
+ },
+ {
+  "name": "secretChatInfoForChat",
+  "sig": "- (void)secretChatInfoForChat:(int64_t)chatId completion:(void (^)(NSDictionary *info))completion",
+  "doc": "Secret chat info for an ordinary chat id, with \"chatId\" and \"name\" filled in. `completion` receives nil when the chat is not a secret chat or the lookup failed. This is what the chat header and profile screen read.",
+  "header": "TGClient+SecretChats.h"
+ },
+ {
+  "name": "secretServiceTextForMessage",
+  "sig": "- (NSString *)secretServiceTextForMessage:(NSDictionary *)message",
+  "doc": "Wording for the secret-chat service rows, or nil when the message is not one of them. Covers messageChatSetMessageAutoDeleteTime (\"Alice set the self-destruct timer to 5 seconds\") and messageScreenshotTaken (\"Alice took a screenshot!\"). `message` is a raw TDLib message.",
+  "header": "TGClient+SecretChats.h"
+ },
+ {
+  "name": "selfDestructInfoForMessage",
+  "sig": "- (NSDictionary *)selfDestructInfoForMessage:(NSDictionary *)message",
+  "doc": "Marking a message's content as opened is what starts the self-destruct countdown, so it must happen the moment a secret photo, voice note or video note is actually shown to the user. Without it the timer never runs and the message never expires. Use -openContentOfMessage:inChat: from TGClient+MessageContent.h, which already wraps openMessageContent. Flatten a raw TDLib message into what a self-destructing bubble needs: \"isSecret\"    NSNumber BOOL  media that must be hidden until tapped \"isExpired\"   NSNumber BOOL  content is one of the messageExpired* types \"expiredText\" NSString       placeholder wording for the expired bubble \"ttl\"         NSNumber       self-destruct time in seconds, 0 if none \"immediate\"   NSNumber BOOL  destroys as soon as it is viewed \"remaining\"   NSNumber       seconds left, 0 when the timer has not started or the message does not destruct Pure and synchronous - no network. Returns nil for a message that is not self-destructing and not expired.",
+  "header": "TGClient+SecretChats.h"
+ },
+ {
+  "name": "selfDestructOptionForChat",
+  "sig": "- (NSDictionary *)selfDestructOptionForChat:(int64_t)chatId seconds:(NSInteger)seconds",
+  "doc": "Extra key to merge into an inputMessage* dictionary to make the content self-destruct. `seconds` of 0 means \"destroy as soon as viewed\" (messageSelfDestructTypeImmediately), which is the only mode voice and video notes support. Returns nil when the chat is not secret, so the caller can merge unconditionally.",
+  "header": "TGClient+SecretChats.h"
+ },
+ {
+  "name": "setDefaultAutoDeleteTime",
+  "sig": "- (void)setDefaultAutoDeleteTime:(NSInteger)seconds",
+  "doc": "Set the account-wide default self-destruct timer. Fire and forget.",
+  "header": "TGClient+SecretChats.h"
+ },
+ {
+  "name": "textForSecretChatNotification",
+  "sig": "- (NSString *)textForSecretChatNotification:(NSDictionary *)notification",
+  "doc": "Notification text for an incoming secret chat request, or nil when the notification is not notificationTypeNewSecretChat. `notification` is a raw TDLib notification object.",
+  "header": "TGClient+SecretChats.h"
+ },
+ {
+  "name": "archivedEmojiStickerSetsFromSetId",
+  "sig": "- (void)archivedEmojiStickerSetsFromSetId:(int64_t)offsetSetId limit:(NSInteger)limit completion:(void (^)(NSArray *sets, NSInteger totalCount))completion",
+  "doc": "Archived custom-emoji sets. Pass 0 for `offsetSetId` for the first page.",
+  "header": "TGClient+Stickers.h"
+ },
+ {
+  "name": "archivedMaskStickerSetsFromSetId",
+  "sig": "- (void)archivedMaskStickerSetsFromSetId:(int64_t)offsetSetId limit:(NSInteger)limit completion:(void (^)(NSArray *sets, NSInteger totalCount))completion",
+  "doc": "Archived mask sets. Pass 0 for `offsetSetId` for the first page.",
+  "header": "TGClient+Stickers.h"
+ },
+ {
+  "name": "attachedStickerSetsForFileId",
+  "sig": "- (void)attachedStickerSetsForFileId:(NSInteger)fileId completion:(void (^)(NSArray *sets))completion",
+  "doc": "Sticker sets attached to a photo or video file, for the media viewer's \"Stickers\" button. Completion gets an array of sets.",
+  "header": "TGClient+Stickers.h"
+ },
+ {
+  "name": "customEmojiStickersWithIds",
+  "sig": "- (void)customEmojiStickersWithIds:(NSArray *)customEmojiIds completion:(void (^)(NSArray *stickers))completion",
+  "doc": "Resolve custom emoji ids found in message text entities into stickers so they can be drawn inline. `customEmojiIds` is an array of NSNumber int64.",
+  "header": "TGClient+Stickers.h"
+ },
+ {
+  "name": "emojiCategoriesForStickers",
+  "sig": "- (void)emojiCategoriesForStickers:(BOOL)forStickers completion:(void (^)(NSArray *categories))completion",
+  "doc": "Emoji keyboard categories (Smileys, Animals, ...). Completion gets an array of { \"name\" : NSString, \"isGreeting\" : NSNumber BOOL, \"icon\" : sticker, \"emojis\" : NSArray of NSString }. Pass NO for `forStickers` to get the emoji categories, YES for the category row of the sticker panel.",
+  "header": "TGClient+Stickers.h"
+ },
+ {
+  "name": "emojiSuggestionsForText",
+  "sig": "- (void)emojiSuggestionsForText:(NSString *)text completion:(void (^)(NSArray *suggestions))completion",
+  "doc": "Emoji whose keyword starts with the typed text, for the \":smile\" suggestion bar. Completion gets an array of { \"emoji\" : NSString, \"keyword\" : NSString }.",
+  "header": "TGClient+Stickers.h"
+ },
+ {
+  "name": "greetingStickersWithCompletion",
+  "sig": "- (void)greetingStickersWithCompletion:(void (^)(NSArray *stickers))completion",
+  "doc": "Stickers Telegram suggests for greeting someone in an empty chat.",
+  "header": "TGClient+Stickers.h"
+ },
+ {
+  "name": "keywordEmojisForText",
+  "sig": "- (void)keywordEmojisForText:(NSString *)text completion:(void (^)(NSArray *emojis))completion",
+  "doc": "Emoji for an exact keyword, no fuzzy matching. Array of NSString.",
+  "header": "TGClient+Stickers.h"
+ },
+ {
+  "name": "premiumStickersWithLimit",
+  "sig": "- (void)premiumStickersWithLimit:(NSInteger)limit completion:(void (^)(NSArray *stickers))completion",
+  "doc": "Premium stickers from regular sets, for the promo strip.",
+  "header": "TGClient+Stickers.h"
+ },
+ {
+  "name": "recentStickersAttached",
+  "sig": "- (void)recentStickersAttached:(BOOL)attached completion:(void (^)(NSArray *stickers))completion",
+  "doc": "Recently used stickers, most recent first, in the full sticker shape documented at the top of this file. Pass NO for `attached` to get the recently sent list (what the sticker panel's Recent tab shows), YES for the list recently attached to photos and videos. TGClient.h already has recentStickersWithCompletion:, but it yields a reduced dictionary (fileId/emoji/isAnimated/thumbId only); use this one when setId, size or customEmojiId is needed.",
+  "header": "TGClient+Stickers.h"
+ },
+ {
+  "name": "reorderInstalledEmojiStickerSets",
+  "sig": "- (void)reorderInstalledEmojiStickerSets:(NSArray *)setIds completion:(void (^)(BOOL ok))completion",
+  "doc": "New order of the installed custom-emoji sets. Must list every installed set.",
+  "header": "TGClient+Stickers.h"
+ },
+ {
+  "name": "searchEmojiStickerSets",
+  "sig": "- (void)searchEmojiStickerSets:(NSString *)query completion:(void (^)(NSArray *sets))completion",
+  "doc": "Search public custom-emoji sets by title or short name.",
+  "header": "TGClient+Stickers.h"
+ },
+ {
+  "name": "searchInstalledMaskStickerSets",
+  "sig": "- (void)searchInstalledMaskStickerSets:(NSString *)query limit:(NSInteger)limit completion:(void (^)(NSArray *sets))completion",
+  "doc": "Search installed mask sets by title or short name.",
+  "header": "TGClient+Stickers.h"
+ },
+ {
+  "name": "setCustomEmojiStickerSet",
+  "sig": "- (void)setCustomEmojiStickerSet:(int64_t)setId forSupergroup:(int64_t)supergroupId completion:(void (^)(BOOL ok))completion",
+  "doc": "Set (or clear, with 0) the group custom-emoji pack of a supergroup.",
+  "header": "TGClient+Stickers.h"
+ },
+ {
+  "name": "setStickerSet",
+  "sig": "- (void)setStickerSet:(int64_t)setId forSupergroup:(int64_t)supergroupId completion:(void (^)(BOOL ok))completion",
+  "doc": "Set (or clear, with 0) the group sticker pack of a supergroup.",
+  "header": "TGClient+Stickers.h"
+ },
+ {
+  "name": "stickerOutlineForFileId",
+  "sig": "- (void)stickerOutlineForFileId:(NSInteger)fileId completion:(void (^)(NSArray *paths))completion",
+  "doc": "Vector silhouette of a sticker, to draw while its file downloads. Completion gets an array of closed paths; each path is an array of { \"type\" : @\"line\" | @\"curve\", \"x\", \"y\" } and, for curves, \"c1x\", \"c1y\", \"c2x\", \"c2y\". All coordinates are NSNumber doubles in the sticker's own width/height space.",
+  "header": "TGClient+Stickers.h"
+ },
+ {
+  "name": "stickerSetNameForId",
+  "sig": "- (void)stickerSetNameForId:(int64_t)setId completion:(void (^)(NSString *name))completion",
+  "doc": "Short name of a set, for building a t.me/addstickers/<name> share link when only the id is at hand. Completion gets the name or nil.",
+  "header": "TGClient+Stickers.h"
+ },
+ {
+  "name": "trendingEmojiStickerSetsWithOffset",
+  "sig": "- (void)trendingEmojiStickerSetsWithOffset:(NSInteger)offset limit:(NSInteger)limit completion:(void (^)(NSArray *sets, NSInteger totalCount))completion",
+  "doc": "Trending custom-emoji sets. Completion gets (sets, totalCount).",
+  "header": "TGClient+Stickers.h"
+ },
+ {
+  "name": "addFileToDownloads",
+  "sig": "- (void)addFileToDownloads:(NSInteger)fileId inChat:(int64_t)chatId message:(int64_t)messageId completion:(void (^)(BOOL ok))completion",
+  "doc": "Put a file on the account's download list (\"Save to downloads\" in a message action sheet). `chatId`/`messageId` identify the message it came from.",
+  "header": "TGClient+Storage.h"
+ },
+ {
+  "name": "applyCachePolicyMaxBytes",
+  "sig": "- (void)applyCachePolicyMaxBytes:(long long)maxBytes ttlSeconds:(NSInteger)ttlSeconds excludedChatIds:(NSArray *)excludedChatIds completion:(void (^)(long long freed))completion",
+  "doc": "Apply the user's persisted \"keep media for\" and \"maximum cache size\" choices in one call, which is what the launch-time and low-disk trim hook wants. `maxBytes` and `ttlSeconds` are -1 for \"no limit\". `excludedChatIds` is the persisted never-clear list, or nil.",
+  "header": "TGClient+Storage.h"
+ },
+ {
+  "name": "autoDownloadPresetNamed",
+  "sig": "- (void)autoDownloadPresetNamed:(NSString *)name completion:(void (^)(NSDictionary *settings))completion",
+  "doc": "One of the three server presets - `name` is @\"low\", @\"medium\" or @\"high\" (anything else is treated as @\"medium\") - already translated into the key vocabulary -setAutoDownloadSettings:forNetworkType: expects, so a preset can be handed straight back to it. Nil on failure.",
+  "header": "TGClient+Storage.h"
+ },
+ {
+  "name": "cancelDownloadFile",
+  "sig": "- (void)cancelDownloadFile:(NSInteger)fileId onlyIfPending:(BOOL)onlyIfPending",
+  "doc": "Stop a download in progress. `onlyIfPending` cancels only a download that has not started transferring yet.",
+  "header": "TGClient+Storage.h"
+ },
+ {
+  "name": "clearAllCacheWithCompletion",
+  "sig": "- (void)clearAllCacheWithCompletion:(void (^)(long long freed))completion",
+  "doc": "Clear everything TDLib is willing to delete, including stickers, wallpapers and thumbnails. This is the destructive \"Clear everything\" row.",
+  "header": "TGClient+Storage.h"
+ },
+ {
+  "name": "clearCacheCategories",
+  "sig": "- (void)clearCacheCategories:(NSArray *)kinds completion:(void (^)(long long freed))completion",
+  "doc": "Clear cached files of the given categories across every chat. `kinds` are FileType names; pass nil or an empty array to clear every category this client considers user media (this deliberately does not touch profile photos or thumbnails, which would make the whole UI reload its avatars). `freed` is the number of bytes actually deleted.",
+  "header": "TGClient+Storage.h"
+ },
+ {
+  "name": "clearDownloadsOnlyActive",
+  "sig": "- (void)clearDownloadsOnlyActive:(BOOL)onlyActive onlyCompleted:(BOOL)onlyCompleted deleteFromCache:(BOOL)deleteFromCache",
+  "doc": "Empty the download list. Pass onlyActive or onlyCompleted to limit it; both NO means everything.",
+  "header": "TGClient+Storage.h"
+ },
+ {
+  "name": "databaseStatisticsWithCompletion",
+  "sig": "- (void)databaseStatisticsWithCompletion:(void (^)(NSString *text))completion",
+  "doc": "TDLib's internal database statistics as one preformatted, multi-line string, for a debug text view. Nil on failure.",
+  "header": "TGClient+Storage.h"
+ },
+ {
+  "name": "deleteCachedFile",
+  "sig": "- (void)deleteCachedFile:(NSInteger)fileId",
+  "doc": "Drop one cached file from disk. The file stays available for re-download.",
+  "header": "TGClient+Storage.h"
+ },
+ {
+  "name": "downloadTotalsWithCompletion",
+  "sig": "- (void)downloadTotalsWithCompletion:(void (^)(NSDictionary *counts))completion",
+  "doc": "Just the download-list counts, for a \"Downloads (N)\" badge, without paging the list itself. Keys \"active\", \"paused\", \"completed\" (NSNumber); zeroes on failure, never nil.",
+  "header": "TGClient+Storage.h"
+ },
+ {
+  "name": "downloadsWithQuery",
+  "sig": "- (void)downloadsWithQuery:(NSString *)query onlyActive:(BOOL)onlyActive onlyCompleted:(BOOL)onlyCompleted offset:(NSString *)offset limit:(NSInteger)limit completion:(void (^)(NSArray *files, NSDictionary *counts, NSString *nextOffset))completion",
+  "doc": "One page of the download list, for a Downloads screen. `query` may be nil or empty for everything; `offset` is nil for the first page and otherwise the \"nextOffset\" of the previous page. Each entry: \"fileId\" (NSNumber), \"chatId\" (NSNumber), \"messageId\" (NSNumber), \"name\" (NSString, best-effort file name, may be empty), \"size\" (bytes, NSNumber - 0 when TDLib did not include the file object), \"downloaded\" (bytes, NSNumber, same caveat), \"isPaused\" (NSNumber BOOL), \"isComplete\" (NSNumber BOOL), \"date\" (NSNumber, unix time it was added). `counts` has \"active\", \"paused\" and \"completed\" (NSNumber). `nextOffset` is an empty string when there is no further page.",
+  "header": "TGClient+Storage.h"
+ },
+ {
+  "name": "forgetAutoDownloadSettingsMirror",
+  "sig": "- (void)forgetAutoDownloadSettingsMirror",
+  "doc": "Drop the mirror above, e.g. on logout.",
+  "header": "TGClient+Storage.h"
+ },
+ {
+  "name": "resetNetworkStats",
+  "sig": "- (void)resetNetworkStats",
+  "doc": "Zero the network counters.",
+  "header": "TGClient+Storage.h"
+ },
+ {
+  "name": "setDownloadPaused",
+  "sig": "- (void)setDownloadPaused:(BOOL)paused forFile:(NSInteger)fileId",
+  "doc": "Pause or resume a single download.",
+  "header": "TGClient+Storage.h"
+ },
+ {
+  "name": "suggestedFileNameForFile",
+  "sig": "- (void)suggestedFileNameForFile:(NSInteger)fileId inDirectory:(NSString *)directory completion:(void (^)(NSString *name))completion",
+  "doc": "The file name TDLib suggests when exporting a file into `directory`, or nil.",
+  "header": "TGClient+Storage.h"
+ },
+ {
+  "name": "addStories",
+  "sig": "- (void)addStories:(NSArray *)storyIds toAlbum:(NSInteger)albumId inChat:(int64_t)chatId completion:(void (^)(NSDictionary *album))completion",
+  "doc": "Add, remove or reorder album members. `completion` gets the updated album.",
+  "header": "TGClient+Stories.h"
+ },
+ {
+  "name": "archivedStoriesInChat",
+  "sig": "- (void)archivedStoriesInChat:(int64_t)chatId fromStoryId:(NSInteger)fromStoryId limit:(NSInteger)limit completion:(void (^)(NSArray *stories, NSInteger total))completion",
+  "doc": "Our expired stories, newest first. `fromStoryId` is 0 for the first page, then the id of the oldest story already shown.",
+  "header": "TGClient+Stories.h"
+ },
+ {
+  "name": "closeFriendsWithCompletion",
+  "sig": "- (void)closeFriendsWithCompletion:(void (^)(NSArray *users))completion",
+  "doc": "The close friends list: \"id\", \"name\", \"username\".",
+  "header": "TGClient+Stories.h"
+ },
+ {
+  "name": "createStoryAlbumInChat",
+  "sig": "- (void)createStoryAlbumInChat:(int64_t)chatId name:(NSString *)name storyIds:(NSArray *)storyIds completion:(void (^)(NSDictionary *album))completion",
+  "doc": "",
+  "header": "TGClient+Stories.h"
+ },
+ {
+  "name": "deleteStoryAlbum",
+  "sig": "- (void)deleteStoryAlbum:(NSInteger)albumId inChat:(int64_t)chatId",
+  "doc": "",
+  "header": "TGClient+Stories.h"
+ },
+ {
+  "name": "editStory",
+  "sig": "- (void)editStory:(NSInteger)storyId inChat:(int64_t)chatId photoPath:(NSString *)path caption:(NSString *)caption",
+  "doc": "Replace the content of a story with another local photo.",
+  "header": "TGClient+Stories.h"
+ },
+ {
+  "name": "markStoryRead",
+  "sig": "- (void)markStoryRead:(NSInteger)storyId inChat:(int64_t)chatId",
+  "doc": "Mark a story read without showing it - open immediately followed by close.",
+  "header": "TGClient+Stories.h"
+ },
+ {
+  "name": "profileStoriesInChat",
+  "sig": "- (void)profileStoriesInChat:(int64_t)chatId fromStoryId:(NSInteger)fromStoryId limit:(NSInteger)limit completion:(void (^)(NSArray *stories, NSArray *pinnedIds, NSInteger total))completion",
+  "doc": "Stories a chat keeps on its profile page. `pinnedIds` are the subset shown at the top.",
+  "header": "TGClient+Stories.h"
+ },
+ {
+  "name": "publicForwardsOfStory",
+  "sig": "- (void)publicForwardsOfStory:(NSInteger)storyId inChat:(int64_t)chatId offset:(NSString *)offset limit:(NSInteger)limit completion:(void (^)(NSArray *forwards, NSString *nextOffset))completion",
+  "doc": "Public reposts and forwards of a story. Each entry: \"chatId\", \"title\", \"date\", \"isStory\" (NSNumber BOOL), \"storyId\" when it is a repost.",
+  "header": "TGClient+Stories.h"
+ },
+ {
+  "name": "removeStories",
+  "sig": "- (void)removeStories:(NSArray *)storyIds fromAlbum:(NSInteger)albumId inChat:(int64_t)chatId completion:(void (^)(NSDictionary *album))completion",
+  "doc": "",
+  "header": "TGClient+Stories.h"
+ },
+ {
+  "name": "renameStoryAlbum",
+  "sig": "- (void)renameStoryAlbum:(NSInteger)albumId inChat:(int64_t)chatId name:(NSString *)name completion:(void (^)(NSDictionary *album))completion",
+  "doc": "",
+  "header": "TGClient+Stories.h"
+ },
+ {
+  "name": "reorderStories",
+  "sig": "- (void)reorderStories:(NSArray *)storyIds inAlbum:(NSInteger)albumId inChat:(int64_t)chatId completion:(void (^)(NSDictionary *album))completion",
+  "doc": "",
+  "header": "TGClient+Stories.h"
+ },
+ {
+  "name": "reorderStoryAlbums",
+  "sig": "- (void)reorderStoryAlbums:(NSArray *)albumIds inChat:(int64_t)chatId",
+  "doc": "Album ids in the order they should appear.",
+  "header": "TGClient+Stories.h"
+ },
+ {
+  "name": "resolveStoryLink",
+  "sig": "- (void)resolveStoryLink:(NSString *)link completion:(void (^)(int64_t chatId, NSInteger storyId))completion",
+  "doc": "Resolve a t.me story link into something the viewer can open. `completion` gets the poster chat id and story id, or (0, 0) when the link is not a story link or the username does not resolve.",
+  "header": "TGClient+Stories.h"
+ },
+ {
+  "name": "searchStoriesAtVenueProvider",
+  "sig": "- (void)searchStoriesAtVenueProvider:(NSString *)provider venueId:(NSString *)venueId offset:(NSString *)offset limit:(NSInteger)limit completion:(void (^)(NSArray *stories, NSString *nextOffset, NSInteger total))completion",
+  "doc": "Public stories posted at a venue, as an interactive venue area links to.",
+  "header": "TGClient+Stories.h"
+ },
+ {
+  "name": "searchStoriesWithTag",
+  "sig": "- (void)searchStoriesWithTag:(NSString *)tag posterChatId:(int64_t)posterChatId offset:(NSString *)offset limit:(NSInteger)limit completion:(void (^)(NSArray *stories, NSString *nextOffset, NSInteger total))completion",
+  "doc": "Public stories carrying a hashtag. Pass 0 for `posterChatId` to search everywhere. `offset` is nil for the first page.",
+  "header": "TGClient+Stories.h"
+ },
+ {
+  "name": "setCloseFriends",
+  "sig": "- (void)setCloseFriends:(NSArray *)userIds",
+  "doc": "Replace the close friends list wholesale with these user ids.",
+  "header": "TGClient+Stories.h"
+ },
+ {
+  "name": "setPinnedStories",
+  "sig": "- (void)setPinnedStories:(NSArray *)storyIds inChat:(int64_t)chatId",
+  "doc": "Replace the pinned story ids of a profile.",
+  "header": "TGClient+Stories.h"
+ },
+ {
+  "name": "setStoryPreloading",
+  "sig": "- (void)setStoryPreloading:(BOOL)preload onNetwork:(NSString *)type",
+  "doc": "Whether stories are fetched ahead of time on the given network. Off is the right default on this hardware. `type` is \"mobile\" or \"wifi\".",
+  "header": "TGClient+Stories.h"
+ },
+ {
+  "name": "setStoryReactionNotificationSource",
+  "sig": "- (void)setStoryReactionNotificationSource:(NSString *)source",
+  "doc": "Who may trigger a notification when they react to our story. `source` is \"all\", \"contacts\" or \"none\". Note this rewrites the whole reaction notification record, so message-reaction and poll sources follow it.",
+  "header": "TGClient+Stories.h"
+ },
+ {
+  "name": "storiesInAlbum",
+  "sig": "- (void)storiesInAlbum:(NSInteger)albumId inChat:(int64_t)chatId offset:(NSInteger)offset limit:(NSInteger)limit completion:(void (^)(NSArray *stories, NSInteger total))completion",
+  "doc": "Contents of one album, flattened stories.",
+  "header": "TGClient+Stories.h"
+ },
+ {
+  "name": "storyAlbumsInChat",
+  "sig": "- (void)storyAlbumsInChat:(int64_t)chatId completion:(void (^)(NSArray *albums))completion",
+  "doc": "Story albums of a chat: \"id\", \"name\".",
+  "header": "TGClient+Stories.h"
+ },
+ {
+  "name": "deleteLanguagePack",
+  "sig": "- (void)deleteLanguagePack:(NSString *)packId completion:(void (^)(BOOL deleted))completion",
+  "doc": "Remove a downloaded pack. Fails on the pack currently in use, so switch away first. Completion gets YES when it was actually deleted.",
+  "header": "TGClient+Translation.h"
+ },
+ {
+  "name": "languagePackStrings",
+  "sig": "- (void)languagePackStrings:(NSString *)packId keys:(NSArray *)keys completion:(void (^)(NSDictionary *strings))completion",
+  "doc": "Strings of a pack, for a TGLang-style lookup layer. Pass nil or an empty `keys` array for the whole pack. Completion gets a dictionary keyed by the string key; an ordinary value maps to an NSString, a pluralised one to a dictionary with the \"zero\"/\"one\"/\"two\"/\"few\"/\"many\"/\"other\" keys that are present. Deleted strings are omitted. Never nil, empty on failure.",
+  "header": "TGClient+Translation.h"
+ },
+ {
+  "name": "languagePacksWithCompletion",
+  "sig": "- (void)languagePacksWithCompletion:(void (^)(NSArray *packs, NSString *current))completion",
+  "doc": "Every language pack this account can see, richer than TGClient's -languagesWithCompletion:. Each entry is a dictionary with keys: \"id\", \"name\", \"nativeName\", \"pluralCode\", \"baseId\", \"official\" (NSNumber bool), \"rtl\", \"beta\", \"installed\", \"totalStrings\", \"translatedStrings\", \"localStrings\", \"translationUrl\". `current` is the language_pack_id in effect. Falls back to the local-only list when the server refuses. Completion gets an empty array (never nil) if there is nothing at all.",
+  "header": "TGClient+Translation.h"
+ },
+ {
+  "name": "rateSpeechRecognitionForMessage",
+  "sig": "- (void)rateSpeechRecognitionForMessage:(int64_t)messageId inChat:(int64_t)chatId good:(BOOL)good",
+  "doc": "Send the Good / Bad feedback offered under a finished transcript.",
+  "header": "TGClient+Translation.h"
+ },
+ {
+  "name": "speechTranscriptForMessage",
+  "sig": "- (void)speechTranscriptForMessage:(int64_t)messageId inChat:(int64_t)chatId completion:(void (^)(NSDictionary *transcript))completion",
+  "doc": "Current transcription state of a message. Completion gets a dictionary: \"state\" is \"pending\", \"text\" or \"error\"; \"text\" is the partial or final transcript (\"\" while nothing is available); \"error\" is a human-readable message when state is \"error\". Completion gets nil when the message has no voice or video note, or has never been transcribed - that is the \"show the transcribe glyph\" case.",
+  "header": "TGClient+Translation.h"
+ },
+ {
+  "name": "synchronizeLanguagePack",
+  "sig": "- (void)synchronizeLanguagePack:(NSString *)packId",
+  "doc": "Pull the newest strings of a pack from the server. Fire and forget.",
+  "header": "TGClient+Translation.h"
+ },
+ {
+  "name": "translateText",
+  "sig": "- (void)translateText:(NSString *)text toLanguage:(NSString *)languageCode tone:(NSString *)tone completion:(void (^)(NSString *text))completion",
+  "doc": "Translate arbitrary text (composer contents, a bio, a caption). Completion gets the translated plain text, or nil on failure.",
+  "header": "TGClient+Translation.h"
+ },
+ {
+  "name": "badgesForChat",
+  "sig": "- (void)badgesForChat:(int64_t)chatId completion:(void (^)(NSDictionary *badges))completion",
+  "doc": "The same for a chat; channels and supergroups carry their own verification mark. Keys \"isVerified\", \"isScam\", \"isFake\" (NSNumber BOOL). Never nil.",
+  "header": "TGClient+UserStatus.h"
+ },
+ {
+  "name": "closeChat",
+  "sig": "- (void)closeChat:(int64_t)chatId",
+  "doc": "Tell TDLib the chat left the screen. Call from viewWillDisappear:.",
+  "header": "TGClient+UserStatus.h"
+ },
+ {
+  "name": "customEmojiIconsForIds",
+  "sig": "- (void)customEmojiIconsForIds:(NSArray *)ids completion:(void (^)(NSDictionary *iconsById))completion",
+  "doc": "Resolve custom emoji ids to drawable icons in one call, for a list screen that needs several badges at once. `ids` are NSNumber custom emoji ids. `completion` gets a dictionary keyed by the id as an NSString, each value shaped like -emojiStatusForUser:. Missing ids are simply absent.",
+  "header": "TGClient+UserStatus.h"
+ },
+ {
+  "name": "groupOnlineSummaryForChat",
+  "sig": "- (void)groupOnlineSummaryForChat:(int64_t)chatId completion:(void (^)(NSString *text, NSInteger members, NSInteger online))completion",
+  "doc": "\"N members, M online\" for a group or supergroup, ready for the navigation bar subtitle. `online` is 0 for anything that is not a group. The count is sampled from the members TDLib has cached (up to 50 recent ones in a supergroup), so it is exact for small groups and a lower bound for large ones. Call -openChat: first for TDLib to keep statuses fresh.",
+  "header": "TGClient+UserStatus.h"
+ },
+ {
+  "name": "hiddenStatusHintForStatusInfo",
+  "sig": "+ (NSString *)hiddenStatusHintForStatusInfo:(NSDictionary *)info",
+  "doc": "Explanatory line for tapping an approximate status, or nil when the status is exact and there is nothing to explain. Says that the precise time is hidden because the signed-in user hides their own, when that is the reason.",
+  "header": "TGClient+UserStatus.h"
+ },
+ {
+  "name": "privacyRuleDetail",
+  "sig": "- (void)privacyRuleDetail:(NSString *)setting completion:(void (^)(NSDictionary *detail))completion",
+  "doc": "Full picture of one privacy setting, beyond the everybody/contacts/nobody scalar -privacyRule:completion: returns. `setting` is the TDLib name without the \"userPrivacySetting\" prefix: \"ShowStatus\", \"ShowProfilePhoto\", \"ShowPhoneNumber\", \"ShowBio\", \"AllowCalls\", \"AllowChatInvites\", \"AllowFindingByPhoneNumber\", \"ShowLinkInForwardedMessages\". Keys: \"value\" (\"everybody\" / \"contacts\" / \"nobody\"), \"allowedUserIds\", \"restrictedUserIds\", \"allowedChatIds\", \"restrictedChatIds\" (NSArray of NSNumber, possibly empty). Nil on failure.",
+  "header": "TGClient+UserStatus.h"
+ },
+ {
+  "name": "profileGradientForColorId",
+  "sig": "+ (NSArray *)profileGradientForColorId:(NSInteger)colorId",
+  "doc": "Two gradient stops (0xRRGGBB NSNumbers, top then bottom) for a profile accent colour id, or nil when `colorId` is negative, which means the peer uses the plain profile header.",
+  "header": "TGClient+UserStatus.h"
+ },
+ {
+  "name": "rgbForAccentColorId",
+  "sig": "+ (NSNumber *)rgbForAccentColorId:(NSInteger)colorId",
+  "doc": "Name colour for a built-in accent colour id, as 0xRRGGBB. Ids outside the seven built-in colours are folded back into them, so this always answers. Use it to colour a name synchronously once an id is known.",
+  "header": "TGClient+UserStatus.h"
+ },
+ {
+  "name": "setSelfOnline",
+  "sig": "- (void)setSelfOnline:(BOOL)online",
+  "doc": "Publish or withdraw our own presence to peers. Call with YES from applicationDidBecomeActive: and NO from applicationDidEnterBackground:; without this our account looks permanently offline to everyone else.",
+  "header": "TGClient+UserStatus.h"
+ },
+ {
+  "name": "statusInfoForUser",
+  "sig": "- (void)statusInfoForUser:(int64_t)userId completion:(void (^)(NSDictionary *info))completion",
+  "doc": "The same dictionary for one user, fetched from TDLib's local cache when it has one. `completion` also gets \"userId\". Never nil.",
+  "header": "TGClient+UserStatus.h"
+ },
+ {
+  "name": "statusInfoForUserStatus",
+  "sig": "+ (NSDictionary *)statusInfoForUserStatus:(NSDictionary *)status",
+  "doc": "Format a raw TDLib UserStatus object (the \"status\" field of a user, or the \"status\" of an updateUserStatus) into what a subtitle shows. Keys: \"text\" (NSString, e.g. \"online\", \"last seen yesterday at 21:04\"), \"isOnline\" (NSNumber BOOL), \"rank\" (NSNumber, higher sorts first in a contacts list), \"wasOnline\" (NSNumber unix time, 0 when unknown), \"isApproximate\" (NSNumber BOOL - recently/week/month, no exact time), and \"hiddenByMyPrivacy\" (NSNumber BOOL - the exact time is withheld because the signed-in user hides their own last seen). Never nil, so a malformed status still yields a drawable subtitle.",
+  "header": "TGClient+UserStatus.h"
+ },
+ {
+  "name": "applicationDownloadLinkWithCompletion",
+  "sig": "- (void)applicationDownloadLinkWithCompletion:(void (^)(NSString *url))completion",
+  "doc": "Download link for this application, for the invite-friends SMS body.",
+  "header": "TGClient+WebLinks.h"
+ },
+ {
+  "name": "embeddingCodeForMessage",
+  "sig": "- (void)embeddingCodeForMessage:(int64_t)messageId inChat:(int64_t)chatId forAlbum:(BOOL)forAlbum completion:(void (^)(NSString *code))completion",
+  "doc": "",
+  "header": "TGClient+WebLinks.h"
+ },
+ {
+  "name": "flattenedLinkPreview",
+  "sig": "+ (NSDictionary *)flattenedLinkPreview:(NSDictionary *)preview",
+  "doc": "",
+  "header": "TGClient+WebLinks.h"
+ },
+ {
+  "name": "linkForInternalType",
+  "sig": "- (void)linkForInternalType:(NSDictionary *)type isHttp:(BOOL)isHttp completion:(void (^)(NSString *url))completion",
+  "doc": "",
+  "header": "TGClient+WebLinks.h"
+ },
+ {
+  "name": "linkPreviewOptionsDisabled",
+  "sig": "+ (NSDictionary *)linkPreviewOptionsDisabled:(BOOL)disabled url:(NSString *)url forceSmallMedia:(BOOL)forceSmall forceLargeMedia:(BOOL)forceLarge showAboveText:(BOOL)showAboveText",
+  "doc": "",
+  "header": "TGClient+WebLinks.h"
+ },
+ {
+  "name": "loginUrlForButton",
+  "sig": "- (void)loginUrlForButton:(int64_t)buttonId inMessage:(int64_t)messageId inChat:(int64_t)chatId allowWriteAccess:(BOOL)allowWriteAccess completion:(void (^)(NSString *url))completion",
+  "doc": "",
+  "header": "TGClient+WebLinks.h"
+ },
+ {
+  "name": "loginUrlInfoForButton",
+  "sig": "- (void)loginUrlInfoForButton:(int64_t)buttonId inMessage:(int64_t)messageId inChat:(int64_t)chatId completion:(void (^)(NSDictionary *info))completion",
+  "doc": "",
+  "header": "TGClient+WebLinks.h"
+ },
+ {
+  "name": "publicLinkForStickerSetName",
+  "sig": "- (void)publicLinkForStickerSetName:(NSString *)name completion:(void (^)(NSString *url))completion",
+  "doc": "t.me link to a sticker set by its short name. Nil on failure.",
+  "header": "TGClient+WebLinks.h"
+ },
+ {
+  "name": "publicLinkForUsername",
+  "sig": "- (void)publicLinkForUsername:(NSString *)username completion:(void (^)(NSString *url))completion",
+  "doc": "t.me link to a public chat / user by username. Nil on failure.",
+  "header": "TGClient+WebLinks.h"
+ },
+ {
+  "name": "tappableEntitiesIn",
+  "sig": "+ (NSArray *)tappableEntitiesIn:(NSDictionary *)formattedText",
+  "doc": "",
+  "header": "TGClient+WebLinks.h"
+ },
+ {
+  "name": "chatsInFolder",
+  "sig": "- (void)chatsInFolder:(NSInteger)folderId completion:(void (^)(NSArray *chats))completion",
+  "doc": "Chats of one folder.",
+  "header": "TGClient.h"
+ },
+ {
+  "name": "notificationsMutedForScope",
+  "sig": "- (void)notificationsMutedForScope:(NSString *)scope completion:(void (^)(BOOL muted))completion",
+  "doc": "Notification settings are kept per scope rather than per chat: private chats, groups and channels each have their own. `scope` is \"private\", \"groups\" or \"channels\"; `muted` is what the switch shows.",
+  "header": "TGClient.h"
+ },
+ {
+  "name": "premiumStateWithCompletion",
+  "sig": "- (void)premiumStateWithCompletion:(void (^)(NSString *summary))completion",
+  "doc": "Premium state of the signed-in account: nil when it is not active.",
+  "header": "TGClient.h"
+ },
+ {
+  "name": "sessionsWithCompletion",
+  "sig": "- (void)sessionsWithCompletion:(void (^)(NSArray *sessions))completion",
+  "doc": "Other devices signed into this account: \"id\", \"name\", \"platform\", \"ip\", \"isCurrent\", \"lastActive\".",
+  "header": "TGClient.h"
+ },
+ {
+  "name": "setScope",
+  "sig": "- (void)setScope:(NSString *)scope muted:(BOOL)muted",
+  "doc": "",
+  "header": "TGClient.h"
+ },
+ {
+  "name": "userForPhone",
+  "sig": "- (void)userForPhone:(NSString *)phone completion:(void (^)(NSDictionary *user))completion",
+  "doc": "Resolve an address-book phone number to a Telegram user, or nil. Same dictionary shape as -contactsWithCompletion:.",
+  "header": "TGClient.h"
+ }
+]

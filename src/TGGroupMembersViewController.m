@@ -1,6 +1,7 @@
 #import "TGGroupMembersViewController.h"
 #import "TGClient.h"
 #import "TGClient+Groups.h"
+#import "TGClient+Contacts.h"
 #import "TGClient+Privacy.h"
 #import "TGIcons.h"
 #import "TGTheme.h"
@@ -66,6 +67,7 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 	int64_t _chatId;
 	int64_t _userId;
 	BOOL _restricting;
+	BOOL _defaults;
 }
 
 @property (nonatomic, strong) NSString *memberName;
@@ -84,6 +86,25 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 
 - (id)initWithChatId:(int64_t)chatId userId:(int64_t)userId
 				name:(NSString *)name restricting:(BOOL)restricting;
+- (id)initWithDefaultPermissionsOfChat:(int64_t)chatId;
+
+@end
+
+@interface TGGroupAddMembersViewController : UITableViewController <UISearchBarDelegate> {
+	int64_t _chatId;
+}
+
+@property (nonatomic, strong) UISearchBar *searchBar;
+@property (nonatomic, strong) NSArray *users;
+@property (nonatomic, strong) NSMutableArray *picked;
+@property (nonatomic, strong) NSMutableDictionary *pickedNames;
+@property (nonatomic, strong) UILabel *statusLabel;
+@property (nonatomic, strong) UIActivityIndicatorView *spinner;
+@property (nonatomic, assign) NSInteger generation;
+@property (nonatomic, assign) BOOL adding;
+@property (nonatomic, copy) void (^onAdded)(void);
+
+- (id)initWithChatId:(int64_t)chatId;
 
 @end
 
@@ -230,13 +251,24 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 	return self;
 }
 
+- (id)initWithDefaultPermissionsOfChat:(int64_t)chatId {
+	self = [self initWithChatId:chatId userId:0 name:nil restricting:YES];
+	if (!self)
+		return nil;
+	_defaults = YES;
+	return self;
+}
+
 - (void)viewDidLoad {
 	[super viewDidLoad];
 
 	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
 		self.edgesForExtendedLayout = UIRectEdgeNone;
 
-	self.title = _restricting ? @"Restrictions" : @"Admin Rights";
+	if (_defaults)
+		self.title = @"Permissions";
+	else
+		self.title = _restricting ? @"Restrictions" : @"Admin Rights";
 	self.view.backgroundColor = [[TGTheme shared] listBackgroundColour];
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
 
@@ -282,6 +314,26 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 
 - (void)loadCurrentState {
 	__weak typeof(self) weakSelf = self;
+	if (_defaults){
+		self.keys = [[TGClient shared] memberPermissionKeys] ?: [NSArray array];
+		[[TGClient shared] defaultPermissionsInGroup:_chatId
+										  completion:^(NSDictionary *permissions){
+			TGMemberRightsViewController *me = weakSelf;
+			if (!me)
+				return;
+			if (![permissions isKindOfClass:NSDictionary.class]){
+				[me showLoadFailure];
+				return;
+			}
+			[me.values removeAllObjects];
+			for (NSString *key in me.keys)
+				[me.values setObject:[NSNumber numberWithBool:
+						[[permissions objectForKey:key] boolValue]] forKey:key];
+			me.editable = YES;
+			[me finishLoading];
+		}];
+		return;
+	}
 	if (_restricting){
 		self.keys = [[TGClient shared] memberPermissionKeys] ?: [NSArray array];
 		[[TGClient shared] permissionsOfUser:_userId inGroup:_chatId
@@ -333,7 +385,9 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 - (void)showLoadFailure {
 	[self.spinner stopAnimating];
 	self.tableView.hidden = YES;
-	self.statusLabel.text = @"Could not read this member.";
+	self.statusLabel.text = _defaults
+			? @"Could not read the group permissions."
+			: @"Could not read this member.";
 	self.statusLabel.hidden = NO;
 }
 
@@ -351,7 +405,7 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 }
 
 - (BOOL)hasExtraSection {
-	if (!self.loaded || !self.editable)
+	if (!self.loaded || !self.editable || _defaults)
 		return NO;
 	return _restricting || self.canTransferOwnership;
 }
@@ -369,6 +423,8 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
 	if (section == 1)
 		return _restricting ? @"How long?" : nil;
+	if (_defaults)
+		return @"What can members do?";
 	return _restricting ? @"What can this member do?" : @"What can this admin do?";
 }
 
@@ -381,6 +437,9 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 		return [NSString stringWithFormat:@"%@ becomes the owner and you keep only admin rights.",
 				self.memberName];
 	}
+	if (_defaults)
+		return @"Anything turned off here is denied to every member who is not "
+				@"an administrator.";
 	if (!self.editable)
 		return @"You cannot change the rights of this member.";
 	if (_restricting)
@@ -515,6 +574,12 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 		[me.navigationController popViewControllerAnimated:YES];
 	};
 
+	if (_defaults){
+		[[TGClient shared] setDefaultPermissions:payload
+										 inGroup:_chatId
+									  completion:done];
+		return;
+	}
 	if (_restricting){
 		[[TGClient shared] restrictMember:_userId
 								  inGroup:_chatId
@@ -532,12 +597,226 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 
 @end
 
+@implementation TGGroupAddMembersViewController
+
+- (id)initWithChatId:(int64_t)chatId {
+	self = [super initWithStyle:UITableViewStylePlain];
+	if (!self)
+		return nil;
+	_chatId = chatId;
+	self.picked = [NSMutableArray array];
+	self.pickedNames = [NSMutableDictionary dictionary];
+	self.users = [NSArray array];
+	return self;
+}
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+
+	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
+		self.edgesForExtendedLayout = UIRectEdgeNone;
+
+	self.title = @"Add Members";
+	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+	self.tableView.rowHeight = 44;
+	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	self.tableView.separatorColor = [[TGTheme shared] separatorColour];
+
+	self.searchBar = [[UISearchBar alloc] initWithFrame:
+			CGRectMake(0, 0, self.view.bounds.size.width, 44)];
+	self.searchBar.delegate = self;
+	self.searchBar.placeholder = @"Search";
+	self.tableView.tableHeaderView = self.searchBar;
+
+	UIView *background = [[UIView alloc] initWithFrame:self.tableView.bounds];
+	background.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	background.autoresizingMask =
+			UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+
+	self.statusLabel = [[UILabel alloc] initWithFrame:
+			CGRectMake(0, 110, background.bounds.size.width, 22)];
+	self.statusLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	self.statusLabel.backgroundColor = [UIColor clearColor];
+	self.statusLabel.textAlignment = NSTextAlignmentCenter;
+	self.statusLabel.font = [UIFont systemFontOfSize:15];
+	self.statusLabel.textColor = [[TGTheme shared] secondaryTextColour];
+	self.statusLabel.hidden = YES;
+	[background addSubview:self.statusLabel];
+
+	self.spinner = [[UIActivityIndicatorView alloc]
+			initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleGray];
+	self.spinner.center = CGPointMake(background.bounds.size.width / 2, 84);
+	self.spinner.autoresizingMask =
+			UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin;
+	self.spinner.hidesWhenStopped = YES;
+	[background addSubview:self.spinner];
+	self.tableView.backgroundView = background;
+
+	self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
+			initWithTitle:@"Add" style:UIBarButtonItemStyleDone
+				   target:self action:@selector(addPicked)];
+	[self updateDoneButton];
+	[self runSearchWithQuery:@""];
+}
+
+- (void)updateDoneButton {
+	self.navigationItem.rightBarButtonItem.enabled = self.picked.count != 0 && !self.adding;
+}
+
+- (void)runSearchWithQuery:(NSString *)query {
+	self.generation++;
+	NSInteger generation = self.generation;
+	[self.spinner startAnimating];
+	self.statusLabel.hidden = YES;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] searchContacts:query ?: @"" limit:kMemberPageSize
+						   completion:^(NSArray *users){
+		TGGroupAddMembersViewController *me = weakSelf;
+		if (!me || me.generation != generation)
+			return;
+		[me.spinner stopAnimating];
+		me.users = [users isKindOfClass:NSArray.class] ? users : [NSArray array];
+		[me.tableView reloadData];
+		me.statusLabel.text = @"Nobody here to add.";
+		me.statusLabel.hidden = me.users.count != 0;
+	}];
+}
+
+- (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)text {
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+											 selector:@selector(runDelayedSearch)
+											   object:nil];
+	[self performSelector:@selector(runDelayedSearch) withObject:nil afterDelay:0.3f];
+}
+
+- (void)runDelayedSearch {
+	[self runSearchWithQuery:self.searchBar.text ?: @""];
+}
+
+- (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {
+	[searchBar resignFirstResponder];
+}
+
+- (NSDictionary *)userAtRow:(NSInteger)row {
+	if (row < 0 || row >= (NSInteger)self.users.count)
+		return nil;
+	NSDictionary *user = [self.users objectAtIndex:(NSUInteger)row];
+	return [user isKindOfClass:NSDictionary.class] ? user : nil;
+}
+
+- (NSString *)nameOfUser:(NSDictionary *)user {
+	NSString *first = TGMembersString(user, @"first_name");
+	NSString *last = TGMembersString(user, @"last_name");
+	NSString *name = last.length
+			? (first.length ? [NSString stringWithFormat:@"%@ %@", first, last] : last)
+			: first;
+	if (!name.length)
+		name = TGMembersString(user, @"username");
+	return name.length ? name : @"Unknown";
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	return (NSInteger)self.users.count;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView
+		 cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	static NSString *reuse = @"TGGroupAddMemberCell";
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
+	if (!cell){
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+									  reuseIdentifier:reuse];
+		cell.textLabel.font = [UIFont systemFontOfSize:17];
+		cell.detailTextLabel.font = [UIFont systemFontOfSize:13];
+	}
+	NSDictionary *user = [self userAtRow:indexPath.row];
+	cell.textLabel.text = user ? [self nameOfUser:user] : @"";
+	cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
+	NSString *username = user ? TGMembersString(user, @"username") : @"";
+	cell.detailTextLabel.text = username.length
+			? [NSString stringWithFormat:@"@%@", username] : @"";
+	int64_t userId = user ? TGMembersUserId(user) : 0;
+	BOOL on = userId != 0
+			&& [self.picked containsObject:[NSNumber numberWithLongLong:userId]];
+	cell.accessoryType = on ? UITableViewCellAccessoryCheckmark
+							: UITableViewCellAccessoryNone;
+	return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	NSDictionary *user = [self userAtRow:indexPath.row];
+	int64_t userId = user ? TGMembersUserId(user) : 0;
+	if (userId == 0)
+		return;
+	NSNumber *key = [NSNumber numberWithLongLong:userId];
+	if ([self.picked containsObject:key]){
+		[self.picked removeObject:key];
+		[self.pickedNames removeObjectForKey:key];
+	} else {
+		[self.picked addObject:key];
+		[self.pickedNames setObject:[self nameOfUser:user] forKey:key];
+	}
+	[tableView reloadRowsAtIndexPaths:[NSArray arrayWithObject:indexPath]
+					 withRowAnimation:UITableViewRowAnimationNone];
+	[self updateDoneButton];
+}
+
+- (void)addPicked {
+	if (self.adding || self.picked.count == 0)
+		return;
+	self.adding = YES;
+	[self updateDoneButton];
+	[self.searchBar resignFirstResponder];
+
+	NSArray *ids = [self.picked copy];
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] addMembers:ids toGroup:_chatId completion:^(NSArray *failedUserIds){
+		TGGroupAddMembersViewController *me = weakSelf;
+		if (!me)
+			return;
+		me.adding = NO;
+		[me updateDoneButton];
+
+		NSArray *failed = [failedUserIds isKindOfClass:NSArray.class]
+				? failedUserIds : [NSArray array];
+		if (failed.count == ids.count){
+			[[[UIAlertView alloc] initWithTitle:nil
+										message:@"Nobody could be added. Their privacy "
+					@"settings may not allow it."
+									   delegate:nil
+							  cancelButtonTitle:@"OK"
+							  otherButtonTitles:nil] show];
+			return;
+		}
+		if (me.onAdded)
+			me.onAdded();
+		if (failed.count != 0){
+			NSMutableArray *names = [NSMutableArray array];
+			for (NSNumber *key in failed){
+				NSString *name = [me.pickedNames objectForKey:key];
+				[names addObject:name.length ? name : @"someone"];
+			}
+			[[[UIAlertView alloc] initWithTitle:nil
+										message:[NSString stringWithFormat:
+					@"%@ could not be added.", [names componentsJoinedByString:@", "]]
+									   delegate:nil
+							  cancelButtonTitle:@"OK"
+							  otherButtonTitles:nil] show];
+		}
+		[me.navigationController popViewControllerAnimated:YES];
+	}];
+}
+
+@end
+
 @interface TGGroupMembersViewController () <UITableViewDataSource, UITableViewDelegate,
 		UISearchBarDelegate, UIActionSheetDelegate, UIAlertViewDelegate> {
 	UIView *_modeBar;
 	NSMutableArray *_groupButtons;
 	NSMutableArray *_groupSeparators;
 	int64_t _pendingUserId;
+	NSArray *_manageActions;
 }
 
 @property (nonatomic, strong) UITableView *tableView;
@@ -904,6 +1183,7 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 		if ([info isKindOfClass:NSDictionary.class]){
 			me.groupInfo = info;
 			[me updateTitle];
+			[me updateManageButton];
 		}
 	}];
 
@@ -916,6 +1196,223 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 			me.myRights = rights;
 		if ([status isKindOfClass:NSString.class])
 			me.myStatus = status;
+		[me updateManageButton];
+	}];
+}
+
+#pragma mark - manage menu
+
+- (BOOL)isSupergroup {
+	return [[self.groupInfo objectForKey:@"isSupergroup"] boolValue];
+}
+
+- (NSInteger)pendingJoinRequestCount {
+	return TGMembersInteger(self.groupInfo, @"pendingJoinRequests");
+}
+
+- (NSArray *)availableManageActions {
+	if (![self.groupInfo isKindOfClass:NSDictionary.class])
+		return [NSArray array];
+
+	NSMutableArray *actions = [NSMutableArray array];
+	if ([self iMay:@"can_invite_users"]){
+		[actions addObject:@"addMembers"];
+		if ([self pendingJoinRequestCount] > 0){
+			[actions addObject:@"approveAllRequests"];
+			[actions addObject:@"dismissAllRequests"];
+		}
+	}
+	if ([self isSupergroup] && [self iMay:@"can_restrict_members"])
+		[actions addObject:@"defaultPermissions"];
+	if (![self isSupergroup] && [self.myStatus isEqualToString:@"creator"])
+		[actions addObject:@"upgrade"];
+	return actions;
+}
+
+- (NSString *)titleForManageAction:(NSString *)action {
+	if ([action isEqualToString:@"addMembers"])
+		return @"Add Members";
+	if ([action isEqualToString:@"approveAllRequests"])
+		return [NSString stringWithFormat:@"Approve All Requests (%d)",
+				(int)[self pendingJoinRequestCount]];
+	if ([action isEqualToString:@"dismissAllRequests"])
+		return @"Dismiss All Requests";
+	if ([action isEqualToString:@"defaultPermissions"])
+		return @"Default Permissions";
+	return @"Upgrade to Supergroup";
+}
+
+- (void)updateManageButton {
+	_manageActions = [self availableManageActions];
+	if (_manageActions.count == 0){
+		self.navigationItem.rightBarButtonItem = nil;
+		return;
+	}
+	if (self.navigationItem.rightBarButtonItem)
+		return;
+	self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
+			initWithTitle:@"Manage" style:UIBarButtonItemStylePlain
+				   target:self action:@selector(showManageMenu)];
+}
+
+- (void)showManageMenu {
+	NSArray *actions = [self availableManageActions];
+	if (actions.count == 0)
+		return;
+	_manageActions = actions;
+
+	[self.searchBar resignFirstResponder];
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:nil];
+	sheet.tag = 2;
+	for (NSString *action in actions)
+		[sheet addButtonWithTitle:[self titleForManageAction:action]];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	[sheet showInView:self.navigationController.view ?: self.view];
+}
+
+- (void)performManageAction:(NSString *)action {
+	__weak typeof(self) weakSelf = self;
+	if ([action isEqualToString:@"addMembers"]){
+		TGGroupAddMembersViewController *picker =
+				[[TGGroupAddMembersViewController alloc] initWithChatId:self.chatId];
+		picker.onAdded = ^{
+			TGGroupMembersViewController *me = weakSelf;
+			if (!me)
+				return;
+			[me loadGroupInfo];
+			[me reload];
+		};
+		[self.navigationController pushViewController:picker animated:YES];
+		return;
+	}
+	if ([action isEqualToString:@"defaultPermissions"]){
+		TGMemberRightsViewController *editor = [[TGMemberRightsViewController alloc]
+				initWithDefaultPermissionsOfChat:self.chatId];
+		[self.navigationController pushViewController:editor animated:YES];
+		return;
+	}
+	if ([action isEqualToString:@"upgrade"]){
+		[self confirm:@"Upgrade this group to a supergroup? Members can then be "
+				@"restricted and banned. This cannot be undone."
+				   ok:@"Upgrade" destructive:YES run:^{
+			[weakSelf upgradeToSupergroupThen:nil];
+		}];
+		return;
+	}
+	[self confirmAllJoinRequests:[action isEqualToString:@"approveAllRequests"]];
+}
+
+- (void)confirmAllJoinRequests:(BOOL)approve {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] joinRequestsInGroup:self.chatId
+									 limit:kMemberPageSize
+								completion:^(NSArray *requests, NSInteger totalCount){
+		TGGroupMembersViewController *me = weakSelf;
+		if (!me)
+			return;
+		NSArray *list = [requests isKindOfClass:NSArray.class] ? requests : [NSArray array];
+		if (list.count == 0 && totalCount == 0){
+			[[[UIAlertView alloc] initWithTitle:nil
+										message:@"Nobody is waiting to join this group."
+									   delegate:nil
+							  cancelButtonTitle:@"OK"
+							  otherButtonTitles:nil] show];
+			[me loadGroupInfo];
+			return;
+		}
+
+		NSMutableArray *names = [NSMutableArray array];
+		for (NSDictionary *request in list){
+			if (![request isKindOfClass:NSDictionary.class])
+				continue;
+			NSString *name = TGMembersString(request, @"name");
+			if (name.length && names.count < 3)
+				[names addObject:name];
+		}
+		NSInteger count = totalCount > 0 ? totalCount : (NSInteger)list.count;
+		NSString *who = names.count
+				? [names componentsJoinedByString:@", "] : @"everyone waiting";
+		if (count > (NSInteger)names.count && names.count)
+			who = [NSString stringWithFormat:@"%@ and %d more", who,
+					(int)(count - (NSInteger)names.count)];
+		NSString *message = approve
+				? [NSString stringWithFormat:@"Let %@ into this group?", who]
+				: [NSString stringWithFormat:@"Turn down %@?", who];
+
+		[me confirm:message ok:(approve ? @"Approve" : @"Dismiss")
+		destructive:!approve run:^{
+			[weakSelf runAllJoinRequests:approve];
+		}];
+	}];
+}
+
+- (void)runAllJoinRequests:(BOOL)approve {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] processAllJoinRequestsInGroup:self.chatId
+											 approve:approve
+										  completion:^(BOOL ok){
+		TGGroupMembersViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (!ok){
+			[[[UIAlertView alloc] initWithTitle:nil
+										message:@"Could not answer these join requests."
+									   delegate:nil
+							  cancelButtonTitle:@"OK"
+							  otherButtonTitles:nil] show];
+			return;
+		}
+		[me loadGroupInfo];
+		if (approve)
+			[me reload];
+	}];
+}
+
+- (void)upgradeToSupergroupThen:(void (^)(void))then {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] upgradeBasicGroupToSupergroup:self.chatId
+										  completion:^(int64_t newChatId){
+		TGGroupMembersViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (newChatId == 0){
+			[[[UIAlertView alloc] initWithTitle:nil
+										message:@"Could not upgrade this group."
+									   delegate:nil
+							  cancelButtonTitle:@"OK"
+							  otherButtonTitles:nil] show];
+			return;
+		}
+		me.chatId = newChatId;
+		me.groupInfo = nil;
+		[[TGClient shared] groupInfoForChat:newChatId completion:^(NSDictionary *info){
+			TGGroupMembersViewController *inner = weakSelf;
+			if (!inner)
+				return;
+			if ([info isKindOfClass:NSDictionary.class]){
+				inner.groupInfo = info;
+				[inner updateTitle];
+			}
+			[[TGClient shared] myAdministratorRightsInGroup:newChatId
+												 completion:^(NSDictionary *rights,
+															  NSString *status){
+				TGGroupMembersViewController *last = weakSelf;
+				if (!last)
+					return;
+				if ([rights isKindOfClass:NSDictionary.class])
+					last.myRights = rights;
+				if ([status isKindOfClass:NSString.class])
+					last.myStatus = status;
+				[last updateManageButton];
+				[last reload];
+				if (then)
+					then();
+			}];
+		}];
 	}];
 }
 
@@ -1469,6 +1966,18 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 	return actions;
 }
 
+- (BOOL)actionNeedsSupergroup:(NSString *)action {
+	if (![self.groupInfo isKindOfClass:NSDictionary.class] || [self isSupergroup])
+		return NO;
+	if (![self.myStatus isEqualToString:@"creator"])
+		return NO;
+	return [action isEqualToString:@"restrict"]
+			|| [action isEqualToString:@"editRestrictions"]
+			|| [action isEqualToString:@"ban"]
+			|| [action isEqualToString:@"unban"]
+			|| [action isEqualToString:@"unrestrict"];
+}
+
 - (void)openRightsEditorForUser:(int64_t)userId name:(NSString *)name
 					restricting:(BOOL)restricting {
 	TGMemberRightsViewController *editor = [[TGMemberRightsViewController alloc]
@@ -1499,6 +2008,17 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 	if (!name.length)
 		name = @"this user";
 	__weak typeof(self) weakSelf = self;
+
+	if ([self actionNeedsSupergroup:action]){
+		[self confirm:@"Restricting and banning people needs a supergroup. Upgrade "
+				@"this group now? This cannot be undone."
+				   ok:@"Upgrade" destructive:YES run:^{
+			[weakSelf upgradeToSupergroupThen:^{
+				[weakSelf performAction:action onMember:member];
+			}];
+		}];
+		return;
+	}
 
 	if ([action isEqualToString:@"promote"] || [action isEqualToString:@"editRights"]){
 		[self openRightsEditorForUser:userId name:name restricting:NO];
@@ -1699,6 +2219,14 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 }
 
 - (void)actionSheet:(UIActionSheet *)actionSheet clickedButtonAtIndex:(NSInteger)buttonIndex {
+	if (actionSheet.tag == 2){
+		if (buttonIndex == actionSheet.cancelButtonIndex)
+			return;
+		if (buttonIndex < 0 || buttonIndex >= (NSInteger)_manageActions.count)
+			return;
+		[self performManageAction:[_manageActions objectAtIndex:(NSUInteger)buttonIndex]];
+		return;
+	}
 	if (buttonIndex == actionSheet.cancelButtonIndex || _pendingUserId == 0)
 		return;
 	NSInteger now = (NSInteger)[[NSDate date] timeIntervalSince1970];

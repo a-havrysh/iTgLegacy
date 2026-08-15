@@ -2,6 +2,7 @@
 #import "TGChatViewController.h"
 #import "TGClient.h"
 #import "TGClient+Contacts.h"
+#import "TGClient+SecretChats.h"
 #import "TGClient+UserStatus.h"
 #import "TGClient+Groups.h"
 #import "TGIcons.h"
@@ -678,6 +679,346 @@ static BOOL TGCanSendSMS(void) {
 
 @end
 
+static UIImage *TGSecretKeyImage(NSArray *cells) {
+	if (![cells isKindOfClass:NSArray.class] || cells.count < 144)
+		return nil;
+	static const int palette[4] = {0xffffff, 0xd5e6f3, 0x2d5775, 0x2f99c9};
+	CGFloat side = 8.0f;
+	UIGraphicsBeginImageContextWithOptions(CGSizeMake(side * 12, side * 12), YES, 0.0f);
+	CGContextRef context = UIGraphicsGetCurrentContext();
+	for (int i = 0; i < 144; i++){
+		id value = cells[(NSUInteger)i];
+		int index = [value isKindOfClass:NSNumber.class] ? ([value intValue] & 3) : 0;
+		CGContextSetFillColorWithColor(context, TGContactsRGB(palette[index]).CGColor);
+		CGContextFillRect(context, CGRectMake((i % 12) * side, (i / 12) * side, side, side));
+	}
+	UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return image;
+}
+
+@interface TGSecretChatViewController : UITableViewController <UIActionSheetDelegate>
+@property (nonatomic, assign) int64_t chatId;
+@property (nonatomic, assign) int64_t userId;
+@property (nonatomic, copy) NSString *peerName;
+@property (nonatomic, assign) int secretChatId;
+@property (nonatomic, copy) NSString *stateText;
+@property (nonatomic, copy) NSString *sendText;
+@property (nonatomic, assign) NSInteger ttl;
+@property (nonatomic, assign) BOOL ttlKnown;
+@property (nonatomic, assign) NSInteger defaultTtl;
+@property (nonatomic, assign) BOOL defaultTtlKnown;
+@property (nonatomic, strong) NSArray *ladder;
+@end
+
+@implementation TGSecretChatViewController
+
+- (id)init {
+	self = [super initWithStyle:UITableViewStyleGrouped];
+	return self;
+}
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
+		self.edgesForExtendedLayout = UIRectEdgeNone;
+	self.title = self.peerName.length ? self.peerName : @"Secret Chat";
+	self.stateText = @"Loading…";
+	self.sendText = @"";
+	self.ladder = [TGClient autoDeleteLadder];
+	[self reloadState];
+	[self reloadTimers];
+	[self reloadKey];
+}
+
+- (NSString *)wordingForState:(NSString *)state {
+	if ([state isEqualToString:@"ready"])
+		return @"Ready";
+	if ([state isEqualToString:@"pending"])
+		return @"Waiting for the other side";
+	if ([state isEqualToString:@"closed"])
+		return @"Cancelled";
+	return state.length ? state : @"Unknown";
+}
+
+- (void)reloadState {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] secretChatInfoForChat:self.chatId completion:^(NSDictionary *info){
+		TGSecretChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (![info isKindOfClass:NSDictionary.class]){
+			me.stateText = @"Unavailable";
+			[me.tableView reloadData];
+			return;
+		}
+		NSNumber *secretId = [info[@"secretChatId"] isKindOfClass:NSNumber.class]
+				? info[@"secretChatId"] : nil;
+		me.secretChatId = secretId ? secretId.intValue : 0;
+		NSString *state = [info[@"state"] isKindOfClass:NSString.class] ? info[@"state"] : @"";
+		me.stateText = [me wordingForState:state];
+		if (!me.peerName.length){
+			NSString *name = [info[@"name"] isKindOfClass:NSString.class] ? info[@"name"] : nil;
+			if (name.length){
+				me.peerName = name;
+				me.title = name;
+			}
+		}
+		[me.tableView reloadData];
+	}];
+	[[TGClient shared] canSendInSecretChat:self.chatId
+								completion:^(BOOL canSend, NSString *state){
+		TGSecretChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		me.sendText = canSend ? @"" : @"You cannot send messages yet";
+		[me.tableView reloadData];
+	}];
+}
+
+- (void)reloadTimers {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] autoDeleteTimeForChat:self.chatId completion:^(NSInteger seconds){
+		TGSecretChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		me.ttl = seconds;
+		me.ttlKnown = YES;
+		[me.tableView reloadData];
+	}];
+	[[TGClient shared] defaultAutoDeleteTimeWithCompletion:^(NSInteger seconds){
+		TGSecretChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		me.defaultTtl = seconds;
+		me.defaultTtlKnown = YES;
+		[me.tableView reloadData];
+	}];
+}
+
+- (void)reloadKey {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] encryptionKeyGridForChat:self.chatId completion:^(NSArray *cells){
+		TGSecretChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		UIImage *image = TGSecretKeyImage(cells);
+		if (!image)
+			return;
+		[[TGClient shared] encryptionKeyHashForChat:me.chatId completion:^(NSString *base64){
+			TGSecretChatViewController *inner = weakSelf;
+			if (!inner)
+				return;
+			[inner showKeyImage:image hash:base64];
+		}];
+	}];
+}
+
+- (void)showKeyImage:(UIImage *)image hash:(NSString *)base64 {
+	CGFloat width = self.tableView.bounds.size.width;
+	UIView *footer = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, 210)];
+	footer.backgroundColor = [UIColor clearColor];
+
+	UIImageView *grid = [[UIImageView alloc] initWithImage:image];
+	grid.frame = CGRectMake((CGFloat)(int)((width - 96) / 2), 14, 96, 96);
+	grid.layer.borderColor = [UIColor colorWithWhite:0.0f alpha:0.15f].CGColor;
+	grid.layer.borderWidth = 1.0f;
+	[footer addSubview:grid];
+
+	UILabel *caption = [[UILabel alloc] initWithFrame:CGRectMake(20, 118, width - 40, 30)];
+	caption.backgroundColor = [UIColor clearColor];
+	caption.numberOfLines = 2;
+	caption.textAlignment = NSTextAlignmentCenter;
+	caption.font = [UIFont systemFontOfSize:13];
+	caption.textColor = [UIColor colorWithWhite:0.0f alpha:0.55f];
+	caption.text = @"If this image looks the same on both devices, this chat is secure.";
+	[footer addSubview:caption];
+
+	UILabel *hashLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 152, width - 40, 46)];
+	hashLabel.backgroundColor = [UIColor clearColor];
+	hashLabel.numberOfLines = 3;
+	hashLabel.lineBreakMode = NSLineBreakByCharWrapping;
+	hashLabel.textAlignment = NSTextAlignmentCenter;
+	hashLabel.font = [UIFont fontWithName:@"Courier" size:11] ?: [UIFont systemFontOfSize:11];
+	hashLabel.textColor = [UIColor colorWithWhite:0.0f alpha:0.4f];
+	hashLabel.text = [base64 isKindOfClass:NSString.class] ? base64 : @"";
+	[footer addSubview:hashLabel];
+
+	self.tableView.tableFooterView = footer;
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+	return 3;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	return section == 2 ? 1 : 2;
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
+	if (section == 0)
+		return @"Secret Chat";
+	if (section == 1)
+		return @"Self-Destruct Timer";
+	return nil;
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+	if (section == 0 && self.sendText.length)
+		return self.sendText;
+	if (section == 1)
+		return @"Messages sent to this chat are removed for both sides after the timer runs out.";
+	return nil;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	static NSString *reuse = @"TGSecretChatCell";
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
+	if (!cell)
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
+									  reuseIdentifier:reuse];
+	cell.accessoryType = UITableViewCellAccessoryNone;
+	cell.textLabel.textColor = [UIColor blackColor];
+	cell.textLabel.textAlignment = NSTextAlignmentLeft;
+	cell.detailTextLabel.text = @"";
+	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+
+	if (indexPath.section == 0){
+		if (indexPath.row == 0){
+			cell.textLabel.text = @"Status";
+			cell.detailTextLabel.text = self.stateText;
+			cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		} else {
+			cell.textLabel.text = @"Open Chat";
+			cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+		}
+		return cell;
+	}
+	if (indexPath.section == 1){
+		if (indexPath.row == 0){
+			cell.textLabel.text = @"Timer";
+			cell.detailTextLabel.text = self.ttlKnown
+					? [TGClient autoDeleteTitleForSeconds:self.ttl] : @"…";
+		} else {
+			cell.textLabel.text = @"Default for New Chats";
+			cell.detailTextLabel.text = self.defaultTtlKnown
+					? [TGClient autoDeleteTitleForSeconds:self.defaultTtl] : @"…";
+		}
+		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+		return cell;
+	}
+	cell.textLabel.text = @"Terminate Secret Chat";
+	cell.textLabel.textColor = TGContactsRGB(0xcc3333);
+	cell.textLabel.textAlignment = NSTextAlignmentCenter;
+	return cell;
+}
+
+- (void)showLadderWithTag:(NSInteger)tag title:(NSString *)title {
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:title
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:nil];
+	for (NSDictionary *entry in self.ladder){
+		NSString *entryTitle = [entry isKindOfClass:NSDictionary.class] ? entry[@"title"] : nil;
+		if ([entryTitle isKindOfClass:NSString.class])
+			[sheet addButtonWithTitle:entryTitle];
+	}
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = tag;
+	[sheet showInView:self.navigationController.view];
+}
+
+- (void)openChat {
+	if (self.chatId != 0){
+		TGChatViewController *vc = [[TGChatViewController alloc] init];
+		vc.chatId = self.chatId;
+		vc.chatTitle = self.peerName.length ? self.peerName : @"Secret Chat";
+		[self.navigationController pushViewController:vc animated:YES];
+		return;
+	}
+	if (self.secretChatId == 0){
+		[[[UIAlertView alloc] initWithTitle:nil
+									message:@"This secret chat is not available."
+								   delegate:nil
+						  cancelButtonTitle:@"OK"
+						  otherButtonTitles:nil] show];
+		return;
+	}
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] openSecretChatId:self.secretChatId completion:^(int64_t chatId){
+		TGSecretChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (chatId == 0){
+			[[[UIAlertView alloc] initWithTitle:nil
+										message:@"Could not open this secret chat."
+									   delegate:nil
+							  cancelButtonTitle:@"OK"
+							  otherButtonTitles:nil] show];
+			return;
+		}
+		me.chatId = chatId;
+		[me openChat];
+	}];
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	if (indexPath.section == 0 && indexPath.row == 1){
+		[self openChat];
+		return;
+	}
+	if (indexPath.section == 1){
+		if (indexPath.row == 0)
+			[self showLadderWithTag:1 title:@"Self-Destruct Timer"];
+		else
+			[self showLadderWithTag:2 title:@"Default for New Chats"];
+		return;
+	}
+	if (indexPath.section == 2){
+		UIActionSheet *sheet = [[UIActionSheet alloc]
+				initWithTitle:@"This secret chat will be terminated on both devices."
+					 delegate:self
+			cancelButtonTitle:nil
+	   destructiveButtonTitle:@"Terminate"
+			otherButtonTitles:@"Terminate and Delete History", nil];
+		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+		sheet.tag = 3;
+		[sheet showInView:self.navigationController.view];
+	}
+}
+
+- (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
+	if (index == sheet.cancelButtonIndex)
+		return;
+	if (sheet.tag == 3){
+		BOOL deleteHistory = (index != sheet.destructiveButtonIndex);
+		[[TGClient shared] closeSecretChatForChat:self.chatId deleteHistory:deleteHistory];
+		[self.navigationController popViewControllerAnimated:YES];
+		return;
+	}
+	if (index < 0 || index >= (NSInteger)self.ladder.count)
+		return;
+	NSDictionary *entry = self.ladder[(NSUInteger)index];
+	if (![entry isKindOfClass:NSDictionary.class])
+		return;
+	NSInteger seconds = [entry[@"seconds"] integerValue];
+	if (sheet.tag == 1){
+		[[TGClient shared] setChat:self.chatId autoDeleteSeconds:seconds];
+		self.ttl = seconds;
+		self.ttlKnown = YES;
+	} else {
+		[[TGClient shared] setDefaultAutoDeleteTime:seconds];
+		self.defaultTtl = seconds;
+		self.defaultTtlKnown = YES;
+	}
+	[self.tableView reloadData];
+	[self reloadTimers];
+}
+
+@end
+
 @interface TGContactsViewController () <UISearchBarDelegate, UIActionSheetDelegate, UIAlertViewDelegate>
 @property (nonatomic, strong) NSArray *users;
 @property (nonatomic, strong) NSArray *filteredUsers;
@@ -707,6 +1048,19 @@ static BOOL TGCanSendSMS(void) {
 @property (nonatomic, strong) NSDate *contactLinkFetchedAt;
 @property (nonatomic, assign) BOOL contactLinkRequested;
 @property (nonatomic, assign) BOOL buildingInviteList;
+@property (nonatomic, strong) NSMutableDictionary *contactFlags;
+@property (nonatomic, strong) NSDictionary *actionFlags;
+@property (nonatomic, assign) BOOL actionBirthdateReady;
+@property (nonatomic, assign) BOOL actionFlagsReady;
+@property (nonatomic, strong) NSArray *actionKeys;
+@property (nonatomic, assign) BOOL birthdaysHidden;
+@property (nonatomic, strong) NSArray *serverUsers;
+@property (nonatomic, copy) NSString *serverQuery;
+@property (nonatomic, strong) UIDatePicker *birthdayPicker;
+@property (nonatomic, strong) UIActionSheet *birthdaySheet;
+@property (nonatomic, strong) NSDictionary *birthdayUser;
+@property (nonatomic, strong) NSDictionary *phoneShareUser;
+@property (nonatomic, strong) NSDictionary *tokenUser;
 @end
 
 @implementation TGContactsViewController
@@ -877,6 +1231,9 @@ static NSString *TGContactSortKey(NSDictionary *u) {
    destructiveButtonTitle:nil
 		otherButtonTitles:nil];
 	[sheet addButtonWithTitle:@"Sync Contacts"];
+	[sheet addButtonWithTitle:@"Add by Link"];
+	if (!self.birthdaysHidden && [self hasAnyBirthdayToday])
+		[sheet addButtonWithTitle:@"Hide Birthdays Today"];
 	if (self.importedCountKnown && self.importedCount > 0)
 		sheet.destructiveButtonIndex = [sheet addButtonWithTitle:@"Delete Synced Contacts"];
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
@@ -1023,13 +1380,24 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 		return;
 	self.actionUser = u;
 	self.actionBirthdate = nil;
+	self.actionFlags = nil;
 	self.actionSheetShown = NO;
+	self.actionBirthdateReady = NO;
+	self.actionFlagsReady = NO;
 
 	NSNumber *userId = [u[@"id"] isKindOfClass:NSNumber.class] ? u[@"id"] : nil;
 	id cached = userId ? self.birthdays[userId] : nil;
 	if (cached){
 		if ([cached isKindOfClass:NSDictionary.class])
 			self.actionBirthdate = [self birthdayTextFrom:cached];
+		self.actionBirthdateReady = YES;
+	}
+	NSDictionary *cachedFlags = userId ? self.contactFlags[userId] : nil;
+	if (cachedFlags){
+		self.actionFlags = cachedFlags;
+		self.actionFlagsReady = YES;
+	}
+	if (self.actionBirthdateReady && self.actionFlagsReady){
 		[self showContactActions];
 		return;
 	}
@@ -1039,22 +1407,46 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 											   object:nil];
 	[self performSelector:@selector(showContactActions) withObject:nil afterDelay:0.4f];
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] birthdateForUser:[u[@"id"] longLongValue]
-							 completion:^(NSDictionary *birthdate){
-		TGContactsViewController *me = weakSelf;
-		if (!me)
-			return;
-		if (userId)
-			me.birthdays[userId] = [birthdate isKindOfClass:NSDictionary.class]
-					? birthdate : (id)[NSNull null];
-		if (me.actionUser != u)
-			return;
-		NSString *text = [birthdate isKindOfClass:NSDictionary.class]
-				? [me birthdayTextFrom:birthdate] : nil;
-		if (text.length)
-			me.actionBirthdate = text;
-		[me showContactActions];
-	}];
+	if (!self.actionBirthdateReady){
+		[[TGClient shared] birthdateForUser:[u[@"id"] longLongValue]
+								 completion:^(NSDictionary *birthdate){
+			TGContactsViewController *me = weakSelf;
+			if (!me)
+				return;
+			if (userId)
+				me.birthdays[userId] = [birthdate isKindOfClass:NSDictionary.class]
+						? birthdate : (id)[NSNull null];
+			if (me.actionUser != u)
+				return;
+			NSString *text = [birthdate isKindOfClass:NSDictionary.class]
+					? [me birthdayTextFrom:birthdate] : nil;
+			if (text.length)
+				me.actionBirthdate = text;
+			me.actionBirthdateReady = YES;
+			[me showContactActionsWhenReady];
+		}];
+	}
+	if (!self.actionFlagsReady){
+		[[TGClient shared] contactFlagsForUser:[u[@"id"] longLongValue]
+									completion:^(NSDictionary *flags){
+			TGContactsViewController *me = weakSelf;
+			if (!me)
+				return;
+			if (userId)
+				me.contactFlags[userId] = [flags isKindOfClass:NSDictionary.class] ? flags : @{};
+			if (me.actionUser != u)
+				return;
+			if ([flags isKindOfClass:NSDictionary.class])
+				me.actionFlags = flags;
+			me.actionFlagsReady = YES;
+			[me showContactActionsWhenReady];
+		}];
+	}
+}
+
+- (void)showContactActionsWhenReady {
+	if (self.actionBirthdateReady && self.actionFlagsReady)
+		[self showContactActions];
 }
 
 - (NSString *)birthdayTextFrom:(NSDictionary *)birthdate {
@@ -1078,9 +1470,19 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 }
 
 - (BOOL)hasBirthdayTodayForUser:(NSDictionary *)u {
+	if (self.birthdaysHidden)
+		return NO;
 	NSNumber *userId = [u[@"id"] isKindOfClass:NSNumber.class] ? u[@"id"] : nil;
 	id cached = userId ? self.birthdays[userId] : nil;
 	return [cached isKindOfClass:NSDictionary.class] && [self isBirthdayToday:cached];
+}
+
+- (BOOL)hasAnyBirthdayToday {
+	for (id cached in self.birthdays.allValues){
+		if ([cached isKindOfClass:NSDictionary.class] && [self isBirthdayToday:cached])
+			return YES;
+	}
+	return NO;
 }
 
 - (void)showContactActions {
@@ -1101,18 +1503,170 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 		[title appendFormat:@"\n+%@", phone];
 	if (self.actionBirthdate.length)
 		[title appendFormat:@"\nBirthday %@", self.actionBirthdate];
+	BOOL mutual = [self.actionFlags[@"isMutualContact"] boolValue];
+	if ([self.actionFlags[@"isSupport"] boolValue])
+		[title appendString:@"\nTelegram Support"];
+	else if (mutual)
+		[title appendString:@"\nMutual contact"];
 
+	NSMutableArray *keys = [NSMutableArray array];
 	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:title
 													  delegate:self
 											 cancelButtonTitle:nil
 										destructiveButtonTitle:nil
-											 otherButtonTitles:
-			close ? @"Remove from Close Friends" : @"Add to Close Friends",
-			@"Send Message", nil];
+											 otherButtonTitles:nil];
+	[sheet addButtonWithTitle:close ? @"Remove from Close Friends" : @"Add to Close Friends"];
+	[keys addObject:@"closeFriend"];
+	[sheet addButtonWithTitle:@"Send Message"];
+	[keys addObject:@"message"];
+	[sheet addButtonWithTitle:@"Start Secret Chat"];
+	[keys addObject:@"secret"];
+	if (!mutual){
+		[sheet addButtonWithTitle:@"Share My Phone Number"];
+		[keys addObject:@"sharePhone"];
+	}
+	if (!self.actionBirthdate.length){
+		[sheet addButtonWithTitle:@"Suggest Birthday"];
+		[keys addObject:@"suggestBirthday"];
+	}
 	sheet.destructiveButtonIndex = [sheet addButtonWithTitle:@"Delete Contact"];
+	[keys addObject:@"delete"];
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	self.actionKeys = keys;
 	sheet.tag = 2;
 	[self presentSheet:sheet];
+}
+
+- (void)startSecretChatWithUser:(NSDictionary *)u {
+	NSString *name = TGContactName(u);
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] createSecretChatWithUser:[u[@"id"] longLongValue]
+									 completion:^(NSDictionary *info){
+		TGContactsViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (![info isKindOfClass:NSDictionary.class]){
+			[[[UIAlertView alloc] initWithTitle:nil
+										message:@"Could not start a secret chat."
+									   delegate:nil
+							  cancelButtonTitle:@"OK"
+							  otherButtonTitles:nil] show];
+			return;
+		}
+		TGSecretChatViewController *vc = [[TGSecretChatViewController alloc] init];
+		vc.chatId = [info[@"chatId"] longLongValue];
+		vc.secretChatId = [info[@"secretChatId"] intValue];
+		vc.userId = [u[@"id"] longLongValue];
+		vc.peerName = name;
+		if (vc.chatId == 0 && vc.secretChatId == 0){
+			[[[UIAlertView alloc] initWithTitle:nil
+										message:@"Could not start a secret chat."
+									   delegate:nil
+							  cancelButtonTitle:@"OK"
+							  otherButtonTitles:nil] show];
+			return;
+		}
+		if (vc.chatId == 0){
+			[[TGClient shared] openSecretChatId:vc.secretChatId completion:^(int64_t chatId){
+				TGContactsViewController *inner = weakSelf;
+				if (!inner)
+					return;
+				if (chatId == 0){
+					[[[UIAlertView alloc] initWithTitle:nil
+												message:@"Could not open the new secret chat."
+											   delegate:nil
+									  cancelButtonTitle:@"OK"
+									  otherButtonTitles:nil] show];
+					return;
+				}
+				vc.chatId = chatId;
+				[inner.navigationController pushViewController:vc animated:YES];
+			}];
+			return;
+		}
+		[me.navigationController pushViewController:vc animated:YES];
+	}];
+}
+
+- (void)confirmSharePhoneWithUser:(NSDictionary *)u {
+	self.phoneShareUser = u;
+	UIAlertView *alert = [[UIAlertView alloc]
+			initWithTitle:nil
+				  message:[NSString stringWithFormat:@"Let %@ see your phone number?",
+						  TGContactName(u)]
+				 delegate:self
+		cancelButtonTitle:@"Cancel"
+		otherButtonTitles:@"Share", nil];
+	alert.tag = 12;
+	[alert show];
+}
+
+- (void)showBirthdayPickerForUser:(NSDictionary *)u {
+	self.birthdayUser = u;
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:nil];
+	sheet.actionSheetStyle = UIActionSheetStyleBlackTranslucent;
+	sheet.tag = 5;
+
+	UIToolbar *bar = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, 320, 44)];
+	bar.barStyle = UIBarStyleBlackTranslucent;
+	UIBarButtonItem *cancel = [[UIBarButtonItem alloc]
+			initWithBarButtonSystemItem:UIBarButtonSystemItemCancel
+								 target:self action:@selector(dismissBirthdaySheet)];
+	UIBarButtonItem *space = [[UIBarButtonItem alloc]
+			initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace
+								 target:nil action:nil];
+	UIBarButtonItem *done = [[UIBarButtonItem alloc]
+			initWithTitle:@"Suggest" style:UIBarButtonItemStyleDone
+				   target:self action:@selector(sendBirthdaySuggestion)];
+	bar.items = @[cancel, space, done];
+	[sheet addSubview:bar];
+
+	UIDatePicker *picker = [[UIDatePicker alloc] initWithFrame:CGRectMake(0, 44, 320, 216)];
+	picker.datePickerMode = UIDatePickerModeDate;
+	picker.maximumDate = [NSDate date];
+	[sheet addSubview:picker];
+	self.birthdayPicker = picker;
+	self.birthdaySheet = sheet;
+
+	[sheet showInView:self.navigationController.view];
+	[sheet setBounds:CGRectMake(0, 0, 320, 320)];
+}
+
+- (void)dismissBirthdaySheet {
+	[self.birthdaySheet dismissWithClickedButtonIndex:-1 animated:YES];
+	self.birthdaySheet = nil;
+	self.birthdayPicker = nil;
+	self.birthdayUser = nil;
+}
+
+- (void)sendBirthdaySuggestion {
+	NSDictionary *u = self.birthdayUser;
+	NSDate *date = self.birthdayPicker.date;
+	[self.birthdaySheet dismissWithClickedButtonIndex:-1 animated:YES];
+	self.birthdaySheet = nil;
+	self.birthdayPicker = nil;
+	self.birthdayUser = nil;
+	if (!u || !date)
+		return;
+	NSDateComponents *parts = [[NSCalendar currentCalendar]
+			components:(NSDayCalendarUnit | NSMonthCalendarUnit | NSYearCalendarUnit)
+			  fromDate:date];
+	[[TGClient shared] suggestBirthdateToUser:[u[@"id"] longLongValue]
+										  day:parts.day
+										month:parts.month
+										 year:parts.year
+								   completion:^(BOOL ok){
+		[[[UIAlertView alloc] initWithTitle:nil
+									message:ok ? @"Birthday suggested."
+											   : @"Could not suggest a birthday."
+								   delegate:nil
+						  cancelButtonTitle:@"OK"
+						  otherButtonTitles:nil] show];
+	}];
 }
 
 - (void)toggleCloseFriendForUser:(NSDictionary *)u {
@@ -1163,17 +1717,35 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 	if (sheet.tag == 2){
 		NSDictionary *u = self.actionUser;
 		self.actionUser = nil;
-		if (!u)
+		if (!u || index < 0 || index >= (NSInteger)self.actionKeys.count)
 			return;
-		if (index == 0)
+		NSString *key = self.actionKeys[(NSUInteger)index];
+		if ([key isEqualToString:@"closeFriend"])
 			[self toggleCloseFriendForUser:u];
-		else if (index == 1)
+		else if ([key isEqualToString:@"message"])
 			[self openChatWithUser:u];
-		else if (index == sheet.destructiveButtonIndex)
+		else if ([key isEqualToString:@"secret"])
+			[self startSecretChatWithUser:u];
+		else if ([key isEqualToString:@"sharePhone"])
+			[self confirmSharePhoneWithUser:u];
+		else if ([key isEqualToString:@"suggestBirthday"])
+			[self showBirthdayPickerForUser:u];
+		else if ([key isEqualToString:@"delete"])
 			[self confirmDeleteContact:u];
 		return;
 	}
 	if (sheet.tag == 3){
+		NSString *title = [sheet buttonTitleAtIndex:index];
+		if ([title isEqualToString:@"Add by Link"]){
+			[self promptForContactToken];
+			return;
+		}
+		if ([title isEqualToString:@"Hide Birthdays Today"]){
+			[[TGClient shared] hideContactCloseBirthdays];
+			self.birthdaysHidden = YES;
+			[self.tableView reloadData];
+			return;
+		}
 		if (index == sheet.destructiveButtonIndex){
 			__weak typeof(self) weakSelf = self;
 			[[TGClient shared] clearImportedContactsWithCompletion:^(BOOL ok){
@@ -1214,10 +1786,121 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 				 delegate:self
 		cancelButtonTitle:@"Cancel"
 		otherButtonTitles:@"Delete", nil];
+	alert.tag = 1;
 	[alert show];
 }
 
+- (void)promptForContactToken {
+	UIAlertView *alert = [[UIAlertView alloc]
+			initWithTitle:@"Add by Link"
+				  message:@"Paste the t.me link someone shared with you."
+				 delegate:self
+		cancelButtonTitle:@"Cancel"
+		otherButtonTitles:@"Look Up", nil];
+	alert.alertViewStyle = UIAlertViewStylePlainTextInput;
+	alert.tag = 10;
+	NSString *pasted = [UIPasteboard generalPasteboard].string;
+	if ([pasted isKindOfClass:NSString.class] && [pasted rangeOfString:@"t.me"].length)
+		[alert textFieldAtIndex:0].text = pasted;
+	[alert show];
+}
+
+- (NSString *)tokenFromLink:(NSString *)link {
+	NSString *text = [link stringByTrimmingCharactersInSet:
+			[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+	NSRange marker = [text rangeOfString:@"contact/"];
+	if (marker.length)
+		return [text substringFromIndex:marker.location + marker.length];
+	NSRange slash = [text rangeOfString:@"/" options:NSBackwardsSearch];
+	if (slash.length && slash.location + 1 < text.length)
+		return [text substringFromIndex:slash.location + 1];
+	return text;
+}
+
+- (void)lookUpContactToken:(NSString *)token {
+	if (!token.length)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] userForToken:token completion:^(NSDictionary *user){
+		TGContactsViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (![user isKindOfClass:NSDictionary.class] || !user[@"id"]){
+			[[[UIAlertView alloc] initWithTitle:nil
+										message:@"This link is not valid any more."
+									   delegate:nil
+							  cancelButtonTitle:@"OK"
+							  otherButtonTitles:nil] show];
+			return;
+		}
+		me.tokenUser = user;
+		UIAlertView *confirm = [[UIAlertView alloc]
+				initWithTitle:nil
+					  message:[NSString stringWithFormat:@"Add %@ to your contacts?",
+							  TGContactName(user)]
+					 delegate:me
+			cancelButtonTitle:@"Cancel"
+			otherButtonTitles:@"Add", nil];
+		confirm.tag = 11;
+		[confirm show];
+	}];
+}
+
+- (void)addTokenUser:(NSDictionary *)user {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] addContactWithUserId:[user[@"id"] longLongValue]
+									  phone:TGContactString(user, @"phone")
+								  firstName:TGContactString(user, @"first_name")
+								   lastName:TGContactString(user, @"last_name")
+						   sharePhoneNumber:NO
+								 completion:^(BOOL ok){
+		TGContactsViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (!ok){
+			[[[UIAlertView alloc] initWithTitle:nil
+										message:@"Could not add this contact."
+									   delegate:nil
+							  cancelButtonTitle:@"OK"
+							  otherButtonTitles:nil] show];
+			return;
+		}
+		[me reloadContacts];
+	}];
+}
+
 - (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)index {
+	if (alertView.tag == 10){
+		if (index == alertView.cancelButtonIndex)
+			return;
+		[self lookUpContactToken:[self tokenFromLink:[alertView textFieldAtIndex:0].text ?: @""]];
+		return;
+	}
+	if (alertView.tag == 11){
+		NSDictionary *user = self.tokenUser;
+		self.tokenUser = nil;
+		if (index == alertView.cancelButtonIndex || !user)
+			return;
+		[self addTokenUser:user];
+		return;
+	}
+	if (alertView.tag == 12){
+		NSDictionary *u = self.phoneShareUser;
+		self.phoneShareUser = nil;
+		if (index == alertView.cancelButtonIndex || !u)
+			return;
+		[[TGClient shared] sharePhoneNumberWithUser:[u[@"id"] longLongValue]];
+		NSNumber *userId = [u[@"id"] isKindOfClass:NSNumber.class] ? u[@"id"] : nil;
+		if (userId)
+			[self.contactFlags removeObjectForKey:userId];
+		[[[UIAlertView alloc] initWithTitle:nil
+									message:[NSString stringWithFormat:
+											@"%@ can now see your phone number.", TGContactName(u)]
+								   delegate:nil
+						  cancelButtonTitle:@"OK"
+						  otherButtonTitles:nil] show];
+		return;
+	}
 	NSDictionary *u = self.pendingDeleteUser;
 	self.pendingDeleteUser = nil;
 	if (index == alertView.cancelButtonIndex || !u)
@@ -1277,10 +1960,47 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 		return;
 	}
 	NSMutableArray *out = [NSMutableArray array];
-	for (NSDictionary *u in self.users)
-		if ([self matchesQuery:u query:query])
+	NSMutableSet *seen = [NSMutableSet set];
+	for (NSDictionary *u in self.users){
+		if (![self matchesQuery:u query:query])
+			continue;
+		[out addObject:u];
+		[seen addObject:@([u[@"id"] longLongValue])];
+	}
+	if ([self.serverQuery isEqualToString:query]){
+		for (NSDictionary *u in self.serverUsers){
+			if (![u isKindOfClass:NSDictionary.class])
+				continue;
+			NSNumber *key = @([u[@"id"] longLongValue]);
+			if (key.longLongValue == 0 || [seen containsObject:key])
+				continue;
+			[seen addObject:key];
 			[out addObject:u];
+		}
+	}
 	self.filteredUsers = out;
+}
+
+- (void)runServerContactSearch {
+	NSString *query = [self.searchQuery
+			stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+	if (query.length < 2)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] searchContacts:query limit:30 completion:^(NSArray *users){
+		TGContactsViewController *me = weakSelf;
+		if (!me)
+			return;
+		NSString *current = [me.searchQuery
+				stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+		if (![current isEqualToString:query])
+			return;
+		me.serverQuery = query;
+		me.serverUsers = [users isKindOfClass:NSArray.class] ? users : @[];
+		[me applyFilter];
+		[me rebuildSections];
+		[me.tableView reloadData];
+	}];
 }
 
 - (NSArray *)actionRowIdentifiers {
@@ -1592,6 +2312,7 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 	self.badges = [NSMutableDictionary dictionary];
 	self.badgesRequested = [NSMutableSet set];
 	self.birthdays = [NSMutableDictionary dictionary];
+	self.contactFlags = [NSMutableDictionary dictionary];
 	self.tableView.rowHeight = kContactRowHeight;
 	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
 	self.tableView.separatorColor = [[TGTheme shared] separatorColour];
@@ -1837,6 +2558,10 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 	[self applyFilter];
 	[self rebuildSections];
 	[self.tableView reloadData];
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+											 selector:@selector(runServerContactSearch)
+											   object:nil];
+	[self performSelector:@selector(runServerContactSearch) withObject:nil afterDelay:0.35f];
 }
 
 - (void)searchBarTextDidBeginEditing:(UISearchBar *)searchBar {
@@ -1855,6 +2580,8 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 	searchBar.text = @"";
 	self.searchQuery = nil;
 	self.filteredUsers = nil;
+	self.serverUsers = nil;
+	self.serverQuery = nil;
 	[self rebuildSections];
 	[self.tableView reloadData];
 	[searchBar resignFirstResponder];

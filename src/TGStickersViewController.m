@@ -4,6 +4,7 @@
 #import "TGTheme.h"
 #import "TGIcons.h"
 #import "TGActionSheet.h"
+#import "TGAlertView.h"
 #import "UIImage+WebP.h"
 
 #define TGStickersRGB(rgb) [UIColor colorWithRed:(((rgb) >> 16) & 0xff) / 255.0f \
@@ -31,6 +32,16 @@ static const NSUInteger kCoverCacheLimit = 220;
 static const NSUInteger kCoverCacheByteLimit = 8 * 1024 * 1024;
 
 static const NSInteger TGStickersPageMasks = 5;
+static const NSInteger TGStickersPageEmoji = 6;
+static const NSInteger TGStickersPageEmojiTrending = 7;
+static const NSInteger TGStickersPageEmojiArchived = 8;
+static const NSInteger TGStickersPageMasksArchived = 9;
+static const NSInteger TGStickersPageRecent = 10;
+static const NSInteger TGStickersPagePremium = 11;
+
+static const NSInteger kSearchLimit = 40;
+static const NSInteger kPremiumLimit = 40;
+static const CGFloat kSearchBarHeight = 44.0f;
 
 static const NSInteger kRootSectionSettings = 0;
 static const NSInteger kRootSectionPages = 1;
@@ -204,7 +215,8 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 
 @end
 
-@interface TGStickersViewController () <UITableViewDataSource, UITableViewDelegate>
+@interface TGStickersViewController () <UITableViewDataSource, UITableViewDelegate,
+		UISearchBarDelegate>
 
 @property (nonatomic, strong) UITableView *table;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
@@ -242,6 +254,13 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 @property (nonatomic, strong) TGActionSheet *currentActionSheet;
 @property (nonatomic, strong) NSDictionary *actionSheetSet;
 @property (nonatomic, strong) NSDictionary *actionSheetSticker;
+
+@property (nonatomic, strong) UISearchBar *searchBar;
+@property (nonatomic, strong) NSMutableArray *setsBeforeSearch;
+@property (nonatomic, assign) BOOL searching;
+@property (nonatomic, assign) NSInteger recentCount;
+@property (nonatomic, assign) NSInteger emojiSetCount;
+@property (nonatomic, assign) NSInteger subpageTrendingCount;
 @end
 
 @implementation TGStickersViewController
@@ -259,16 +278,65 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 }
 
 - (BOOL)isGridPage {
-	return self.page == TGStickersPageFavourites || self.page == TGStickersPageSet;
+	return self.page == TGStickersPageFavourites || self.page == TGStickersPageSet ||
+			(NSInteger)self.page == TGStickersPageRecent ||
+			(NSInteger)self.page == TGStickersPagePremium;
 }
 
 - (BOOL)isMaskPage {
 	return (NSInteger)self.page == TGStickersPageMasks;
 }
 
+- (BOOL)isEmojiListPage {
+	return (NSInteger)self.page == TGStickersPageEmoji;
+}
+
+- (BOOL)isTwoSectionListPage {
+	return [self isMaskPage] || [self isEmojiListPage];
+}
+
+- (BOOL)isTrendingPage {
+	return self.page == TGStickersPageTrending ||
+			(NSInteger)self.page == TGStickersPageEmojiTrending;
+}
+
+- (BOOL)isArchivePage {
+	return self.page == TGStickersPageArchived ||
+			(NSInteger)self.page == TGStickersPageEmojiArchived ||
+			(NSInteger)self.page == TGStickersPageMasksArchived;
+}
+
+- (BOOL)isReorderPage {
+	return self.page == TGStickersPageRoot || [self isTwoSectionListPage];
+}
+
+- (BOOL)showsSearchBar {
+	return [self isMaskPage] || (NSInteger)self.page == TGStickersPageEmojiTrending;
+}
+
+- (NSInteger)setsSection {
+	if (self.page == TGStickersPageRoot)
+		return kRootSectionSets;
+	if ([self isTwoSectionListPage])
+		return 1;
+	return 0;
+}
+
 - (NSString *)pageTitle {
 	if ([self isMaskPage])
 		return @"Masks";
+	if ([self isEmojiListPage])
+		return @"Custom Emoji";
+	if ((NSInteger)self.page == TGStickersPageEmojiTrending)
+		return @"Trending Emoji";
+	if ((NSInteger)self.page == TGStickersPageEmojiArchived)
+		return @"Archived Emoji";
+	if ((NSInteger)self.page == TGStickersPageMasksArchived)
+		return @"Archived Masks";
+	if ((NSInteger)self.page == TGStickersPageRecent)
+		return @"Recently Used";
+	if ((NSInteger)self.page == TGStickersPagePremium)
+		return @"Premium Stickers";
 	switch (self.page){
 		case TGStickersPageTrending:   return @"Trending Stickers";
 		case TGStickersPageArchived:   return @"Archived Stickers";
@@ -293,6 +361,9 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 
 	[self buildTable];
 
+	if ([self showsSearchBar])
+		[self buildSearchBar];
+
 	if ([self showsBottomBar])
 		[self buildBottomBar];
 
@@ -303,7 +374,7 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	self.spinner.hidesWhenStopped = YES;
 	[self.view addSubview:self.spinner];
 
-	if (self.page == TGStickersPageRoot || [self isMaskPage])
+	if ([self isReorderPage])
 		[self installEditButton];
 	if (self.page == TGStickersPageSet){
 		[self refreshSetBarButton];
@@ -315,6 +386,15 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 
 	if (self.page == TGStickersPageTrending || self.page == TGStickersPageSet)
 		[self captureArchivedSnapshot];
+}
+
+- (void)buildSearchBar {
+	self.searchBar = [[UISearchBar alloc] initWithFrame:
+			CGRectMake(0, 0, self.view.bounds.size.width, kSearchBarHeight)];
+	self.searchBar.delegate = self;
+	self.searchBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	self.searchBar.placeholder = [self isMaskPage] ? @"Search Masks" : @"Search Emoji Sets";
+	self.table.tableHeaderView = self.searchBar;
 }
 
 - (void)captureArchivedSnapshot {
@@ -380,8 +460,7 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
-	if ((self.page == TGStickersPageRoot || [self isMaskPage]) && self.loaded &&
-			!self.reordering)
+	if ([self isReorderPage] && self.loaded && !self.reordering && !self.searching)
 		[self reload];
 	[self.table deselectRowAtIndexPath:[self.table indexPathForSelectedRow] animated:animated];
 }
@@ -395,6 +474,8 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	}
 	if (self.reordering)
 		[self commitOrder];
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+											 selector:@selector(runSearch) object:nil];
 }
 
 - (void)viewDidLayoutSubviews {
@@ -655,17 +736,159 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 #pragma mark - loading
 
 - (void)reload {
+	if (self.searching)
+		return;
 	if ([self isMaskPage]){
 		[self reloadMasks];
 		return;
 	}
+	if ([self isEmojiListPage]){
+		[self reloadEmojiSets];
+		return;
+	}
+	if ([self isTrendingPage]){
+		[self reloadTrending];
+		return;
+	}
+	if ([self isArchivePage]){
+		[self reloadArchived];
+		return;
+	}
+	if ((NSInteger)self.page == TGStickersPageRecent){
+		[self reloadRecent];
+		return;
+	}
+	if ((NSInteger)self.page == TGStickersPagePremium){
+		[self reloadPremium];
+		return;
+	}
 	switch (self.page){
-		case TGStickersPageTrending:   [self reloadTrending]; break;
-		case TGStickersPageArchived:   [self reloadArchived]; break;
 		case TGStickersPageFavourites: [self reloadFavourites]; break;
 		case TGStickersPageSet:        [self reloadSet]; break;
 		default:                       [self reloadRoot]; break;
 	}
+}
+
+- (void)fetchArchivedFromSetId:(int64_t)offsetSetId
+					completion:(void (^)(NSArray *sets, NSInteger totalCount))completion {
+	if ((NSInteger)self.page == TGStickersPageEmojiArchived)
+		[[TGClient shared] archivedEmojiStickerSetsFromSetId:offsetSetId
+													   limit:kArchivedPageSize
+												  completion:completion];
+	else if ((NSInteger)self.page == TGStickersPageMasksArchived)
+		[[TGClient shared] archivedMaskStickerSetsFromSetId:offsetSetId
+													  limit:kArchivedPageSize
+												 completion:completion];
+	else
+		[[TGClient shared] archivedStickerSetsFromSetId:offsetSetId limit:kArchivedPageSize
+											 completion:completion];
+}
+
+- (void)fetchTrendingFromOffset:(NSInteger)offset
+					 completion:(void (^)(NSArray *sets, NSInteger totalCount))completion {
+	if ((NSInteger)self.page == TGStickersPageEmojiTrending)
+		[[TGClient shared] trendingEmojiStickerSetsWithOffset:offset limit:kTrendingPageSize
+												   completion:completion];
+	else
+		[[TGClient shared] trendingStickerSetsWithOffset:offset limit:kTrendingPageSize
+											  completion:completion];
+}
+
+- (void)reloadEmojiSets {
+	if (!self.loaded)
+		[self showLoading];
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] installedEmojiStickerSetsWithCompletion:^(NSArray *sets){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		strongSelf.loaded = YES;
+		if (!sets && strongSelf.sets.count == 0){
+			[strongSelf showFailure];
+			return;
+		}
+		if (sets)
+			strongSelf.sets = [NSMutableArray arrayWithArray:sets];
+		strongSelf.emojiSetCount = (NSInteger)strongSelf.sets.count;
+		[strongSelf showContent];
+		[strongSelf.table reloadData];
+		[strongSelf installEditButton];
+	}];
+
+	[[TGClient shared] archivedEmojiStickerSetsFromSetId:0 limit:1
+											  completion:^(NSArray *sets, NSInteger total){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		strongSelf.archivedCount = total > 0 ? total : (NSInteger)sets.count;
+		[strongSelf reloadSubpageSection];
+	}];
+
+	[[TGClient shared] trendingEmojiStickerSetsWithOffset:0 limit:kTrendingPageSize
+											   completion:^(NSArray *sets, NSInteger total){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		strongSelf.subpageTrendingCount = total > 0 ? total : (NSInteger)sets.count;
+		[strongSelf reloadSubpageSection];
+	}];
+}
+
+- (void)reloadSubpageSection {
+	if (![self isTwoSectionListPage] || self.table.hidden || !self.loaded)
+		return;
+	if ([self.table numberOfSections] < 2)
+		return;
+	[self.table reloadSections:[NSIndexSet indexSetWithIndex:0]
+			  withRowAnimation:UITableViewRowAnimationNone];
+}
+
+- (void)reloadRecent {
+	[self showLoading];
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] recentStickersAttached:NO completion:^(NSArray *stickers){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		strongSelf.loaded = YES;
+		if (!stickers){
+			[strongSelf showFailure];
+			return;
+		}
+		strongSelf.stickers = stickers;
+		strongSelf.recentCount = (NSInteger)stickers.count;
+		if (stickers.count == 0){
+			[strongSelf showTitle:@"No Recent Stickers"
+							 body:@"Stickers you send show up here, ready to be sent again."];
+			return;
+		}
+		[strongSelf showContent];
+		[strongSelf.table reloadData];
+	}];
+}
+
+- (void)reloadPremium {
+	[self showLoading];
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] premiumStickersWithLimit:kPremiumLimit completion:^(NSArray *stickers){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		strongSelf.loaded = YES;
+		if (!stickers){
+			[strongSelf showFailure];
+			return;
+		}
+		strongSelf.stickers = stickers;
+		if (stickers.count == 0){
+			[strongSelf showTitle:@"No Premium Stickers"
+							 body:@"There are no premium stickers in the sets you have installed."];
+			return;
+		}
+		[strongSelf showContent];
+		[strongSelf.table reloadData];
+	}];
 }
 
 - (void)reloadRoot {
@@ -733,6 +956,22 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		[strongSelf.table reloadData];
 	}];
 
+	[[TGClient shared] recentStickersAttached:NO completion:^(NSArray *stickers){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		strongSelf.recentCount = (NSInteger)stickers.count;
+		[strongSelf reloadFirstSection];
+	}];
+
+	[[TGClient shared] installedEmojiStickerSetsWithCompletion:^(NSArray *sets){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		strongSelf.emojiSetCount = (NSInteger)sets.count;
+		[strongSelf reloadFirstSection];
+	}];
+
 	if (![[NSUserDefaults standardUserDefaults] objectForKey:TGStickerSuggestModeKey]){
 		[[TGClient shared] stickerSuggestionEnabledWithCompletion:^(BOOL enabled){
 			__strong typeof(weakSelf) strongSelf = weakSelf;
@@ -773,14 +1012,18 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		if (sets)
 			strongSelf.sets = [NSMutableArray arrayWithArray:sets];
 		strongSelf.maskCount = (NSInteger)strongSelf.sets.count;
-		if (strongSelf.sets.count == 0){
-			[strongSelf showTitle:@"No Masks"
-							 body:@"Mask sets you install show up here, ready to be reordered or removed."];
-			return;
-		}
 		[strongSelf showContent];
 		[strongSelf.table reloadData];
 		[strongSelf installEditButton];
+	}];
+
+	[[TGClient shared] archivedMaskStickerSetsFromSetId:0 limit:1
+											 completion:^(NSArray *sets, NSInteger total){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		strongSelf.archivedCount = total > 0 ? total : (NSInteger)sets.count;
+		[strongSelf reloadSubpageSection];
 	}];
 }
 
@@ -794,8 +1037,7 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 - (void)reloadTrending {
 	[self showLoading];
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] trendingStickerSetsWithOffset:0 limit:kTrendingPageSize
-										  completion:^(NSArray *sets, NSInteger total){
+	[self fetchTrendingFromOffset:0 completion:^(NSArray *sets, NSInteger total){
 		__strong typeof(weakSelf) strongSelf = weakSelf;
 		if (!strongSelf)
 			return;
@@ -809,7 +1051,7 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		strongSelf.trendingOffset = (NSInteger)sets.count;
 		strongSelf.exhausted = ((NSInteger)sets.count < kTrendingPageSize ||
 				(total > 0 && strongSelf.trendingOffset >= total));
-		if (strongSelf.sets.count == 0){
+		if (strongSelf.sets.count == 0 && ![strongSelf showsSearchBar]){
 			[strongSelf showTitle:@"No Trending Stickers"
 							 body:@"There is nothing featured right now. Come back later."];
 			return;
@@ -821,13 +1063,15 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 }
 
 - (void)loadMoreTrending {
+	if (self.searching)
+		return;
 	if (self.loadingMore || self.exhausted || self.sets.count == 0)
 		return;
 	self.loadingMore = YES;
 
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] trendingStickerSetsWithOffset:self.trendingOffset limit:kTrendingPageSize
-										  completion:^(NSArray *sets, NSInteger total){
+	[self fetchTrendingFromOffset:self.trendingOffset
+					   completion:^(NSArray *sets, NSInteger total){
 		__strong typeof(weakSelf) strongSelf = weakSelf;
 		if (!strongSelf)
 			return;
@@ -874,11 +1118,26 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		[[TGClient shared] markTrendingStickerSetsViewed:ids];
 }
 
+- (NSString *)emptyArchiveTitle {
+	if ((NSInteger)self.page == TGStickersPageEmojiArchived)
+		return @"No Archived Emoji";
+	if ((NSInteger)self.page == TGStickersPageMasksArchived)
+		return @"No Archived Masks";
+	return @"No Archived Stickers";
+}
+
+- (NSString *)emptyArchiveBody {
+	if ((NSInteger)self.page == TGStickersPageEmojiArchived)
+		return @"Custom emoji sets you archive are kept here, ready to be put back.";
+	if ((NSInteger)self.page == TGStickersPageMasksArchived)
+		return @"Mask sets you archive are kept here, ready to be put back.";
+	return @"Sticker sets you archive are kept here, ready to be put back.";
+}
+
 - (void)reloadArchived {
 	[self showLoading];
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] archivedStickerSetsFromSetId:0 limit:kArchivedPageSize
-										 completion:^(NSArray *sets, NSInteger total){
+	[self fetchArchivedFromSetId:0 completion:^(NSArray *sets, NSInteger total){
 		__strong typeof(weakSelf) strongSelf = weakSelf;
 		if (!strongSelf)
 			return;
@@ -891,8 +1150,8 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		strongSelf.sets = [NSMutableArray arrayWithArray:sets];
 		strongSelf.exhausted = ((NSInteger)sets.count < kArchivedPageSize);
 		if (strongSelf.sets.count == 0){
-			[strongSelf showTitle:@"No Archived Stickers"
-							 body:@"Sticker sets you archive are kept here, ready to be put back."];
+			[strongSelf showTitle:[strongSelf emptyArchiveTitle]
+							 body:[strongSelf emptyArchiveBody]];
 			return;
 		}
 		[strongSelf showContent];
@@ -901,14 +1160,15 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 }
 
 - (void)loadMoreArchived {
+	if (self.searching)
+		return;
 	if (self.loadingMore || self.exhausted || self.sets.count == 0)
 		return;
 	self.loadingMore = YES;
 	int64_t last = [[self.sets lastObject][@"id"] longLongValue];
 
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] archivedStickerSetsFromSetId:last limit:kArchivedPageSize
-										 completion:^(NSArray *sets, NSInteger total){
+	[self fetchArchivedFromSetId:last completion:^(NSArray *sets, NSInteger total){
 		__strong typeof(weakSelf) strongSelf = weakSelf;
 		if (!strongSelf)
 			return;
@@ -1167,21 +1427,51 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 }
 
 - (void)tileTapped:(UIButton *)tile {
-	if (self.page != TGStickersPageFavourites)
+	if (![self isGridPage])
 		return;
 	NSInteger index = tile.tag;
 	if (index >= (NSInteger)self.stickers.count)
 		return;
-	self.actionSheetSticker = self.stickers[index];
+	NSDictionary *sticker = self.stickers[index];
+	self.actionSheetSticker = sticker;
 
-	NSArray *actions = @[
-		[[TGActionSheetAction alloc] initWithTitle:@"Remove from Favourites"
-											action:@"removeFavourite"
-											  type:TGActionSheetActionTypeDestructive],
-		[[TGActionSheetAction alloc] initWithTitle:@"Cancel" action:@"cancel"
-											  type:TGActionSheetActionTypeCancel]
-	];
-	[self presentSheetWithTitle:nil actions:actions];
+	if (self.page == TGStickersPageFavourites){
+		NSArray *actions = @[
+			[[TGActionSheetAction alloc] initWithTitle:@"Remove from Favourites"
+												action:@"removeFavourite"
+												  type:TGActionSheetActionTypeDestructive],
+			[[TGActionSheetAction alloc] initWithTitle:@"Cancel" action:@"cancel"
+												  type:TGActionSheetActionTypeCancel]
+		];
+		[self presentSheetWithTitle:nil actions:actions];
+		return;
+	}
+
+	NSInteger fileId = [sticker[@"fileId"] integerValue];
+	if (fileId == 0)
+		return;
+	BOOL recent = ((NSInteger)self.page == TGStickersPageRecent);
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] isStickerFavoriteWithFileId:fileId completion:^(BOOL favourite){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf || strongSelf.actionSheetSticker != sticker)
+			return;
+		NSMutableArray *actions = [NSMutableArray array];
+		if (favourite)
+			[actions addObject:[[TGActionSheetAction alloc]
+					initWithTitle:@"Remove from Favourites" action:@"unfavouriteSticker"]];
+		else
+			[actions addObject:[[TGActionSheetAction alloc]
+					initWithTitle:@"Add to Favourites" action:@"favouriteSticker"]];
+		if (recent)
+			[actions addObject:[[TGActionSheetAction alloc]
+					initWithTitle:@"Remove from Recent" action:@"removeRecent"
+							 type:TGActionSheetActionTypeDestructive]];
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Cancel" action:@"cancel"
+																 type:TGActionSheetActionTypeCancel]];
+		[strongSelf presentSheetWithTitle:sticker[@"emoji"] actions:actions];
+	}];
 }
 
 #pragma mark - action sheets
@@ -1223,6 +1513,88 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		[self applySuggestMode:TGStickerSuggestModeInstalled];
 	else if ([action isEqualToString:@"suggestNone"])
 		[self applySuggestMode:TGStickerSuggestModeNone];
+	else if ([action isEqualToString:@"copyLink"] && set)
+		[self copyLinkForSet:set];
+	else if ([action isEqualToString:@"favouriteSticker"])
+		[self setCurrentStickerFavourite:YES];
+	else if ([action isEqualToString:@"unfavouriteSticker"])
+		[self setCurrentStickerFavourite:NO];
+	else if ([action isEqualToString:@"removeRecent"])
+		[self removeCurrentRecent];
+}
+
+- (void)showAlertWithTitle:(NSString *)title message:(NSString *)message {
+	TGAlertView *alert = [[TGAlertView alloc] initWithTitle:title message:message
+										  cancelButtonTitle:@"OK" okButtonTitle:nil
+											completionBlock:nil];
+	[alert show];
+}
+
+- (void)copyLinkForSet:(NSDictionary *)set {
+	int64_t identifier = [set[@"id"] longLongValue];
+	if (identifier == 0)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] stickerSetNameForId:identifier completion:^(NSString *name){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		if (!name.length){
+			[strongSelf showAlertWithTitle:@"Sticker Set"
+								   message:@"The link for this set could not be fetched."];
+			return;
+		}
+		NSString *link = [NSString stringWithFormat:@"https://telegram.me/addstickers/%@", name];
+		[UIPasteboard generalPasteboard].string = link;
+		[strongSelf showAlertWithTitle:@"Link Copied" message:link];
+	}];
+}
+
+- (void)setCurrentStickerFavourite:(BOOL)favourite {
+	NSDictionary *sticker = self.actionSheetSticker;
+	self.actionSheetSticker = nil;
+	NSInteger fileId = [sticker[@"fileId"] integerValue];
+	if (fileId == 0)
+		return;
+
+	if (favourite)
+		[[TGClient shared] addFavoriteStickerWithFileId:fileId];
+	else
+		[[TGClient shared] removeFavoriteStickerWithFileId:fileId];
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] isStickerFavoriteWithFileId:fileId completion:^(BOOL isFavourite){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		if (isFavourite != favourite){
+			[strongSelf showAlertWithTitle:@"Favourites"
+								   message:@"The favourites list could not be updated."];
+			return;
+		}
+		[strongSelf showAlertWithTitle:@"Favourites"
+							   message:favourite ? @"Sticker added to favourites."
+												 : @"Sticker removed from favourites."];
+	}];
+}
+
+- (void)removeCurrentRecent {
+	NSDictionary *sticker = self.actionSheetSticker;
+	self.actionSheetSticker = nil;
+	if (!sticker)
+		return;
+	[[TGClient shared] removeRecentStickerWithFileId:[sticker[@"fileId"] integerValue]];
+
+	NSMutableArray *remaining = [NSMutableArray arrayWithArray:self.stickers];
+	[remaining removeObject:sticker];
+	self.stickers = remaining;
+	self.recentCount = (NSInteger)remaining.count;
+	if (remaining.count == 0){
+		[self showTitle:@"No Recent Stickers"
+				   body:@"Stickers you send show up here, ready to be sent again."];
+		return;
+	}
+	[self.table reloadData];
 }
 
 - (void)applySuggestMode:(TGStickerSuggestMode)mode {
@@ -1268,7 +1640,7 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	NSUInteger index = [self.sets indexOfObject:set];
 	if (index == NSNotFound)
 		return;
-	if (self.page == TGStickersPageArchived){
+	if ([self isArchivePage]){
 		[self removeArchivedRow:(NSInteger)index];
 	} else {
 		[self.sets removeObjectAtIndex:index];
@@ -1297,7 +1669,7 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		[strongSelf checkAutoArchivedSets];
 		if (row >= (NSInteger)strongSelf.sets.count)
 			return;
-		if (strongSelf.page == TGStickersPageArchived){
+		if ([strongSelf isArchivePage]){
 			[strongSelf removeArchivedRow:row];
 			return;
 		}
@@ -1318,8 +1690,7 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		self.archivedCount--;
 	if (self.sets.count == 0){
 		[self.table reloadData];
-		[self showTitle:@"No Archived Stickers"
-				   body:@"Sticker sets you archive are kept here, ready to be put back."];
+		[self showTitle:[self emptyArchiveTitle] body:[self emptyArchiveBody]];
 		return;
 	}
 	[self.table reloadData];
@@ -1437,8 +1808,91 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	};
 	if ([self isMaskPage])
 		[[TGClient shared] reorderInstalledMaskStickerSets:ids completion:done];
+	else if ([self isEmojiListPage])
+		[[TGClient shared] reorderInstalledEmojiStickerSets:ids completion:done];
 	else
 		[[TGClient shared] reorderInstalledStickerSets:ids completion:done];
+}
+
+#pragma mark - search
+
+- (NSString *)trimmedQuery {
+	return [self.searchBar.text stringByTrimmingCharactersInSet:
+			[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+
+- (void)endSearch {
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+											 selector:@selector(runSearch) object:nil];
+	if (!self.searching)
+		return;
+	self.searching = NO;
+	if (self.setsBeforeSearch)
+		self.sets = self.setsBeforeSearch;
+	self.setsBeforeSearch = nil;
+	[self.table reloadData];
+	[self reload];
+}
+
+- (BOOL)searchBarShouldBeginEditing:(UISearchBar *)searchBar {
+	if (self.reordering)
+		[self editTapped];
+	[searchBar setShowsCancelButton:YES animated:YES];
+	return YES;
+}
+
+- (void)searchBarTextDidEndEditing:(UISearchBar *)searchBar {
+	[searchBar setShowsCancelButton:NO animated:YES];
+}
+
+- (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {
+	[searchBar resignFirstResponder];
+}
+
+- (void)searchBarCancelButtonClicked:(UISearchBar *)searchBar {
+	searchBar.text = @"";
+	[searchBar resignFirstResponder];
+	[self endSearch];
+}
+
+- (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)text {
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+											 selector:@selector(runSearch) object:nil];
+	if ([self trimmedQuery].length == 0){
+		[self endSearch];
+		return;
+	}
+	[self performSelector:@selector(runSearch) withObject:nil afterDelay:0.3];
+}
+
+- (void)runSearch {
+	NSString *query = [self trimmedQuery];
+	if (query.length == 0){
+		[self endSearch];
+		return;
+	}
+	if (!self.searching){
+		self.searching = YES;
+		self.setsBeforeSearch = self.sets;
+	}
+
+	__weak typeof(self) weakSelf = self;
+	void (^done)(NSArray *) = ^(NSArray *sets){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf || !strongSelf.searching)
+			return;
+		if (![[strongSelf trimmedQuery] isEqualToString:query])
+			return;
+		strongSelf.sets = [NSMutableArray arrayWithArray:(sets ?: @[])];
+		[strongSelf showContent];
+		[strongSelf.table reloadData];
+	};
+
+	if ([self isMaskPage])
+		[[TGClient shared] searchInstalledMaskStickerSets:query limit:kSearchLimit
+											   completion:done];
+	else
+		[[TGClient shared] searchEmojiStickerSets:query completion:done];
 }
 
 #pragma mark - navigation
@@ -1455,7 +1909,7 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	next.set = set;
 	next.setId = [set[@"id"] longLongValue];
 
-	if (self.page == TGStickersPageTrending || self.page == TGStickersPageArchived){
+	if ([self isTrendingPage] || [self isArchivePage]){
 		__weak typeof(self) weakSelf = self;
 		next.setStateChanged = ^(BOOL installed){
 			__strong typeof(weakSelf) strongSelf = weakSelf;
@@ -1471,7 +1925,7 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	NSUInteger index = [self.sets indexOfObject:set];
 	if (index == NSNotFound)
 		return;
-	if (self.page == TGStickersPageArchived){
+	if ([self isArchivePage]){
 		if (installed)
 			[self removeArchivedRow:(NSInteger)index];
 		return;
@@ -1513,10 +1967,18 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 }
 
 - (NSString *)footerTitleForSection:(NSInteger)section {
-	if ([self isMaskPage]){
-		if (section == 0 && self.sets.count)
-			return @"The mask sets you have installed. Hold Edit to reorder, swipe to remove.";
-		return nil;
+	if ([self isTwoSectionListPage]){
+		if (section != 1)
+			return nil;
+		if (self.searching)
+			return self.sets.count ? nil : @"No sets match that name.";
+		if (self.sets.count == 0)
+			return [self isMaskPage]
+					? @"Mask sets you install show up here, ready to be reordered or removed."
+					: @"Custom emoji sets you install show up here, ready to be reordered or removed.";
+		return [self isMaskPage]
+				? @"The mask sets you have installed. Hold Edit to reorder, swipe to remove."
+				: @"The custom emoji sets you have installed. Hold Edit to reorder, swipe to remove.";
 	}
 	if (self.page == TGStickersPageRoot){
 		if (section == kRootSectionSettings)
@@ -1528,32 +1990,84 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 							   : @"Loading...";
 		return @"Tap a set to see its stickers, hold Edit to reorder. Sets are managed through @stickers.";
 	}
-	if (self.page == TGStickersPageArchived && section == 0 && self.sets.count)
+	if ([self isArchivePage] && section == 0 && self.sets.count)
 		return @"Archived sets are kept out of the panel until you add them back.";
-	if (self.page == TGStickersPageTrending && section == 0 && self.sets.count)
-		return @"Sets other people are using right now. Tap one to see its stickers before you add it.";
+	if ([self isTrendingPage] && section == 0){
+		if (self.searching)
+			return self.sets.count ? nil : @"No public emoji sets match that name.";
+		if (self.sets.count)
+			return @"Sets other people are using right now. Tap one to see its stickers before you add it.";
+	}
 	return nil;
 }
 
 #pragma mark - table data
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-	return self.page == TGStickersPageRoot ? 4 : 1;
+	if (self.page == TGStickersPageRoot)
+		return 4;
+	return [self isTwoSectionListPage] ? 2 : 1;
 }
 
-- (NSInteger)pageRowCount {
-	return self.maskCount > 0 ? 4 : 3;
+- (NSArray *)rootPageRows {
+	NSMutableArray *rows = [NSMutableArray array];
+	[rows addObject:@{@"title": @"Trending Stickers",
+					  @"detail": self.trendingNewCount
+							? [NSString stringWithFormat:@"%d new", (int)self.trendingNewCount] : @"",
+					  @"page": @(TGStickersPageTrending)}];
+	[rows addObject:@{@"title": @"Archived Stickers",
+					  @"detail": self.archivedCount
+							? [NSString stringWithFormat:@"%d", (int)self.archivedCount] : @"",
+					  @"page": @(TGStickersPageArchived)}];
+	[rows addObject:@{@"title": @"Favourite Stickers",
+					  @"detail": self.favouriteCount
+							? [NSString stringWithFormat:@"%d", (int)self.favouriteCount] : @"",
+					  @"page": @(TGStickersPageFavourites)}];
+	[rows addObject:@{@"title": @"Recently Used",
+					  @"detail": self.recentCount
+							? [NSString stringWithFormat:@"%d", (int)self.recentCount] : @"",
+					  @"page": @(TGStickersPageRecent)}];
+	[rows addObject:@{@"title": @"Custom Emoji",
+					  @"detail": self.emojiSetCount
+							? [NSString stringWithFormat:@"%d", (int)self.emojiSetCount] : @"",
+					  @"page": @(TGStickersPageEmoji)}];
+	if (self.maskCount > 0)
+		[rows addObject:@{@"title": @"Masks",
+						  @"detail": [NSString stringWithFormat:@"%d", (int)self.maskCount],
+						  @"page": @(TGStickersPageMasks)}];
+	[rows addObject:@{@"title": @"Premium Stickers", @"detail": @"",
+					  @"page": @(TGStickersPagePremium)}];
+	return rows;
+}
+
+- (NSArray *)subpageRows {
+	if ([self isEmojiListPage]){
+		return @[@{@"title": @"Trending Emoji",
+				   @"detail": self.subpageTrendingCount
+						? [NSString stringWithFormat:@"%d", (int)self.subpageTrendingCount] : @"",
+				   @"page": @(TGStickersPageEmojiTrending)},
+				 @{@"title": @"Archived Emoji",
+				   @"detail": self.archivedCount
+						? [NSString stringWithFormat:@"%d", (int)self.archivedCount] : @"",
+				   @"page": @(TGStickersPageEmojiArchived)}];
+	}
+	return @[@{@"title": @"Archived Masks",
+			   @"detail": self.archivedCount
+					? [NSString stringWithFormat:@"%d", (int)self.archivedCount] : @"",
+			   @"page": @(TGStickersPageMasksArchived)}];
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
 	if ([self isGridPage])
 		return [self gridRowCount];
+	if ([self isTwoSectionListPage])
+		return section == 0 ? (NSInteger)[self subpageRows].count : (NSInteger)self.sets.count;
 	if (self.page != TGStickersPageRoot)
 		return (NSInteger)self.sets.count;
 	if (section == kRootSectionSettings)
 		return 2;
 	if (section == kRootSectionPages)
-		return [self pageRowCount];
+		return (NSInteger)[self rootPageRows].count;
 	if (section == kRootSectionSets)
 		return (NSInteger)self.sets.count;
 	return 1;
@@ -1562,8 +2076,10 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
 	if ([self isGridPage])
 		return kGridRowHeight;
-	if (self.page == TGStickersPageTrending)
+	if ([self isTrendingPage])
 		return kTrendRowHeight;
+	if ([self isTwoSectionListPage])
+		return indexPath.section == 0 ? kPlainRowHeight : kSetRowHeight;
 	if (self.page != TGStickersPageRoot)
 		return kSetRowHeight;
 	return indexPath.section == kRootSectionSets ? kSetRowHeight : kPlainRowHeight;
@@ -1629,6 +2145,8 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		return nil;
 	if (self.page == TGStickersPageRoot && indexPath.section != kRootSectionSets)
 		return nil;
+	if ([self isTwoSectionListPage] && indexPath.section != 1)
+		return nil;
 	if (indexPath.row >= (NSInteger)self.sets.count)
 		return nil;
 	return self.sets[indexPath.row];
@@ -1647,13 +2165,13 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 }
 
 - (NSString *)addButtonTitle {
-	return self.page == TGStickersPageArchived ? @"ADD BACK" : @"ADD";
+	return [self isArchivePage] ? @"ADD BACK" : @"ADD";
 }
 
 - (UIButton *)addButton {
 	UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
 	button.frame = CGRectMake(0, 0,
-			self.page == TGStickersPageArchived ? 86 : 70, 30);
+			[self isArchivePage] ? 86 : 70, 30);
 	button.titleLabel.font = [UIFont boldSystemFontOfSize:14];
 	button.titleLabel.shadowOffset = CGSizeMake(0, -1);
 	[button setTitle:[self addButtonTitle] forState:UIControlStateNormal];
@@ -1740,7 +2258,7 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	}
 	cell.imageView.contentMode = UIViewContentModeScaleAspectFit;
 
-	if (self.page == TGStickersPageRoot || [self isMaskPage]){
+	if ([self isReorderPage]){
 		cell.accessoryView = nil;
 		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 	} else {
@@ -1833,8 +2351,17 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		 cellForRowAtIndexPath:(NSIndexPath *)indexPath {
 	if ([self isGridPage])
 		return [self tilesCellForTable:tableView indexPath:indexPath];
-	if (self.page == TGStickersPageTrending)
+	if ([self isTrendingPage])
 		return [self trendCellForTable:tableView indexPath:indexPath];
+	if ([self isTwoSectionListPage]){
+		if (indexPath.section == 0){
+			NSArray *rows = [self subpageRows];
+			if (indexPath.row >= (NSInteger)rows.count)
+				return [self plainCellForTable:tableView];
+			return [self subpageCellForTable:tableView rowInfo:rows[indexPath.row]];
+		}
+		return [self setCellForTable:tableView indexPath:indexPath];
+	}
 	if (self.page != TGStickersPageRoot)
 		return [self setCellForTable:tableView indexPath:indexPath];
 
@@ -1846,24 +2373,17 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	if (indexPath.section == kRootSectionSettings)
 		return [self settingsCellForTable:tableView row:indexPath.row];
 
+	NSArray *rows = [self rootPageRows];
+	if (indexPath.row >= (NSInteger)rows.count)
+		return [self plainCellForTable:tableView];
+	return [self subpageCellForTable:tableView rowInfo:rows[indexPath.row]];
+}
+
+- (UITableViewCell *)subpageCellForTable:(UITableView *)tableView
+								 rowInfo:(NSDictionary *)rowInfo {
 	UITableViewCell *cell = [self plainCellForTable:tableView];
-	if (indexPath.row == 3){
-		cell.textLabel.text = @"Masks";
-		cell.detailTextLabel.text = self.maskCount
-				? [NSString stringWithFormat:@"%d", (int)self.maskCount] : @"";
-	} else if (indexPath.row == 0){
-		cell.textLabel.text = @"Trending Stickers";
-		cell.detailTextLabel.text = self.trendingNewCount
-				? [NSString stringWithFormat:@"%d new", (int)self.trendingNewCount] : @"";
-	} else if (indexPath.row == 1){
-		cell.textLabel.text = @"Archived Stickers";
-		cell.detailTextLabel.text = self.archivedCount
-				? [NSString stringWithFormat:@"%d", (int)self.archivedCount] : @"";
-	} else {
-		cell.textLabel.text = @"Favourite Stickers";
-		cell.detailTextLabel.text = self.favouriteCount
-				? [NSString stringWithFormat:@"%d", (int)self.favouriteCount] : @"";
-	}
+	cell.textLabel.text = rowInfo[@"title"];
+	cell.detailTextLabel.text = rowInfo[@"detail"];
 	return cell;
 }
 
@@ -1874,6 +2394,19 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 
 	if ([self isGridPage])
 		return;
+
+	if ([self isTwoSectionListPage]){
+		if (indexPath.section == 0){
+			NSArray *rows = [self subpageRows];
+			if (indexPath.row < (NSInteger)rows.count)
+				[self openPage:(TGStickersPage)[rows[indexPath.row][@"page"] integerValue]];
+			return;
+		}
+		NSDictionary *set = [self setAtIndexPath:indexPath];
+		if (set)
+			[self openSet:set];
+		return;
+	}
 
 	if (self.page != TGStickersPageRoot){
 		NSDictionary *set = [self setAtIndexPath:indexPath];
@@ -1888,14 +2421,9 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		return;
 	}
 	if (indexPath.section == kRootSectionPages){
-		if (indexPath.row == 0)
-			[self openPage:TGStickersPageTrending];
-		else if (indexPath.row == 1)
-			[self openPage:TGStickersPageArchived];
-		else if (indexPath.row == 2)
-			[self openPage:TGStickersPageFavourites];
-		else
-			[self openPage:(TGStickersPage)TGStickersPageMasks];
+		NSArray *rows = [self rootPageRows];
+		if (indexPath.row < (NSInteger)rows.count)
+			[self openPage:(TGStickersPage)[rows[indexPath.row][@"page"] integerValue]];
 		return;
 	}
 	if (indexPath.section == kRootSectionSets){
@@ -1918,36 +2446,43 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 - (void)tableView:(UITableView *)tableView
 		willDisplayCell:(UITableViewCell *)cell
 	  forRowAtIndexPath:(NSIndexPath *)indexPath {
-	if (self.page != TGStickersPageArchived && self.page != TGStickersPageTrending)
+	if (![self isArchivePage] && ![self isTrendingPage])
 		return;
 	if (indexPath.row < (NSInteger)self.sets.count - 3)
 		return;
-	if (self.page == TGStickersPageArchived)
+	if ([self isArchivePage])
 		[self loadMoreArchived];
 	else
 		[self loadMoreTrending];
 }
 
 - (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
-	if ([self isGridPage])
+	if ([self isGridPage] || self.searching)
 		return NO;
-	if (self.page == TGStickersPageArchived || [self isMaskPage])
+	if ([self isArchivePage])
 		return YES;
+	if ([self isTwoSectionListPage])
+		return indexPath.section == 1;
 	return self.page == TGStickersPageRoot && indexPath.section == kRootSectionSets;
 }
 
 - (BOOL)tableView:(UITableView *)tableView canMoveRowAtIndexPath:(NSIndexPath *)indexPath {
-	if ([self isMaskPage])
-		return YES;
+	if (self.searching)
+		return NO;
+	if ([self isTwoSectionListPage])
+		return indexPath.section == 1;
 	return self.page == TGStickersPageRoot && indexPath.section == kRootSectionSets;
 }
 
 - (UITableViewCellEditingStyle)tableView:(UITableView *)tableView
 		   editingStyleForRowAtIndexPath:(NSIndexPath *)indexPath {
-	if (self.reordering)
+	if (self.reordering || self.searching)
 		return UITableViewCellEditingStyleNone;
-	if (self.page == TGStickersPageArchived || [self isMaskPage])
+	if ([self isArchivePage])
 		return UITableViewCellEditingStyleDelete;
+	if ([self isTwoSectionListPage])
+		return indexPath.section == 1 ? UITableViewCellEditingStyleDelete
+									  : UITableViewCellEditingStyleNone;
 	if (self.page == TGStickersPageRoot && indexPath.section == kRootSectionSets)
 		return UITableViewCellEditingStyleDelete;
 	return UITableViewCellEditingStyleNone;
@@ -1968,9 +2503,10 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		return;
 	self.actionSheetSet = set;
 
-	if (self.page == TGStickersPageArchived){
+	if ([self isArchivePage]){
 		NSArray *archivedActions = @[
 			[[TGActionSheetAction alloc] initWithTitle:@"Add Back" action:@"restoreSet"],
+			[[TGActionSheetAction alloc] initWithTitle:@"Copy Link" action:@"copyLink"],
 			[[TGActionSheetAction alloc] initWithTitle:@"Delete" action:@"removeSet"
 												  type:TGActionSheetActionTypeDestructive],
 			[[TGActionSheetAction alloc] initWithTitle:@"Cancel" action:@"cancel"
@@ -1982,6 +2518,7 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 
 	NSArray *actions = @[
 		[[TGActionSheetAction alloc] initWithTitle:@"Archive" action:@"archiveSet"],
+		[[TGActionSheetAction alloc] initWithTitle:@"Copy Link" action:@"copyLink"],
 		[[TGActionSheetAction alloc] initWithTitle:@"Remove" action:@"removeSet"
 											  type:TGActionSheetActionTypeDestructive],
 		[[TGActionSheetAction alloc] initWithTitle:@"Cancel" action:@"cancel"
@@ -1993,7 +2530,7 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 - (NSIndexPath *)tableView:(UITableView *)tableView
 		targetIndexPathForMoveFromRowAtIndexPath:(NSIndexPath *)sourceIndexPath
 							 toProposedIndexPath:(NSIndexPath *)proposedDestinationIndexPath {
-	NSInteger section = [self isMaskPage] ? 0 : kRootSectionSets;
+	NSInteger section = [self setsSection];
 	if (proposedDestinationIndexPath.section == section)
 		return proposedDestinationIndexPath;
 	if (proposedDestinationIndexPath.section < section)
