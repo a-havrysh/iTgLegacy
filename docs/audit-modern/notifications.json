@@ -1,0 +1,109 @@
+{
+  "cluster": "notifications",
+  "gaps": [
+    {
+      "name": "Actual alerts when the app is not in front",
+      "whatItIs": "TDLib emits updateActiveNotifications / updateNotificationGroup / updateHavePendingNotifications; the modern client turns each group into a system alert with sender, preview text and a tap route into the chat, and calls removeNotificationGroup once the chat is read.",
+      "whyItMatters": "Today the client is silent: AppDelegate.m has no notification code at all, and nothing in src/ handles any notification update. A messenger that never tells you a message arrived unless you are looking at it is the single largest hole in this area. On iOS 6 there is no push token, so scheduling UILocalNotification from the live socket during the ~10 minutes of background execution is the only path, plus a catch-up pass on foregrounding.",
+      "whereItGoes": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/AppDelegate.m (scheduling, launch/tap routing, badge sync) and the TGClient update dispatcher in /Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGClient.m; the mapping helpers -alertForNotification:chatName: and -previewTextForPushContent: already exist in TGClient+Notifications.h and are currently called by nobody.",
+      "tdlib": [
+        "updateActiveNotifications / updateNotificationGroup / updateHavePendingNotifications (not dispatched by TGClient today)",
+        "removeNotification / removeNotificationGroup (wrapped)",
+        "-alertForNotification:chatName: and -previewTextForPushContent: (wrapped, unused)"
+      ],
+      "effort": "substantial"
+    },
+    {
+      "name": "Per-scope notification detail page",
+      "whatItIs": "Notifications > Private Chats / Groups / Channels each open a page with Alert on/off, Message Preview, Sound, and for groups/channels the pinned-message and mention suppression switches, with an exceptions count in the subtitle.",
+      "whyItMatters": "Our Notifications page is three bare on/off switches (TGSettingsViewController.m fillNotificationCell, one -notificationsMutedForScope: per row). Preview off, mention-only groups and pinned-message silence are the settings people actually reach for on a noisy account, and none of them are reachable.",
+      "whereItGoes": "New sub-page off /Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSettingsViewController.m (TGSettingsPageNotifications, ~line 429/1083), same grouped-table idiom as the existing pages.",
+      "tdlib": [
+        "getScopeNotificationSettings / setScopeNotificationSettings — wrapped as -notificationSettingsForScope:completion: and -updateScope:values:completion:, which already carry showPreview, soundId, disablePinnedMessageNotifications, disableMentionNotifications"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Notification exceptions list",
+      "whatItIs": "Each scope page lists the chats whose settings differ from the default, with a row per chat showing its state, an edit page per exception, and a Reset All that puts them back on the default.",
+      "whyItMatters": "Once a user mutes chats one by one from the chat list (which we do support), there is no way to see or undo that set. Chats get muted and forgotten, and the only cure today is finding each chat again.",
+      "whereItGoes": "Sub-page under the scope page in /Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSettingsViewController.m; rows can reuse the chat-list cell. Modern reference: submodules/SettingsUI/Sources/Notifications/Exceptions/.",
+      "tdlib": [
+        "getChatNotificationSettingsExceptions — wrapped as -notificationExceptionsForScope:compareSound:completion:",
+        "-clearNotificationExceptionsForScope:completion: (wrapped)"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Per-chat Notifications sub-page with tri-state Default",
+      "whatItIs": "A chat's profile has a Notifications row opening mute duration, preview, sound and a Default reset that hands every value back to the scope, rather than a single mute toggle.",
+      "whyItMatters": "We only expose binary mute: chat-list swipe (TGChatListViewController.m ~2008/2064) and the chat header toggle (TGChatViewController.m ~2227). There is no per-chat preview or sound override, and no way to return a chat to 'follow the default' once touched — the use_default_ flags our wrapper exposes are unreachable from the UI, and TGProfileViewController.m has no notifications row at all.",
+      "whereItGoes": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGProfileViewController.m (new row) plus a small sub-page; the same page serves group and channel profiles.",
+      "tdlib": [
+        "getChatNotificationSettings / setChatNotificationSettings — wrapped as -notificationSettingsForChat:completion:, -updateChat:values:completion:, -resetNotificationSettingsForChat:"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "In-app banner and its sound/vibrate/preview switches",
+      "whatItIs": "When a message arrives while the app is open on another screen, a tappable banner drops from the top; three switches control whether it plays a sound, vibrates, and shows the message text.",
+      "whyItMatters": "With no banner and no alerts at all, a message arriving in another chat while the app is open is completely invisible until the user returns to the chat list. The 2013 client had exactly this banner, so it is period-correct, not a modern affordance.",
+      "whereItGoes": "A window-level banner view driven from the TGClient update dispatcher; the undo banner added in commit e3f106a is the closest existing precedent to copy. Switch rows go on the Notifications page in TGSettingsViewController.m. Telegraph (/Users/alexanderhavrysh/Git/iOS/twelve/Telegraph/) has an Objective-C in-app banner implementation worth porting.",
+      "tdlib": [
+        "no new calls — driven by updateNewMessage plus the chat's isMuted flag; settings are local (NSUserDefaults)"
+      ],
+      "effort": "substantial"
+    },
+    {
+      "name": "Badge configuration",
+      "whatItIs": "A Badge section choosing whether the icon counts unread messages or unread chats, whether channels are included, and whether muted chats count.",
+      "whyItMatters": "RootViewController.m -updateUnreadBadge hardcodes one policy: sum of unread messages over every non-muted chat in both lists. Anyone in a few busy channels gets a permanent four-digit badge and no way to tame it short of muting the channels.",
+      "whereItGoes": "Badge section on the Notifications page in /Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSettingsViewController.m, read by -unreadInChats:/-updateUnreadBadge in /Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/RootViewController.m (~line 120-140).",
+      "tdlib": [
+        "none — counting is already local over the cached chat list; only the policy switches are new"
+      ],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Notification sound picker",
+      "whatItIs": "A sound row on the scope and per-chat pages listing built-in tones plus the account's saved/uploaded sounds, with tap-to-preview and a None entry.",
+      "whyItMatters": "sound_id currently follows whatever another device set and cannot be seen or changed here; picking None per scope is a common way to keep a chat unread-visible but quiet. Note the real limit: server sounds are MP3/OGG and an iOS 6 UILocalNotification can only play a bundled CAF under 30s, so the picker can preview in-app and write sound_id for other devices, but our own local alerts stay on a bundled tone.",
+      "whereItGoes": "Picker sub-page shared by the scope page and the per-chat page in /Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSettingsViewController.m. Modern reference: submodules/NotificationSoundSelectionUI/.",
+      "tdlib": [
+        "getSavedNotificationSounds / addSavedNotificationSound / removeSavedNotificationSound — wrapped as -savedNotificationSoundsWithCompletion:, -addSavedNotificationSoundAtPath:completion:, -removeSavedNotificationSound:",
+        "downloadFile for preview (wrapped)"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "\"New contact joined Telegram\" toggle",
+      "whatItIs": "One switch suppressing the service message and notification fired when a phone-book contact signs up.",
+      "whyItMatters": "Small but visible: on a freshly imported address book these arrive in a burst and there is currently no way to stop them.",
+      "whereItGoes": "One switch row on the Notifications page in /Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSettingsViewController.m.",
+      "tdlib": [
+        "setOption \"disable_contact_registered_notifications\" — the generic setter -setOptionNamed:... is already wrapped in TGClient+Network.h (line 200), and getOption exists in TGClient.m"
+      ],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Reset all notification settings",
+      "whatItIs": "A destructive row at the bottom of the Notifications page returning every scope and every chat to the TDLib defaults, behind a confirmation.",
+      "whyItMatters": "The natural escape hatch once mutes and exceptions have accumulated across devices, and it is the cheapest possible companion to the exceptions list.",
+      "whereItGoes": "Last section of the Notifications page in /Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSettingsViewController.m, confirmed with the existing TGAlertView.",
+      "tdlib": [
+        "resetAllNotificationSettings — wrapped as -resetAllNotificationSettingsWithCompletion:"
+      ],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Custom mute duration and \"mute until\" display",
+      "whatItIs": "Beyond the fixed 1h / 8h / 2d choices, modern offers a custom interval and shows the remaining time (\"Unmute in 3h\") wherever the chat is muted.",
+      "whyItMatters": "Our sheet writes a fixed set of durations (TGChatListViewController.m ~2064) and nothing ever surfaces mute_for, so a timed mute looks identical to a permanent one and the user cannot tell when sound comes back.",
+      "whereItGoes": "The existing mute action sheet in /Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGChatListViewController.m plus the per-chat notifications page; muteFor already comes back from -notificationSettingsForChat:.",
+      "tdlib": [
+        "setChatNotificationSettings mute_for — wrapped as -setChat:muteForSeconds:"
+      ],
+      "effort": "drop-in"
+    }
+  ]
+}

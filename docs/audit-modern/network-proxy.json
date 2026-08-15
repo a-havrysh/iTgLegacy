@@ -1,0 +1,53 @@
+{
+  "cluster": "network-proxy",
+  "gaps": [
+    {
+      "name": "Reachability observer feeding setNetworkType",
+      "whatItIs": "Modern Telegram watches SCNetworkReachability (submodules/Reachability) plus the radio type and pushes networkTypeWiFi / networkTypeMobile / networkTypeMobileRoaming / networkTypeNone into the core on every change and on foreground.",
+      "whyItMatters": "TGClient+Network.h declares -setNetworkTypeKind: and it is never called from anywhere in src/ (grep: only its own definition). TDLib therefore stays on networkTypeOther forever, so the per-network auto-download presets the settings screen carefully writes are never the ones applied, network usage counters all land in one bucket, and TDLib keeps retrying a dead radio instead of parking on networkTypeNone. It is the single highest-value missing piece in this area because three shipped features silently do nothing without it.",
+      "whereItGoes": "AppDelegate or TGClient: an SCNetworkReachability callback (SystemConfiguration, fine on iOS 6) plus UIApplicationWillEnterForegroundNotification, calling the existing -setNetworkTypeKind:.",
+      "tdlib": ["setNetworkType - already wrapped as -setNetworkTypeKind: in TGClient+Network.h"],
+      "effort": "small"
+    },
+    {
+      "name": "Network Usage screen",
+      "whatItIs": "Data and Storage > Network Usage: bytes sent/received per category (photos, video, files, voice, calls, messages) per network type, a 'since' date and a Reset Statistics row.",
+      "whyItMatters": "Both halves are already wrapped (-networkStatisticsOnlyCurrent:completion: in TGClient+Files, -resetNetworkStatisticsWithCompletion: and -addCallStatisticsSent:... in TGClient+Network) and nothing in src/ calls either one. On a metered 2013-era plan this is the screen that tells the user whether the client is eating their data, and it is a plain grouped table over data we already fetch.",
+      "whereItGoes": "New page in TGSettingsViewController under Data and Storage, alongside the existing Storage and Auto-Download pages.",
+      "tdlib": ["getNetworkStatistics - wrapped", "resetNetworkStatistics - wrapped", "addNetworkStatistics - wrapped"],
+      "effort": "small"
+    },
+    {
+      "name": "Connection state in the navigation title",
+      "whatItIs": "The modern client swaps the navigation title for 'Connecting...', 'Updating...', 'Waiting for network' or 'Connecting to proxy' with a small spinner, on the chat list and inside every chat.",
+      "whyItMatters": "We have the whole mechanism - -connectionStateTitle, -beginBroadcastingConnectionState and TGConnectionStateDidChangeNotification - and the only consumer in the app is one line in TGChatListViewController that changes the empty-list placeholder text. Inside a chat, a user on a flaky EDGE link sees a message that simply never sends, with no indication the client is offline. This is catalogued as one capability but is in practice unimplemented outside the empty state.",
+      "whereItGoes": "TGChatListViewController and TGChatViewController title views; observers on TGConnectionStateDidChangeNotification balanced with -endBroadcastingConnectionState.",
+      "tdlib": ["updateConnectionState - already surfaced via TGClient.connectionState and the Network category notification"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Online / background state pushed to TDLib",
+      "whatItIs": "The modern client sets the 'online' option false and stops network activity when the app backgrounds, and true on foreground, in step with the reachability updates.",
+      "whyItMatters": "Nothing in src/ writes the 'online' option or reacts to UIApplicationDidEnterBackgroundNotification at the client level (only TGVideoRecorder listens). The account therefore reports itself online to contacts while the app is suspended, and TDLib keeps a socket it cannot service - on a 4S that is both a privacy wart and wasted radio time.",
+      "whereItGoes": "AppDelegate lifecycle callbacks, using -setOptionNamed:value:isBoolean: from TGClient+Network.",
+      "tdlib": ["setOption(\"online\") - wrapped as -setOptionNamed:value:isBoolean:"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Proxy failure feedback and revert",
+      "whatItIs": "The modern proxy list keeps a live per-server status (checking / available / unavailable) driven by the actual connection, and the connection status line tells you the enabled proxy is not working rather than sitting on 'Connecting'.",
+      "whyItMatters": "Our list pings on appear, but once a proxy is enabled and turns out to be dead the app is indistinguishable from a broken account: connection state sticks at connecting, and nothing offers 'this proxy is not responding, disable it?'. That is the exact failure mode a proxy user hits, and recovering today means guessing your way back to the proxy screen. We already have -testProxy:dcId:timeout: and -disableProxyWithCompletion:, so this is a timer plus an alert.",
+      "whereItGoes": "TGProxyViewController status cell plus a watchdog in TGClient+Network that fires when the state has been connecting for N seconds with a proxy enabled.",
+      "tdlib": ["testProxy - wrapped", "disableProxy - wrapped", "updateConnectionState"],
+      "effort": "small"
+    },
+    {
+      "name": "TDLib log to file with verbosity control",
+      "whatItIs": "Modern builds route the core log into a rotating file and expose verbosity plus log export from the debug screen.",
+      "whyItMatters": "TGClient.m pins verbosity to 1 and never calls setLogStream, so every network and MTProto diagnostic is lost. On this device the only debugging channel is SSH into the filesystem; a rotating log file under Documents, plus a verbosity row on the hidden debug screen, turns 'it will not connect on this SIM' from unanswerable into readable. The existing debug screen is the host, so no new UI surface.",
+      "whereItGoes": "TGClient.m start-up (setLogStream logStreamFile with a small max size) and a row on the hidden debug screen that already exists behind the settings version footer.",
+      "tdlib": ["setLogStream - not wrapped", "setLogVerbosityLevel - raw exec call only, not wrapped", "getLogVerbosityLevel - not wrapped"],
+      "effort": "small"
+    }
+  ]
+}

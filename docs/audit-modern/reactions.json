@@ -1,0 +1,77 @@
+{
+  "cluster": "reactions",
+  "gaps": [
+    {
+      "name": "Unread-reaction badge and jump-to-next-reaction in chat",
+      "whatItIs": "Modern chat shows a floating circular badge above the scroll-down button with the count of reactions you have not seen, tapping it jumps to the next reacted message and marks it read.",
+      "whyItMatters": "In a busy group a reaction to your own message is currently invisible unless you happen to scroll past it; there is no way to find who reacted to you.",
+      "whereItGoes": "TGChatViewController.m, next to the existing scroll-to-bottom control; TGClient+Reactions.h already has -unreadReactionsInChat:fromMessageId:limit:completion: and -markReactionsReadInChat:, neither is called from any .m outside the category.",
+      "tdlib": ["searchChatMessages with searchMessagesFilterUnreadReaction (wrapped: -unreadReactionsInChat:...)", "readAllChatReactions (wrapped: -markReactionsReadInChat:)"],
+      "effort": "small"
+    },
+    {
+      "name": "Unread reaction / mention counters on chat list rows",
+      "whatItIs": "The chat list draws a separate small badge for unread mentions and unread reactions beside the unread-message count.",
+      "whyItMatters": "Without it a user cannot tell from the list which chat contains a reaction aimed at them; the reaction feature is effectively write-only for the receiver.",
+      "whereItGoes": "TGChatListViewController.m row drawing and the chat dictionary built in TGClient+ChatList.m — grep shows no unread_reaction_count / unread_mention_count is even read out of the TDLib chat object there, although TGTopicsViewController.m already renders the same counter for forum topics.",
+      "tdlib": ["chat.unread_reaction_count / unread_mention_count from the chat object (not currently mapped in TGClient+ChatList.m)", "readAllChatReactions (wrapped)"],
+      "effort": "small"
+    },
+    {
+      "name": "Choosing the quick (double-tap) reaction",
+      "whatItIs": "Settings holds a default reaction the double-tap gesture sends; the modern client lets you pick it from the reaction grid.",
+      "whyItMatters": "We ship the double-tap gesture and TGReactionPickerView.m reads -quickReactionEmoji, but -setQuickReactionEmoji: is never called from any screen, so every user is permanently stuck on the thumbs-up default.",
+      "whereItGoes": "TGSettingsViewController.m, a row that opens a small emoji grid built from -activeReactionsWithCompletion: (same grid the picker strip already builds in TGReactionPickerView.m).",
+      "tdlib": ["setDefaultReactionType (wrapped: -setQuickReactionEmoji:)", "getEmojiReaction / available reactions (wrapped)"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Reaction notification settings row",
+      "whatItIs": "Notifications settings has a Reactions section: notify from everyone / contacts only / nobody, plus preview and sound, for message reactions and story reactions.",
+      "whyItMatters": "In any group of size, reaction notifications are the noisiest source of pushes and there is currently no way to turn them down.",
+      "whereItGoes": "TGSettingsViewController.m notifications section; -setReactionNotificationSource:showPreview:soundId: exists in TGClient+Reactions.h and is called from nowhere.",
+      "tdlib": ["setReactionNotificationSettings (wrapped)", "reactionNotificationSettings update is not routed — the screen must hold local state, as the header already notes"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Admin screen for which reactions a chat allows",
+      "whatItIs": "PeerAllowedReactionsScreen: an admin picks All / Some / None and, for Some, ticks the individual emoji, plus the max reactions per message for channels.",
+      "whyItMatters": "Group and channel owners cannot switch reactions off or restrict them from this client at all, which is a routine moderation action.",
+      "whereItGoes": "A Reactions row in the group/channel admin area of TGProfileViewController.m (which already lists reactToMessages permission text at line 1924); -setAvailableReactionsInChat:emojis:maxCount: is wrapped and unused. Modern reference: submodules/TelegramUI/Components/PeerAllowedReactionsScreen.",
+      "tdlib": ["getChatAvailableReactions (wrapped: -availableReactionsInChat:completion:)", "setChatAvailableReactions (wrapped: -setAvailableReactionsInChat:emojis:maxCount:)"],
+      "effort": "small"
+    },
+    {
+      "name": "Per-emoji tabs in the who-reacted list",
+      "whatItIs": "ReactionListContextMenuContent puts a header of tabs across the reader list — All, then one tab per emoji with its count — so you can see just who sent a specific reaction, paged as you scroll.",
+      "whyItMatters": "TGReactionPickerView.m fetches the reader list unfiltered (line ~1148); on a post with five different reactions the list is an undifferentiated scroll and you cannot answer \"who disliked this\".",
+      "whereItGoes": "The reader list already inside TGReactionPickerView.m — add a segmented header and pass the emoji filter argument that -addedReactionsForMessage:inChat:emoji:offset:limit:completion: already accepts.",
+      "tdlib": ["getMessageAddedReactions with reaction_type filter (wrapped, emoji argument currently always nil)"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Paid (star) reactions on channel posts",
+      "whatItIs": "A star chip on channel posts: tap to add one star reaction, a slider to send many at once, a few seconds of Undo before it commits, a top-senders strip, and a toggle to send anonymously or as a chat.",
+      "whyItMatters": "Catalogued as blocked, but the block is wrong: StoreKit only prevents *buying* stars, and TGClient+Payments.h already wraps the whole spend path (-addPaidReactionToMessage:, -commitPaidReactionsOnMessage:, -cancelPaidReactionsOnMessage:, -setPaidReactionAnonymous:, -paidReactionSendersInChat:) and we already ship TGStarsViewController. A user with a star balance simply cannot spend it on posts, and cannot even see that a post has paid reactions — TGClient+Reactions.h renders paid reactions as a placeholder star glyph with no interaction.",
+      "whereItGoes": "TGReactionPickerView.m chip row (a distinct star chip) plus a small sheet reusing the existing TGSnackbar undo banner for the commit timer; balance and top-up live in TGStarsViewController.m.",
+      "tdlib": ["addPendingPaidMessageReaction (wrapped)", "commitPendingPaidMessageReactions (wrapped)", "removePendingPaidMessageReactions (wrapped)", "togglePaidMessageReactionIsAnonymous (wrapped)", "getChatAvailablePaidMessageReactionSenders (wrapped)"],
+      "effort": "substantial"
+    },
+    {
+      "name": "Displaying custom-emoji reactions as static images",
+      "whatItIs": "Premium users react with arbitrary custom emoji; every client, premium or not, renders those chips as the emoji's image.",
+      "whyItMatters": "Catalogued blocked, and *sending* genuinely is (premium plus animated formats), but *showing* is not: today TGClient+Reactions.h substitutes a star character, so a post reacted to entirely with custom emoji shows a row of identical meaningless stars with counts. We already decode static WebP sticker thumbnails through UIImage+WebP.",
+      "whereItGoes": "TGReactionChipsView in TGReactionPickerView.m, fetching the sticker for the custom_emoji_id through the existing TGClient+Stickers / TGClient+Files download path.",
+      "tdlib": ["getCustomEmojiStickers (check TGClient+Stickers.h)", "downloadFile (wrapped)", "reactionTypeCustomEmoji already parsed but discarded"],
+      "effort": "small"
+    },
+    {
+      "name": "Reaction chip state driven by updates instead of polling",
+      "whatItIs": "Modern clients update chips from updateMessageInteractionInfo pushed by the server, instantly and at zero cost.",
+      "whyItMatters": "TGClient+Reactions.h states the watcher polls -reactionChipsForMessage: on a 5s timer, one request per watched message. On a 4S with several visible reacted messages that is a steady stream of requests and wakeups purely to observe something the server already pushes — it costs battery and makes chips lag by up to five seconds.",
+      "whereItGoes": "Route updateMessageInteractionInfo in TGClient.m's update dispatch and have the watch table in TGClient+Reactions.m consume it, keeping the timer only as a fallback.",
+      "tdlib": ["updateMessageInteractionInfo (not routed)", "updateDefaultReactionType, updateReactionNotificationSettings (also unrouted — would remove the two 'we cache it locally' caveats in the header)"],
+      "effort": "small"
+    }
+  ]
+}

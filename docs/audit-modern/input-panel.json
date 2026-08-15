@@ -1,0 +1,85 @@
+{
+  "cluster": "input-panel",
+  "gaps": [
+    {
+      "name": "Media send preview with caption, spoiler and view-once",
+      "whatItIs": "MediaPickerScreen hands the selection to a preview step where you type a caption, toggle the blurred spoiler cover, and set self-destruct/view-once before the send button commits.",
+      "whyItMatters": "Picking a photo in our client fires it off instantly with an empty caption. There is no way to say anything about the picture you just sent, and no way to send a view-once or spoilered photo from the gallery even though the client can render both.",
+      "whereItGoes": "TGChatViewController.m -imagePickerController:didFinishPickingMediaWithInfo: (line ~3733) currently calls sendPhotoAtPath:toChat:. A modal preview view controller should call the full -sendPhotoAtPath:toChat:thread:caption:spoiler:selfDestructSeconds: in TGClient+MessageContent.h:97.",
+      "tdlib": ["inputMessagePhoto with caption/has_spoiler/self_destruct_type - already wrapped as -sendPhotoAtPath:...spoiler:selfDestructSeconds:", "inputMessageVideo likewise wrapped"],
+      "effort": "small"
+    },
+    {
+      "name": "Multi-select gallery picker and album send",
+      "whatItIs": "MediaPickerScreen is a grid of camera-roll assets with checkmark multi-select, a running count, and one shared caption; the selection goes out as a grouped album.",
+      "whyItMatters": "UIImagePickerController is one asset per trip through the attach sheet, so sending five holiday photos is five separate round trips and five separate bubbles. Our chat already groups and renders albums on the receiving side, but we can never send one.",
+      "whereItGoes": "New picker screen replacing -pickMedia in TGChatViewController.m:3668; wire to -sendPhotoAlbumAtPaths:toChat:thread:caption:completion: (TGClient+MessageContent.h:141). twelve/Telegraph has the whole 2013 attachment-sheet stack to port: TGAttachmentSheetView/TGAttachmentSheetScrollView plus TGMediaAsset* helpers.",
+      "tdlib": ["sendMessageAlbum - wrapped as -sendPhotoAlbumAtPaths:toChat:thread:caption:completion:"],
+      "effort": "substantial"
+    },
+    {
+      "name": "Entity formatting on outgoing text",
+      "whatItIs": "TextInputMenu adds Bold / Italic / Monospace / Strikethrough / Link / Spoiler / Quote to the text selection menu, and typed markdown is parsed into entities on send.",
+      "whyItMatters": "Every message we send is plain text. Type **bold** or a `code` block and the asterisks and backticks go out literally. We render incoming entities fine, so the asymmetry is visible in every conversation with a modern client.",
+      "whereItGoes": "TGChatViewController.m -sendTapped (line 2094) calls -sendText:, never -sendMarkdown: (TGClient+MessageContent.h:37) which is already wrapped and unused. The selection menu is UIMenuController + custom UIMenuItems, fully available on iOS 6.",
+      "tdlib": ["parseTextEntities / inputMessageText with formatted_text - wrapped as -parseMarkdown:completion: and -sendMarkdown:"],
+      "effort": "small"
+    },
+    {
+      "name": "Take Photo from the attach menu",
+      "whatItIs": "The attachment panel's camera tile shoots a still straight into the chat.",
+      "whyItMatters": "Our attach sheet offers 'Photo or Video' (library only), 'Video' and 'Video Message'. There is no way to take a still photo from inside a chat at all - you have to leave for Camera.app and come back through the library.",
+      "whereItGoes": "TGChatViewController.m -attachTapped (line 3006): add a 'Take Photo' title guarded by [UIImagePickerController isSourceTypeAvailable:Camera], reusing the existing UIImagePickerController delegate path with sourceType camera.",
+      "tdlib": ["inputMessagePhoto - already wrapped"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Poll and quiz creation",
+      "whatItIs": "The attach panel's poll tile opens a composer: question, option rows, anonymous / multiple-answers / quiz toggles and a correct-answer pick.",
+      "whyItMatters": "We can vote in polls and see results, but cannot create one. In group chats, which is where this client's polls appear, that is the half that people actually use.",
+      "whereItGoes": "New small form screen launched from -attachTapped in TGChatViewController.m:3006; calls the already-wrapped -sendPollWithQuestion:options:anonymous:multipleAnswers:quizCorrectOption:toChat:thread:completion: (TGClient+MessageContent.h:182).",
+      "tdlib": ["inputMessagePoll - wrapped as -sendPollWithQuestion:...", "stopPoll - wrapped"],
+      "effort": "small"
+    },
+    {
+      "name": "Location picker: pin on a map, nearby venues, live location",
+      "whatItIs": "The location attachment opens a map you can drag a pin on, a list of nearby venues, and a 'Share My Location For...' live-location option with 15min/1h/8h periods.",
+      "whyItMatters": "Our 'Location' item silently grabs one CLLocation fix and sends it. You cannot send a place other than where you are standing, cannot send a named venue, and cannot share a moving location - which is the one location feature people actually coordinate with.",
+      "whereItGoes": "Replace -sendCurrentLocation in TGChatViewController.m:3680 with an MKMapView picker screen (MapKit is fine on iOS 6). Calls -sendVenueWithTitle:address:latitude:longitude:toChat: and -sendLiveLocationWithLatitude:...period:...completion: / -updateLiveLocation: / -stopLiveLocation:, all already in TGClient+MessageContent.h:149-171. twelve/Telegraph has TGLocationVenueIconDataSource, TGLocationReverseGeocodeActor and TGLocationPulseViewModel to crib from.",
+      "tdlib": ["inputMessageVenue - wrapped", "inputMessageLocation with live_period - wrapped", "editMessageLiveLocation - wrapped", "searchChatsNearby/getVenues via bot inline search for the venue list - not wrapped"],
+      "effort": "substantial"
+    },
+    {
+      "name": "Attach music from the iPod library",
+      "whatItIs": "The audio attachment tile lets you pick a track and send it as a playable music message with title and performer.",
+      "whyItMatters": "We can play incoming music messages but cannot send one. The device's own library is the obvious source and there is no other way to put an audio file into a chat from a jailbroken 4S.",
+      "whereItGoes": "New 'Music' entry in -attachTapped (TGChatViewController.m:3006) using MPMediaPickerController, exporting the picked item through AVAssetExportSession to a temp m4a, then -sendAudioAtPath:... (TGClient+MessageContent.h:123). DRM-free tracks only; skip protected assets.",
+      "tdlib": ["inputMessageAudio - wrapped as -sendAudioAtPath:"],
+      "effort": "small"
+    },
+    {
+      "name": "Attach a file from what the client already has",
+      "whatItIs": "The file attachment tile browses documents and re-sends them, including recently received files from other chats.",
+      "whyItMatters": "-sendDocumentAtPath: is wrapped and never called from anywhere. Re-sending a PDF or archive someone sent you last week is a routine thing and today it is impossible.",
+      "whereItGoes": "New 'File' entry in -attachTapped (TGChatViewController.m:3006) backed by a list of downloaded files (TGClient+Files / searchMessages filterDocument, which the catalogue already lists as 'Outgoing document search'). iOS 6 has no UIDocumentPicker, so the client's own download directory plus chat document search is the only sane source.",
+      "tdlib": ["inputMessageDocument - wrapped as -sendDocumentAtPath:", "searchMessages with searchMessagesFilterDocument - wrapped"],
+      "effort": "small"
+    },
+    {
+      "name": "Exact date and time for a scheduled send",
+      "whatItIs": "Long-pressing send opens a date/time wheel for the exact scheduled moment, alongside the quick presets.",
+      "whyItMatters": "Our schedule sheet offers only 'In 1 Hour', 'In 8 Hours', 'Tomorrow Morning' and 'When Online'. Scheduling a birthday message for Saturday 09:00 is not expressible.",
+      "whereItGoes": "TGChatViewController.m -runSendOption:/-runScheduleOption: (lines 5156-5220): add a 'Choose Date' branch presenting a UIDatePicker in a sheet and set self.scheduledSendDate from it. Everything downstream (sendOptionsDictionary, scheduled list) already exists.",
+      "tdlib": ["messageSchedulingStateSendAtDate - already used via the options dictionary"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Send an image pasted from the clipboard",
+      "whatItIs": "MediaPasteboardScreen catches an image or video on the pasteboard and offers to send it, with a caption field.",
+      "whyItMatters": "Copying a photo from Safari or Photos and pasting into the composer today inserts nothing. It is the fastest way to move one image into a chat and it is dead.",
+      "whereItGoes": "TGChatViewController.m input handling near -inputChanged / the paste path: when UIPasteboard.generalPasteboard has an image, stage it to a temp JPEG and route into the same send-preview step as gap 1. twelve/Telegraph has TGClipboardGalleryModel for exactly this.",
+      "tdlib": ["inputMessagePhoto - already wrapped"],
+      "effort": "drop-in"
+    }
+  ]
+}

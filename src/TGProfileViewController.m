@@ -116,6 +116,7 @@ static const CGFloat kMemberRowHeight = 49.0f;
 static const CGFloat kMemberAvatarSide = 36.0f;
 static const CGFloat kStripInset = 6.0f;
 static const CGFloat kStripThumbSide = 76.0f;
+static const NSUInteger kStripMaximumThumbs = 20;
 
 static CGFloat TGProfileRetinaPixel(void) {
 	return [UIScreen mainScreen].scale > 1.5f ? 0.5f : 0.0f;
@@ -195,6 +196,9 @@ static NSString *TGProfileInitial(NSString *name) {
 		self.edgesForExtendedLayout = UIRectEdgeNone;
 	self.tableView.backgroundColor = TGProfileListBackground();
 	self.tableView.separatorColor = [[TGTheme shared] separatorColour];
+
+	if (self.chatId)
+		self.muted = [[TGClient shared] isChatMuted:self.chatId];
 
 	[self buildHeader];
 	[self loadDetails];
@@ -549,7 +553,7 @@ static NSString *TGProfileInitial(NSString *name) {
 		if (!path.length)
 			return;
 		dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-			UIImage *image = [UIImage imageWithContentsOfFile:path];
+			UIImage *image = TGDecodeSquareThumbnail(path, kProfileAvatarSide);
 			if (!image)
 				return;
 			dispatch_async(dispatch_get_main_queue(), ^{
@@ -739,7 +743,6 @@ static NSString *TGProfileInitial(NSString *name) {
 	if ([title isEqualToString:@"Share contact"]){
 		TGForwardPicker *picker = [[TGForwardPicker alloc] init];
 		NSString *name = self.name;
-		int64_t userId = self.userId;
 		__weak typeof(self) weakSelf = self;
 		picker.onPicked = ^(int64_t targetChatId){
 			NSString *phone = weakSelf.phoneNumber;
@@ -752,7 +755,6 @@ static NSString *TGProfileInitial(NSString *name) {
 			}
 			[[TGClient shared] sendContactNamed:name phone:phone toChat:targetChatId];
 		};
-		(void)userId;
 		[self.navigationController pushViewController:picker animated:YES];
 		return;
 	}
@@ -1084,6 +1086,8 @@ static NSString *TGProfileInitial(NSString *name) {
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] suitableDiscussionChatsWithCompletion:^(NSArray *chats){
 		NSMutableArray *usable = [NSMutableArray array];
+		if (![chats isKindOfClass:[NSArray class]])
+			chats = @[];
 		for (id chat in chats){
 			if (![chat isKindOfClass:[NSDictionary class]])
 				continue;
@@ -1489,9 +1493,13 @@ static NSString *TGProfileInitial(NSString *name) {
 - (void)showToast:(NSString *)text {
 	if (!text.length || !self.isViewLoaded)
 		return;
+	UIView *host = self.navigationController.view ?: self.view;
 	UILabel *toast = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 200, 34)];
-	toast.center = CGPointMake(self.view.bounds.size.width / 2,
-							   self.view.bounds.size.height - 70);
+	toast.center = CGPointMake(host.bounds.size.width / 2,
+							   host.bounds.size.height - 70);
+	toast.autoresizingMask = UIViewAutoresizingFlexibleTopMargin
+			| UIViewAutoresizingFlexibleLeftMargin
+			| UIViewAutoresizingFlexibleRightMargin;
 	toast.text = text;
 	toast.textAlignment = NSTextAlignmentCenter;
 	toast.font = [UIFont systemFontOfSize:14];
@@ -1499,7 +1507,7 @@ static NSString *TGProfileInitial(NSString *name) {
 	toast.backgroundColor = [UIColor colorWithWhite:0 alpha:0.75f];
 	toast.layer.cornerRadius = 6;
 	toast.clipsToBounds = YES;
-	[self.view addSubview:toast];
+	[host addSubview:toast];
 	[UIView animateWithDuration:0.3 delay:1.0 options:0
 					 animations:^{ toast.alpha = 0; }
 					 completion:^(BOOL done){ [toast removeFromSuperview]; }];
@@ -1848,20 +1856,28 @@ static NSString *TGProfileInitial(NSString *name) {
 				CGRectMake(0, 0, tableView.bounds.size.width,
 						   kStripThumbSide + kStripInset * 2)];
 		strip.tag = 99;
+		strip.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 		strip.showsHorizontalScrollIndicator = NO;
 		[cell.contentView addSubview:strip];
 	}
 
 	UIScrollView *strip = (UIScrollView *)[cell.contentView viewWithTag:99];
-	for (UIView *v in strip.subviews)
+	for (UIView *v in [strip.subviews copy]){
+		if ([v isKindOfClass:[UIImageView class]])
+			((UIImageView *)v).image = nil;
 		[v removeFromSuperview];
+	}
 
 	CGFloat side = kStripThumbSide, gap = kStripInset, x = gap;
+	NSUInteger shown = 0;
 	for (id m in self.photos){
+		if (shown >= kStripMaximumThumbs)
+			break;
 		if (![m isKindOfClass:[NSDictionary class]]) continue;
 		id fileId = m[@"photoId"];
 		if (![fileId isKindOfClass:[NSNumber class]] || [fileId integerValue] <= 0)
 			continue;
+		shown++;
 		UIImageView *thumb = [[UIImageView alloc] initWithFrame:
 				CGRectMake(x, kStripInset, side, side)];
 		thumb.backgroundColor = [UIColor colorWithWhite:0.9f alpha:1];
@@ -1871,12 +1887,14 @@ static NSString *TGProfileInitial(NSString *name) {
 		[strip addSubview:thumb];
 		x += side + gap;
 
+		__weak UIImageView *weakThumb = thumb;
 		[[TGClient shared] downloadFile:[fileId integerValue] completion:^(NSString *path){
 			if (!path.length) return;
 			dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
 				UIImage *image = TGDecodeSquareThumbnail(path, side);
+				if (!image) return;
 				dispatch_async(dispatch_get_main_queue(), ^{
-					thumb.image = image;
+					weakThumb.image = image;
 				});
 			});
 		}];
@@ -2934,6 +2952,8 @@ static UIImage *TGStatsStretch(NSString *name, int leftCap) {
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] channelBoostSlotsWithCompletion:^(NSArray *slots){
 		NSMutableArray *usable = [NSMutableArray array];
+		if (![slots isKindOfClass:[NSArray class]])
+			slots = @[];
 		for (id slot in slots){
 			if (![slot isKindOfClass:[NSDictionary class]])
 				continue;
@@ -2954,7 +2974,7 @@ static UIImage *TGStatsStretch(NSString *name, int leftCap) {
 		[[TGClient shared] boostChat:weakSelf.chatId
 						 withSlotIds:usable
 						  completion:^(NSArray *updated){
-			if (!updated){
+			if (![updated isKindOfClass:[NSArray class]]){
 				[[[UIAlertView alloc] initWithTitle:nil
 						message:@"This chat could not be boosted."
 					   delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil] show];

@@ -1,0 +1,85 @@
+{
+  "cluster": "search",
+  "gaps": [
+    {
+      "name": "Music / audio filter in the search scope bar",
+      "whatItIs": "Modern ChatListSearchPaneContainerNode offers panes for chats, media, downloads, links, files, music and voice. Our scope bar stops at All / Media / Links / Files / Voice - there is no Music pane, so sent audio tracks are unfindable except by falling into the Files scope.",
+      "whyItMatters": "Audio tracks shared in chats cannot be located at all; the Files filter (searchMessagesFilterDocument) does not return them.",
+      "whereItGoes": "TGSearchViewController.m +scopeTitles and +filterForScope: add one title and one case returning \"searchMessagesFilterAudio\".",
+      "tdlib": ["searchMessages with searchMessagesFilterAudio - already wrapped and already documented in TGClient+Search.h"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "In-chat search restricted to one sender (\"From:\" chip)",
+      "whatItIs": "In a group, modern search lets you pick a member and see only their messages matching the query, with the chosen member shown as a token in the search field.",
+      "whyItMatters": "In a busy group, searching a common word is useless without narrowing by who said it. This is the single most-used group search affordance.",
+      "whereItGoes": "TGSearchViewController.m chat-scoped path (loadChatMessagesPage:, _scopedChatId / _scopeChatButton area) - a second chip next to the existing chat scope chip, picking a member through the existing group-members list.",
+      "tdlib": ["searchChatMessages sender_id - already wrapped: -searchMessagesInChat:query:senderUserId:filter:fromMessageId:limit:completion:, but every call site passes 0", "getSupergroupMembers / searchChatMembers - wrapped in TGClient+Groups"],
+      "effort": "small"
+    },
+    {
+      "name": "Jump to date in a chat history (calendar)",
+      "whatItIs": "Modern search offers a calendar of days that have messages; picking a day scrolls the history to that day. Typing a date into search also surfaces a \"jump to date\" row.",
+      "whyItMatters": "The only way to reach old messages in our client is scrolling or guessing a keyword. Long histories are effectively unreachable.",
+      "whereItGoes": "TGChatViewController.m - a \"Jump to date\" entry in the chat action sheet opening a simple month grid; jump via the existing scrollToMessageId: path.",
+      "tdlib": ["getChatMessageCalendar - wrapped as -messageCalendarForChat:filter:fromMessageId:completion:, currently unused anywhere", "getChatMessageByDate - wrapped as -messageInChat:closestToDate:completion:, currently unused anywhere"],
+      "effort": "small"
+    },
+    {
+      "name": "Date-range narrowing in global search",
+      "whatItIs": "Modern global search accepts a date and narrows results to that period, shown alongside the chat-type filter.",
+      "whyItMatters": "Global search over years of history returns a wall of hits; a period filter is what makes it usable. Our wrapper already takes minDate/maxDate but the UI always sends 0/0.",
+      "whereItGoes": "TGSearchViewController.m loadGlobalMessagesPage: - reuse the existing chat-type action sheet pattern for a period picker (Any / last week / last month / a chosen year).",
+      "tdlib": ["searchMessages min_date/max_date - already wrapped in -searchMessagesWithQuery:filter:chatType:minDate:maxDate:offset:limit:completion:"],
+      "effort": "small"
+    },
+    {
+      "name": "Frequently contacted peers row in the empty search state",
+      "whatItIs": "ChatListSearchRecentPeersNode shows a horizontal strip of top/frequent contacts above the recent-searches list when the search field is empty.",
+      "whyItMatters": "Search doubles as the fastest way to open a chat; without top peers the empty state only shows chats you previously found through search, which is a much narrower set.",
+      "whereItGoes": "TGSearchViewController.m loadRecents / rebuildSections - a horizontal UIScrollView header section above the existing recents.",
+      "tdlib": ["getTopChats topChatCategoryUsers - already wrapped as -topChatsWithCompletion: in TGClient+ChatList.h, currently called from nowhere"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Hashtag search scopes (This chat / My messages / Public posts)",
+      "whatItIs": "Tapping a #hashtag in modern Telegram opens a screen with three tabs: occurrences in the current chat, in your own messages, and across public posts.",
+      "whyItMatters": "We only ever run the public-posts search. Tapping a tag inside a group you follow gives you strangers' posts instead of that group's, which is the wrong answer most of the time.",
+      "whereItGoes": "TGSearchViewController.m loadTagMessagesPage: plus the tag-tap handler in TGChatViewController.m - reuse the existing scope bar with three tag scopes.",
+      "tdlib": ["searchPublicMessagesByTag - wrapped as -searchPublicMessagesWithTag:offset:limit:completion:", "searchChatMessages with the tag as the query - wrapped", "searchMessages restricted to own messages - wrapped"],
+      "effort": "small"
+    },
+    {
+      "name": "Shared media panes beyond photos and videos",
+      "whatItIs": "Modern shared media splits a chat's history into Media / Files / Links / Music / Voice / GIFs tabs, each a filtered history list.",
+      "whyItMatters": "TGMediaViewController.m hardcodes searchMessagesFilterPhotoAndVideo (line ~1089), so a chat's shared files, links and voice notes can only be reached through the global search screen, never from the chat's own profile.",
+      "whereItGoes": "TGMediaViewController.m - a scope bar identical to the one in TGSearchViewController, swapping the filter string and switching between the grid layout and a plain list for non-visual types.",
+      "tdlib": ["searchChatMessages with each SearchMessagesFilter - all wrapped and documented in TGClient+Search.h"],
+      "effort": "small"
+    },
+    {
+      "name": "Multi-select on search results",
+      "whatItIs": "ChatListSearchMessageSelectionPanelNode lets you select several search hits and forward or delete them in one go, without opening each chat.",
+      "whyItMatters": "Collecting scattered messages (photos of a trip, a set of files) currently means opening each chat and forwarding one at a time.",
+      "whereItGoes": "TGSearchViewController.m - the table already implements editing for recents; add a select mode driving the existing TGForwardPicker.",
+      "tdlib": ["forwardMessages, deleteMessages - wrapped in TGClient+Messages"],
+      "effort": "small"
+    },
+    {
+      "name": "Date indicator while fast-scrolling shared media",
+      "whatItIs": "Dragging the media grid's scrollbar shows a floating month label, driven by sparse message positions rather than by loading the whole history.",
+      "whyItMatters": "A chat with thousands of photos scrolls blind; without a date hint you cannot aim at a period. The cheap sparse API exists precisely so a 512MB device need not load everything.",
+      "whereItGoes": "TGMediaViewController.m - a small floating label updated during scrollViewDidScroll.",
+      "tdlib": ["getChatSparseMessagePositions - wrapped as -sparseMessagePositionsInChat:filter:fromMessageId:limit:completion:, currently unused"],
+      "effort": "small"
+    },
+    {
+      "name": "Downloads pane in search",
+      "whatItIs": "A pane listing files currently downloading and recently downloaded, with pause/resume and a total-size header.",
+      "whyItMatters": "Marginal here: our client downloads on demand into a small cache and has a storage screen already, and a 4S with 40-60MB of usable RAM is not a file-hoarding device. Listed only so a later wave does not re-audit it.",
+      "whereItGoes": "would be a fifth section of TGSearchViewController.m, overlapping the existing storage screen",
+      "tdlib": ["getActiveFileDownloads / searchFileDownloads - not wrapped", "addFileToDownloads, removeFileFromDownloads - not wrapped"],
+      "effort": "substantial"
+    }
+  ]
+}

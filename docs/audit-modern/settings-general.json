@@ -1,0 +1,69 @@
+{
+  "cluster": "settings-general",
+  "gaps": [
+    {
+      "name": "Auto-Night Mode (scheduled / brightness-triggered dark theme)",
+      "whatItIs": "Themes settings offers an automatic switch to the dark theme, either on a time schedule (sunset/sunrise or fixed hours) or below a screen-brightness threshold, with the chosen night theme picked separately from the day theme (ThemeAutoNightSettingsController.swift).",
+      "whyItMatters": "We already ship a dark theme and a theme picker, but the user has to walk into Settings > Theme every evening and every morning to flip it. A schedule makes the dark theme actually usable.",
+      "whereItGoes": "TGSettingsViewController.m theme page (a new sub-page next to the theme list) plus TGTheme.m, which needs a timer/notification-driven re-apply and a persisted day/night pair.",
+      "tdlib": ["none - purely local, no td_api call involved"],
+      "effort": "small"
+    },
+    {
+      "name": "Reset all notification settings",
+      "whatItIs": "A destructive footer row in Notifications and Sounds that drops every per-chat notification override back to the scope defaults (resetAllNotificationSettings).",
+      "whyItMatters": "Once a user has muted a few dozen chats individually there is no way back short of visiting each chat. Today our notifications page has three mute toggles and no escape hatch.",
+      "whereItGoes": "TGSettingsViewController.m, TGSettingsPageNotifications - one red row plus a confirm sheet (TGActionSheet).",
+      "tdlib": ["resetAllNotificationSettings - already wrapped as -resetAllNotificationSettingsWithCompletion: in TGClient+Notifications.h"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "\"New contacts joined Telegram\" notification toggle",
+      "whatItIs": "A switch in Notifications and Sounds that suppresses the contactRegistered service notification (TDLib option disable_contact_registered_notifications).",
+      "whyItMatters": "A user importing a phonebook gets a burst of \"X joined Telegram\" alerts with no way to stop them. The catalogue has the incoming service message (users-contacts, trivial) but not the setting that turns it off.",
+      "whereItGoes": "TGSettingsViewController.m notifications page, one toggle row.",
+      "tdlib": ["setOption / getOption \"disable_contact_registered_notifications\" - wrapped as -optionNamed:completion: and the option setter in TGClient+Network.h"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Badge counting preferences (messages vs chats, include muted)",
+      "whatItIs": "The badge section of Notifications and Sounds: count unread messages or unread chats, and whether muted chats and channels contribute to the app icon badge.",
+      "whyItMatters": "Our RootViewController -updateUnreadBadge hard-codes one policy. Users who keep noisy muted groups see a permanently inflated badge and cannot change it. The catalogue entry \"Badge count and unread counters feeding the app icon\" covers producing the number, not letting the user choose the rule.",
+      "whereItGoes": "TGSettingsViewController.m notifications page (a 2-row picker plus toggles) reading into RootViewController.m -updateUnreadBadge.",
+      "tdlib": ["no new call - the counters already come from updateUnreadMessageCount / updateUnreadChatCount, which we consume; the muted-aware variants are in the same update"],
+      "effort": "small"
+    },
+    {
+      "name": "Raise to listen / raise to speak",
+      "whatItIs": "A Data and Storage > Other toggle (raiseToListen) that uses the proximity sensor: lift the phone to the ear and the voice note plays through the earpiece, or recording starts.",
+      "whyItMatters": "It is the gesture that makes voice notes usable in public, and the 4S has the proximity sensor we already drive in TGCallViewController.m. Absent from the catalogue entirely.",
+      "whereItGoes": "Toggle in TGSettingsViewController.m data-and-storage page; behaviour in TGChatViewController.m voice playback plus TGVoiceRecorder.m, reusing the UIDevice proximityMonitoringEnabled path from TGCallViewController.m lines 194-199.",
+      "tdlib": ["none - local playback routing only"],
+      "effort": "small"
+    },
+    {
+      "name": "Notification exceptions list (bucket correction)",
+      "whatItIs": "A screen listing every chat whose notification settings differ from the scope default, with per-row edit and a \"delete all exceptions\" action. Our settings page currently prints the footer \"Per-chat exceptions are set from the chat itself\" instead.",
+      "whyItMatters": "Without it a user cannot see or undo the mutes they scattered across chats. Catalogued as \"Notification exceptions list\" with bucket design, but the API is wrapped and the screen is an ordinary grouped table of chat rows - it is small, not a design problem.",
+      "whereItGoes": "New page inside TGSettingsViewController.m (TGSettingsPageNotifications sub-page), reusing the chat-row cell from TGChatListViewController.m.",
+      "tdlib": ["getChatNotificationSettingsExceptions - wrapped as -notificationExceptionsForScope:completion:", "clearNotificationSettingsExceptions - wrapped as -clearNotificationExceptionsForScope:completion:"],
+      "effort": "small"
+    },
+    {
+      "name": "Custom notification sound picker (bucket correction: blocked)",
+      "whatItIs": "Modern clients let a scope or a chat use a downloaded or user-uploaded notification sound (notificationSound, getSavedNotificationSounds, addSavedNotificationSound).",
+      "whyItMatters": "Catalogued as design in the notifications area, which overstates what is reachable. On iOS 6 the sound of a remote push must be a file already inside the app bundle (or the system default); a sound downloaded at runtime into Documents/Library cannot be named in an APNs payload, and there is no UNNotificationSound. Only in-app playback of a chosen sound is possible, so the setting would lie about what happens when the app is backgrounded. Recommend re-bucketing to blocked (iOS 6 APNs sound must be bundled) and keeping only a bundled-sounds picker if anything.",
+      "whereItGoes": "TGSettingsViewController.m notifications page - and the catalogue entries \"Custom notification sound picker\" (notifications) and \"Custom notification sounds library\" (misc-settings).",
+      "tdlib": ["getSavedNotificationSounds / addSavedNotificationSound / removeSavedNotificationSound - already wrapped in TGClient+Notifications.h; setScopeNotificationSettings sound_id also wrapped"],
+      "effort": "blocked"
+    },
+    {
+      "name": "Stickers settings section (suggest by emoji, large emoji, dynamic order)",
+      "whatItIs": "InstalledStickerPacksController carries a settings block above the pack list: suggest stickers by emoji (all / installed / none), send large single emoji, and dynamic pack ordering (recently used packs float up).",
+      "whyItMatters": "Our stickers screen is packs, trending, archived and favourites with no preferences at all, so the emoji-to-sticker suggestion behaviour is unconfigurable and always on. The catalogue has the suggestion behaviour (\"Sticker suggestion for a lone typed emoji\", design) but not the controls.",
+      "whereItGoes": "Header section of TGStickersViewController.m root page; suggestion behaviour lives in TGStickerPanelView.m / TGChatViewController.m compose path.",
+      "tdlib": ["getOption \"disable_sticker_suggestions\" and the local counterpart - reader already wrapped as -stickerSuggestionEnabledWithCompletion: in TGClient+Stickers.h; the mode choice and pack ordering are local NSUserDefaults on top of the wrapped reorderInstalledStickerSets"],
+      "effort": "small"
+    }
+  ]
+}

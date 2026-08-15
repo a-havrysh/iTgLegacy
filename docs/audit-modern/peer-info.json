@@ -1,0 +1,101 @@
+{
+  "cluster": "peer-info",
+  "gaps": [
+    {
+      "name": "Add members to a group or channel",
+      "whatItIs": "Modern PeerInfoUI has an 'Add Member' row at the top of the member list and in the group info section, opening a multi-select contact picker (PresentAddMembers.swift, ChannelMembersSearchController); failures per-user are reported as a 'could not be added, invite link instead' sheet.",
+      "whyItMatters": "There is currently no path anywhere in the app to put another person into a group. An admin can remove, ban, restrict and promote, but never add. This is the single largest hole in the peer-info area.",
+      "whereItGoes": "New multi-select mode on TGContactsViewController, pushed from TGGroupMembersViewController (members mode) and from the 'Members' row in TGProfileViewController rebuildManageRows. Telegraph has TGGroupInfoSelectContactController for the exact picker.",
+      "tdlib": ["addChatMembers / addChatMember - wrapped as -addMembers:toGroup: in TGClient+Groups.h (never called from any .m)", "searchContacts - wrapped", "createChatInviteLink for the fallback path - wrapped"],
+      "effort": "small"
+    },
+    {
+      "name": "Group Type screen (public username / private link / join by request)",
+      "whatItIs": "ChannelVisibilityController: Private vs Public segmented choice, username field with live availability checking, the t.me link preview, the 'too many public links' list of owned public chats to free one, and the 'Approve new members' toggle.",
+      "whyItMatters": "A group or channel created in this client can never be made public, and an existing public link can never be changed or revoked. Owners cannot control whether joins need approval.",
+      "whereItGoes": "New TGGroupTypeViewController pushed from a 'Group Type' / 'Channel Type' row in TGProfileViewController rebuildManageRows, above Permissions. Telegraph has TGCheckUsernameAvailabilityActor and TGApplyUsernameActor plus TGGroupInfoShareLinkController.",
+      "tdlib": ["setSupergroupUsername - wrapped as -setGroupChat:username:", "checkChatUsername - wrapped as -checkGroupUsername:", "getCreatedPublicChats - wrapped as -createdPublicChatsWithCompletion:", "toggleSupergroupJoinByRequest - wrapped as -setChat:joinByRequest:"],
+      "effort": "small"
+    },
+    {
+      "name": "Missing group management toggles: history visibility, hidden members, anti-spam, content protection",
+      "whatItIs": "GroupPreHistorySetupController ('New members can see older messages'), plus the Hide Members, Aggressive Anti-Spam and Restrict Saving Content switches that sit in the modern group info edit screen.",
+      "whyItMatters": "Four owner-facing controls that shape what a group actually is; every one of them is already reachable from the server side and simply has no row.",
+      "whereItGoes": "Four rows in TGProfileViewController rebuildManageRows, in the admin block next to Permissions and Slow Mode; the history one is a two-choice push, the other three are switches.",
+      "tdlib": ["toggleSupergroupIsAllHistoryAvailable - wrapped (-setGroup:allHistoryAvailable:)", "toggleSupergroupHasHiddenMembers - wrapped (-setGroup:hiddenMembers:)", "toggleSupergroupHasAggressiveAntiSpamEnabled - wrapped (-setGroup:aggressiveAntiSpam:)", "toggleChatHasProtectedContent - wrapped (-setGroup:protectedContent:)"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Join requests row on the group/channel info screen",
+      "whatItIs": "Modern peer info shows a badged 'N Requests' row directly on group info, opening the approve/dismiss queue, with an 'Approve all' action.",
+      "whyItMatters": "Our approval queue exists only inside TGInviteLinksViewController, so an admin whose group is set to approve-joins has no visible signal that anybody is waiting, and no obvious place to look.",
+      "whereItGoes": "One row with a count badge in TGProfileViewController rebuildManageRows, reusing the queue UI already written in TGInviteLinksViewController.m.",
+      "tdlib": ["getChatJoinRequests - wrapped (-joinRequestsForChat:...)", "processChatJoinRequest / processChatJoinRequests - wrapped", "chatFull.pending_join_request_count via -pendingJoinRequestCountForChat: - wrapped"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Timed restrictions and timed bans",
+      "whatItIs": "ChannelBannedMemberController offers a duration list for a restriction or ban (1 day / 1 week / 1 month / Forever / custom date), which becomes restricted_until_date.",
+      "whyItMatters": "Every restriction and ban we issue is permanent: TGMemberRightsViewController reads the existing untilDate but always writes 0, and -banMember:/-unbanMember: are called with untilDate:0. Muting a member for a day, the normal moderation action, is impossible.",
+      "whereItGoes": "A 'Duration' row plus a date sheet at the bottom of TGMemberRightsViewController in TGGroupMembersViewController.m (the save path already passes self.untilDate through).",
+      "tdlib": ["setChatMemberStatus with chatMemberStatusRestricted.restricted_until_date / chatMemberStatusBanned.banned_until_date - both wrapped (-restrictMember:...untilDate:, -banMember:)"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Transfer ownership",
+      "whatItIs": "The 'Transfer Ownership' row at the bottom of ChannelAdminController, gated behind a 2FA password prompt and a confirmation alert, with the specific error states (needs a password, password set too recently, target must be a member and not restricted).",
+      "whyItMatters": "An owner cannot hand a group or channel over, which also means they cannot cleanly leave one they created.",
+      "whereItGoes": "A destructive row in the admin editor (TGMemberRightsViewController, promote mode) in TGGroupMembersViewController.m, plus a password UIAlertView.",
+      "tdlib": ["transferChatOwnership - wrapped as -transferOwnershipOfGroup:toUser:password:", "canTransferOwnership - not wrapped, needed to pick the right error text"],
+      "effort": "small"
+    },
+    {
+      "name": "Delete group / delete channel, and upgrade a basic group to a supergroup",
+      "whatItIs": "Modern group info gives the owner 'Delete Group' (deletes for all members) beside 'Leave', and silently upgrades a basic group to a supergroup when an action requires it (permissions, admins, invite links, member limit).",
+      "whyItMatters": "Today the only exit is 'Leave group'; an owner cannot delete a group they made. And in a basic group the admin rows either fail or do nothing, with no upgrade prompt to explain why.",
+      "whereItGoes": "A destructive row in the profile action sheet built around line 693 of TGProfileViewController.m, and an upgrade confirmation before the admin-only rows in rebuildManageRows. Telegraph has TGConvertToSupergroupController.",
+      "tdlib": ["deleteChat - wrapped on TGClient", "upgradeBasicGroupChatToSupergroupChat - wrapped as -upgradeBasicGroupToSupergroup:"],
+      "effort": "small"
+    },
+    {
+      "name": "Profile photo history and avatar carousel",
+      "whatItIs": "PeerInfoAvatarListNode pages horizontally through every profile photo the peer has, with dot indicators, and PeerAvatarGalleryUI opens the full gallery where you can set one as main or delete it.",
+      "whyItMatters": "We show one avatar and nothing else, so older profile photos, and deleting your own previous photos, are unreachable. A paging UIScrollView is exactly what the 2013 app used for this.",
+      "whereItGoes": "The header avatar view of TGProfileViewController (avatarView / loadAvatarFile:), with a gallery pushed on tap. Telegraph has TGGroupAvatarGalleryModel/Item plus the user equivalent.",
+      "tdlib": ["getUserProfilePhotos - wrapped as -profilePhotosForUser: (never called)", "deleteProfilePhoto - wrapped as -deleteMyProfilePhoto:", "setProfilePhoto with is_public - wrapped as -setMyProfilePhotoAtPath:"],
+      "effort": "small"
+    },
+    {
+      "name": "Set or suggest a profile photo for a contact",
+      "whatItIs": "'Set Photo for <name>' and 'Suggest Photo' in the contact's profile menu (PeerInfoScreenAvatarSetup / PhotoUpdateConfirmationController); the personal photo replaces theirs only for you, the suggestion is sent to them.",
+      "whyItMatters": "The usual fix for a contact with no avatar or a useless one. Both calls are wrapped and unused.",
+      "whereItGoes": "Two entries in the profile action sheet of TGProfileViewController, reusing the existing photo-picker path already used by 'Set Photo'.",
+      "tdlib": ["setUserPersonalProfilePhoto - wrapped as -setPersonalPhotoAtPath:forUser:", "-removePersonalPhotoForUser: - wrapped", "suggestUserProfilePhoto - not wrapped"],
+      "effort": "small"
+    },
+    {
+      "name": "Private note about a contact, and a tappable Groups in Common list",
+      "whatItIs": "The modern user profile has a personal note field (PeerInfoScreenOpenNote) visible only to you, and a 'N Groups in Common' row that opens the actual chat list.",
+      "whyItMatters": "Our profile prints 'groups in common: 3' as dead text and offers no note at all, even though both APIs are wrapped and idle.",
+      "whereItGoes": "The details rows built around line 1440 of TGProfileViewController.m: make the common-groups row push a chat list, and add an editable note row above it.",
+      "tdlib": ["getUserSupportInfo-style note pair -noteForUser: / -setNote:forUser: - wrapped, unused", "getGroupsInCommon - wrapped as -groupsInCommonWithUser:, unused"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Report a user, group, channel or chat photo",
+      "whatItIs": "The report flow from peer info: an action-sheet or list of server-supplied reasons (spam, violence, child abuse, illegal drugs, personal details, other), an optional comment field, and the separate chat-photo report.",
+      "whyItMatters": "There is no report entry point on any profile in the app; reportChat is wrapped in three places and never called from UI. It is also the expected safety affordance for a client people actually use.",
+      "whereItGoes": "A destructive row in the profile action sheet of TGProfileViewController, reusing the option-list + comment screen shape that the message report flow will need anyway.",
+      "tdlib": ["reportChat - wrapped (TGClient+Privacy.h, TGClient+Groups.h -reportGroup:)", "reportChatPhoto - not wrapped"],
+      "effort": "small"
+    },
+    {
+      "name": "Shared-media panes beyond photos and files",
+      "whatItIs": "PeerInfoPaneContainerNode gives Media / Files / Links / Voice / Music / GIFs (and Groups in Common) as swipeable, paged panes with lazy loading.",
+      "whyItMatters": "Our profile fetches exactly one page of searchMessagesFilterPhotoAndVideo and one of searchMessagesFilterDocument (TGProfileViewController.m loadMedia, line 1464) and stops. Shared links, voice messages and music in a chat are unreachable from the profile, and nothing pages past the first batch.",
+      "whereItGoes": "loadMedia / the media sections of TGProfileViewController.m, driven by a segmented control; a paging UIScrollView is available on 4S so panes can swipe rather than reload.",
+      "tdlib": ["searchChatMessages with searchMessagesFilterUrl / VoiceNote / Audio / Animation - the filter string is already a parameter of the wrapped -mediaInChat:filter:"],
+      "effort": "small"
+    }
+  ]
+}

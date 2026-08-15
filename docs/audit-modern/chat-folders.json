@@ -1,0 +1,105 @@
+{
+  "cluster": "chat-folders",
+  "gaps": [
+    {
+      "name": "Shareable folder invite links",
+      "whatItIs": "A folder that contains groups/channels can be published as a t.me/addlist link. The folder editor gets an \"Invite Links\" section listing every link with its name and the chats it covers, plus create/edit/revoke and a chat-selection step limited to shareable chats.",
+      "whyItMatters": "Shared folders are how people distribute whole sets of communities today. Without it, a folder link received from a friend cannot be produced, renamed or revoked from this client, and a folder marked shareable elsewhere shows no evidence of its links here.",
+      "whereItGoes": "New section in the editor page of src/TGFoldersViewController.m (page TGFoldersPageEditor), reusing the existing chat-picker page for chat selection. Modern reference: submodules/InviteLinksUI/Sources/FolderInviteLinkListController.swift. Not present in twelve/Telegraph (predates folders).",
+      "tdlib": [
+        "getChatFolderInviteLinks - wrapped as -inviteLinksForFolder:completion: (unused by any screen)",
+        "getChatsForChatFolderInviteLink - wrapped as -shareableChatsInFolder:completion: (unused)",
+        "createChatFolderInviteLink - wrapped as -createInviteLinkForFolder:name:chatIds:completion: (unused)",
+        "editChatFolderInviteLink - wrapped as -editInviteLink:forFolder:name:chatIds:completion: (unused)",
+        "deleteChatFolderInviteLink - wrapped as -deleteInviteLink:forFolder: (unused)"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Opening a t.me/addlist link (folder link preview and join)",
+      "whatItIs": "Tapping a folder link shows a preview sheet: folder name, the chats you are not yet in, each with a checkbox, and a Join Chats button that adds only the ticked ones and creates or updates the local folder.",
+      "whyItMatters": "This is the receiving half of shared folders and by far the more common one. Right now an addlist link is inert text; the user cannot join a shared folder at all.",
+      "whereItGoes": "URL routing alongside the existing t.me handlers (TGClient+WebLinks.m, the proxy/QR link sniffers in src/TGProxyViewController.m and src/TGQRViewController.m show the pattern), presenting a checklist table modeled on the picker page of src/TGFoldersViewController.m. Modern reference: submodules/TelegramUI/Components/ChatFolderLinkPreviewScreen.",
+      "tdlib": [
+        "checkChatFolderInviteLink - wrapped as -checkFolderInviteLink:completion: (unused)",
+        "addChatFolderByInviteLink - wrapped as -joinFolderByInviteLink:chatIds:completion: (unused)"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "\"New chats in this folder\" banner",
+      "whatItIs": "When the owner of a shared folder you joined adds chats to it, the chat list shows a banner above the rows offering to join the N new chats, or to dismiss it.",
+      "whyItMatters": "Without it a joined shared folder silently stops matching its source; the user never learns new chats were added and the folder quietly rots.",
+      "whereItGoes": "Header area of src/TGChatListViewController.m, next to the existing Archived Chats header row and stories tray (the header builder around -headerRows / folderStripWithWidth). Modern reference: openChatFolderUpdates / hideChatFolderUpdates in submodules/ChatListUI/Sources/Node/ChatListNode.swift.",
+      "tdlib": [
+        "getChatFolderNewChats - wrapped as -newChatsInFolder:completion: (unused)",
+        "addChatFolderNewChats - wrapped as -addNewChats:toFolder: (unused)",
+        "TDLib update chatFolderNewChats / poll on folder switch"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Add a chat to a folder from the chat list",
+      "whatItIs": "The chat row's long-press menu offers \"Add to Folder\", listing existing folders plus New Folder, and toggles that chat in the folder's includedChatIds.",
+      "whyItMatters": "Today the only way to file a chat is to open Settings, open the folder editor, open the include picker and hunt for the chat. Folders are useless if filing a chat costs five screens.",
+      "whereItGoes": "-showActionsForRow: / -runChatAction: in src/TGChatListViewController.m, appended to the existing TGPopupMenu items (Pin, Read, Mute, Archive, Delete). Modern reference: ChatList_Context_AddToFolder in submodules/ChatListUI/Sources/ChatContextMenus.swift.",
+      "tdlib": [
+        "getChatFolder + editChatFolder - both already wrapped as -folderWithId:completion: and -saveFolder:completion:",
+        "chat folder list already live via TGClient.folders"
+      ],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Swipe between folder tabs",
+      "whatItIs": "A horizontal swipe on the chat list moves to the adjacent folder, with the tab strip tracking the gesture; the strip also scrolls the selected tab into view.",
+      "whyItMatters": "Tapping small 12pt plates in a scroll strip is the only way to change folder now. Swiping is the gesture everyone uses for folders, and on a 320pt screen where only two or three tabs fit, tap-only means constantly scrolling the strip first.",
+      "whereItGoes": "src/TGChatListViewController.m around folderStripWithWidth:top: and -folderButtonTapped: - a UISwipeGestureRecognizer on the table (both work on iOS 6; a paged UIScrollView host would be the fuller version). Modern reference: submodules/ChatListUI/Sources/ChatListControllerNode.swift container paging.",
+      "tdlib": [
+        "none - purely local, chats already fetched per list with -chatsInList:limit:completion:"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Folder tag colours",
+      "whatItIs": "A folder can be given one of the seven accent colours; chats then carry small coloured folder tags on their chat-list row so you can see which folders a chat belongs to without switching tabs. Premium-gated, with a global on/off.",
+      "whyItMatters": "Colour is the only cue that survives at 320pt - the strip plates are all identical grey otherwise, and there is no way at all to see a chat's folder membership from the main list.",
+      "whereItGoes": "A colour-swatch row in the editor page of src/TGFoldersViewController.m (the draft already round-trips \"colorId\" through TGClient+ChatList.m but nothing sets it), plus a tag chip drawn on the chat row in src/TGChatListViewController.m. Modern reference: the tagColor section of submodules/ChatListUI/Sources/ChatListFilterPresetController.swift.",
+      "tdlib": [
+        "editChatFolder with color_id - already serialised in -tgcl_tdFolderFrom: / -tgcl_folderFromTdFolder:",
+        "toggleChatFolderTags - NOT wrapped, needs adding",
+        "getChatFolderChatCount already wrapped for the editor counter"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Moving the All Chats tab among folders",
+      "whatItIs": "In the folder reorder list, All Chats is itself a draggable row, so folders can be placed before it and the client opens on whichever tab is first.",
+      "whyItMatters": "People who live in one folder want it first. -commitOrder always sends mainListPosition:0, so All Chats is permanently pinned leftmost and there is no way to change it.",
+      "whereItGoes": "-commitOrder and the reorder rows in src/TGFoldersViewController.m (line 360 hardcodes position 0); add a non-deletable All Chats row to the list page.",
+      "tdlib": [
+        "reorderChatFolders - already wrapped as -reorderFolders:mainListPosition:, the position argument is simply never used"
+      ],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Correct per-folder unread badges",
+      "whatItIs": "Each tab shows the folder's unread count from the server's own per-list summary, respecting the badge settings (count muted chats or not, count chats not messages).",
+      "whyItMatters": "The current strip counter in -refreshCounts sums the unread field of the first 100 chats of every folder on a 5-second sweep, including muted ones. On a busy account the numbers are wrong, and the sweep re-fetches every folder's chat list on one A5 core - it is both incorrect and the most expensive thing the chat list does idle.",
+      "whereItGoes": "-refreshCounts / -unreadSuffixForList: in src/TGChatListViewController.m, using the existing -unreadSummaryForList: path already used for Main and Archive.",
+      "tdlib": [
+        "getChatListUnreadCount / updateUnreadChatCount for chatListFolder - -unreadSummaryForList: already wrapped and used for Main and Archive, it just is not called for folder ids"
+      ],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Folder limits surfaced before the failure",
+      "whatItIs": "The folder list shows how many folders remain (e.g. 2 of 10) and the include/exclude pickers cap at the chats-per-folder limit, explaining the Premium limit rather than failing on save.",
+      "whyItMatters": "Today an over-limit save just produces \"Telegram refused this folder. It may be full, or the name may be taken.\" after the user has done all the work of building it.",
+      "whereItGoes": "List page footer and -saveDraft: error path in src/TGFoldersViewController.m.",
+      "tdlib": [
+        "getPremiumLimit for chatFolderCount / chatFolderChosenChatCount - the limit lookup is already wrapped in TGClient+Premium.h (chatFolderCount is named in its docs)"
+      ],
+      "effort": "drop-in"
+    }
+  ]
+}

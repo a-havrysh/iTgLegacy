@@ -1,0 +1,77 @@
+{
+  "cluster": "file-transfer",
+  "gaps": [
+    {
+      "name": "Priority-aware fetch queue with cancel on scroll-away",
+      "whatItIs": "FetchManagerImpl keeps one entry per resource with a bag of references, priorities (elevated / user-initiated / visible-index), and cancels a fetch the moment the last reference goes away, so only what is on screen is being pulled and a tapped item jumps the queue.",
+      "whyItMatters": "Every call site in our app uses TGClient's plain downloadFile:completion: at default priority, and TGRemoteImageView -cancelLoading only flips a local BOOL - the TDLib download keeps running. Fast-scrolling a chat or the contact list queues dozens of avatar and thumbnail fetches that keep competing with the photo the user actually tapped. On EDGE/3G on a 4S this is the difference between a tap opening in seconds and in a minute.",
+      "whereItGoes": "A new small scheduler owned by TGClient (or a TGFetchQueue in src/), called from TGRemoteImageView.m, TGChatViewController.m, TGMediaViewController.m, TGChatListViewController.m; uses the already-wrapped priority argument.",
+      "tdlib": ["downloadFile with priority 1..32 - wrapped as startDownloadingFile:priority:completion:", "cancelDownloadFile - wrapped as cancelDownloadOfFile:onlyIfPending:"],
+      "effort": "substantial"
+    },
+    {
+      "name": "Per-file transfer status fan-out and in-bubble progress ring",
+      "whatItIs": "FileMediaResourceStatus / ChatMessageInteractiveMediaBadge model each media as Remote / Fetching(progress) / Local and draw a per-bubble circular progress with a cancel cross, independently for every visible message.",
+      "whyItMatters": "We have one global TGClient.onFileProgress block. TGChatViewController overwrites it for a single downloadingFileId and shows one centred percentage HUD; TGMediaViewController saves and restores the previous block to avoid clobbering it. Only one transfer can be observed at a time, and a bubble downloading in the background shows nothing. Users cannot see or cancel a second download.",
+      "whereItGoes": "Replace onFileProgress with a fileId->observers registry in TGClient.m, draw the ring in ChatViewCell.m, delete the HUD in TGChatViewController.m (~line 2308).",
+      "tdlib": ["updateFile (already dispatched in TGClient.m:283)", "cancelDownloadFile - wrapped"],
+      "effort": "substantial"
+    },
+    {
+      "name": "Download failure surfacing and tap-to-retry",
+      "whatItIs": "Modern clients turn a failed or cancelled fetch back into the Remote state with a download arrow, so a retry is one tap; TDLib reports the failure through updateFile / the request error.",
+      "whyItMatters": "Nearly every download callback in our source is `if (path.length == 0) return;` - a failed fetch leaves a spinner or a blank bubble forever with no way to retry short of leaving and re-entering the chat. On a flaky 3G link this is the single most common file-transfer failure a 4S user hits.",
+      "whereItGoes": "Same status model as the progress ring: ChatViewCell.m plus the completion blocks in TGChatViewController.m, TGMediaViewController.m, TGProfileViewController.m.",
+      "tdlib": ["downloadFile error path - wrapped", "getFile / fileInfo: to re-check state - wrapped"],
+      "effort": "small"
+    },
+    {
+      "name": "Report the real network type to TDLib",
+      "whatItIs": "The app watches reachability and calls setNetworkType(wifi/mobile/mobileRoaming/other/none) on every change, which is what makes auto-download limits and the network-usage breakdown mean anything.",
+      "whyItMatters": "TGClient+Network.m:460 wraps setNetworkType but nothing in the app ever calls it, and there is no reachability observer anywhere in src/. So TDLib assumes one network forever: our per-network auto-download settings and the Wi-Fi vs mobile columns in the data-usage screen are both fiction, and a user on a metered 3G plan gets Wi-Fi-sized auto-downloads.",
+      "whereItGoes": "SCNetworkReachability observer in AppDelegate.m feeding [TGClient setNetworkTypeKind:]; SystemConfiguration is fine on iOS 6.",
+      "tdlib": ["setNetworkType - wrapped as setNetworkTypeKind:"],
+      "effort": "small"
+    },
+    {
+      "name": "Keep transfers alive when the app is backgrounded",
+      "whatItIs": "A background task assertion held while any download or upload is in flight, so pressing Home mid-send does not freeze the transfer.",
+      "whyItMatters": "There is no beginBackgroundTask anywhere in src/. Sending a photo or pulling a video and then locking the phone suspends the process and the transfer stalls until the user returns - on a 4S over 3G a 10MB video is minutes, so this happens constantly. iOS 6 grants ~10 minutes, which is exactly the window this needs.",
+      "whereItGoes": "AppDelegate.m applicationDidEnterBackground, driven by the same transfer registry as the progress fan-out.",
+      "tdlib": ["none new; uses the active-transfer set derived from updateFile"],
+      "effort": "small"
+    },
+    {
+      "name": "Play video and music while they download",
+      "whatItIs": "MediaPlayer / UniversalMediaPlayer feed AVPlayer through a resource loader backed by byte-range fetches, so playback starts on the first seconds instead of the whole file.",
+      "whyItMatters": "Every video and audio playback path calls the whole-file downloadFile:completion:, so a 20MB video is a multi-minute wait behind a percentage HUD before the first frame. TGClient+Files already exposes the exact primitives a resource loader needs (downloadedPrefixSizeForFile:offset:, downloadFile:offset:limit:, streamFile:offset:count:) and none of them are called from any screen. Only progressive MP4/H.264 is in scope - the 4S cannot decode the modern alternative-quality codecs.",
+      "whereItGoes": "An AVAssetResourceLoaderDelegate used by TGMediaViewController.m and the audio player; /Users/alexanderhavrysh/Git/iOS/twelve/Telegraph/TGMusicPlayer.m and TGModernConversationAudioPlayer.m already implement this pattern in Objective-C, so the port is mostly plumbing to streamFile:.",
+      "tdlib": ["downloadFile with offset/limit - wrapped", "getFileDownloadedPrefixSize - wrapped", "readFilePart - wrapped"],
+      "effort": "substantial"
+    },
+    {
+      "name": "Free-space guard and disk-full handling on download",
+      "whatItIs": "Modern clients check available space against the resource size before fetching and surface a clear out-of-space error rather than failing mid-write.",
+      "whyItMatters": "TGVideoRecorder.m already does exactly this check for recording (freeDiskSpace / diskFloor), but the download side has no equivalent. A 4S that is nearly full silently fails part-way into a big file, and because failures are not surfaced at all the user just sees a stuck bubble.",
+      "whereItGoes": "Same guard helper reused from TGVideoRecorder.m, applied in the fetch scheduler before startDownloadingFile:, with an offer to run the existing storage cleanup in TGStorageViewController.",
+      "tdlib": ["file.size / expectedSize from fileInfo: - wrapped", "optimizeStorage - wrapped"],
+      "effort": "small"
+    },
+    {
+      "name": "Cancel an outgoing media send from the bubble",
+      "whatItIs": "A pending upload shows its progress on the bubble with a cross that aborts the send and removes the message.",
+      "whyItMatters": "We can start uploads (uploadFileAtPath:, cancelUploadOfFile:) but neither is called from any screen, and the sending bubble shows no progress. On a slow uplink a mis-picked 8MB photo is unstoppable and blocks everything queued behind it.",
+      "whereItGoes": "ChatViewCell.m sending state plus TGChatViewController.m send path; cancel maps to deleting the pending message, as the header already notes.",
+      "tdlib": ["updateFile upload fields (uploadedSize/isUploading) - wrapped", "cancelPreliminaryUploadFile - wrapped as cancelUploadOfFile:", "deleteMessages - wrapped"],
+      "effort": "small"
+    },
+    {
+      "name": "Preload the neighbouring photo in the media viewer",
+      "whatItIs": "The gallery fetches the next and previous item at low priority while the current one is on screen, so swiping is instant.",
+      "whyItMatters": "TGMediaViewController fetches strictly on demand, so every swipe in a photo gallery is a fresh round trip on a link where that is seconds. One low-priority prefetch each side is the cheapest perceived-speed win in the whole file-transfer area, and it is bounded so it costs no memory beyond one extra decoded image.",
+      "whereItGoes": "TGMediaViewController.m paging callback, using priority 1 for the neighbours and the tapped item at high priority via the fetch scheduler.",
+      "tdlib": ["downloadFile with priority - wrapped as startDownloadingFile:priority:completion:"],
+      "effort": "small"
+    }
+  ]
+}

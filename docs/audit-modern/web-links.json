@@ -1,0 +1,127 @@
+{
+  "cluster": "web-links",
+  "gaps": [
+    {
+      "name": "Tappable link entities in message text",
+      "whatItIs": "Modern clients render message text through a CoreText label that turns every text entity (url, textUrl, mention, mentionName, hashtag, cashtag, phone, email, bank card) into a tappable run with highlight-on-touch, and route the tap through the internal link resolver.",
+      "whyItMatters": "Today a link inside a message body is dead text. The only tappable thing is the preview bubble, so any message with a link and no preview (t.me/username, tg:// links, hashtags, @mentions, mailto) cannot be opened at all, and a hidden textUrl never reveals its real target.",
+      "whereItGoes": "TGChatViewController.m message body label (currently a plain UILabel; ChatViewCell.m still uses a UITextView with dataDetectorTypes, which bypasses openLink: and jumps straight to Safari). Needs a small CoreText/UILabel hit-test label; feed it +[TGClient tappableEntitiesIn:] and call the existing -openLink:.",
+      "tdlib": [
+        "getTextEntities / message formatted_text entities - already wrapped as +[TGClient tappableEntitiesIn:] in TGClient+WebLinks.h (currently unused by any screen)"
+      ],
+      "effort": "substantial"
+    },
+    {
+      "name": "Internal link routing beyond message links",
+      "whatItIs": "UrlHandling maps every resolved InternalLinkType onto a screen: public chat/username, chat invite, sticker set, bot start, video chat, story, proxy, language pack, background, folder invite.",
+      "whyItMatters": "-openLink: only handles kind==\"message\" inside the currently open chat; everything else falls through to the Safari confirmation sheet or a flat 'This link cannot be opened.' Yet we already have every destination screen (profile, invite links, sticker strip, proxy, folders, stories). A tapped t.me/durov should open the profile, not Safari.",
+      "whereItGoes": "TGChatViewController.m -openLink: (line ~3162), promoted to a shared router so QR scan, search results and other screens use it too.",
+      "tdlib": [
+        "getInternalLinkType - wrapped as -resolveLink:completion:",
+        "searchPublicChat, checkChatInviteLink, joinChatByInviteLink, getStickerSet - all already wrapped"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Handling tg:// and t.me URLs arriving from other apps",
+      "whatItIs": "Opening a Telegram link from Safari, Mail or another app launches the client and navigates to the target.",
+      "whyItMatters": "Info.plist already claims the tg: and telegram: URL schemes, so iOS hands us those links and we silently drop them - worse than not registering the scheme. AppDelegate -handleOpenURL: only understands the itglegacy:// debug hosts.",
+      "whereItGoes": "AppDelegate.m -handleOpenURL: (line 244): anything that is not the itglegacy scheme goes to the shared link router above.",
+      "tdlib": [
+        "getInternalLinkType - already wrapped"
+      ],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Composer link preview panel",
+      "whatItIs": "While typing a message containing a URL, a panel above the input shows the preview that will be attached, with a close button to disable it, and (modern) small/large media and above-text toggles.",
+      "whyItMatters": "The user has no idea a preview will be attached and no way to suppress it; a chat full of unwanted preview cards is the visible result. The 2013 client already had this panel.",
+      "whereItGoes": "TGChatViewController.m compose bar, reusing the existing TGLinkPreviewView for the panel body and -linkPreviewForText:withOptions: (already used for incoming bubbles at line ~1890, just never for the composer).",
+      "tdlib": [
+        "getLinkPreview - wrapped as -linkPreviewForText:withOptions:",
+        "linkPreviewOptions on inputMessageText - wrapped as +linkPreviewOptionsDisabled:url:forceSmallMedia:forceLargeMedia:showAboveText: (never passed by the send path, which hardcodes defaults)"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Rich text runs inside Instant View articles",
+      "whatItIs": "InstantPageTextItem renders each paragraph with bold/italic/fixed/marked styling and inline links, anchor links, mentions and email/phone runs, each tappable.",
+      "whyItMatters": "Our reader flattens every block to a plain UILabel string (+textOfBlock:), so an article's inline links and emphasis vanish. Tapping a text block does nothing; tapping a media block opens the whole article in Safari. For a reader whose point is offline, low-bandwidth reading on a 4S, losing every in-article link is a real loss.",
+      "whereItGoes": "TGInstantViewController inside TGChatViewController.m - the same CoreText label as gap 1, fed with the block's \"runs\" array that -instantViewForUrl: already returns. Telegraph has a full Objective-C precedent in TGInstantPageTextItem/TGInstantPage+TG.m worth porting.",
+      "tdlib": [
+        "getWebPageInstantView - wrapped; block \"runs\" already flattened by TGClient+WebLinks"
+      ],
+      "effort": "substantial"
+    },
+    {
+      "name": "Instant View v2 structural blocks",
+      "whatItIs": "Tables, collapsible details sections, related-articles lists, channel (chatLink) banners, collages and slideshows.",
+      "whyItMatters": "These are common in real IV articles; every one of them currently renders as a blank or unsupported row, so parts of the article are simply missing with no indication. Details blocks in particular hide whole sections of text.",
+      "whereItGoes": "TGInstantViewController +heightForBlock:/cellForRow: - add a scrollable table cell (horizontal UIScrollView), an expandable details row, and a related-articles row. Telegraph has TGInstantPageDetailsItem / table equivalents to port.",
+      "tdlib": [
+        "getWebPageInstantView - the flattened block dictionaries already carry \"rows\", \"isOpen\", \"articles\", \"blocks\""
+      ],
+      "effort": "substantial"
+    },
+    {
+      "name": "Instant View footer chrome and sharing",
+      "whatItIs": "View count, 'Leave a comment' feedback link, an action button to share the article or open the original page in the browser, and the settings popover (font size, theme).",
+      "whyItMatters": "There is currently no way out of the reader other than Back - no share, no 'open original', no font size for a 320pt screen where 15pt body text on a 4S is the whole reading experience.",
+      "whereItGoes": "TGInstantViewController: a right bar button opening the existing TGActionSheet with Share / Open in Safari / Copy Link, a footer cell for viewCount and feedbackLink, and a font-size row backed by NSUserDefaults.",
+      "tdlib": [
+        "getWebPageInstantView - already returns viewCount, feedbackLink, isFull"
+      ],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Non-article link preview types rendered as their media",
+      "whatItIs": "A preview whose type is photo/video/audio/document/sticker/animation is drawn as the media itself rather than as a title+description card, and tapping it plays or opens the media in-app.",
+      "whyItMatters": "TGLinkPreviewView only lays out title/description plus a thumbnail, so a link to a Telegram photo, a voice message or an mp3 is shown as a small grey card instead of the content, and tapping it leaves for Safari.",
+      "whereItGoes": "TGLinkPreviewView in TGChatViewController.m: branch on the already-provided \"mediaKind\" and reuse the existing photo/audio/document attachment views.",
+      "tdlib": [
+        "linkPreview types - already flattened into \"mediaKind\", \"mediaFileId\", \"duration\", \"fileName\" by +flattenedLinkPreview:"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Login-URL keyboard buttons (Seamless Telegram Login)",
+      "whatItIs": "An inlineKeyboardButtonTypeLoginUrl press shows a confirmation naming the site and the bot, with an optional 'allow to write to me' toggle, then opens the authorised URL.",
+      "whyItMatters": "Bots that log you into a website are common; without the confirmation flow the button is either inert or leaks the raw URL. The bot layer already classifies the button kind as \"loginUrl\" but nothing consumes it.",
+      "whereItGoes": "TGChatViewController.m inline keyboard button handling, reusing the existing external-link confirmation sheet.",
+      "tdlib": [
+        "getLoginUrlInfo / getLoginUrl - wrapped as -loginUrlInfoForButton:inMessage:inChat:completion: and -loginUrlForButton:... (both unused)"
+      ],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Unknown tg:// deep link explanation",
+      "whatItIs": "For a tg:// link this build does not understand, the server supplies human-readable text and a flag for whether an app update would help; the client shows it in an alert instead of failing silently.",
+      "whyItMatters": "This is exactly the case a 2013-era client hits constantly - links for features we do not implement. Right now the user gets a generic 'This link cannot be opened.'",
+      "whereItGoes": "TGChatViewController.m -openLink:, in the branch that currently shows the generic alert.",
+      "tdlib": [
+        "getDeepLinkInfo - wrapped as -deepLinkInfoForUrl:completion: (unused)"
+      ],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Recently visited t.me links in search",
+      "whatItIs": "Global search offers a section of recently opened t.me URLs (users, groups, invite links, sticker sets) with title, member count and photo.",
+      "whyItMatters": "Small, but it is the only path back to a public chat you opened by link and never joined; without it the link is gone once it scrolls out of the chat.",
+      "whereItGoes": "TGSearchViewController as an extra section above results.",
+      "tdlib": [
+        "getRecentlyVisitedTMeUrls - wrapped as -recentlyVisitedTMeUrlsWithReferrer:completion: (unused)"
+      ],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Embedded content blocks in Instant View (iframes, YouTube, tweets)",
+      "whatItIs": "pageBlockEmbedded and pageBlockEmbeddedPost render third-party HTML in a web view, inline in the article.",
+      "whyItMatters": "Real articles embed videos and tweets; those blocks are blank in our reader.",
+      "whereItGoes": "TGInstantViewController - best we can do is render the poster image from \"photoFileId\" and open \"url\" in Safari on tap, which is worth doing as a fallback.",
+      "tdlib": [
+        "getWebPageInstantView - block already carries photoFileId and url"
+      ],
+      "effort": "blocked"
+    }
+  ]
+}

@@ -15,6 +15,9 @@
 #import "TGPopupMenu.h"
 #import "TGSnackbar.h"
 #import "TGSearchViewController.h"
+#import "TGSwipeGestureRecognizer.h"
+#import "TGActionsMenu.h"
+#import "TGStoriesViewController.h"
 #import "UIView+SafeTint.h"
 #import <QuartzCore/QuartzCore.h>
 
@@ -22,6 +25,36 @@ static const CGFloat kRowHeight = 73.0f;
 static const CGFloat kAvatar = 56.0f;
 static const CGFloat kAvatarLeft = 8.0f;
 static const CGFloat kTextLeft = 73.0f;
+
+static const CGFloat kSwipeButtonHeight = 31.0f;
+static const CGFloat kSwipeButtonMinWidth = 61.0f;
+static const CGFloat kSwipeEdgeDistance = 10.0f;
+static const CGFloat kSwipeButtonGap = 6.0f;
+
+static NSDictionary *TGReplyDictionary(id value) {
+	return [value isKindOfClass:[NSDictionary class]] ? (NSDictionary *)value : nil;
+}
+
+static NSArray *TGReplyArray(id value) {
+	return [value isKindOfClass:[NSArray class]] ? (NSArray *)value : nil;
+}
+
+static NSString *TGReplyString(id value) {
+	return [value isKindOfClass:[NSString class]] ? (NSString *)value : nil;
+}
+
+static NSArray *TGChatRows(id value) {
+	NSArray *raw = TGReplyArray(value);
+	if (!raw.count)
+		return @[];
+	NSMutableArray *rows = [NSMutableArray arrayWithCapacity:raw.count];
+	for (id entry in raw){
+		NSDictionary *chat = TGReplyDictionary(entry);
+		if (chat && [chat[@"id"] longLongValue])
+			[rows addObject:chat];
+	}
+	return rows;
+}
 
 static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 	static UIImage *normal = nil, *bright = nil;
@@ -51,9 +84,36 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 @property (nonatomic, strong) UIImageView *arrow;
 @property (nonatomic, strong) UIImageView *muteIcon;
 @property (nonatomic, strong) UIImageView *groupIcon;
+
+@property (nonatomic, strong) NSArray *swipeActions;
+@property (nonatomic, copy) void (^onSwipeOpen)(void);
+@property (nonatomic, copy) void (^onSwipeAction)(NSString *kind);
+@property (nonatomic, readonly) BOOL swipeActionsVisible;
+
+- (void)setSwipeActionsVisible:(BOOL)visible animated:(BOOL)animated;
 @end
 
-@implementation TGChatCell
+@implementation TGChatCell {
+	NSMutableArray *_swipeButtons;
+	BOOL _swipeActionsVisible;
+}
+
+static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
+	static UIImage *cache[4] = {nil, nil, nil, nil};
+	NSInteger slot = (destructive ? 2 : 0) + (highlighted ? 1 : 0);
+	if (cache[slot])
+		return cache[slot];
+
+	NSString *name = destructive ? @"MenuRedButton" : @"GroupedActionButton";
+	if (highlighted)
+		name = [name stringByAppendingString:@"_Highlighted"];
+	UIImage *raw = [UIImage imageNamed:[name stringByAppendingString:@".png"]];
+	if (!raw)
+		return nil;
+	cache[slot] = [raw stretchableImageWithLeftCapWidth:(int)(raw.size.width / 2)
+										   topCapHeight:(int)(raw.size.height / 2)];
+	return cache[slot];
+}
 
 - (id)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)reuseIdentifier {
 	self = [super initWithStyle:style reuseIdentifier:reuseIdentifier];
@@ -143,7 +203,199 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 
 	self.accessoryType = UITableViewCellAccessoryNone;
 	self.selectionStyle = UITableViewCellSelectionStyleBlue;
+
+	_swipeButtons = [NSMutableArray array];
+	TGSwipeGestureRecognizer *swipe = [[TGSwipeGestureRecognizer alloc]
+			initWithTarget:self action:@selector(swipeRecognised:)];
+	[self addGestureRecognizer:swipe];
+
 	return self;
+}
+
+#pragma mark - swipe actions
+
+- (BOOL)swipeActionsVisible {
+	return _swipeActionsVisible;
+}
+
+- (void)swipeRecognised:(TGSwipeGestureRecognizer *)recogniser {
+	if (recogniser.state != UIGestureRecognizerStateRecognized || self.editing)
+		return;
+	if (!self.swipeActions.count || _swipeActionsVisible)
+		return;
+
+	[self setSelected:NO];
+	[self setHighlighted:NO];
+	if (self.onSwipeOpen)
+		self.onSwipeOpen();
+	[self setSwipeActionsVisible:YES animated:YES];
+}
+
+- (void)buildSwipeButtons {
+	for (UIButton *button in _swipeButtons)
+		[button removeFromSuperview];
+	[_swipeButtons removeAllObjects];
+
+	UIFont *font = [UIFont boldSystemFontOfSize:14];
+	for (NSUInteger i = 0; i < self.swipeActions.count; i++){
+		NSDictionary *action = self.swipeActions[i];
+		BOOL destructive = [action[@"destructive"] boolValue];
+		NSString *title = action[@"title"] ?: @"";
+
+		UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+		button.exclusiveTouch = YES;
+		button.adjustsImageWhenHighlighted = NO;
+		button.titleLabel.font = font;
+		[button setTitle:title forState:UIControlStateNormal];
+		[button setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+		[button setTitleColor:[UIColor whiteColor] forState:UIControlStateHighlighted];
+
+		UIImage *plate = TGSwipePlateImage(destructive, NO);
+		UIImage *pressed = TGSwipePlateImage(destructive, YES);
+		if (plate){
+			[button setBackgroundImage:plate forState:UIControlStateNormal];
+			[button setBackgroundImage:(pressed ?: plate) forState:UIControlStateHighlighted];
+			if (!destructive){
+				[button setTitleColor:[UIColor colorWithRed:0x4a / 255.0f green:0x65 / 255.0f
+													   blue:0x87 / 255.0f alpha:1.0f]
+							 forState:UIControlStateNormal];
+				[button setTitleShadowColor:[UIColor colorWithWhite:1.0f alpha:0.45f]
+								   forState:UIControlStateNormal];
+				button.titleLabel.shadowOffset = CGSizeMake(0, 1);
+			} else {
+				[button setTitleShadowColor:[UIColor colorWithWhite:0.0f alpha:0.3f]
+								   forState:UIControlStateNormal];
+				button.titleLabel.shadowOffset = CGSizeMake(0, -1);
+			}
+		} else {
+			button.backgroundColor = destructive
+					? [UIColor colorWithRed:0xC4 / 255.0f green:0x2B / 255.0f
+									   blue:0x1E / 255.0f alpha:1.0f]
+					: [UIColor colorWithRed:0x8E / 255.0f green:0x9C / 255.0f
+									   blue:0xAE / 255.0f alpha:1.0f];
+			button.layer.cornerRadius = 4;
+		}
+
+		button.tag = (NSInteger)i;
+		[button addTarget:self action:@selector(swipeButtonPressed:)
+		 forControlEvents:UIControlEventTouchUpInside];
+		[self.contentView addSubview:button];
+		[_swipeButtons addObject:button];
+	}
+}
+
+- (CGFloat)swipeButtonWidthForIndex:(NSUInteger)index {
+	if (index >= _swipeButtons.count)
+		return kSwipeButtonMinWidth;
+	UIButton *button = _swipeButtons[index];
+	NSString *title = [button titleForState:UIControlStateNormal] ?: @"";
+	CGFloat text = [title sizeWithFont:button.titleLabel.font].width;
+	return MAX(kSwipeButtonMinWidth, (int)text + 22);
+}
+
+- (void)layoutSwipeButtonsCollapsed:(BOOL)collapsed {
+	CGFloat width = self.contentView.bounds.size.width;
+	CGFloat top = (int)((kRowHeight - kSwipeButtonHeight) / 2);
+	CGFloat right = width - kSwipeEdgeDistance;
+	for (NSUInteger i = _swipeButtons.count; i > 0; i--){
+		UIButton *button = _swipeButtons[i - 1];
+		CGFloat buttonWidth = [self swipeButtonWidthForIndex:i - 1];
+		if (collapsed)
+			button.frame = CGRectMake(width - kSwipeEdgeDistance - 2, top, 2, kSwipeButtonHeight);
+		else
+			button.frame = CGRectMake(right - buttonWidth, top, buttonWidth, kSwipeButtonHeight);
+		right -= buttonWidth + kSwipeButtonGap;
+	}
+}
+
+- (void)setCoveredContentAlpha:(CGFloat)alpha {
+	self.dateLabel.alpha = alpha;
+	self.tick.alpha = alpha;
+	self.badge.alpha = alpha;
+	self.badgeBackground.alpha = alpha;
+	self.pin.alpha = alpha;
+	self.arrow.alpha = alpha;
+	self.previewLabel.alpha = alpha;
+}
+
+- (void)setSwipeActionsVisible:(BOOL)visible animated:(BOOL)animated {
+	if (visible && !self.swipeActions.count)
+		return;
+	if (visible == _swipeActionsVisible && (!visible || _swipeButtons.count))
+		return;
+	_swipeActionsVisible = visible;
+
+	if (visible){
+		[self buildSwipeButtons];
+		[self layoutSwipeButtonsCollapsed:YES];
+		for (UIButton *button in _swipeButtons)
+			button.alpha = 0.0f;
+
+		__weak typeof(self) weakSelf = self;
+		NSArray *coming = [_swipeButtons copy];
+		void (^reveal)(void) = ^{
+			[weakSelf layoutSwipeButtonsCollapsed:NO];
+			for (UIButton *button in coming)
+				button.alpha = 1.0f;
+			[weakSelf setCoveredContentAlpha:0.0f];
+		};
+		if (animated)
+			[UIView animateWithDuration:0.25 delay:0
+								options:UIViewAnimationOptionBeginFromCurrentState
+							 animations:reveal completion:nil];
+		else
+			reveal();
+		return;
+	}
+
+	__weak typeof(self) weakSelf = self;
+	NSArray *going = [_swipeButtons copy];
+	CGFloat collapsedX = self.contentView.bounds.size.width - kSwipeEdgeDistance - 2;
+	CGFloat collapsedY = (int)((kRowHeight - kSwipeButtonHeight) / 2);
+	[_swipeButtons removeAllObjects];
+	void (^conceal)(void) = ^{
+		for (UIButton *button in going){
+			button.alpha = 0.0f;
+			button.frame = CGRectMake(collapsedX, collapsedY, 2, kSwipeButtonHeight);
+		}
+		[weakSelf setCoveredContentAlpha:1.0f];
+	};
+	void (^drop)(BOOL) = ^(BOOL finished){
+		for (UIButton *button in going)
+			[button removeFromSuperview];
+	};
+	if (animated)
+		[UIView animateWithDuration:0.25 delay:0
+							options:UIViewAnimationOptionBeginFromCurrentState
+						 animations:conceal completion:drop];
+	else {
+		conceal();
+		drop(YES);
+	}
+}
+
+- (void)swipeButtonPressed:(UIButton *)button {
+	NSInteger index = button.tag;
+	if (index < 0 || index >= (NSInteger)self.swipeActions.count)
+		return;
+	NSString *kind = self.swipeActions[index][@"kind"];
+	if (self.onSwipeAction && kind.length)
+		self.onSwipeAction(kind);
+}
+
+- (void)prepareForReuse {
+	[super prepareForReuse];
+	[self setSwipeActionsVisible:NO animated:NO];
+	[self setCoveredContentAlpha:1.0f];
+	self.swipeActions = nil;
+	self.onSwipeOpen = nil;
+	self.onSwipeAction = nil;
+}
+
+- (void)setEditing:(BOOL)editing animated:(BOOL)animated {
+	if (editing && _swipeActionsVisible)
+		[self setSwipeActionsVisible:NO animated:animated];
+	[super setEditing:editing animated:animated];
 }
 
 - (void)layoutSubviews {
@@ -197,6 +449,9 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 
 	self.arrow.frame = CGRectMake(w - self.arrow.image.size.width - 6, 33,
 			self.arrow.image.size.width, self.arrow.image.size.height);
+
+	if (_swipeActionsVisible && _swipeButtons.count)
+		[self layoutSwipeButtonsCollapsed:NO];
 }
 
 @end
@@ -379,7 +634,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	for (UIView *bar in [self.bars.subviews copy])
 		[bar removeFromSuperview];
 
-	NSArray *stories = [self currentPoster][@"stories"];
+	NSArray *stories = TGReplyArray([self currentPoster][@"stories"]);
 	NSInteger count = (NSInteger)stories.count;
 	if (count <= 0)
 		return;
@@ -420,7 +675,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 		return;
 	}
 
-	NSArray *stories = poster[@"stories"];
+	NSArray *stories = TGReplyArray(poster[@"stories"]);
 	if (self.storyIndex >= (NSInteger)stories.count)
 		self.storyIndex = (NSInteger)stories.count - 1;
 	if (self.storyIndex < 0)
@@ -429,14 +684,17 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 		return;
 
 	int64_t chatId = [poster[@"chatId"] longLongValue];
-	NSInteger storyId = [stories[self.storyIndex][@"id"] integerValue];
+	NSDictionary *entry = TGReplyDictionary(stories[self.storyIndex]);
+	NSInteger storyId = [entry[@"id"] integerValue];
+	if (!storyId)
+		return;
 
 	[self closeOpenStory];
 	[[TGClient shared] openStory:storyId inChat:chatId];
 	self.openedStoryId = storyId;
 	self.openedChatId = chatId;
 
-	self.titleLine.text = poster[@"title"];
+	self.titleLine.text = TGReplyString(poster[@"title"]) ?: @"";
 	self.subtitleLine.text = [NSString stringWithFormat:@"%ld of %lu",
 			(long)(self.storyIndex + 1), (unsigned long)stories.count];
 	[self layoutBars];
@@ -445,14 +703,15 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	self.captionPlate.hidden = YES;
 
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] storyWithId:storyId inChat:chatId completion:^(NSDictionary *story){
+	[[TGClient shared] storyWithId:storyId inChat:chatId completion:^(NSDictionary *reply){
 		TGStoryViewController *me = weakSelf;
+		NSDictionary *story = TGReplyDictionary(reply);
 		if (!me || !story)
 			return;
 		if (me.openedStoryId != storyId)
 			return;
 		me.current = story;
-		NSString *caption = story[@"caption"];
+		NSString *caption = TGReplyString(story[@"caption"]);
 		me.captionLabel.text = caption ?: @"";
 		me.captionPlate.hidden = (caption.length == 0);
 		NSInteger reactions = [story[@"reactions"] integerValue];
@@ -460,12 +719,13 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 				? [NSString stringWithFormat:@"♥ %ld", (long)reactions] : @"♥")
 						forState:UIControlStateNormal];
 
-		NSNumber *photoId = story[@"photoId"];
-		if (!photoId)
+		id photoId = story[@"photoId"];
+		if (![photoId isKindOfClass:[NSNumber class]])
 			return;
-		[[TGClient shared] downloadFile:[photoId integerValue] completion:^(NSString *path){
+		[[TGClient shared] downloadFile:[photoId integerValue] completion:^(NSString *reply){
 			TGStoryViewController *inner = weakSelf;
-			if (!inner || !path || inner.openedStoryId != storyId)
+			NSString *path = TGReplyString(reply);
+			if (!inner || !path.length || inner.openedStoryId != storyId)
 				return;
 			UIImage *raw = [UIImage imageWithContentsOfFile:path];
 			if (!raw)
@@ -485,13 +745,13 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 }
 
 - (void)stepBy:(NSInteger)delta {
-	NSArray *stories = [self currentPoster][@"stories"];
+	NSArray *stories = TGReplyArray([self currentPoster][@"stories"]);
 	NSInteger next = self.storyIndex + delta;
 	if (next < 0){
 		if (self.posterIndex == 0)
 			return;
 		self.posterIndex -= 1;
-		self.storyIndex = (NSInteger)[[self currentPoster][@"stories"] count] - 1;
+		self.storyIndex = (NSInteger)TGReplyArray([self currentPoster][@"stories"]).count - 1;
 	} else if (next >= (NSInteger)stories.count){
 		if (self.posterIndex + 1 >= (NSInteger)self.posters.count){
 			[self closeOpenStory];
@@ -527,7 +787,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 }
 
 - (void)reactTapped {
-	NSString *mine = self.current[@"myReaction"];
+	NSString *mine = TGReplyString(self.current[@"myReaction"]);
 	NSString *next = mine.length ? nil : @"❤";
 	[[TGClient shared] reactToStory:self.openedStoryId inChat:self.openedChatId emoji:next];
 	NSMutableDictionary *updated = [(self.current ?: @{}) mutableCopy];
@@ -544,7 +804,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 
 - (void)moreTapped {
 	NSMutableArray *items = [NSMutableArray array];
-	NSString *name = [self currentPoster][@"title"] ?: @"this person";
+	NSString *name = TGReplyString([self currentPoster][@"title"]) ?: @"this person";
 	[items addObject:@{@"kind" : @"hide",
 					   @"title" : [NSString stringWithFormat:@"Hide Stories from %@", name]}];
 	[items addObject:@{@"kind" : @"report", @"title" : @"Report"}];
@@ -580,11 +840,11 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 		[self.navigationController popViewControllerAnimated:YES];
 	} else if ([kind isEqualToString:@"report"]){
 		[[TGClient shared] reportStory:storyId inChat:chatId optionId:nil text:nil
-							completion:^(NSDictionary *result){
-			NSString *status = result[@"status"];
+							completion:^(NSDictionary *reply){
+			NSString *status = TGReplyString(TGReplyDictionary(reply)[@"status"]);
 			NSString *message = [status isEqualToString:@"ok"]
 					? @"Thank you. The story has been reported."
-					: @"Reporting this story needs the full report form, which this client does not have.";
+					: @"The report was not accepted.";
 			UIAlertView *done = [[UIAlertView alloc] initWithTitle:@"Report"
 														   message:message
 														  delegate:nil
@@ -624,6 +884,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 @property (nonatomic, assign) NSInteger storyProbesPending;
 @property (nonatomic, assign) NSTimeInterval lastStorySweep;
 @property (nonatomic, strong) UILabel *titleLabelView;
+@property (nonatomic, weak) TGChatCell *openSwipeCell;
 @end
 
 @implementation TGChatListViewController
@@ -632,15 +893,9 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	[super viewDidLoad];
 
 	self.title = [self defaultTitle];
-	if (!self.showsArchive){
-		UIButton *edit = [TGIcons headerButtonWithTitle:@"Edit" bold:NO
-												  target:self action:@selector(listOptionsTapped)];
-		self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:edit];
-	} else {
-		UIButton *options = [TGIcons headerButtonWithTitle:@"Edit" bold:NO
-													target:self action:@selector(archiveOptionsTapped)];
-		self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:options];
-	}
+	UIButton *edit = [TGIcons headerButtonWithTitle:@"Edit" bold:NO
+											 target:self action:@selector(actionsTapped)];
+	self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:edit];
 	self.chats = @[];
 	self.avatars = [NSMutableDictionary dictionary];
 	self.avatarsRequested = [NSMutableSet set];
@@ -741,7 +996,8 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	[TGClient shared].onConnectionState = ^(TGConnectionState state, NSString *text){
 		// Clients put this in the title bar rather than hiding it in a flag.
 		TGChatListViewController *me = weakSelf;
-		me.title = text.length ? text : [me defaultTitle];
+		NSString *line = TGReplyString(text);
+		me.title = line.length ? line : [me defaultTitle];
 		[me updateEmptyState];
 	};
 }
@@ -750,15 +1006,21 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	if (self.showsArchive)
 		return @"Archived";
 	if (self.folderId != 0){
-		for (NSDictionary *f in [TGClient shared].folders)
+		for (id entry in [self folderList]){
+			NSDictionary *f = TGReplyDictionary(entry);
 			if ([f[@"id"] integerValue] == self.folderId)
-				return f[@"title"] ?: @"Messages";
+				return TGReplyString(f[@"title"]) ?: @"Messages";
+		}
 	}
 	return @"Messages";
 }
 
+- (NSArray *)folderList {
+	return TGReplyArray([TGClient shared].folders) ?: @[];
+}
+
 - (BOOL)hasFolders {
-	return [TGClient shared].folders.count > 0;
+	return [self folderList].count > 0;
 }
 
 - (BOOL)usesFolderStrip {
@@ -817,6 +1079,17 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	if ([self.tabBarController isKindOfClass:[RootViewController class]])
 		[(RootViewController *)self.tabBarController updateUnreadBadge];
 	[self reload];
+}
+
+- (void)scrollViewWillBeginDragging:(UIScrollView *)scrollView {
+	[self closeOpenSwipeCellAnimated:YES];
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+	[super viewWillDisappear:animated];
+	[self closeOpenSwipeCellAnimated:NO];
+	[TGPopupMenu dismiss];
+	[TGActionsMenu dismiss];
 }
 
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView {
@@ -882,8 +1155,8 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 /// what brings them back, which is how Telegram hides them.
 - (void)rebuildTableHeader {
 	CGFloat width = self.tableView.bounds.size.width ?: 320;
-	BOOL showArchive = !self.showsArchive && self.folderId == 0 &&
-					   [TGClient shared].archivedChats.count > 0;
+	NSUInteger archivedCount = TGReplyArray([TGClient shared].archivedChats).count;
+	BOOL showArchive = !self.showsArchive && self.folderId == 0 && archivedCount > 0;
 	BOOL showTray = !self.showsArchive && TGStoriesTrayEnabled() && self.storyPosters.count > 0;
 	BOOL showStrip = [self usesFolderStrip];
 	CGFloat trayHeight = showTray ? kStoryTrayHeight : 0;
@@ -907,7 +1180,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 		row.titleLabel.text = @"Archived Chats";
 		row.titleLabel.textColor = [[TGTheme shared] primaryTextColour];
 		row.previewLabel.text = [NSString stringWithFormat:@"%lu chats",
-				(unsigned long)[TGClient shared].archivedChats.count];
+				(unsigned long)archivedCount];
 		row.previewLabel.textColor = [[TGTheme shared] secondaryTextColour];
 		NSInteger archiveUnread = [self.listUnread[@(TGChatListArchive)] integerValue];
 		if (archiveUnread > 0){
@@ -923,7 +1196,8 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 		row.userInteractionEnabled = YES;
 		[row addGestureRecognizer:[[UITapGestureRecognizer alloc]
 				initWithTarget:self action:@selector(openArchive)]];
-		[row layoutSubviews];
+		[row setNeedsLayout];
+		[row layoutIfNeeded];
 		[header addSubview:row];
 
 		UIView *hair = [[UIView alloc] initWithFrame:
@@ -979,9 +1253,12 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 
 	NSMutableArray *entries = [NSMutableArray array];
 	[entries addObject:@{@"title" : @"All Chats", @"folder" : @0}];
-	for (NSDictionary *folder in [TGClient shared].folders)
-		[entries addObject:@{@"title" : (folder[@"title"] ?: @"Folder"),
-							 @"folder" : (folder[@"id"] ?: @0)}];
+	for (id entry in [self folderList]){
+		NSDictionary *folder = TGReplyDictionary(entry);
+		[entries addObject:@{@"title" : (TGReplyString(folder[@"title"]) ?: @"Folder"),
+							 @"folder" : ([folder[@"id"] isKindOfClass:[NSNumber class]]
+									 ? folder[@"id"] : @0)}];
+	}
 
 	UIFont *font = [UIFont boldSystemFontOfSize:12];
 	CGFloat x = 4;
@@ -1076,7 +1353,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 		NSNumber *fileId = poster[@"photoFileId"];
 		UIImage *photo = fileId ? self.avatars[fileId] : nil;
 		if (!photo){
-			NSString *title = poster[@"title"] ?: @"";
+			NSString *title = TGReplyString(poster[@"title"]) ?: @"";
 			photo = [TGIcons avatarWithInitials:(title.length
 					? [title substringToIndex:1].uppercaseString : @"?")
 										   size:kStoryAvatar
@@ -1091,7 +1368,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 		name.textAlignment = NSTextAlignmentCenter;
 		name.lineBreakMode = NSLineBreakByTruncatingTail;
 		name.textColor = unread ? [theme primaryTextColour] : [theme secondaryTextColour];
-		name.text = poster[@"title"];
+		name.text = TGReplyString(poster[@"title"]) ?: @"";
 		[cell addSubview:name];
 
 		[cell addGestureRecognizer:[[UITapGestureRecognizer alloc]
@@ -1152,13 +1429,14 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	__weak typeof(self) weakSelf = self;
 	for (NSDictionary *chat in candidates){
 		int64_t chatId = [chat[@"id"] longLongValue];
-		NSString *title = chat[@"title"] ?: @"";
-		NSNumber *fileId = chat[@"photoFileId"];
-		[[TGClient shared] activeStoriesForChat:chatId completion:^(NSDictionary *active){
+		NSString *title = TGReplyString(chat[@"title"]) ?: @"";
+		id fileId = [chat[@"photoFileId"] isKindOfClass:[NSNumber class]] ? chat[@"photoFileId"] : nil;
+		[[TGClient shared] activeStoriesForChat:chatId completion:^(NSDictionary *reply){
 			TGChatListViewController *me = weakSelf;
 			if (!me)
 				return;
-			NSArray *stories = active[@"stories"];
+			NSDictionary *active = TGReplyDictionary(reply);
+			NSArray *stories = TGReplyArray(active[@"stories"]);
 			if (stories.count && ![active[@"archived"] boolValue]){
 				NSMutableDictionary *poster = [NSMutableDictionary dictionary];
 				poster[@"chatId"] = @(chatId);
@@ -1239,8 +1517,9 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 }
 
 - (void)reload {
+	self.openSwipeCell = nil;
 	if (self.showsArchive){
-		self.chats = [TGClient shared].archivedChats ?: @[];
+		self.chats = TGChatRows([TGClient shared].archivedChats);
 		[self.tableView reloadData];
 		[self fetchMissingAvatars];
 		[self refreshUnreadCounters];
@@ -1250,12 +1529,12 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	if (self.folderId != 0){
 		__weak typeof(self) weakSelf = self;
 		[[TGClient shared] chatsInList:(TGChatListId)self.folderId limit:self.folderLimit
-							completion:^(NSArray *chats){
+							completion:^(NSArray *reply){
 			TGChatListViewController *me = weakSelf;
 			if (!me)
 				return;
 			me.loadingMore = NO;
-			me.chats = chats ?: @[];
+			me.chats = TGChatRows(reply);
 			[me.tableView reloadData];
 			[me rebuildTableHeader];
 			[me fetchMissingAvatars];
@@ -1265,7 +1544,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 		return;
 	}
 
-	self.chats = [TGClient shared].chats ?: @[];
+	self.chats = TGChatRows([TGClient shared].chats);
 	self.loadingMore = NO;
 	[self.tableView reloadData];
 	[self rebuildTableHeader];
@@ -1276,12 +1555,12 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 
 - (void)refreshUnreadCounters {
 	TGClient *client = [TGClient shared];
-	NSDictionary *main = [client unreadSummaryForList:TGChatListMain];
-	if (main)
-		self.listUnread[@(TGChatListMain)] = main[@"messages"] ?: @0;
-	NSDictionary *archive = [client unreadSummaryForList:TGChatListArchive];
-	if (archive)
-		self.listUnread[@(TGChatListArchive)] = archive[@"messages"] ?: @0;
+	NSDictionary *main = TGReplyDictionary([client unreadSummaryForList:TGChatListMain]);
+	if ([main[@"messages"] isKindOfClass:[NSNumber class]])
+		self.listUnread[@(TGChatListMain)] = main[@"messages"];
+	NSDictionary *archive = TGReplyDictionary([client unreadSummaryForList:TGChatListArchive]);
+	if ([archive[@"messages"] isKindOfClass:[NSNumber class]])
+		self.listUnread[@(TGChatListArchive)] = archive[@"messages"];
 
 	static NSTimeInterval lastFolderSweep = 0;
 	NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
@@ -1290,17 +1569,18 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	lastFolderSweep = now;
 
 	__weak typeof(self) weakSelf = self;
-	for (NSDictionary *folder in client.folders){
+	for (id entry in (TGReplyArray(client.folders) ?: @[])){
+		NSDictionary *folder = TGReplyDictionary(entry);
 		NSInteger listId = [folder[@"id"] integerValue];
 		if (listId == 0)
 			continue;
-		[client chatsInList:(TGChatListId)listId limit:100 completion:^(NSArray *chats){
+		[client chatsInList:(TGChatListId)listId limit:100 completion:^(NSArray *reply){
 			TGChatListViewController *me = weakSelf;
 			if (!me)
 				return;
 			NSInteger total = 0;
-			for (NSDictionary *c in chats)
-				total += [c[@"unread"] integerValue];
+			for (id item in (TGReplyArray(reply) ?: @[]))
+				total += [TGReplyDictionary(item)[@"unread"] integerValue];
 			me.listUnread[@(listId)] = @(total);
 		}];
 	}
@@ -1379,7 +1659,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 /// Folders are a filter over the same chats, offered as a choice, with the way
 /// into managing them at the end of the same list.
 - (void)foldersTapped {
-	NSArray *folders = [TGClient shared].folders;
+	NSArray *folders = [self folderList];
 
 	NSMutableArray *items = [NSMutableArray array];
 	[items addObject:@{@"kind"   : @"list",
@@ -1387,14 +1667,17 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 										   (self.folderId == 0 ? @"✓ " : @""),
 										   [self unreadSuffixForList:TGChatListMain]],
 					   @"folder" : @0}];
-	for (NSDictionary *f in folders){
+	for (id entry in folders){
+		NSDictionary *f = TGReplyDictionary(entry);
 		NSInteger listId = [f[@"id"] integerValue];
-		NSString *name = f[@"title"] ?: @"Folder";
+		if (!listId)
+			continue;
+		NSString *name = TGReplyString(f[@"title"]) ?: @"Folder";
 		[items addObject:@{@"kind"   : @"list",
 						   @"title"  : [NSString stringWithFormat:@"%@%@%@",
 											   (self.folderId == listId ? @"✓ " : @""), name,
 											   [self unreadSuffixForList:(TGChatListId)listId]],
-						   @"folder" : f[@"id"] ?: @0}];
+						   @"folder" : @(listId)}];
 	}
 	self.sheetItems = items;
 
@@ -1415,7 +1698,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 /// own actions, never the folder chooser - that is the title in one style and
 /// the strip in the other, and it is absent entirely when there are no folders.
 - (void)listOptionsTapped {
-	NSArray *folders = [TGClient shared].folders;
+	NSArray *folders = [self folderList];
 	self.sheetItems = @[
 		@{@"kind" : @"markAllRead", @"title" : @"Mark All as Read"},
 		@{@"kind" : @"editFolders",
@@ -1432,6 +1715,72 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 		[sheet addButtonWithTitle:item[@"title"]];
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 	[self presentSheet:sheet];
+}
+
+- (void)actionsTapped {
+	[self closeOpenSwipeCellAnimated:NO];
+	if (self.showsArchive){
+		[self archiveOptionsTapped];
+		return;
+	}
+
+	UIView *host = self.navigationController.view ?: self.view;
+	UIView *anchor = self.navigationItem.leftBarButtonItem.customView;
+	__weak typeof(self) weakSelf = self;
+	void (^onAction)(NSString *, NSInteger) = ^(NSString *action, NSInteger folderId){
+		TGChatListViewController *me = weakSelf;
+		if (!me)
+			return;
+		if ([action isEqualToString:TGActionsMenuSelectList])
+			[me selectChatListWithFolderId:folderId];
+		else if ([action isEqualToString:TGActionsMenuAddStory])
+			[me addStory];
+		else if ([action isEqualToString:TGActionsMenuMarkAllRead])
+			[me markCurrentListAsRead];
+		else if ([action isEqualToString:TGActionsMenuEditFolders])
+			[me openFolderManagement];
+	};
+	NSString *(^titleForList)(NSInteger, NSString *) = ^NSString *(NSInteger listId, NSString *title){
+		TGChatListViewController *me = weakSelf;
+		if (!me)
+			return title;
+		return [(title ?: @"") stringByAppendingString:
+				[me unreadSuffixForList:(TGChatListId)listId]];
+	};
+
+	if (anchor)
+		[TGActionsMenu showFromView:anchor
+							 inView:host
+					currentFolderId:self.folderId
+					   titleForList:titleForList
+						   onAction:onAction];
+	else
+		[TGActionsMenu showFromRect:CGRectMake(10, 20, 60, 24)
+							 inView:host
+					currentFolderId:self.folderId
+					   titleForList:titleForList
+						   onAction:onAction];
+}
+
+- (void)selectChatListWithFolderId:(NSInteger)folderId {
+	if (self.folderId == folderId)
+		return;
+	self.folderId = folderId;
+	self.folderLimit = 60;
+	[self applyTitleView];
+	[self reload];
+}
+
+- (void)addStory {
+	__weak typeof(self) weakSelf = self;
+	[TGStoryComposer presentFrom:self completion:^(BOOL posted){
+		TGChatListViewController *me = weakSelf;
+		if (!me || !posted)
+			return;
+		me.lastStorySweep = 0;
+		[[TGClient shared] loadActiveStoriesArchived:NO];
+		[me refreshStoryPosters];
+	}];
 }
 
 - (void)openFolderManagement {
@@ -1466,11 +1815,11 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 
 - (void)showArchiveSettings {
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] archiveSettingsWithCompletion:^(NSDictionary *settings){
+	[[TGClient shared] archiveSettingsWithCompletion:^(NSDictionary *reply){
 		TGChatListViewController *me = weakSelf;
 		if (!me)
 			return;
-		me.archiveSettings = settings ?: @{};
+		me.archiveSettings = TGReplyDictionary(reply) ?: @{};
 
 		NSArray *keys = @[@"archiveUnknownSenders", @"keepUnmutedArchived", @"keepFoldersArchived"];
 		NSArray *names = @[@"Archive new chats from unknown senders",
@@ -1533,14 +1882,17 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 - (void)fetchMissingAvatars {
 	__weak typeof(self) weakSelf = self;
 	for (NSDictionary *c in self.chats){
-		NSNumber *fileId = c[@"photoFileId"];
-		if (!fileId || self.avatars[fileId] || [self.avatarsRequested containsObject:fileId])
+		id fileId = c[@"photoFileId"];
+		if (![fileId isKindOfClass:[NSNumber class]])
+			continue;
+		if (self.avatars[fileId] || [self.avatarsRequested containsObject:fileId])
 			continue;
 		[self.avatarsRequested addObject:fileId];
 
-		[[TGClient shared] downloadFile:[fileId integerValue] completion:^(NSString *path){
+		[[TGClient shared] downloadFile:[fileId integerValue] completion:^(NSString *reply){
 			TGChatListViewController *me = weakSelf;
-			if (!me || !path)
+			NSString *path = TGReplyString(reply);
+			if (!me || !path.length)
 				return;
 			UIImage *img = [UIImage imageWithContentsOfFile:path];
 			if (!img)
@@ -1580,6 +1932,7 @@ static const NSInteger kChatActionsTag = 77;
 	if (hold.state != UIGestureRecognizerStateBegan)
 		return;
 
+	[self closeOpenSwipeCellAnimated:YES];
 	NSIndexPath *path = [self.tableView indexPathForRowAtPoint:[hold locationInView:self.tableView]];
 	if (path)
 		[self showActionsForRow:path.row];
@@ -1766,26 +2119,32 @@ static const NSInteger kChatActionsTag = 77;
 	// Chat titles match locally and instantly; messages need the server. Both
 	// land in one list, chats first, which is what the query usually means.
 	NSMutableArray *results = [NSMutableArray array];
-	for (NSDictionary *c in [TGClient shared].chats)
-		if ([c[@"title"] rangeOfString:query options:NSCaseInsensitiveSearch].location != NSNotFound)
+	for (NSDictionary *c in TGChatRows([TGClient shared].chats)){
+		NSString *title = TGReplyString(c[@"title"]);
+		if (title && [title rangeOfString:query options:NSCaseInsensitiveSearch].location != NSNotFound)
 			[results addObject:c];
+	}
 	self.searchResults = results;
 	[self.tableView reloadData];
 
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] searchMessages:query completion:^(NSArray *messages){
+	[[TGClient shared] searchMessages:query completion:^(NSArray *reply){
 		TGChatListViewController *me = weakSelf;
 		// A slower answer to an older query must not replace a newer one.
 		if (!me || ![me.searchBar.text isEqualToString:query])
 			return;
 		NSMutableArray *combined = [results mutableCopy];
-		for (NSDictionary *m in messages)
+		for (id item in (TGReplyArray(reply) ?: @[])){
+			NSDictionary *m = TGReplyDictionary(item);
+			if (![m[@"chatId"] longLongValue])
+				continue;
 			[combined addObject:@{
-				@"id"    : m[@"chatId"] ?: @0,
-				@"title" : m[@"chatTitle"] ?: @"",
-				@"text"  : m[@"text"] ?: @"",
-				@"date"  : m[@"date"] ?: @0,
+				@"id"    : m[@"chatId"],
+				@"title" : (TGReplyString(m[@"chatTitle"]) ?: @""),
+				@"text"  : (TGReplyString(m[@"text"]) ?: @""),
+				@"date"  : ([m[@"date"] isKindOfClass:[NSNumber class]] ? m[@"date"] : @0),
 			}];
+		}
 		me.searchResults = combined;
 		[me.tableView reloadData];
 		[me appendSponsoredChatsForQuery:query onto:combined];
@@ -1795,24 +2154,27 @@ static const NSInteger kChatActionsTag = 77;
 
 - (void)appendSponsoredChatsForQuery:(NSString *)query onto:(NSArray *)base {
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] sponsoredChatsForQuery:query completion:^(NSArray *sponsored){
+	[[TGClient shared] sponsoredChatsForQuery:query completion:^(NSArray *reply){
 		TGChatListViewController *me = weakSelf;
+		NSArray *sponsored = TGReplyArray(reply);
 		if (!me || !sponsored.count || ![me.searchBar.text isEqualToString:query])
 			return;
 		NSMutableArray *combined = [NSMutableArray array];
 		for (NSDictionary *existing in (me.searchResults ?: base))
 			if (![existing[@"sponsored"] boolValue])
 				[combined addObject:existing];
-		for (NSDictionary *s in sponsored){
+		for (id item in sponsored){
+			NSDictionary *s = TGReplyDictionary(item);
 			if (![s[@"id"] longLongValue])
 				continue;
+			NSString *info = TGReplyString(s[@"sponsorInfo"]) ?: TGReplyString(s[@"additionalInfo"]);
 			[combined addObject:@{
 				@"id"        : s[@"id"],
-				@"title"     : s[@"title"] ?: @"",
-				@"text"      : s[@"sponsorInfo"] ?: (s[@"additionalInfo"] ?: @"Sponsored"),
+				@"title"     : (TGReplyString(s[@"title"]) ?: @""),
+				@"text"      : (info ?: @"Sponsored"),
 				@"date"      : @0,
 				@"sponsored" : @YES,
-				@"uniqueId"  : s[@"uniqueId"] ?: @0,
+				@"uniqueId"  : ([s[@"uniqueId"] isKindOfClass:[NSNumber class]] ? s[@"uniqueId"] : @0),
 			}];
 		}
 		me.searchResults = combined;
@@ -1866,6 +2228,8 @@ static const NSInteger kChatActionsTag = 77;
 	TGChatCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
 	if (!cell)
 		cell = [[TGChatCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:reuse];
+	if (cell == self.openSwipeCell)
+		self.openSwipeCell = nil;
 
 	TGTheme *theme = [TGTheme shared];
 	cell.backgroundColor = [theme listBackgroundColour];
@@ -1895,7 +2259,7 @@ static const NSInteger kChatActionsTag = 77;
 		cell.titleLabel.text = isArchive ? @"Archived Chats" : @"Saved Messages";
 		cell.previewLabel.text = isArchive
 				? [NSString stringWithFormat:@"%lu chats",
-						(unsigned long)[TGClient shared].archivedChats.count]
+						(unsigned long)TGReplyArray([TGClient shared].archivedChats).count]
 				: @"Your own notes and forwards";
 		cell.dateLabel.text = @"";
 		cell.badge.hidden = YES;
@@ -1909,7 +2273,7 @@ static const NSInteger kChatActionsTag = 77;
 	}
 
 	NSDictionary *c = rows[indexPath.row - header.count];
-	cell.titleLabel.text = c[@"title"];
+	cell.titleLabel.text = TGReplyString(c[@"title"]) ?: @"";
 	cell.dateLabel.text = [c[@"sponsored"] boolValue]
 			? @"Sponsored"
 			: TGChatDate([c[@"date"] doubleValue]);
@@ -1918,12 +2282,12 @@ static const NSInteger kChatActionsTag = 77;
 
 	// Someone typing takes the preview over for as long as it lasts, in their
 	// blurple rather than the grey the preview uses.
-	NSString *action = c[@"action"];
-	if ([action length]){
+	NSString *action = TGReplyString(c[@"action"]);
+	if (action.length){
 		cell.previewLabel.text = action;
 		cell.previewLabel.textColor = [theme typingColour];
 	} else {
-		cell.previewLabel.text = c[@"text"];
+		cell.previewLabel.text = TGReplyString(c[@"text"]) ?: @"";
 	}
 
 	cell.onlineDot.hidden = ![c[@"isOnline"] boolValue];
@@ -1953,7 +2317,7 @@ static const NSInteger kChatActionsTag = 77;
 	if ([c[@"isSaved"] boolValue])
 		photo = [TGIcons savedMessagesAvatarOfSide:kAvatar];
 	if (!photo){
-		NSString *title = c[@"title"] ?: @"";
+		NSString *title = TGReplyString(c[@"title"]) ?: @"";
 		NSString *initials = title.length ? [title substringToIndex:1] : @"?";
 		photo = [TGIcons avatarWithInitials:initials.uppercaseString
 									   size:kAvatar
@@ -1962,8 +2326,81 @@ static const NSInteger kChatActionsTag = 77;
 	cell.avatar.image = photo;
 	cell.avatar.backgroundColor = [UIColor clearColor];
 
+	cell.swipeActions = [self swipeActionsForChat:c];
+	__weak typeof(self) weakSelf = self;
+	__weak TGChatCell *weakCell = cell;
+	cell.onSwipeOpen = ^{
+		[weakSelf closeOpenSwipeCellAnimated:YES];
+		weakSelf.openSwipeCell = weakCell;
+	};
+	cell.onSwipeAction = ^(NSString *kind){
+		[weakSelf runSwipeAction:kind forCell:weakCell];
+	};
+
 	[cell setNeedsLayout];
 	return cell;
+}
+
+- (NSArray *)swipeActionsForChat:(NSDictionary *)chat {
+	if (self.searchResults || [chat[@"sponsored"] boolValue])
+		return nil;
+	if (![chat[@"id"] longLongValue])
+		return nil;
+
+	BOOL muted = [chat[@"isMuted"] boolValue];
+	return @[
+		@{@"kind"  : (muted ? @"unmute" : @"mute"),
+		  @"title" : (muted ? @"Unmute" : @"Mute")},
+		@{@"kind"  : (self.showsArchive ? @"unarchive" : @"archive"),
+		  @"title" : (self.showsArchive ? @"Unarchive" : @"Archive")},
+		@{@"kind"        : @"delete",
+		  @"title"       : ([chat[@"isGroup"] boolValue] ? @"Leave" : @"Delete"),
+		  @"destructive" : @YES},
+	];
+}
+
+- (void)closeOpenSwipeCellAnimated:(BOOL)animated {
+	TGChatCell *open = self.openSwipeCell;
+	self.openSwipeCell = nil;
+	[open setSwipeActionsVisible:NO animated:animated];
+}
+
+- (void)runSwipeAction:(NSString *)kind forCell:(TGChatCell *)cell {
+	if (!cell)
+		return;
+	NSIndexPath *path = [self.tableView indexPathForCell:cell];
+	if (!path)
+		return;
+	NSArray *rows = [self visibleChats];
+	NSInteger index = path.row - (NSInteger)[self headerRows].count;
+	if (index < 0 || index >= (NSInteger)rows.count)
+		return;
+
+	NSDictionary *chat = rows[index];
+	int64_t chatId = [chat[@"id"] longLongValue];
+	if (!chatId)
+		return;
+
+	[cell setSwipeActionsVisible:NO animated:YES];
+	if (self.openSwipeCell == cell)
+		self.openSwipeCell = nil;
+
+	if ([kind isEqualToString:@"unmute"]){
+		[[TGClient shared] setChat:chatId muteForSeconds:0];
+		[self reload];
+	} else if ([kind isEqualToString:@"mute"]){
+		self.actionChat = chat;
+		CGRect rect = [self.tableView rectForRowAtIndexPath:path];
+		self.menuPoint = [self.tableView convertPoint:
+				CGPointMake(120, CGRectGetMaxY(rect) - 10) toView:self.navigationController.view];
+		[self showMuteDurationsForChat:chatId];
+	} else if ([kind isEqualToString:@"archive"]){
+		[self setChat:chatId archived:YES];
+	} else if ([kind isEqualToString:@"unarchive"]){
+		[self setChat:chatId archived:NO];
+	} else if ([kind isEqualToString:@"delete"]){
+		[self confirmDeleteChat:chatId];
+	}
 }
 
 - (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell
@@ -1987,6 +2424,13 @@ static const NSInteger kChatActionsTag = 77;
 		return NO;
 	NSArray *header = [self headerRows];
 	return indexPath.row >= (NSInteger)header.count;
+}
+
+- (UITableViewCellEditingStyle)tableView:(UITableView *)tableView
+		editingStyleForRowAtIndexPath:(NSIndexPath *)indexPath {
+	if (![self tableView:tableView canEditRowAtIndexPath:indexPath])
+		return UITableViewCellEditingStyleNone;
+	return tableView.editing ? UITableViewCellEditingStyleDelete : UITableViewCellEditingStyleNone;
 }
 
 - (NSString *)tableView:(UITableView *)tableView
@@ -2014,6 +2458,11 @@ static const NSInteger kChatActionsTag = 77;
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
 
+	if (self.openSwipeCell){
+		[self closeOpenSwipeCellAnimated:YES];
+		return;
+	}
+
 	NSArray *header = [self headerRows];
 	NSArray *rows = [self visibleChats];
 	if (indexPath.row >= (NSInteger)(header.count + rows.count))
@@ -2037,14 +2486,14 @@ static const NSInteger kChatActionsTag = 77;
 	if ([c[@"isForum"] boolValue]){
 		TGTopicsViewController *topics = [[TGTopicsViewController alloc] init];
 		topics.chatId = chatId;
-		topics.chatTitle = c[@"title"];
+		topics.chatTitle = TGReplyString(c[@"title"]);
 		[self.navigationController pushViewController:topics animated:YES];
 		return;
 	}
 
 	TGChatViewController *vc = [[TGChatViewController alloc] init];
 	vc.chatId = chatId;
-	vc.chatTitle = c[@"title"];
+	vc.chatTitle = TGReplyString(c[@"title"]);
 	vc.isGroup = [c[@"isGroup"] boolValue];
 	[self.navigationController pushViewController:vc animated:YES];
 }

@@ -1,0 +1,104 @@
+{
+  "cluster": "saved-messages",
+  "gaps": [
+    {
+      "name": "Open a Saved Messages topic as a real chat",
+      "whatItIs": "Modern Telegram opens a saved topic in the full chat controller scoped to saved_messages_topic_id (SavedMessagesScreen pushes a ChatController with a saved-messages subject), with bubbles, media, reply, forward, selection and a composer.",
+      "whyItMatters": "Our topic screen (TGSavedMessagesViewController.m, the inner topic list controller) is a read-only one-line-per-message text table. Tapping a topic offers only 'open the whole Saved Messages chat' unfiltered, so a user who forwarded a photo album from one person cannot view, forward or delete it inside its topic.",
+      "whereItGoes": "TGChatViewController.m needs a topicId-scoped loading path (getSavedMessagesTopicHistory instead of getChatHistory); TGSavedMessagesViewController.m pushes it instead of its private message table.",
+      "tdlib": [
+        "getSavedMessagesTopicHistory - wrapped as -savedMessagesTopicHistory:fromMessage:limit:completion:",
+        "deleteSavedMessagesTopicHistory - wrapped as -deleteSavedMessagesTopic:completion:",
+        "setChatDraftMessage with messageTopicSavedMessages - wrapped as -setSavedMessagesTopic:draftText:completion:, currently unused"
+      ],
+      "effort": "substantial"
+    },
+    {
+      "name": "Tag filter strip inside the Saved Messages chat",
+      "whatItIs": "In the modern client the saved chat itself carries a horizontal chip rail of reaction tags with counts and labels directly under the title; tapping a chip filters the visible message stream to that tag.",
+      "whyItMatters": "We only expose tags in two detours: the global search screen (TGSearchViewController.m builds the chip strip and calls searchSavedMessages) and a standalone tags list screen. Inside Saved Messages itself there is no way to say 'show me the ones I tagged Work'; the user has to leave the chat.",
+      "whereItGoes": "TGChatViewController.m, reusing the chip-strip code already written in TGSearchViewController.m rebuildTagStrip and the searchSavedMessages request path.",
+      "tdlib": [
+        "getSavedMessagesTags - used raw in TGSearchViewController.m, the declared wrapper -savedMessagesTagsForTopic:completion: does not actually exist in TGClient+SavedMessages",
+        "searchSavedMessages - used raw in TGSearchViewController.m, no wrapper despite headers referencing one"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Add / rename a tag from the message itself",
+      "whatItIs": "Long-pressing a message in Saved Messages offers 'Tag' with an emoji chooser, and a tap on the tag chip under a bubble offers renaming it (SavedTagNameAlertController), so tag labels are created where they are used.",
+      "whyItMatters": "Reactions in the self-chat are tags, and our reaction picker does add them, but nothing in the chat tells the user that, the chip renders as a bare reaction with no label, and renaming is only reachable from the separate tags screen. Tags stay invisible unless you already know they exist.",
+      "whereItGoes": "TGChatViewController.m message action sheet plus the reaction chip view; rename alert already implemented in TGSavedMessagesTagsViewController.m askRenameForEmoji.",
+      "tdlib": [
+        "addMessageReaction / removeMessageReaction - wrapped in TGClient+Reactions",
+        "setSavedMessagesTagLabel - wrapped as -setSavedMessagesTagLabel:forEmoji:completion:"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Search scoped to one saved topic",
+      "whatItIs": "Modern search inside a saved topic passes the topic id to searchSavedMessages, so query and tag filtering apply within the one author's stream.",
+      "whyItMatters": "Our search always passes saved_messages_topic_id 0 (TGSearchViewController.m loadTaggedSavedMessagesPage), so 'that link Anna sent me' has to be found among every saved message ever.",
+      "whereItGoes": "TGSearchViewController.m - carry a topicId alongside _scopedChatId; entry point is a search button on the topic screen.",
+      "tdlib": [
+        "searchSavedMessages with saved_messages_topic_id - used raw, no wrapper"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Jump to date inside Saved Messages",
+      "whatItIs": "A fast-scroll date bubble and date picker backed by sparse message positions, letting you land on a month in a years-deep archive.",
+      "whyItMatters": "Saved Messages is the one chat people scroll years back in. We wrapped both calls and never used them: -savedMessagesSparsePositionsForTopic:... and -savedMessagesTopic:messageAtDate: have zero call sites outside TGClient+SavedMessages.m.",
+      "whereItGoes": "The topic chat / Saved Messages chat screen; a 'Jump to date' row in the chat action sheet is the cheap version of the scroll bubble.",
+      "tdlib": [
+        "getChatSparseMessagePositions - wrapped, unused",
+        "getSavedMessagesTopicMessageByDate - wrapped, unused"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "tg://saved deep link routing",
+      "whatItIs": "internalLinkTypeSavedMessages opens the Saved Messages chat when a tg://saved or t.me link is tapped.",
+      "whyItMatters": "The predicate -linkOpensSavedMessages:completion: is implemented in TGClient+SavedMessages.m line 512 and called from nowhere, so such a link currently falls through the link dispatcher and does nothing.",
+      "whereItGoes": "The link-type dispatch in TGClient+WebLinks.m / the URL open path in AppDelegate.m and TGChatViewController.m link sheet - one extra case that pushes TGSavedMessagesViewController.",
+      "tdlib": [
+        "getInternalLinkType / internalLinkTypeSavedMessages - wrapped as -linkOpensSavedMessages:completion:"
+      ],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Clear a topic's messages by date range",
+      "whatItIs": "Modern offers deleting only part of a saved topic between two dates rather than wiping it.",
+      "whyItMatters": "Today the only destructive option on a topic row is delete-everything, which is a scary all-or-nothing on an archive people keep for years.",
+      "whereItGoes": "TGSavedMessagesViewController.m topic long-press action sheet, next to the existing delete confirmation (kSavedDeleteAlertTag).",
+      "tdlib": [
+        "deleteSavedMessagesTopicMessagesByDate - wrapped as -deleteSavedMessagesTopic:messagesFrom:to:completion:, unused"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Quick reply shortcuts",
+      "whatItIs": "Named canned-message shortcuts (Settings > Business > Quick Replies in QuickReplySetupScreen.swift): create, rename, reorder and delete a shortcut, edit the messages it contains in a chat-like editor, and send it into any chat by typing '/name' in the composer.",
+      "whyItMatters": "Typing the same reply repeatedly on a 4S keyboard is exactly the case where a shortcut pays off, and shortcuts created on a desktop client are invisible and unsendable here today.",
+      "whereItGoes": "New shortcut list screen reachable from TGSettingsViewController.m, plus a '/' suggestion row in the existing mention/hashtag suggestion strip in TGChatViewController.m.",
+      "tdlib": [
+        "addQuickReplyShortcutMessage - wrapped in TGClient+Messages.m line 1066",
+        "sendQuickReplyShortcutMessages - wrapped in TGClient+Messages.m line 1086",
+        "getQuickReplyShortcuts / loadQuickReplyShortcuts - not wrapped",
+        "deleteQuickReplyShortcut, setQuickReplyShortcutName, reorderQuickReplyShortcuts, checkQuickReplyShortcutName - not wrapped",
+        "getQuickReplyShortcutMessages, editQuickReplyMessage, deleteQuickReplyShortcutMessages - not wrapped"
+      ],
+      "effort": "substantial"
+    },
+    {
+      "name": "Custom emoji tags",
+      "whatItIs": "Premium users tag saved messages with animated custom emoji, rendered as animated chips on bubbles and in the tag rail.",
+      "whyItMatters": "Tags set from a desktop premium account would show as blanks here, but plain-emoji tags cover the feature for practical use.",
+      "whereItGoes": "Would be the reaction chip renderer in TGChatViewController.m; recommend a static fallback glyph rather than support.",
+      "tdlib": [
+        "reactionTypeCustomEmoji, getCustomEmojiStickers"
+      ],
+      "effort": "blocked"
+    }
+  ]
+}

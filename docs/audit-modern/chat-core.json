@@ -1,0 +1,99 @@
+{
+  "cluster": "chat-core",
+  "gaps": [
+    {
+      "name": "Chat action bar (report spam / add contact / block / share phone)",
+      "whatItIs": "Modern clients show a bar under the navigation bar of a chat with an unknown or suspicious peer offering Report Spam, Add Contact, Block User, Share My Phone Number, Invite to Group, or a join-requests notice; TDLib drives it entirely through chat.action_bar and it is dismissed with removeChatActionBar.",
+      "whyItMatters": "First message from a stranger currently arrives with no safety affordance at all: no way to report, block or add the sender without leaving the chat and hunting through the profile screen. This is the one piece of anti-spam UI Telegram never ships without.",
+      "whereItGoes": "TGChatViewController.m, a header strip above the message table mirroring the existing pinned-message bar (loadPinnedMessage around line 2339); actions route to the already-wrapped reportChat in TGClient+Privacy.h and contacts calls in TGClient+Contacts.h.",
+      "tdlib": [
+        "chat.action_bar (chatActionBarReportSpam / ReportAddBlock / AddContact / SharePhoneNumber / InviteMembers / JoinRequest) - not read anywhere",
+        "removeChatActionBar - not wrapped",
+        "toggleMessageSenderIsBlocked - not wrapped",
+        "reportChat - already wrapped, TGClient+Privacy.h:196",
+        "addContact / sharePhoneNumberWithUser - already wrapped, TGClient+Contacts.h"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Unread-messages separator and opening a chat at the first unread message",
+      "whatItIs": "Opening a chat with unread messages scrolls to the first unread one and draws an 'Unread Messages' divider above it, rather than jumping to the very bottom.",
+      "whyItMatters": "With 40 unread messages in a group the user is dropped at the newest one with no marker of where they stopped reading, and has to scroll blindly upwards. The 2013 client had this divider; it is one of the most-used pieces of chat chrome.",
+      "whereItGoes": "TGChatViewController.m - history load at line ~1705 (historyForChat:thread:limit:) always ends with scrollToBottomAnimated: (lines 1725, 2475); needs an anchor on chat.last_read_inbox_message_id plus a divider row in the table data source.",
+      "tdlib": [
+        "chat.unread_count and chat.last_read_inbox_message_id - present in chat objects but never read by the chat screen",
+        "getChatHistory with from_message_id = last read and a negative offset - historyForChat: is wrapped but always loads from the bottom"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Swipe-to-reply on a message bubble",
+      "whatItIs": "A short right-swipe on any bubble sets it as the reply target, with the bubble sliding and an arrow glyph appearing behind it.",
+      "whyItMatters": "Reply is currently only reachable through the long-press action sheet, which is three interactions deep in a group conversation. The gesture is the single most-used shortcut in modern Telegram and the hardware supports it - TGSwipeGestureRecognizer already exists in this repo and is used for chat-list rows.",
+      "whereItGoes": "The bubble cell in TGChatViewController.m (ChatViewCell / the bubble class near line 1025) reusing TGSwipeGestureRecognizer.m; it feeds the existing self.replyToId path used at line 2114.",
+      "tdlib": [
+        "no new call - reply plumbing already exists (inputMessageReplyTo, sendMessage:thread:replyTo:)"
+      ],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Pinned-message bar with count, cycling and the full pinned list",
+      "whatItIs": "Modern chats show how many messages are pinned, step through them on each tap, offer 'Show all pinned messages' as a filtered history, and give admins Unpin All.",
+      "whyItMatters": "We show exactly one pinned message (pinnedMessageId, TGChatViewController.m:1209) and tapping it always jumps to that one. In a channel or a busy group with several pins the other pinned posts are unreachable, and there is no way to clear them in bulk.",
+      "whereItGoes": "TGChatViewController.m pinned bar (loadPinnedMessage, line 2339) gains a counter and a tap-to-cycle index; 'Show all' opens the existing search-results style list with searchMessagesFilterPinned.",
+      "tdlib": [
+        "searchChatMessages with searchMessagesFilterPinned - searchChatMessages wrapped in TGClient+Search",
+        "unpinAllChatMessages - not wrapped",
+        "getChatPinnedMessage - wrapped as pinnedMessageForChat:"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Composer state for restricted chats and slow mode",
+      "whatItIs": "ChatPresentationInterfaceState replaces the input bar with an explanatory placeholder when the peer's permissions forbid sending ('Sending messages is not allowed in this group', 'The channel is read-only'), and shows a live countdown plus a disabled send button while slow mode is running.",
+      "whyItMatters": "Today the composer is always live: the user types a message into a read-only channel or a slow-moded group, presses send and the message silently fails. Distinct from the catalogued admin-side slow-mode picker row - this is the sending side of the same feature.",
+      "whereItGoes": "TGChatViewController.m composer construction and sendCurrentText (around line 2109); reads permissions already wrapped in TGClient+ChatManagement.h:108 and slowModeDelay in TGClient+Groups.h:45.",
+      "tdlib": [
+        "chat.permissions / chatPermissions - wrapped as permissionsForChat:",
+        "supergroupFullInfo.slow_mode_delay_expires_in - not currently surfaced",
+        "canSendMessageToUser / chat.can_send_* - not wrapped"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Forward options: hide sender names and drop captions",
+      "whatItIs": "Before confirming a forward, modern clients offer a two-toggle sheet - keep or hide the original sender, keep or remove media captions - and preview the result.",
+      "whyItMatters": "Forwarding always attributes the original author right now, which leaks who said what when relaying a message between groups. The TDLib parameters are already in our own wrapper and unused.",
+      "whereItGoes": "TGForwardPicker.m confirm step, as two rows in the existing TGActionSheet; calls the already-wrapped forward:...removeCaptions: in TGClient+Messages.h:170.",
+      "tdlib": [
+        "forwardMessages with send_copy and remove_caption - already wrapped (TGClient+Messages.h:170-177), no UI exposes it"
+      ],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Per-chat history position and full draft state restored on reopen",
+      "whatItIs": "ChatInterfaceState persists per chat the scroll anchor (historyScrollState: message index plus relative offset) and the whole compose state - text, reply target, edit-in-progress, selected forwards, silent-posting flag - so reopening a chat lands exactly where the user left it.",
+      "whyItMatters": "We persist draft text only (clearDraftInChat at line 2127) and always reopen at the bottom, so a half-written reply loses its reply target and a chat you were reading in the middle restarts from the newest message. On a device where switching chats is slow this costs the user a scroll every time.",
+      "whereItGoes": "TGChatViewController.m draft save/restore plus a small per-chat dictionary persisted alongside it; reply target goes into the existing draft via inputMessageReplyTo.",
+      "tdlib": [
+        "setChatDraftMessage with draftMessage.reply_to - wrapped, but only text is stored",
+        "no call needed for scroll anchor - purely local state"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Composer autocomplete strip (@mention, /command, :emoji, @inlinebot, #hashtag)",
+      "whatItIs": "ChatContextQuery parses the text being typed and drives one shared suggestion strip above the keyboard: group members after '@', bot commands after '/', emoji after a colon-prefix, inline-bot results after '@bot ', and recent hashtags after '#'.",
+      "whyItMatters": "Every one of the five sources is wrapped in TGClient already (inlineQueryToBot:, recentInlineBotsWithCompletion:, emoji suggestions in TGClient+Stickers, member mention filters in TGClient+Groups, bot_info commands) and none is reachable - inline bots in particular are completely unusable without it. The feature catalogue lists these five as five separate deferred entries, each blocked on 'an autocomplete overlay we do not have'; the overlay is one view and unblocks all of them at once, so the correct unit of work is the strip, not the five leaves.",
+      "whereItGoes": "New shared view owned by TGChatViewController.m above the input bar, modelled on the existing TGStickerPanelView presentation; one query parser feeding five result sources.",
+      "tdlib": [
+        "getInlineQueryResults / getRecentInlineBots - wrapped as inlineQueryToBot:, recentInlineBotsWithCompletion: (TGClient+Bots.h:144,160)",
+        "sendInlineQueryResultMessage - wrapped as sendInlineResult:",
+        "searchEmojis / getStickerEmojis - wrapped in TGClient+Stickers",
+        "getSupergroupMembers with supergroupMembersFilterMention - wrapped in TGClient+Groups",
+        "userFullInfo.bot_info.commands - available, not surfaced"
+      ],
+      "effort": "substantial"
+    }
+  ]
+}

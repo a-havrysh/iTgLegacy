@@ -1,0 +1,101 @@
+{
+  "cluster": "stories",
+  "gaps": [
+    {
+      "name": "Auto-advancing story playback with a filling progress bar",
+      "whatItIs": "In StoryContainerScreen a story plays for a fixed duration (about 5s for a photo), the segment of the top progress strip fills in real time, and the viewer advances by itself to the next story and then the next poster. Holding a finger down pauses it.",
+      "whyItMatters": "Our viewer never advances on its own: the strip segments only shade seen/unseen and the user has to tap the right third for every single story. Stories stop feeling like stories and become a clumsy photo pager.",
+      "whereItGoes": "TGStoriesViewController.m - add an NSTimer/CADisplayLink driving a fill layer per segment in -layoutStrip/-updateStrip, reset in -setCurrentIndex:, paused by the existing long-press/pan path and by -viewWillDisappear:.",
+      "tdlib": ["none - pure UI on top of the already-wrapped openStory/closeStory"],
+      "effort": "small"
+    },
+    {
+      "name": "My Stories: profile stories grid and expired-story archive",
+      "whatItIs": "Modern clients show a Stories grid on a profile (getChatPostedToChatPageStories) plus a personal archive of every expired story (getChatArchivedStories), with pinned stories first and story albums as tabs over the grid.",
+      "whyItMatters": "Right now a posted story is unreachable the moment it leaves the tray. The user cannot look back at what they posted, cannot recover a story, cannot see anybody's story highlights on their profile. This is the single biggest hole in our stories surface.",
+      "whereItGoes": "New TGMyStoriesViewController (three-thumbnail rows in a plain UITableView, no UICollectionView needed) pushed from Settings and from a Stories row in TGProfileViewController.m; opens the existing TGStoriesViewController with the tapped id list. Albums layer on top later.",
+      "tdlib": ["getChatPostedToChatPageStories - wrapped as -profileStoriesInChat:fromStoryId:limit:completion: (unused)", "getChatArchivedStories - wrapped as -archivedStoriesInChat:... (unused)", "setChatPinnedStories - wrapped (unused)", "getChatStoryAlbums / getStoryAlbumStories - wrapped (unused)"],
+      "effort": "substantial"
+    },
+    {
+      "name": "Keep story on profile after it expires (Save to Profile)",
+      "whatItIs": "A toggle in the story viewer's menu that marks a story as posted to the chat page so it survives the 24h expiry.",
+      "whyItMatters": "Without it every story is permanently lost after a day; there is no way to build the story highlights other clients show on a profile.",
+      "whereItGoes": "TGStoriesViewController.m -morePressed / -performMoreAction: one more TGActionSheetAction driven by the story dict's canToggleProfile/onProfile flags.",
+      "tdlib": ["toggleStoryIsPostedToChatPage - wrapped as -setStory:inChat:onProfile:"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Unhide a story poster (stories block list)",
+      "whatItIs": "A Hidden Stories list in privacy settings showing every poster whose stories were moved out of the tray, with a way to put them back.",
+      "whyItMatters": "Our viewer already offers \"Hide Stories from X\" and calls setUser:storiesHidden:YES, but nothing anywhere can undo it. A mistap silently and permanently removes a person's stories.",
+      "whereItGoes": "A section or pushed table in TGPrivacyViewController.m, next to the existing block list UI.",
+      "tdlib": ["getBlockedMessageSenders(blockListStories) - wrapped as -hiddenStoryPostersWithCompletion: (unused)", "setMessageSenderBlockList - wrapped as -setUser:storiesHidden:"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Close Friends list editor",
+      "whatItIs": "A contact multi-picker that defines the close-friends audience used by the closeFriends story privacy option.",
+      "whyItMatters": "Both TGProfileViewController and the composer already offer \"Close Friends\" as a privacy choice, but the list itself can never be populated from our client, so choosing it posts a story literally nobody can see.",
+      "whereItGoes": "New checkmark multi-select table over the contacts model (same shape as TGForwardPicker), reached from the privacy action sheet in TGStoriesViewController.m/TGProfileViewController.m and from TGPrivacyViewController.",
+      "tdlib": ["getCloseFriends - wrapped as -closeFriendsWithCompletion:", "setCloseFriends - wrapped"],
+      "effort": "small"
+    },
+    {
+      "name": "Selected-contacts story privacy and per-story audience editing",
+      "whatItIs": "Choosing \"Selected Contacts\" (or exceptions for Everyone/Contacts) when posting, and changing a posted story's audience afterwards from the viewer.",
+      "whyItMatters": "Our composer hardcodes the three list-less options; the userIds parameter of postPhotoStoryAtPath: is always nil, so the fourth privacy mode of every modern client is unreachable and a mistakenly public story cannot be narrowed after the fact.",
+      "whereItGoes": "Reuses the same contact multi-picker as Close Friends; wire into -askStoryPrivacy in TGStoriesViewController.m (TGStoryComposer) and TGProfileViewController.m, plus a \"Who can see\" item in the viewer's more menu for own stories.",
+      "tdlib": ["setStoryPrivacySettings - wrapped as -setStory:privacy:userIds:", "postStory - wrapped, userIds argument already present"],
+      "effort": "small"
+    },
+    {
+      "name": "Story messages in chat: story bubbles, reply-to-story headers, sharing a story into a chat",
+      "whatItIs": "messageStory renders as a bubble with the story thumbnail and poster; a reply sent from the story viewer shows a reply-to-story header above the message; the share button offers \"Send to...\" as well as repost.",
+      "whyItMatters": "We already send story replies from the viewer, but in the chat they and any received story link render as nothing at all - a blank or unsupported message. And our share button can only repost to our own stories, never forward a story to a friend, which is how most story sharing actually happens.",
+      "whereItGoes": "ChatViewCell.m needs a story content case and a reply-to-story header variant; TGStoriesViewController.m -sharePressed should offer the existing TGForwardPicker as a second option.",
+      "tdlib": ["messageStory / messageReplyToStory - content mapping needed in TGClient+MessageContent", "inputMessageStory - not wrapped, needed for send-to-chat", "getStory - wrapped, for thumbnail resolution"],
+      "effort": "substantial"
+    },
+    {
+      "name": "Full reaction strip on a story (not just the heart)",
+      "whatItIs": "Long-press or tap on the reaction button opens the available story reactions, ordered by usefulness, and sends the chosen emoji.",
+      "whyItMatters": "Our viewer can only toggle a single hardcoded heart, so any reaction other than ❤ is impossible to send and reacting feels like a stub next to the message reactions we already do properly.",
+      "whereItGoes": "TGStoriesViewController.m -middlePressed - present the existing TGReactionPickerView on long-press, keep the heart on tap.",
+      "tdlib": ["getStoryAvailableReactions - wrapped as -storyReactionsWithLimit:completion: (unused)", "setStoryReaction - wrapped and already used"],
+      "effort": "small"
+    },
+    {
+      "name": "Interactive story areas (link, location, venue, message, suggested reaction)",
+      "whatItIs": "Overlay rectangles positioned by percentage over the story image; tapping a link area opens the URL, a venue area searches stories at that venue, a suggested-reaction area sends that emoji.",
+      "whyItMatters": "Areas are the main call-to-action in modern stories - the link sticker especially. TGClient+Stories already flattens every area with x/y/width/height/rotation, and our viewer ignores all of it, so the story looks like it has a button that does nothing.",
+      "whereItGoes": "TGStoryPage in TGStoriesViewController.m - transparent tappable subviews laid out from the story dict's \"areas\", hit tested in -viewTapped: before the left/right third logic.",
+      "tdlib": ["storyArea/storyAreaPosition - already flattened by TGClient+Stories", "searchPublicStoriesByVenue - wrapped (unused)", "openWebLink path already exists"],
+      "effort": "small"
+    },
+    {
+      "name": "Story stealth mode",
+      "whatItIs": "StoryStealthModeSheetScreen: a Premium toggle that hides the user from the viewer lists of stories opened in the last 5 minutes and the next 25, with a live cooldown countdown surfaced in the viewer.",
+      "whyItMatters": "It is the one story privacy control that acts at view time rather than post time; without it every story we open is permanently attributed, and there is no way for the user to browse quietly.",
+      "whereItGoes": "New wrapper in TGClient+Stories plus an item in TGStoriesViewController.m -morePressed and a row in TGPrivacyViewController; state comes from updateStoryStealthMode.",
+      "tdlib": ["activateStoryStealthMode - NOT wrapped", "updateStoryStealthMode - not handled", "getStory / canPostStory premium gating already present"],
+      "effort": "small"
+    },
+    {
+      "name": "Per-chat story notifications and story mute exceptions",
+      "whatItIs": "Mute a poster's stories without muting their messages, plus a Stories section in Notifications listing every chat with its own story setting and choosing who may notify us on a story reaction.",
+      "whyItMatters": "Once the tray is on, story notifications are all-or-nothing; a chatty poster cannot be silenced except by muting the chat completely.",
+      "whereItGoes": "A Stories row in the per-chat notification area of TGProfileViewController.m and a Stories section in the notifications part of TGSettingsViewController.m.",
+      "tdlib": ["setChatNotificationSettings(mute_stories) - wrapped as -setChat:storiesMuted:", "getStoryNotificationSettingsExceptions - wrapped (unused)", "setReactionNotificationSettings - wrapped as -setStoryReactionNotificationSource:"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Archived story tray and t.me story links",
+      "whatItIs": "Long-press a tray avatar to move that poster into an Archive story list, an Archived Stories screen reading storyListArchive, and t.me/<user>/s/<id> links opening straight into the viewer.",
+      "whyItMatters": "We load only storyListMain, so posters can never be de-cluttered out of the tray, and a story link shared in a chat is dead text even though the resolver is written and the viewer exists.",
+      "whereItGoes": "TGChatListViewController.m story tray (long-press gesture + reuse of the existing showsArchive screen shape) and the URL handling path that already routes t.me links.",
+      "tdlib": ["setChatActiveStoriesList - wrapped as -setChat:storiesArchived:", "loadActiveStories(archived) - wrapped, only called with NO", "internalLinkTypeStory - wrapped as -resolveStoryLink:completion: (unused)"],
+      "effort": "small"
+    }
+  ]
+}

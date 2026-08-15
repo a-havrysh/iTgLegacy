@@ -1,0 +1,93 @@
+{
+  "cluster": "stickers-emoji",
+  "gaps": [
+    {
+      "name": "Custom emoji rendered inline in message text",
+      "whatItIs": "Modern clients resolve textEntityTypeCustomEmoji entities via getCustomEmojiStickers and draw the sticker image inline at line height in place of the placeholder emoji character. Static ones are just a small WebP; only the animated ones need a player.",
+      "whyItMatters": "Without it, messages from premium users show a stray unrelated emoji character (the fallback glyph) where a custom emoji was meant, so the text reads wrong rather than merely plainer.",
+      "whereItGoes": "TGChatViewController.m text layout (the same attributed-string pass that handles entities) plus the WebP decode already in TGClient.m; TGClient+Stickers.h customEmojiStickersWithIds: is already wrapped.",
+      "tdlib": ["getCustomEmojiStickers - wrapped as customEmojiStickersWithIds:completion:", "textEntityTypeCustomEmoji - parsed already"],
+      "effort": "small"
+    },
+    {
+      "name": "Bucket correction: 'Custom emoji entity' is catalogued as blocked",
+      "whatItIs": "The feature catalogue marks 'Custom emoji entity' blocked while marking 'Custom emoji in message text' design. Nothing in the hardware forbids it: the static case is a 20pt WebP drawn with the existing decoder, and the TDLib call is wrapped.",
+      "whyItMatters": "A wrong bucket keeps a cheap, visible correctness fix permanently off the build list.",
+      "whereItGoes": "docs/feature-catalogue.json - the entry should be 'design' (static) rather than 'blocked'; only animated custom emoji at text size deserve blocked.",
+      "tdlib": ["getCustomEmojiStickers - already wrapped"],
+      "effort": "small"
+    },
+    {
+      "name": "Bucket correction: 'Custom emoji reactions' is catalogued as blocked",
+      "whatItIs": "A reaction chip whose reactionType is reactionTypeCustomEmoji needs the same static sticker image, sized to the chip, instead of a unicode glyph. The chip layout already exists in TGReactionPickerView/TGReactionChipsView.",
+      "whyItMatters": "Custom-emoji reactions are common in channels; today those chips presumably render blank or with a placeholder, so counts appear attached to nothing.",
+      "whereItGoes": "src/TGReactionPickerView.m (TGReactionChipsView drawing) using customEmojiStickersWithIds:.",
+      "tdlib": ["getCustomEmojiStickers - wrapped", "reactionTypeCustomEmoji in message.interaction_info - already surfaced by reactionChipsFromMessage:"],
+      "effort": "small"
+    },
+    {
+      "name": "Sticker long-press peek action menu (Send / Favourite / View Pack / Remove from Recent)",
+      "whatItIs": "StickerPreviewPeekContent shows the enlarged sticker AND a context menu of actions built by the caller: send, add or remove from favourites, view the owning pack, remove from recents. The catalogue lists only the enlarged preview, not the actions.",
+      "whyItMatters": "Favouriting and jumping to a pack have no other entry point from the keyboard; without the menu the panel is send-only and packs can only be reached from Settings.",
+      "whereItGoes": "src/TGStickerPanelView.m - add a UILongPressGestureRecognizer over the grid feeding an existing TGActionSheet/TGPopupMenu; all calls wrapped (addFavoriteStickerWithFileId:, removeFavoriteStickerWithFileId:, isStickerFavoriteWithFileId:, removeRecentStickerWithFileId:, stickerSetWithId:).",
+      "tdlib": ["addFavoriteSticker / removeFavoriteSticker - wrapped", "removeRecentSticker - wrapped", "getStickerSet - wrapped"],
+      "effort": "small"
+    },
+    {
+      "name": "Trending tab inside the sticker keyboard with an inline Add button",
+      "whatItIs": "The modern keyboard carries a featured/trending section as its own tab: unseen packs badged, each shown as a strip of covers with an Add button, marked viewed on scroll. We have trending only as a page in TGStickersViewController (Settings), not in the in-chat panel.",
+      "whyItMatters": "Installing a new pack currently means leaving the chat, going to Settings > Stickers > Trending, and coming back. In practice new packs never get installed.",
+      "whereItGoes": "src/TGStickerPanelView.m as an extra section kind alongside Recent/Favourite/Set; reuse the row rendering already in TGStickersViewController.m reloadTrending.",
+      "tdlib": ["getTrendingStickerSets - wrapped as trendingStickerSetsWithOffset:limit:", "viewTrendingStickerSets - wrapped as markTrendingStickerSetsViewed:", "changeStickerSet - wrapped as installStickerSet:"],
+      "effort": "small"
+    },
+    {
+      "name": "Remote sticker search in the keyboard search bar",
+      "whatItIs": "The panel's UISearchBar today only filters the already-loaded section titles locally (TGStickerPanelView.m filter pass). Modern search hits the server: stickers matching a query or an emoji, plus public packs, with an emoji category row above the field.",
+      "whyItMatters": "Typing 'cat' in the sticker search returns nothing unless a pack is literally titled 'cat', which reads as a broken search box rather than a missing feature.",
+      "whereItGoes": "src/TGStickerPanelView.m searchBar:textDidChange: - the wrappers exist and are currently unused: searchStickersByEmoji:, installedStickersMatching:, allStickerEmojisForQuery:, searchStickerSets:.",
+      "tdlib": ["searchStickers - wrapped", "getStickers - wrapped as installedStickersMatching:", "searchStickerSets - wrapped", "getStickerEmojis - wrapped"],
+      "effort": "small"
+    },
+    {
+      "name": "'Suggest stickers by emoji' preference (All / Installed / None)",
+      "whatItIs": "A stored setting that controls whether typing a lone emoji offers matching stickers, and whether the suggestions come from all public packs or only installed ones. TGClient already exposes stickerSuggestionEnabledWithCompletion:, with nothing reading it.",
+      "whyItMatters": "On a 4S, suggestion lookups cost a network round trip and a decode per keystroke; without the off switch the user cannot buy back that latency, and the suggestion feature itself is unusable to anyone who dislikes it.",
+      "whereItGoes": "src/TGStickersViewController.m root page, as a switch row above the pack list.",
+      "tdlib": ["getOption('suggest_stickers_by_emoji') / stickerSuggestionEnabledWithCompletion: - wrapped", "setOption for the write side - needs a one-line addition"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "'Loop animated stickers' toggle",
+      "whatItIs": "Modern sticker settings let animated stickers play once versus loop forever. Purely local state read by the player.",
+      "whyItMatters": "This is the single biggest battery and CPU lever for TGS playback on one A5 core - an off-screen looping Lottie in a chat full of animated stickers never stops burning the core. A 2013-styled client badly wants the default to be play-once.",
+      "whereItGoes": "src/TGStickersViewController.m as a switch row; consumed by TGLottieView (play/stop) via TGChatViewController.m where the lottie view is installed (~line 1131).",
+      "tdlib": ["none - NSUserDefaults only"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Archived-packs notice after the install limit is hit",
+      "whatItIs": "ArchivedStickerPacksNotice: when installing a pack pushes the user past the server's installed-set limit, the oldest packs are auto-archived and the client shows a sheet naming exactly which ones went away, with a way to open the archive.",
+      "whyItMatters": "Otherwise packs silently vanish from the keyboard after an install and the user assumes the client lost them. We already have the Archived page, so the notice is what closes the loop.",
+      "whereItGoes": "src/TGStickerPanelView.m / TGStickersViewController.m install path, presented with the existing TGActionSheet; navigates to the existing TGStickersPageArchived.",
+      "tdlib": ["updateInstalledStickerSets / changeStickerSet result - wrapped", "getArchivedStickerSets - wrapped"],
+      "effort": "small"
+    },
+    {
+      "name": "Bucket correction: mask pack management is catalogued as blocked",
+      "whatItIs": "'Mask stickers' is blocked wholesale. Applying a mask needs a photo editor with face placement and is genuinely out of scope, but listing, reordering, archiving and uninstalling installed mask packs is the same table we already render for regular packs, and all four wrappers exist.",
+      "whyItMatters": "A user who installed mask packs on another device currently has no way to see or remove them here; the packs are invisible rather than merely unusable.",
+      "whereItGoes": "src/TGStickersViewController.m as a Masks page beside Trending/Archived; installedMaskStickerSetsWithCompletion:, archivedMaskStickerSetsFromSetId:, searchInstalledMaskStickerSets:, reorderInstalledMaskStickerSets: are all wrapped and unused.",
+      "tdlib": ["getInstalledStickerSets(stickerTypeMask) - wrapped", "getArchivedStickerSets(mask) - wrapped", "reorderInstalledStickerSets(mask) - wrapped"],
+      "effort": "small"
+    },
+    {
+      "name": "Bucket nuance: 'Animated reaction effects' blocked is too broad",
+      "whatItIs": "The catalogue blocks the whole appear/select/activate/around/effect family. The particle 'around' and full-screen 'effect' layers are indeed beyond an A5, but the 'activate' animation is a single centre-effect TGS - exactly what TGLottieView already plays for stickers - and it is the one the user actually notices when they tap a reaction.",
+      "whyItMatters": "Reacting currently gives no feedback beyond a count changing; one short TGS makes the whole reaction system feel connected, at the cost of one already-existing player instance.",
+      "whereItGoes": "src/TGReactionPickerView.m tap handler, playing the emoji's activate animation through TGLottieView; reactionIconPathForEmoji: and emojiReactionInfo: are already wrapped.",
+      "tdlib": ["getEmojiReaction / emojiReactionInfo: - wrapped", "reactionIconPathForEmoji: - wrapped"],
+      "effort": "small"
+    }
+  ]
+}

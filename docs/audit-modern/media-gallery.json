@@ -1,0 +1,85 @@
+{
+  "cluster": "media-gallery",
+  "gaps": [
+    {
+      "name": "Shared media type tabs (Files, Links, Music, Voice, GIFs)",
+      "whatItIs": "Modern PeerInfo shows shared media as a segmented pane set - Media grid, Files list, Links list, Music, Voice, GIFs - each backed by a different SearchMessagesFilter, each with its own cell layout and infinite scroll.",
+      "whyItMatters": "Our shared media screen only ever queries searchMessagesFilterPhotoAndVideo. A document, a link or a music track sent months ago is unreachable except by scrolling the whole chat history. This is the single most-used way people find old content.",
+      "whereItGoes": "TGMediaViewController.m - the hardcoded filter at line 1089 becomes a segmented control over the table; the file/link/audio rows can reuse the document row drawing already in TGChatViewController. Telegraph has TGGenericPeerMediaGalleryModel and the per-type list models to copy layout from.",
+      "tdlib": ["searchChatMessages with searchMessagesFilterDocument / Url / Audio / VoiceNote / Animation - all already wrapped as mediaInChat:filter:completion: in TGClient+Search"],
+      "effort": "small"
+    },
+    {
+      "name": "Music file (messageAudio) playback is broken",
+      "whatItIs": "Modern plays mp3/m4a audio documents through the shared media player with title/performer metadata and a scrubber.",
+      "whyItMatters": "TGChatViewController routes messageAudio into playAudioMessage:, which unconditionally runs the file through TGVoiceDecoder wavFromOpusFile - op_open_file fails on any non-Ogg-Opus file, so every music track a user taps produces 'Cannot play this audio'. AVAudioPlayer plays mp3/m4a/aac natively on this hardware.",
+      "whereItGoes": "TGChatViewController.m playAudioTail: - branch on mime type / extension and hand the downloaded path straight to AVAudioPlayer for non-opus, keeping the opus conversion only for voice notes.",
+      "tdlib": ["no new calls; downloadFile already wrapped in TGClient+Files"],
+      "effort": "small"
+    },
+    {
+      "name": "Playback that survives leaving the chat, plus lock-screen controls",
+      "whatItIs": "SharedMediaPlayer plus MediaNavigationAccessoryPanel: audio keeps playing when you navigate away, a compact now-playing bar sits under the navigation bar on every screen, and the track appears on the lock screen and in the multitasking audio controls.",
+      "whyItMatters": "Our AVAudioPlayer is a property of TGChatViewController and the player bar is a subview of that chat. Pop the chat and playback stops; nothing is registered with MPNowPlayingInfoCenter, no remote-control events are accepted, and Info.plist declares no audio background mode. Listening to a long voice message or a podcast while doing anything else is impossible.",
+      "whereItGoes": "A new shared singleton owning AVAudioPlayer (lift the code out of TGChatViewController.m playAudioMessage:/showPlayerBar), a reusable accessory bar view installed by RootViewController, plus UIBackgroundModes audio in src/Info.plist and remoteControlReceivedWithEvent: in AppDelegate.m.",
+      "tdlib": ["none - purely client-side; downloadFile already wrapped"],
+      "effort": "substantial"
+    },
+    {
+      "name": "Voice / music playlist auto-advance",
+      "whatItIs": "Playing one voice message or track continues into the next one of the same kind in that chat, with next/previous controls, exactly as TGGenericPeerVoiceMessagesPlaylistSignal does.",
+      "whyItMatters": "Catching up on a run of ten voice messages currently means tapping each bubble individually and waiting for each download. Auto-advance is the difference between listening to a conversation and poking at it.",
+      "whereItGoes": "The player introduced above, fed by a filtered searchChatMessages (VoiceNote or Audio) around the currently playing message id; next/prev buttons on the existing player bar in TGChatViewController.m.",
+      "tdlib": ["searchChatMessages with searchMessagesFilterVoiceNote / searchMessagesFilterAudio - already wrapped"],
+      "effort": "small"
+    },
+    {
+      "name": "Action footer in the full-screen media viewer",
+      "whatItIs": "ChatItemGalleryFooterContentNode gives the open photo/video a footer with share, forward, save, delete and a 'more' menu, and the title view names the sender and date.",
+      "whyItMatters": "TGMediaFullscreenController has only Done, a counter, a caption and Play - a photo opened from shared media cannot be saved, forwarded or deleted at all. The chat's TGPhotoBrowserView is slightly better but exposes exactly one hidden affordance, a 'Hold to save' hint. Forwarding a photo someone just sent is a daily action.",
+      "whereItGoes": "TGMediaViewController.m TGMediaFullscreenController bottom bar - add buttons that reuse TGActionSheet plus the existing forward picker (TGForwardPicker) and the camera-roll save code already in TGChatViewController.m (UIImageWriteToSavedPhotosAlbum / UISaveVideoAtPathToSavedPhotosAlbum, lines 5462-5497).",
+      "tdlib": ["forwardMessages, deleteMessages, getMessageLink - all already wrapped in TGClient+Messages"],
+      "effort": "small"
+    },
+    {
+      "name": "Jump from a shared-media item to its message in the chat",
+      "whatItIs": "Tapping 'Show in chat' on a gallery item closes the viewer and scrolls the chat history to that message.",
+      "whyItMatters": "Shared media items carry a message id but our grid throws away the context - a user who finds the photo cannot see who sent it, when, or what was said around it. This is how people actually use the media grid: as an index into the conversation.",
+      "whereItGoes": "TGMediaViewController.m item dictionaries already keep the message id; add the action to the fullscreen footer and route into TGChatViewController's existing scroll-to-message path used by replies and pinned messages.",
+      "tdlib": ["getMessage / getChatHistory around a message id - already wrapped"],
+      "effort": "small"
+    },
+    {
+      "name": "GIF (messageAnimation) playback",
+      "whatItIs": "Animated messages are mpeg4/H.264 without audio; modern loops them inline, and the gallery has a dedicated ChatAnimationGalleryItem.",
+      "whyItMatters": "Our chat tap handler covers document, video note, video, voice/audio and photo - messageAnimation falls through, so tapping a GIF does nothing and it stays a frozen thumbnail forever. The A5 decodes this H.264 in hardware, and MPMoviePlayerController with repeatMode is enough.",
+      "whereItGoes": "TGChatViewController.m tap handler around line 3862 - treat messageAnimation like messageVideo but loop and mute; the mediaInChat animation filter also feeds the GIFs pane above. Telegraph's TGGenericPeerMediaGalleryGifItemView and TGInlineVideoView are direct ports.",
+      "tdlib": ["downloadFile - already wrapped; messageAnimation is already parsed in TGClient.m and TGClient+Files.m"],
+      "effort": "small"
+    },
+    {
+      "name": "Thumbnail-first loading in the full-screen pager",
+      "whatItIs": "PhotoResources emits the cached thumbnail immediately, then the full-size image over it, so a page is never blank and a progress ring shows the fetch.",
+      "whyItMatters": "TGMediaFullscreenController's loadImageForPageAtIndex downloads the full photo before drawing anything, so on a slow link swiping through shared media shows plain black pages with no feedback at all - the viewer looks broken. The grid already holds decoded thumbnails that could be shown instantly.",
+      "whereItGoes": "TGMediaViewController.m loadImageForPageAtIndex - set the thumbId image first (it is usually already in the grid's cache), then replace with the full image; drive the existing spinner off the download progress update.",
+      "tdlib": ["updateFile progress events - already delivered by TGClient"],
+      "effort": "small"
+    },
+    {
+      "name": "Long-press actions and multi-select on the media grid",
+      "whatItIs": "Modern lets you long-press a grid tile to select, then bulk forward, save or delete a run of photos.",
+      "whyItMatters": "Clearing out or forwarding a batch of photos one at a time through the chat history is the kind of chore people give up on. The grid is the only place bulk media selection makes sense.",
+      "whereItGoes": "TGMediaViewController.m TGMediaGridCell / TGMediaTileView - add a long-press recognizer and a selection overlay, with a toolbar reusing TGForwardPicker and deleteMessages.",
+      "tdlib": ["forwardMessages, deleteMessages - already wrapped"],
+      "effort": "small"
+    },
+    {
+      "name": "Streaming video playback before the file is fully downloaded",
+      "whatItIs": "Modern starts a video within a second by fetching the first byte ranges and playing while the rest arrives.",
+      "whyItMatters": "Our viewer downloads the whole file, then hands the path to MPMoviePlayerController, so a 40MB video means minutes of a spinner. But partial playback needs a local HTTP server or AVAssetResourceLoader fed by ranged TDLib reads, neither of which is viable on iOS 6.1.3 with MPMoviePlayer, and holding a partial file plus decode buffers does not fit in the 40-60MB budget.",
+      "whereItGoes": "would have been TGMediaViewController.m playTapped - not worth attempting; already recorded as blocked in the catalogue under 'Video streaming / alternative qualities / storyboards'.",
+      "tdlib": ["downloadFile with offset/limit, readFilePart - wrapped, but unusable without a streaming asset loader"],
+      "effort": "blocked"
+    }
+  ]
+}

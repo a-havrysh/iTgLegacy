@@ -1,0 +1,101 @@
+{
+  "cluster": "forums-topics",
+  "gaps": [
+    {
+      "name": "Topic service messages in the transcript",
+      "whatItIs": "Modern clients render centred grey service lines for messageForumTopicCreated, messageForumTopicEdited, messageForumTopicIsClosedToggled and messageForumTopicIsHiddenToggled (\"X created topic Y\", \"X closed the topic\").",
+      "whyItMatters": "Inside a topic the very first message is always messageForumTopicCreated. Our converter in TGClient.m has no case for it, so every topic opens with a blank or \"Message not supported\" bubble, and closing/reopening a topic leaves an unexplained empty row.",
+      "whereItGoes": "The service-message branch of the content converter in /Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGClient.m (around lines 735-805, next to messageChatChangeTitle). TGClient+Forums.m already has the two title strings at lines 36-37 and can be reused.",
+      "tdlib": ["messageForumTopicCreated (not handled)", "messageForumTopicEdited (not handled)", "messageForumTopicIsClosedToggled (not handled)", "messageForumTopicIsHiddenToggled (not handled)"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Enable Topics for a group",
+      "whatItIs": "ForumSettingsScreen in the modern app is a single switch on the group info page that converts a supergroup into a forum (upgrading a basic group first if needed) and back.",
+      "whyItMatters": "We can browse and manage the topics of a forum somebody else created, but the user can never turn their own group into one. The whole topic feature is unreachable for groups we own.",
+      "whereItGoes": "A switch row in the group section of /Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGProfileViewController.m, next to the existing \"Permissions\" row at line 986. The wrapper -setSupergroup:isForum:hasTabs: in TGClient+Forums.h is written and unused; pass hasTabs NO.",
+      "tdlib": ["toggleSupergroupIsForum - wrapped as -setSupergroup:isForum:hasTabs: in TGClient+Forums, no caller"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "View chat as topics / as messages",
+      "whatItIs": "TDLib's view_as_topics flag decides whether tapping a forum opens the topic list or one flat message list; the modern client exposes it as a toggle and honours it on open.",
+      "whyItMatters": "We force the topic list whenever isForum is true (AppDelegate.m:304, TGChatListViewController.m:2486), so a forum can never be read as a single stream. On a small phone the flat view is often the faster way through a low-traffic forum, and the user's server-side preference is ignored.",
+      "whereItGoes": "Read view_as_topics in the chat dict and branch on it at the two open sites above; add the toggle as a row in TGProfileViewController.m. -setChat:viewAsTopics: in TGClient+Forums.h is already wrapped and has no caller.",
+      "tdlib": ["toggleChatViewAsTopics - wrapped as -setChat:viewAsTopics:, no caller", "updateChatViewAsTopics - not observed", "chat.view_as_topics - not surfaced in the chat dict"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Search topics by name",
+      "whatItIs": "The modern forum list has a search field that filters topics server-side by name.",
+      "whyItMatters": "A busy forum easily runs to dozens of topics; our list only pages 40 at a time with no way to jump to a known one. The 4S scroll through 200 rows is exactly the case search exists for.",
+      "whereItGoes": "A UISearchBar as tableHeaderView of /Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGTopicsViewController.m, feeding -searchForumTopicsInChat:query:completion: which is already wrapped in TGClient+Forums.h and has no caller.",
+      "tdlib": ["getForumTopics with query - wrapped as -searchForumTopicsInChat:query:completion:, no caller"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Locked composer in a closed topic",
+      "whatItIs": "When a topic is closed, the modern chat screen replaces the input bar with a \"Topic closed\" strip (admins get a Reopen button instead).",
+      "whyItMatters": "TGChatViewController has no topic awareness at all beyond threadId - no isClosed anywhere in the file. A user types a message into a closed topic, sends it and gets a raw server error with the text lost.",
+      "whereItGoes": "Pass isClosed (and isGeneral) from the topic dict when TGTopicsViewController.m:706 pushes the chat, and hide/replace the input bar in /Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGChatViewController.m. The reopen action already exists in the topic action sheet.",
+      "tdlib": ["forumTopicInfo.is_closed - already in the row dict, never passed to the chat screen", "toggleForumTopicIsClosed - wrapped and used from the topic list"],
+      "effort": "small"
+    },
+    {
+      "name": "Topic-scoped pinned banner and Unpin All",
+      "whatItIs": "Pinned messages in a forum are per topic: the banner at the top of a topic shows that topic's pins, and the overflow offers Unpin All for the topic only.",
+      "whyItMatters": "Our pinned banner calls -pinnedMessageForChat: (TGChatViewController.m:2351), so inside a topic it shows some unrelated topic's pinned message. That is actively misleading, and there is no way to clear a topic's pins.",
+      "whereItGoes": "Make the banner load in TGChatViewController.m topic-aware, and wire -unpinAllMessagesInForumTopicInChat:topic: (wrapped in TGClient+Forums.h, no caller) into the banner's action sheet.",
+      "tdlib": ["unpinAllForumTopicMessages - wrapped, no caller", "getChatPinnedMessage / searchChatMessages with topic filter - chat-scoped only today"],
+      "effort": "small"
+    },
+    {
+      "name": "Choosing the topic colour when creating a topic",
+      "whatItIs": "ForumCreateTopicScreen offers the six server-allowed icon colours as swatches alongside the name field and the emoji icon picker.",
+      "whyItMatters": "Our create flow derives the colour from a hash of the name (-iconColourForName: in TGTopicsViewController.m:1192), so the user cannot pick one and cannot change it later. Colour is the only thing distinguishing rows in our list, since we draw circles rather than emoji glyphs.",
+      "whereItGoes": "Replace the UIAlertView name prompt in TGTopicsViewController.m -newTopicPressed (line 1060) with a small compose screen: name field, a row of six swatches from -forumTopicIconColors, and the existing icon action sheet.",
+      "tdlib": ["createForumTopic with icon_color - wrapped, colour currently hashed rather than chosen", "forumTopicIconColors - wrapped"],
+      "effort": "small"
+    },
+    {
+      "name": "Create-topic gating on can_create_topics",
+      "whatItIs": "The modern client only shows the new-topic button when the user actually holds can_create_topics (or can_manage_topics), and non-creators cannot edit somebody else's topic.",
+      "whyItMatters": "Our plus button and the whole edit/close/delete action sheet are unconditional, so ordinary members in a locked-down forum tap through a full form and only then get a bare CHAT_ADMIN_REQUIRED error.",
+      "whereItGoes": "Gate -newTopicPressed and the entries in -topicHeld: in TGTopicsViewController.m on the chat permission dict. Both flags are already read: \"createTopics\" in TGClient+ChatManagement.m and \"can_manage_topics\" in the admin-rights key list in TGClient+Groups.m:41.",
+      "tdlib": ["chatPermissions.can_create_topics - already parsed", "chatAdministratorRights.can_manage_topics - already parsed"],
+      "effort": "small"
+    },
+    {
+      "name": "Per-topic drafts",
+      "whatItIs": "Each topic keeps its own draft; the modern topic row shows a red \"Draft:\" preview and the composer refills when the topic is reopened.",
+      "whyItMatters": "Half-written replies in a forum are lost when you back out to the topic list, and nothing on the list reminds you a reply was in progress. Drafts are one of the few things a 2013 client is expected to get right.",
+      "whereItGoes": "Surface forumTopic.draft_message in the row dict built by TGClient+Forums.m and render it in the cell in TGTopicsViewController.m; TGChatViewController already passes thread through to -clearDraftInChat:thread: so the send path is mostly there.",
+      "tdlib": ["forumTopic.draft_message - not surfaced in the row dict", "setChatDraftMessage with message_thread_id - partly plumbed"],
+      "effort": "small"
+    },
+    {
+      "name": "Real custom-emoji icons on topic rows",
+      "whatItIs": "Every topic carries a custom emoji icon, shown as the glyph on the row and in the picker; only topics with no emoji fall back to the coloured circle.",
+      "whyItMatters": "We already let the user pick an icon from getForumTopicDefaultIcons (TGTopicsViewController.m:389) but the list always draws a coloured circle with a letter, so the icon the user chose is invisible everywhere. Topics look identical to each other and to what they looked like before the picker existed.",
+      "whereItGoes": "Resolve iconEmojiId to a sticker thumbnail, download it through the existing file plumbing and cache it per row alongside TGTopicFlushAvatarCache in TGTopicsViewController.m. Static WEBP thumbs are fine on a 4S; animated TGS icons must be drawn as a single still frame.",
+      "tdlib": ["getForumTopicDefaultIcons - wrapped and used for the picker only", "getCustomEmojiStickers - needed to resolve arbitrary iconEmojiId", "downloadFile - already wrapped"],
+      "effort": "substantial"
+    },
+    {
+      "name": "Opening an incoming t.me topic link",
+      "whatItIs": "Tapping a t.me/c/<chat>/<topic>/<message> link jumps straight into that topic at that message.",
+      "whyItMatters": "We can copy a topic link out (-forumTopicLinkInChat: is wired into the action sheet) but cannot follow one in, so links shared inside the forum itself are dead. It is an asymmetry the user notices immediately.",
+      "whereItGoes": "Needs the general internal-link router we still lack, plus a topic branch that pushes TGChatViewController with the right threadId. Link taps are handled ad hoc in TGChatViewController.m today.",
+      "tdlib": ["getMessageLinkInfo - not wrapped", "internalLinkTypeMessage / messageTopicForum - not handled"],
+      "effort": "substantial"
+    },
+    {
+      "name": "Forum tab strip above the transcript",
+      "whatItIs": "Recent clients pin a horizontally paging strip of topic tabs above the message list (has_forum_tabs / displayForumAsTabs), each tab a live chat history you swipe between.",
+      "whyItMatters": "It is the modern default way to move between topics, so its absence is visible to anyone coming from the current app - but the plain topic list covers the same need.",
+      "whereItGoes": "Nowhere; keep TGTopicsViewController as the only forum navigation and pass hasTabs NO to toggleSupergroupIsForum.",
+      "tdlib": ["toggleSupergroupIsForum has_forum_tabs - wrapped, deliberately always NO"],
+      "effort": "blocked"
+    }
+  ]
+}

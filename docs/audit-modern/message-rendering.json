@@ -1,0 +1,98 @@
+{
+ "cluster": "message-rendering",
+ "gaps": [
+  {
+   "name": "Quiz polls and multiple-answer polls",
+   "whatItIs": "ChatMessagePollBubbleContentNode renders four poll modes, not one: a quiz shows a green tick on the correct option and a red cross on the one you picked wrongly, a lamp button that pops the explanation text, and a countdown ring for a close_date; a multiple-answer poll shows square checkboxes and a 'Vote' button that submits several options at once; a regular poll shows 'Anonymous Poll' / 'Public Poll' in the subtitle plus 'Retract Vote' / 'View Results'.",
+   "whyItMatters": "Our bubble treats every poll as a single-choice public poll. Voting in a quiz gives no right/wrong feedback and the explanation the author wrote is never shown; a multi-answer poll is silently reduced to one pick, so the user submits a wrong ballot and cannot undo it.",
+   "whereItGoes": "The poll branch of -tableView:cellForRowAtIndexPath: in src/TGChatViewController.m (around the kPollRow layout, line ~4482) plus the messagePoll flatten in src/TGClient.m (~line 805) which currently drops poll.type, correct_option_id, is_closed, is_anonymous and close_date.",
+   "tdlib": [
+    "poll / pollTypeRegular / pollTypeQuiz (fields not surfaced by our flatten)",
+    "setPollAnswer - wrapped as -votePoll:inChat:options: and already takes an array, so multi-answer needs no new call",
+    "stopPoll - wrapped",
+    "getPollVoters - wrapped as -votersForPollOption:"
+   ],
+   "effort": "small"
+  },
+  {
+   "name": "Interactive checklist (to-do) messages",
+   "whatItIs": "ChatMessageTodoBubbleContentNode draws a checklist message as tappable rows: tap a task to tick or untick it, completed rows get a strikethrough and a 'done by X' avatar, the author can append tasks from an 'Add a task' row, and the header counts 'N/M done'.",
+   "whyItMatters": "We flatten messageChecklist into a block of ☐/☑ text, so a shared shopping list or task list is read-only. Checklists are a mainstream 2025 feature in DMs and small groups, and a list you cannot tick is worse than no list.",
+   "whereItGoes": "A new content branch in src/TGChatViewController.m next to the poll branch (the tap-target-per-row pattern already exists there), fed by the messageChecklist flatten in src/TGClient.m (~line 851); the API calls belong in src/TGClient+MessageContent.m.",
+   "tdlib": [
+    "markChecklistTasksAsDone - NOT wrapped",
+    "addChecklistTasks - NOT wrapped",
+    "editMessageChecklist - NOT wrapped",
+    "messageChecklist / checklistTask (flattened to text only today)"
+   ],
+   "effort": "small"
+  },
+  {
+   "name": "Media thumbnail in the reply header",
+   "whatItIs": "ChatMessageReplyInfoNode puts a small rounded thumbnail of the replied-to media at the left of the reply bar, and swaps the text for a typed label ('Photo', 'Voice message', 'Sticker' + its emoji, 'Location') when the original has no text.",
+   "whyItMatters": "Our reply bar is one line of text with no thumbnail, so replying to a photo shows the caption or nothing at all. In a busy group the reply bar becomes ambiguous exactly when it is needed most.",
+   "whereItGoes": "The quote/reply layout in src/TGChatViewController.m (cell.quote / quoteAuthor, ~line 4860) and the reply extraction in src/TGClient.m (~line 900) which already fetches the original message. Telegraph has the whole family ported already: TGReplyHeaderImageModel, TGReplyHeaderPhotoModel, TGReplyHeaderAudioModel, TGReplyHeaderLocationModel, TGReplyHeaderStickerModel in /Users/alexanderhavrysh/Git/iOS/twelve/Telegraph/, so this is close to a copy.",
+   "tdlib": [
+    "messageReplyToMessage.content thumbnail (already in the payload we parse)",
+    "getMessage / downloadFile - both wrapped"
+   ],
+   "effort": "small"
+  },
+  {
+   "name": "Sensitive-content gate on media",
+   "whatItIs": "ChatMessageRestrictedBubbleContentNode replaces a bubble whose message carries a platform restriction with the restriction text, and elsewhere age-restricted media is drawn blurred behind a '18+ / Show anyway' overlay honouring the account's ignore-sensitive-content setting.",
+   "whyItMatters": "We render restricted media as ordinary media with no warning and no way to keep it hidden. Beyond the obvious surprise in a public channel, the account-level 'show sensitive content' preference is simply not honoured by this client.",
+   "whereItGoes": "The media branch of src/TGChatViewController.m (the pic.height > 0 block, ~line 4893) reusing the existing spoiler-style overlay path, with the account toggle as a row in TGPrivacyViewController.m or TGSettingsViewController.m.",
+   "tdlib": [
+    "message.restriction_reason / has_sensitive_content (not read today)",
+    "getOption/setOption 'ignore_sensitive_content_restrictions' - setOptionNamed: is wrapped in TGClient+Network.h, the getter is not",
+    "canIgnoreSensitiveContentRestrictions - NOT wrapped"
+   ],
+   "effort": "small"
+  },
+  {
+   "name": "Fact-check block under a message",
+   "whatItIs": "ChatMessageFactCheckBubbleContentNode appends an inset, coloured block under the bubble reading 'Fact Check' with the country flag and the reviewer's text, collapsible when long.",
+   "whyItMatters": "Fact checks appear on high-reach channel posts, exactly the messages a user is most likely to be misled by. We drop the field entirely, so a post that other clients show as disputed looks clean here.",
+   "whereItGoes": "A block appended to the text branch in src/TGChatViewController.m after the body label, fed by reading message.fact_check in the flatten in src/TGClient.m (~line 900, alongside the edited/reply extraction). No network call at all - the text arrives with the message.",
+   "tdlib": [
+    "message.fact_check (factCheck: text + country_code) - present in the payload, never read"
+   ],
+   "effort": "drop-in"
+  },
+  {
+   "name": "Gift and giveaway-prize bubbles in chat",
+   "whatItIs": "ChatMessageGiftBubbleContentNode renders messageGift / messageGiftedPremium / messageGiftedStars / messagePremiumGiftCode as a centred card: a sticker, the title, the months or star count, the sender's note and an action button ('View Gift', 'Use Gift Link').",
+   "whyItMatters": "A gift arriving in a DM is currently a one-line grey service sentence from the generic fallback phrase generator, with no way to redeem the code from the message. The catalogue covers gifts on the profile and in the Stars screens but not the chat bubble that announces them.",
+   "whereItGoes": "A new card branch in src/TGChatViewController.m modelled on the existing call bubble, with the redeem action routed to the already-wrapped code in TGClient+Premium.m.",
+   "tdlib": [
+    "messageGift / messageGiftedPremium / messageGiftedStars / messagePremiumGiftCode - all fall through to TGPhraseFromTypeName today",
+    "checkPremiumGiftCode / applyPremiumGiftCode - wrapped in TGClient+Premium.h",
+    "getReceivedGifts - wrapped"
+   ],
+   "effort": "small"
+  },
+  {
+   "name": "Suggested profile photo message with accept / decline",
+   "whatItIs": "ChatMessageProfilePhotoSuggestionContentNode shows a messageSuggestProfilePhoto as a card with the proposed photo, 'X suggests you use this photo for your profile' and a 'Set Profile Photo' button; the same node family handles the wallpaper suggestion bubble.",
+   "whyItMatters": "The suggestion is actionable only from the bubble - there is no other screen in any client where you can accept it. For us it degrades to a service line, so the photo a contact suggested can never be applied.",
+   "whereItGoes": "A card branch in src/TGChatViewController.m, accepting through -setProfilePhotoAtPath: in TGClient+Account.h after downloading the suggested photo with the wrapped downloadFile path.",
+   "tdlib": [
+    "messageSuggestProfilePhoto - not handled",
+    "setProfilePhoto - wrapped as -setProfilePhotoAtPath:completion:",
+    "downloadFile - wrapped"
+   ],
+   "effort": "small"
+  },
+  {
+   "name": "Large-emoji text messages",
+   "whatItIs": "ChatMessageItemImpl renders a text message that is nothing but one to three emoji at a much larger point size with no bubble behind it, the same treatment a sticker gets.",
+   "whyItMatters": "We already do this for messageAnimatedEmoji (the single-emoji case TDLib upgrades for us), but a two- or three-emoji reply stays a tiny grey bubble, which reads as a different message than what the sender saw when they sent it.",
+   "whereItGoes": "The isSticker test in src/TGChatViewController.m (~line 4425) already branches to the bubble-less layout; this is an extra condition on it plus a font size, using the emoji-only check.",
+   "tdlib": [
+    "none - purely a local layout decision on messageText"
+   ],
+   "effort": "drop-in"
+  }
+ ]
+}

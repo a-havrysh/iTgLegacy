@@ -1,0 +1,119 @@
+{
+  "cluster": "bots",
+  "gaps": [
+    {
+      "name": "Inline keyboard under message bubbles",
+      "whatItIs": "Modern clients draw the message's inline keyboard as rows of full-width buttons attached under the bubble, and route a tap to getCallbackQueryAnswer (toast/alert/url), openMessageContent for url buttons, getLoginUrlInfo for login buttons, or a switch-inline hand-off.",
+      "whyItMatters": "Almost every bot in Telegram is driven by inline buttons. Without rendering them, bot messages arrive as text that references buttons the user can never press, which makes bots functionally unusable rather than merely degraded.",
+      "whereItGoes": "ChatViewCell.m bubble layout plus a tap route in TGChatViewController.m; the whole API is already in TGClient+Bots.h (inlineKeyboardRowsForMessage:, pressCallbackButton:...) and TGClient+WebLinks.h (loginUrlInfoForButton:). Nothing in src/ imports TGClient+Bots.h today. Telegraph has the button geometry in TGModernConversationKeyboardView.h.",
+      "tdlib": [
+        "getCallbackQueryAnswer - wrapped as pressCallbackButton:inChat:message:completion:",
+        "getCallbackQueryAnswer with password - wrapped",
+        "getLoginUrlInfo / getLoginUrl - wrapped in TGClient+WebLinks.h"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Slash-command autocomplete panel",
+      "whatItIs": "Typing '/' in a chat that has bots pops a list of commands (command + description + bot avatar) above the input bar; picking one inserts it, and in groups it appends @botname when several bots share the command.",
+      "whyItMatters": "It is the only discoverable way to use a command bot. Users otherwise have to know the exact command string by heart.",
+      "whereItGoes": "A new overlay table above the input bar in TGChatViewController.m, fed by botCommandsForUser:matchingPrefix:completion:. Telegraph implements exactly this as TGModernConversationCommandsAssociatedPanel + TGCommandPanelCell, a cheap port.",
+      "tdlib": ["userFullInfo.bot_info.commands - wrapped as botCommandsForUser:matchingPrefix:completion:"],
+      "effort": "small"
+    },
+    {
+      "name": "Custom reply keyboard panel",
+      "whatItIs": "replyMarkupShowKeyboard replaces the system keyboard with a grid of bot-supplied buttons, honouring resize, one-time and persistent, plus a custom input placeholder; forceReply focuses the input bar with the bot's placeholder and a pre-set reply target.",
+      "whyItMatters": "Service and utility bots (delivery, banking, support) drive their entire flow from the reply keyboard. Without it those chats are dead ends: the bot asks the user to press a button that is not on screen.",
+      "whereItGoes": "New TGBotKeyboardView presented in the input accessory slot of TGChatViewController.m, with a keyboard-toggle button in the input bar. Telegraph has TGCommandKeyboardView.h/.m doing precisely this against the same button model.",
+      "tdlib": ["message.reply_markup - wrapped as replyKeyboardForMessage:", "sendMessage of the plain button text - wrapped"],
+      "effort": "substantial"
+    },
+    {
+      "name": "Reply-keyboard request buttons (share phone / location / users / chat)",
+      "whatItIs": "Keyboard buttons of kind requestPhoneNumber, requestLocation, requestUsers and requestChat ask a confirmation, then answer the bot with shareUsersWithBot / shareChatWithBot or a contact/location message.",
+      "whyItMatters": "This is how bots do login-by-phone and channel/group hand-off. A pressed request button that silently does nothing looks like a broken client.",
+      "whereItGoes": "Handled inside the reply-keyboard panel in TGChatViewController.m; confirmation via the existing TGActionSheet, and the user/chat pick via the existing TGForwardPicker and TGContactsViewController.",
+      "tdlib": ["shareUsersWithBot - wrapped as shareUsers:withBotButton:inChat:message:", "shareChatWithBot - wrapped as shareChat:withBotButton:inChat:message:"],
+      "effort": "small"
+    },
+    {
+      "name": "Inline query results (@bot query in the input bar)",
+      "whatItIs": "Typing '@botname query' opens a results panel above the input bar: a media grid for photo/gif/sticker results, a list for article results, paged with nextOffset, with a switch-to-PM header button when the bot asks for one. Selecting a result sends it as a via-bot message.",
+      "whyItMatters": "@gif, @pic, @vid and every search bot live here; it is also the only path to sending a GIF from Telegram's own inline provider. On a 2013-styled client @gif is a period-correct feature that users will look for.",
+      "whereItGoes": "New panel view in TGChatViewController.m plus a compact grid built on the existing TGStickerPanelView-style paging scroll (no UICollectionView on iOS 6). Telegraph has the full model layer as TGBotContextResults / TGInlineBotsInputPanel, portable with the layout swapped.",
+      "tdlib": [
+        "getInlineQueryResults - wrapped as inlineQueryToBot:inChat:query:offset:completion:",
+        "sendInlineQueryResultMessage - wrapped as sendInlineResult:queryId:toChat:replyTo:hideVia:"
+      ],
+      "effort": "substantial"
+    },
+    {
+      "name": "Recent inline bots '@' suggestion list",
+      "whatItIs": "A bare '@' in an empty input bar lists the inline bots the user recently used, so the next query starts with one tap.",
+      "whyItMatters": "Without it inline mode is only reachable by typing a username from memory, which few users do.",
+      "whereItGoes": "Same overlay table as the slash-command panel in TGChatViewController.m, different data source.",
+      "tdlib": ["getRecentInlineBots - wrapped as recentInlineBotsWithCompletion:"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "START button in an empty bot chat and bot deep links",
+      "whatItIs": "An empty bot conversation replaces the input bar with a full-width START button that sends /start with the deep-link payload; t.me/bot?start=xyz links open the chat and start it.",
+      "whyItMatters": "It is the entry point to every bot. Today a fresh bot chat gives the user a text field and no indication that /start is required, and shared bot links do nothing.",
+      "whereItGoes": "Input-bar swap in TGChatViewController.m, link handling in the existing deep-link route (TGClient+WebLinks consumers) in AppDelegate.m / RootViewController.m.",
+      "tdlib": [
+        "sendBotStartMessage - wrapped as startBot:inChat:parameter:",
+        "getInternalLinkType botStart - wrapped as botStartLinkInfo: / openBotStartLink:"
+      ],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Bot profile: description, about and command list",
+      "whatItIs": "A bot's profile shows its description and short description instead of bio/last-seen, lists its commands, and offers Share, Add to Group and Settings actions; the chat header shows the bot description before the first message.",
+      "whyItMatters": "Users decide whether to trust and how to use a bot from this screen. Right now a bot renders as an ordinary user with an empty profile.",
+      "whereItGoes": "TGProfileViewController.m section builder, plus an intro block at the top of an empty bot chat in TGChatViewController.m. Telegraph has TGBotUserInfoController and TGBotConversationHeaderView for both.",
+      "tdlib": ["userFullInfo.bot_info - wrapped as botInfoForUser:completion:"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "'via @bot' attribution and bot service messages",
+      "whatItIs": "Messages sent through an inline bot carry a 'via @botname' suffix in the header; bot service events (write access allowed, users shared, chat shared, web app data sent) render as grey service lines.",
+      "whyItMatters": "Without the attribution a forwarded inline result looks like the sender made it; without the service text those events render as blank or 'unsupported' rows in the middle of a bot conversation.",
+      "whereItGoes": "ChatViewCell.m header line and the service-message branch in TGChatViewController.m. Both helpers already exist and are simply never called: viaBotForMessage:completion: and botServiceTextForMessage:.",
+      "tdlib": ["message.via_bot_user_id - wrapped", "messageBotWriteAccessAllowed / messageUsersShared / messageChatShared / messageWebAppDataSent - wrapped"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Bot write-access consent sheet",
+      "whatItIs": "Before a bot may message the user outside a started chat, the client asks for consent and calls allowBotToSendMessages.",
+      "whyItMatters": "Several link and login flows stall silently at this prompt; it is also the only user-visible control over unsolicited bot messages.",
+      "whereItGoes": "A TGActionSheet raised from the bot-start / link-open path in TGChatViewController.m.",
+      "tdlib": ["canBotSendMessages - wrapped", "allowBotToSendMessages - wrapped"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Bot menu button (command-menu mode)",
+      "whatItIs": "A labelled button to the left of the input bar. When the bot set no web-app URL it opens the command list; when it set a URL modern clients launch the mini app.",
+      "whyItMatters": "For command bots this is the visible affordance for the command list, and it costs one call. The web-app variant is not reachable here, so the button should simply fall back to the command menu.",
+      "whereItGoes": "Input bar in TGChatViewController.m, sharing the command panel from the autocomplete gap; menuButtonForBot:completion: already returns text+url.",
+      "tdlib": ["getMenuButton - wrapped as menuButtonForBot:completion:"],
+      "effort": "small"
+    },
+    {
+      "name": "Similar bots section on a bot profile",
+      "whatItIs": "A 'Similar bots' row set on a bot's profile listing related bots with a total count.",
+      "whyItMatters": "Minor but free discovery; it is the only in-app way to find alternatives to a bot.",
+      "whereItGoes": "One extra section in TGProfileViewController.m using similarBotsFor:completion:, rendered like the existing common-groups rows.",
+      "tdlib": ["getBotSimilarBots - wrapped as similarBotsFor:completion:"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Mini apps / web apps and attachment-menu bots",
+      "whatItIs": "openWebApp returns an https URL rendered in an in-app browser with the telegram-web-app.js bridge, backButton/mainButton chrome, theme params and sendWebAppData round-trips; attachment-menu bots are the same thing behind icons in the attach sheet.",
+      "whyItMatters": "A large slice of modern bot functionality lives here, but it is genuinely unreachable and the existing 'blocked' bucket is correct.",
+      "whereItGoes": "Nowhere. Confirmed blocked: no WKWebView on iOS 6.1.3, and UIWebView's 2013 JavaScriptCore cannot run today's mini-app bundles (ES6+, modern DOM APIs) nor host the JS bridge; the attachment-bot icons would be dead buttons. Web-app inline keyboard buttons should degrade to opening the URL in Safari rather than doing nothing.",
+      "tdlib": ["openWebApp / closeWebApp / sendWebAppData - not wrapped, deliberately", "getAttachmentMenuBot - not wrapped"],
+      "effort": "blocked"
+    }
+  ]
+}

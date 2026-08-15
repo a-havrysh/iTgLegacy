@@ -218,6 +218,9 @@ APP_SRC_M := \
 	src/TGCallMessages.m \
 	src/TGCallReflector.m \
 	src/TGVoiceRecorder.m \
+	src/TGVideoRecorder.m \
+	src/TGVideoCaptureViewController.m \
+	src/TGMediaViewController.m \
 	src/opusenc/opusenc.m \
 	src/UIImage+WebP.m \
 	src/TGLottieView.m \

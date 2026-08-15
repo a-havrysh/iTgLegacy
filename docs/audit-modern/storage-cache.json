@@ -1,0 +1,61 @@
+{
+  "cluster": "storage-cache",
+  "gaps": [
+    {
+      "name": "Device free space in the storage header",
+      "whatItIs": "The modern Storage Usage screen shows how the Telegram cache compares to the device: a proportional bar of 'Telegram uses X' against 'Y free of Z', computed from deviceFreeSpace/totalDiskSpace (StorageUsageScreen.swift ~line 1592, StorageKeepSizeComponent.totalDiskSpace()).",
+      "whyItMatters": "On a 8/16 GB iPhone 4S the only reason a user opens this screen is 'my phone is full'. A bare 'Size on disk: 41.2 MB' answers nothing without the free-space figure next to it.",
+      "whereItGoes": "TGStorageViewController.m, the existing TGStorageSectionSummary section (add a 'Free on device' row and drive the header off it). No TDLib involved: NSFileManager attributesOfFileSystemForPath:NSFileSystemFreeSize.",
+      "tdlib": ["none - pure NSFileManager; getStorageStatisticsFast already wrapped as -storageOverviewWithCompletion:"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Cache size limits scaled to the actual disk",
+      "whatItIs": "Modern derives the keep-size choices from total disk space (StorageKeepSizeComponent) rather than fixed constants.",
+      "whyItMatters": "TGStorageViewController.m line 91 offers 5 GB / 16 GB / 32 GB / No limit. Every one of those is larger than the free space on a 4S, so the 'Maximum cache size' row is decorative - the limit can never trigger. Sensible values here are 128 MB / 256 MB / 512 MB / 1 GB / No limit.",
+      "whereItGoes": "TGStorageViewController.m, TGStorageSizeValues and its label formatter; the persisted policy plumbing (-setCachePolicyMaxBytes:...) already handles any value.",
+      "tdlib": ["optimizeStorage - already wrapped as -applyCachePolicyMaxBytes:ttlSeconds:excludedChatIds:completion:"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "The persisted cache policy is never enforced outside the storage screen",
+      "whatItIs": "Modern applies the keep-media TTL and size cap continuously in the background, not only when you visit the settings screen.",
+      "whyItMatters": "-applyPersistedCachePolicyWithCompletion: exists and is correct, but the only caller in the whole app is TGStorageViewController.m:747. A user who picks 'keep media 1 week' and never reopens the screen gets no trimming at all - the setting silently does nothing, which is worse than not offering it.",
+      "whereItGoes": "AppDelegate.m: call it once on applicationDidFinishLaunching (deferred a few seconds so it does not fight the login/chat-list load) and again on applicationDidEnterBackground; optionally on a low-free-space check.",
+      "tdlib": ["optimizeStorage - wrapped as -applyPersistedCachePolicyWithCompletion:"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "'Clear cache' entry point in a chat profile",
+      "whatItIs": "Modern lets you reach a single chat's cached media from that chat (per-peer storage view, StoragePeerListPanelComponent drilldown) and clear just it.",
+      "whyItMatters": "TGStorageViewController already supports a chatId mode (uses -storageUsageForChat:, line 932) and nothing pushes it - grep shows the only push is from TGSettingsViewController.m:1570. The single most useful cleanup action, 'this one group ate 60 MB, drop it', is unreachable unless the chat happens to appear in the global by-chat list.",
+      "whereItGoes": "TGProfileViewController.m (and the group/channel profile path): one 'Clear cache (N MB)' row pushing the existing chat-scoped TGStorageViewController.",
+      "tdlib": ["getStorageStatistics chat_limit - wrapped as -storageUsageForChat:completion:", "optimizeStorage chat_ids - wrapped as -clearCacheForChat:completion:"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Per-item selection when clearing a chat's cache",
+      "whatItIs": "Modern's storage screen breaks a chat's cache into Media / Files / Music panels with per-item checkboxes and a 'Clear selected (N MB)' bar (StorageMediaGridPanelComponent, StorageFileListPanelComponent, selectionState in StorageUsageScreen.swift).",
+      "whyItMatters": "Today the finest granularity we offer is 'all photos' or 'this whole chat'. With 40-60 MB of usable RAM the user is constantly one video away from trouble, and the natural move - delete the three 20 MB videos and keep the conversation's photos - is impossible. Everything gets re-downloaded instead.",
+      "whereItGoes": "TGStorageViewController.m chat-scoped mode: a plain UITableView of the largest cached files for that chat, size-sorted, with checkmark selection and a footer button. Deletion is per-file, no grid or thumbnails needed.",
+      "tdlib": ["deleteFile - wrapped as -deleteCachedFile:", "getStorageStatistics (per-chat, by file type) - wrapped", "searchChatMessages/getMessage to name the items - wrapped"],
+      "effort": "small"
+    },
+    {
+      "name": "Keep-media duration per chat type",
+      "whatItIs": "Modern stores a separate 'keep media for' value for private chats, groups, channels and stories (CacheStorageSettings / AccountSpecificCacheStorageSettings, see StorageUsageExceptionsScreen.swift categories privateChats/groups/channels/stories), plus per-peer overrides on top.",
+      "whyItMatters": "One global TTL forces a bad trade: keep a month of everything, or throw away your friends' photos to stop a busy channel filling the disk. Channels are where the bulk lands; private chats are what you want to keep. A three-value split fixes almost all of it on a device this small.",
+      "whereItGoes": "TGStorageViewController.m cache-limits section (three 'Keep media for' rows instead of one) plus TGClient+Storage's cachePolicy dictionary, which today holds one ttlSeconds. Enforcement is three optimizeStorage passes with chat_ids partitioned by chat type - the per-peer exclusion list already in -cachePolicy stays as-is.",
+      "tdlib": ["optimizeStorage with chat_ids - wrapped as -optimizeStorageToSize:ttlSeconds:immunityDelaySeconds:fileTypes:excludedChatIds:completion:", "getChats/chat type already available for partitioning"],
+      "effort": "small"
+    },
+    {
+      "name": "Per-chat autosave-to-gallery exceptions",
+      "whatItIs": "Modern's Save to Gallery settings have a per-chat exceptions list on top of the three global scopes (autoSaveItem exceptions in DataAndStorageSettingsController.swift).",
+      "whyItMatters": "Global autosave on a 4S is dangerous - one active group fills the camera roll and the disk. The only safe configuration is 'off everywhere except these two chats', and that is exactly the exceptions list. -autosaveExceptionsWithCompletion: and -setAutosavePhotos:videos:maxVideoBytes:forChat: are already wrapped and have zero callers in the app.",
+      "whereItGoes": "TGSettingsViewController.m, TGSettingsPageAutosave (an 'Exceptions' section per scope plus an add-chat picker; the folder screen's chat picker in TGFoldersViewController.m is the pattern to reuse).",
+      "tdlib": ["getAutosaveSettings / setAutosaveSettings chat exceptions - both already wrapped in TGClient+Storage"],
+      "effort": "small"
+    }
+  ]
+}

@@ -11,6 +11,19 @@ system had nothing — the long-press bubble menu, the blocking progress window,
 the selection checks. Do not add a custom sheet, a custom alert, a bottom sheet,
 a card, a toast or a HUD unless this document names one.
 
+**Correction, binding on every agent and superseding any other document in this
+repo:** it is false that iOS 6 cannot do gesture-driven interaction, and false
+that navigation therefore has to be buttons. iOS 6 has the whole
+`UIGestureRecognizer` family and the original 1.1 app used it heavily. See §10.
+It is equally false that the A5 cannot encode video: the iPhone 4S records
+1080p H.264 at 30 fps in hardware, `AVCaptureSession` /
+`AVCaptureMovieFileOutput` / `AVAssetWriter` all exist on iOS 6, and the
+original ships `Telegraph/Telegraph/TGCameraController.m`. Recording and sending
+video works, and round video notes — short H.264 clips — work. What does not
+work is HEVC/H.265, VP9 and AV1, and heavy transcoding of long files is slow
+rather than impossible. Never write a design rule, a control, or a line of user
+visible copy premised on either of these two false claims.
+
 ---
 
 ## 1. Presenting a choice — `UIActionSheet`
@@ -296,6 +309,118 @@ rotate. Expanded child rows are ordinary rows of the same section, inset a
 further 12pt on the left. If more than about five rows would appear, push a new
 controller instead of expanding.
 
+## 10. Gesture-driven interaction
+
+Gestures are available and are the correct answer wherever the original used
+one. The following all exist on iOS 6.1.3 and may be used without a guard:
+
+- `UIGestureRecognizer` and subclassing it — iOS 3.2.
+- `UITapGestureRecognizer`, `UISwipeGestureRecognizer`, `UIPanGestureRecognizer`,
+  `UIPinchGestureRecognizer`, `UILongPressGestureRecognizer`,
+  `UIRotationGestureRecognizer` — all iOS 3.2.
+- `UIScrollView` with `pagingEnabled` — iOS 2. `UIPageViewController` — iOS 5.
+- `UIScrollView` zooming via `viewForZoomingInScrollView:`, `minimumZoomScale`,
+  `maximumZoomScale` — iOS 2, no pinch recogniser needed.
+
+The **only** thing iOS 7 added is the convenience transition layer —
+`UIViewControllerAnimatedTransitioning`, `UIPercentDrivenInteractiveTransition`.
+That layer is sugar for wiring a gesture to a controller transition. Everything
+it produces can be written by hand: read the gesture, move a frame or a
+transform, and on end animate to the nearer resting place. In 2013 that is
+exactly what was done.
+
+**The original proves it.** Fifteen-plus files in `telegram_iphone.src` attach or
+subclass gesture recognisers — among them
+`TelegraphKit/TelegraphKit/TGConversationController.mm`,
+`TGConversationMessageItemView.mm`, `TGDialogListCell.m`, `TGActionTableView.m`,
+`TGImageViewController.mm`, `TGImageViewPage.m`, `TGMapViewController.m`,
+`TGNavigationBar.m`, `TGImagePickerCell.mm`, `TGSwitchView.m`,
+`TGRemoteImageView.m`, `TGImageSearchController.mm`,
+`Telegraph/Telegraph/TGProfileController.m`, `TGPhotoGridCell.m`,
+`TGMediaListView.m`, `TGTokenFieldView.m`, `TGNotificationWindow.m`,
+`TGCameraController.m`. Three custom recognisers ship in TelegraphKit:
+`TGSwipeGestureRecognizer` (a `UIGestureRecognizer` subclass),
+`TGImagePanGestureRecognizer` (a `UIPanGestureRecognizer` subclass) and
+`TGDoubleTapGestureRecognizer`. **Our repo already contains the ported
+`TGSwipeGestureRecognizer`** (`src/TGSwipeGestureRecognizer.h`) with
+`direction`, `directionLockThreshold`, `horizontalThreshold`,
+`verticalThreshold`, `velocityThreshold`, `velocityFailDistance` and
+`failGesture`.
+
+**a. Swiping between items is a paging `UIScrollView`.** The authority is
+`TelegraphKit/TelegraphKit/TGImagePagingScrollView.mm`, declared
+`@interface TGImagePagingScrollView : UIScrollView` and setting
+`self.pagingEnabled = true` in its initialiser. It holds page views
+(`TGImageViewPage`), recycles them, and reports position back through
+`TGImagePagingScrollViewDelegate` — `scrollViewCurrentPageChanged:imageItem:`,
+`pageWillBeginDragging:`, `pageDidScroll:`, `pageDidEndDragging:`. Copy that
+structure for any swipe-between-items surface (photos, wallpapers, media
+previews). Rules: a **page gap** drawn by making each page narrower than the
+scroll view by `pageGap` and inset by `pageGap / 2`; `directionalLockEnabled =
+true` on the container; only the visible page and its two neighbours may exist,
+the rest recycled — a 512 MB device cannot hold more. Do not reach for
+`UIPageViewController` when a paging scroll view will do; the original did not.
+
+**b. Drag-to-dismiss is a pan gesture plus a transform.** Verbatim from
+`TGImageViewController.mm:180` and `:772` (`scrollViewPanned:`), and this is the
+shape to reproduce:
+
+- A `TGImagePanGestureRecognizer` (a `UIPanGestureRecognizer` subclass) is added
+  to the *container* of the paging scroll view, `maximumNumberOfTouches = 1`,
+  `cancelsTouchesInView = true`, with the controller as `delegate` so it can
+  coexist with the scroll view's own pan.
+- On `UIGestureRecognizerStateBegan`: dismissal is armed only if the current page
+  is **not zoomed**; a zoomed page pans its own content instead.
+- On `Changed`: ignore the first **14pt** of travel, then offset the content by
+  `translation.y` minus that 14pt dead zone, fade the black backdrop to
+  `MAX(0.4, 1 - MIN(1, |translation.y| / 400))`, fade the status bar in over the
+  first 200pt, and hide the top and bottom chrome with a 0.3 s `setActive:false`.
+- On `Ended`: dismiss when `|translation.y| > 80` **or**
+  `|velocity| > 800`; otherwise animate back to the resting frame. Carry the
+  release velocity into the dismissal animation rather than starting from zero.
+
+Use a frame offset or a `CGAffineTransform` translation — not a constraint, and
+not an interactive-transition object.
+
+**c. Which gesture for which act.** Long-press on a message opens `TGMenuView` /
+`TGPopupMenu` (§8) — that is a gesture, and it is the only correct message
+menu. Horizontal swipe on a list row opens the cell's own action button (§9)
+through `TGSwipeGestureRecognizer` and `TGActionTableView`. Double-tap zooms an
+image. Pinch zooms through the scroll view's zoom scale. Vertical pan on a
+full-screen media view dismisses it (b). Anything else needs a precedent in the
+original before it is added.
+
+**d. What is still refused.** Not because gestures are impossible, but because
+2013 Telegram did not do them: an interactive swipe-back on the navigation stack
+(the original uses the back button; iOS 7's
+`interactivePopGestureRecognizer` does not exist and a hand-rolled one changes
+the app's feel), swipe-to-reply on a bubble, a swipeable bottom sheet, a card
+stack, and rubber-band spring animations. Gesture work stays inside a screen; it
+does not drive controller transitions.
+
+## 11. Tone — the interface never apologises for the operating system
+
+Absolute, and it applies to every string in the app.
+
+- **No banner, label, alert, placeholder, footer, empty state or button title may
+  say that iOS 6 cannot do something**, that a feature is unavailable on this
+  device, that a device is old or unsupported, or that a thing "requires a newer
+  version". Do not mention an operating system version on screen at all. The
+  whole app is an iOS 6 app; saying so inside it is noise.
+- If something is not supported, there are exactly two allowed outcomes:
+  **do not show the control**, or **show the reduced thing working, silently.**
+  A missing sticker animation shows the still frame. An unplayable codec shows the
+  file row with its download action, not a complaint.
+- Never write copy in the shape "Video notes are not supported on this device" —
+  besides being apologetic it is also false (see the correction at the top of
+  this chapter).
+- Errors still follow §7: a localized sentence about *this act*, never about the
+  platform, never a raw code.
+- Where a limitation genuinely has to be explained, it is explained to a
+  developer — in the agent's report, in `docs/`, or in a commit message. Never on
+  screen. (And never as a source comment: source files in this repo carry no
+  comments.)
+
 ---
 
 ## How to render a modern concept in this idiom
@@ -337,6 +462,17 @@ Rulings. Follow them literally so independent agents converge.
   (`ImagePickerThumbnalSelect*.png` at 33pt in the top-right of the tile, inset
   4pt). Downscale every thumbnail to the tile's pixel size before display; a
   512 MB device cannot hold full-size images.
+- **Full-screen media viewer.** A paging `UIScrollView` in the shape of
+  `TGImagePagingScrollView` (§10a) with vertical drag-to-dismiss (§10b). Not a
+  modal form, not a page-curl, not a custom transition object.
+- **Video recording and round video notes.** Supported; build them. Capture with
+  `AVCaptureSession` + `AVCaptureMovieFileOutput` (or
+  `UIImagePickerController` for the simple path) as
+  `Telegraph/Telegraph/TGCameraController.m` does, H.264 only. A round note is a
+  short clip drawn in a circular-masked layer — the mask is presentation, the
+  file is an ordinary clip. Long-file transcoding is slow, so keep clips short
+  and never block the UI on it; if a codec cannot be played, the row still shows
+  with its normal action and says nothing about the device (§11).
 - **Message forwarding / share sheet.** Not a share sheet. Push or present
   `TGForwardPicker` (`src/TGForwardPicker.h`) — a list with idiom 3a checks and a
   Done `TGToolbarButton` — and confirm with the two-button
@@ -345,7 +481,9 @@ Rulings. Follow them literally so independent agents converge.
   only for undoable destruction. Anything else that wants to be a toast is an
   alert (§7) if it is an error, and is silent otherwise.
 - **Anything needing a bottom sheet, a card stack, a blur, or a spring
-  animation.** Refused. Use §1 or §4.
+  animation.** Refused — because 2013 Telegram had none of these, not because
+  the system cannot do them. Use §1 or §4. Gesture-driven behaviour inside a
+  screen is not refused; see §10.
 
 ## Where the original has no answer
 
@@ -358,6 +496,10 @@ Rulings. Follow them literally so independent agents converge.
   2013 answer for success; do not invent one.
 - **No pull-to-refresh anywhere in the 1.1 source.** Lists refresh from the
   network layer only.
+- **No interactive controller transition anywhere in the 1.1 source.** Gestures
+  drive views inside a screen (§10); pushes and presents are plain animated
+  transitions. This is a taste decision recorded from the original, not a
+  platform limit.
 - `TGListMenuController` in the original is an empty scaffold — it declares
   `+tableView:cellForMenuItem:` and returns `nil`. It is not a usable pattern;
   build modal forms from §4 instead.

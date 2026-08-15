@@ -34,6 +34,20 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 	return [value isKindOfClass:NSString.class] ? value : @"";
 }
 
+static NSInteger TGMembersInteger(NSDictionary *m, NSString *key) {
+	id value = [m objectForKey:key];
+	if ([value isKindOfClass:NSNumber.class])
+		return [value integerValue];
+	if ([value isKindOfClass:NSString.class])
+		return [value integerValue];
+	return 0;
+}
+
+static int64_t TGMembersUserId(NSDictionary *m) {
+	id value = [m objectForKey:@"id"];
+	return [value isKindOfClass:NSNumber.class] ? [value longLongValue] : 0;
+}
+
 @interface TGMemberRightsViewController : UIViewController <UITableViewDataSource, UITableViewDelegate> {
 	int64_t _chatId;
 	int64_t _userId;
@@ -533,7 +547,9 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 		self.edgesForExtendedLayout = UIRectEdgeNone;
 
 	self.title = @"Members";
-	self.mode = (self.initialMode >= 0 && self.initialMode < 4) ? self.initialMode : 0;
+	NSInteger modeCount = (NSInteger)[self modeTitles].count;
+	self.mode = (self.initialMode >= 0 && self.initialMode < modeCount)
+			? self.initialMode : 0;
 	self.members = [NSArray array];
 	self.photos = [NSMutableDictionary dictionary];
 	self.photosRequested = [NSMutableSet set];
@@ -824,11 +840,33 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 }
 
 - (void)updateTitle {
-	NSInteger count = [[self.groupInfo objectForKey:@"memberCount"] integerValue];
+	NSInteger count = TGMembersInteger(self.groupInfo, @"memberCount");
+	NSArray *titles = [self modeTitles];
+	if (self.mode < 0 || self.mode >= (NSInteger)titles.count)
+		self.mode = 0;
 	if (self.mode == 0 && count > 0)
-		self.title = [NSString stringWithFormat:@"%d members", (int)count];
+		self.title = count == 1 ? @"1 member"
+				: [NSString stringWithFormat:@"%d members", (int)count];
 	else
-		self.title = [[self modeTitles] objectAtIndex:(NSUInteger)self.mode];
+		self.title = [titles objectAtIndex:(NSUInteger)self.mode];
+}
+
+- (void)didReceiveMemoryWarning {
+	[super didReceiveMemoryWarning];
+	NSMutableSet *live = [NSMutableSet set];
+	for (NSDictionary *member in [self rows]){
+		if (![member isKindOfClass:NSDictionary.class])
+			continue;
+		int64_t userId = TGMembersUserId(member);
+		if (userId != 0)
+			[live addObject:[NSNumber numberWithLongLong:userId]];
+	}
+	for (NSNumber *key in [self.photos allKeys]){
+		if (![live containsObject:key]){
+			[self.photos removeObjectForKey:key];
+			[self.photosRequested removeObject:key];
+		}
+	}
 }
 
 - (void)reload {
@@ -948,6 +986,16 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 						   lineBreakMode:NSLineBreakByWordWrapping];
 	self.emptyHelpLabel.frame = CGRectMake((CGFloat)(int)((width - 260) / 2), 26,
 			260, helpSize.height);
+
+	CGFloat totalHeight = 26 + helpSize.height;
+	UIView *host = self.emptyPlaceholder.superview;
+	CGFloat hostHeight = host ? host.bounds.size.height : totalHeight;
+	CGRect frame = self.emptyPlaceholder.frame;
+	frame.size.height = totalHeight;
+	frame.origin.y = (CGFloat)(int)((hostHeight - totalHeight) / 2) - 40;
+	if (frame.origin.y < 0)
+		frame.origin.y = 0;
+	self.emptyPlaceholder.frame = frame;
 }
 
 - (void)updateStatusView {
@@ -1004,7 +1052,9 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 - (void)fetchPhotosForRows {
 	__weak typeof(self) weakSelf = self;
 	for (NSDictionary *member in [self rows]){
-		int64_t userId = [[member objectForKey:@"id"] longLongValue];
+		if (![member isKindOfClass:NSDictionary.class])
+			continue;
+		int64_t userId = TGMembersUserId(member);
 		if (userId == 0)
 			continue;
 		NSNumber *key = [NSNumber numberWithLongLong:userId];
@@ -1059,7 +1109,7 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 	if ([status isEqualToString:@"administrator"])
 		return @"admin";
 	if ([status isEqualToString:@"banned"]){
-		NSInteger until = [[member objectForKey:@"untilDate"] integerValue];
+		NSInteger until = TGMembersInteger(member, @"untilDate");
 		if (until > 0)
 			return [NSString stringWithFormat:@"banned until %@",
 					[NSDateFormatter localizedStringFromDate:
@@ -1069,7 +1119,7 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 		return @"removed";
 	}
 	if ([status isEqualToString:@"restricted"]){
-		NSInteger until = [[member objectForKey:@"untilDate"] integerValue];
+		NSInteger until = TGMembersInteger(member, @"untilDate");
 		if (until > 0)
 			return [NSString stringWithFormat:@"restricted until %@",
 					[NSDateFormatter localizedStringFromDate:
@@ -1163,7 +1213,7 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 	[cell setName:name];
 	cell.subtitleLabel.text = [self statusTextForMember:member];
 
-	int64_t userId = [[member objectForKey:@"id"] longLongValue];
+	int64_t userId = TGMembersUserId(member);
 	NSNumber *key = [NSNumber numberWithLongLong:userId];
 	UIImage *photo = [self.photos objectForKey:key];
 	if (!photo)
@@ -1184,7 +1234,7 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 	NSDictionary *member = [self memberAtIndexPath:indexPath];
 	if (!member)
 		return;
-	int64_t userId = [[member objectForKey:@"id"] longLongValue];
+	int64_t userId = TGMembersUserId(member);
 	if (userId == 0)
 		return;
 	NSString *name = TGMembersString(member, @"name");
@@ -1276,7 +1326,7 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 	NSString *status = TGMembersString(member, @"status");
 	BOOL canEdit = [[member objectForKey:@"canBeEdited"] boolValue];
 	BOOL isOwner = [[member objectForKey:@"isOwner"] boolValue];
-	int64_t userId = [[member objectForKey:@"id"] longLongValue];
+	int64_t userId = TGMembersUserId(member);
 
 	if (isOwner || [status isEqualToString:@"creator"])
 		return [NSArray array];
@@ -1339,10 +1389,12 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 }
 
 - (void)performAction:(NSString *)action onMember:(NSDictionary *)member {
-	int64_t userId = [[member objectForKey:@"id"] longLongValue];
+	int64_t userId = TGMembersUserId(member);
+	int64_t chatId = self.chatId;
 	NSString *name = TGMembersString(member, @"name");
 	if (!name.length)
 		name = @"this user";
+	__weak typeof(self) weakSelf = self;
 
 	if ([action isEqualToString:@"promote"] || [action isEqualToString:@"editRights"]){
 		[self openRightsEditorForUser:userId name:name restricting:NO];
@@ -1355,7 +1407,7 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 	if ([action isEqualToString:@"dismiss"]){
 		[self confirm:[NSString stringWithFormat:@"Dismiss %@ as administrator?", name]
 				   ok:@"Dismiss" destructive:NO run:^{
-			[self runDismiss:userId];
+			[weakSelf runDismiss:userId];
 		}];
 		return;
 	}
@@ -1374,21 +1426,21 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 	if ([action isEqualToString:@"ban"]){
 		[self confirm:[NSString stringWithFormat:@"Ban %@ from this group?", name]
 				   ok:@"Ban" destructive:YES run:^{
-			[self runBan:userId];
+			[weakSelf runBan:userId];
 		}];
 		return;
 	}
 	if ([action isEqualToString:@"deleteMessages"]){
 		[self confirm:[NSString stringWithFormat:@"Delete every message %@ has sent here?", name]
 				   ok:@"Delete" destructive:YES run:^{
-			[[TGClient shared] deleteAllMessagesFromUser:userId inGroup:self.chatId];
+			[[TGClient shared] deleteAllMessagesFromUser:userId inGroup:chatId];
 		}];
 		return;
 	}
 
 	[self confirm:[NSString stringWithFormat:@"Remove %@ from this group?", name]
 			   ok:@"Remove" destructive:YES run:^{
-		[self runRemove:userId];
+		[weakSelf runRemove:userId];
 	}];
 }
 
@@ -1425,7 +1477,7 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 		NSDictionary *member = [rows objectAtIndex:i];
 		if (![member isKindOfClass:NSDictionary.class])
 			continue;
-		if ([[member objectForKey:@"id"] longLongValue] == userId)
+		if (TGMembersUserId(member) == userId)
 			return (NSInteger)i;
 	}
 	return -1;

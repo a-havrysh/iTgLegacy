@@ -1,0 +1,101 @@
+{
+  "cluster": "themes-wallpapers",
+  "gaps": [
+    {
+      "name": "Per-chat wallpaper",
+      "whatItIs": "Modern Telegram lets each chat carry its own background, set from Chat Info > Change Wallpaper (TelegramEngine.themes.setChatWallpaper, forBoth flag). In a 1:1 chat it can be applied for both sides; the other party sees a service message with an Apply button and can accept or keep their own.",
+      "whyItMatters": "A user who sets a wallpaper on the official client and then opens our client sees the global wallpaper instead, silently losing per-chat state; and they cannot honour a wallpaper another person set for the conversation.",
+      "whereItGoes": "New wrapper in src/TGClient+AppSettings.h (the file already owns backgrounds and per-chat theme), a 'Chat wallpaper' row in TGProfileViewController's chat-info section, and background selection in TGChatViewController reading the per-chat value before the global one. Catalogue already lists this as bucket 'design'.",
+      "tdlib": [
+        "setChatBackground chat_id background type dark_theme_dimming only_for_self - NOT wrapped",
+        "deleteChatBackground chat_id restore_previous - NOT wrapped",
+        "chat.background (chatBackground field on chat) - not read anywhere in src",
+        "messageChatSetBackground - not handled in TGClient+MessageContent.m, so the service message renders as nothing"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Automatic night mode",
+      "whatItIs": "ThemeAutoNightSettingsController offers four triggers: system, disabled, time-based (manual from/to, or sunset/sunrise computed from location) and screen-brightness threshold, plus a picker for which theme night mode switches to.",
+      "whyItMatters": "TGTheme.style is a manual three-way switch, so on a 4S the user has to walk into Settings twice a day to avoid a white screen in bed. Time-based switching is the single most-used appearance setting in the modern client and costs nothing at runtime.",
+      "whereItGoes": "src/TGTheme.h/.m as a trigger property plus an NSTimer scheduled at the next boundary, and a new 'Auto-Night Mode' sub-screen off the existing appearance section of TGSettingsViewController.m. Purely local, no TDLib.",
+      "tdlib": ["none - local setting only"],
+      "effort": "small"
+    },
+    {
+      "name": "Pattern wallpapers (backgroundTypePattern)",
+      "whatItIs": "Telegram's default backgrounds are not photographs: they are a one-bit SVG/PNG pattern tinted at an intensity over a solid or gradient fill. Our applyBackground: in TGSettingsViewController.m only distinguishes 'fill' from 'photo' and refuses everything non-fill on low-memory devices via TGCapabilities canShowWallpaper.",
+      "whyItMatters": "Every stock Telegram wallpaper since 2019 is a pattern, so the wallpaper grid is effectively unusable on a 4S today - the user is left with flat colours. A tiled pattern mask at 320x480 costs a fraction of a photo, so the memory guard is being applied to the wrong case.",
+      "whereItGoes": "TGTheme's wallpaper drawing path plus the isFill branch of -applyBackground: in TGSettingsViewController.m; TGCapabilities.h canShowWallpaper needs a separate pattern verdict. Backgrounds already come back from installedBackgroundsForDarkTheme: with kind 'pattern'.",
+      "tdlib": [
+        "getInstalledBackgrounds / setDefaultBackground - already wrapped in TGClient+AppSettings",
+        "backgroundTypePattern fill intensity is_inverted is_moving - fields not surfaced by the existing wrapper's dictionary"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Multi-point freeform gradient backgrounds",
+      "whatItIs": "backgroundFillFreeformGradient carries three or four colours that the modern client blends into a soft mesh, animating it on send. The static blend is the look of current Telegram.",
+      "whyItMatters": "Catalogue marks this 'blocked', which is right for the animation but wrong for the still image: a 4-colour mesh rendered once into a 320x480 bitmap is a one-off cost and no per-frame work. Without it these backgrounds fall back to nothing.",
+      "whereItGoes": "Same fill-rendering code as the existing two-colour gradient in TGTheme; the picker row already exists in the wallpaper screen of TGSettingsViewController.m. Correct the catalogue entry 'Freeform multi-point gradient and animated pattern wallpapers' to split still from animated.",
+      "tdlib": ["backgroundFillFreeformGradient colors - reachable through the already-wrapped background list; no new method"],
+      "effort": "small"
+    },
+    {
+      "name": "Per-chat emoji theme picker",
+      "whatItIs": "ChatThemeScreen shows the account's chat themes as a horizontal strip of emoji swatches with live bubble previews, applied per conversation.",
+      "whyItMatters": "TGClient+AppSettings already wraps setChatThemeEmoji: and chatThemeEmojiForChat:, but nothing in src calls either, so the API surface is dead code and a theme set elsewhere is invisible here.",
+      "whereItGoes": "A row in TGProfileViewController's chat-info section opening a simple grouped list (not the modern carousel) that applies the emoji and repaints via TGThemeChangedNotification; palette mapping lives in TGTheme. Catalogue bucket 'design'.",
+      "tdlib": [
+        "setChatThemeEmoji - already wrapped",
+        "chat.theme_name - already wrapped",
+        "updateChatThemes (the palette list itself) - NOT handled, needed to know what colours each emoji means"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "t.me/bg and t.me/addtheme link handling",
+      "whatItIs": "Tapping a shared background or theme link in the official client opens a full-screen preview with Apply.",
+      "whyItMatters": "TGClient+WebLinks.m already parses backgroundName and themeName out of getInternalLinkType results (lines 404-406), but no screen consumes them, so those links dead-end. Sharing a wallpaper is how most people get one.",
+      "whereItGoes": "The link dispatch in RootViewController.m, calling the already-wrapped searchBackgroundNamed: and then the existing applyBackground: path in TGSettingsViewController.m; theme links route into TGThemeFile's existing .tgios-theme parser after download.",
+      "tdlib": [
+        "searchBackground - already wrapped",
+        "getInternalLinkType - already wrapped",
+        "getThemeParameters / theme file download via getRemoteFile - not wired"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Wallpaper blur and dark-mode dimming",
+      "whatItIs": "The wallpaper preview offers Blur for photo backgrounds and a dark_theme_dimming percentage that darkens any background while night mode is on.",
+      "whyItMatters": "Our applyBackground: hard-codes blurred:NO moving:NO, and the dark style paints a full-brightness wallpaper behind dark bubbles, which is exactly the glare night mode exists to avoid. Both are one-time image operations at apply time, not per-frame.",
+      "whereItGoes": "The blurred:/moving: arguments already exist in TGClient+AppSettings.h setDefaultBackgroundId:; needs two switches in the wallpaper screen of TGSettingsViewController.m and a dim composite in TGTheme -wallpaper when isDark.",
+      "tdlib": ["setDefaultBackground with backgroundTypeWallpaper is_blurred - already wrapped, arguments unused"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Custom accent colour for the built-in themes",
+      "whatItIs": "PresentationThemeSettings keeps themeSpecificAccentColors, so a user recolours the whole interface (bars, links, own bubbles) from a swatch row without importing a theme file.",
+      "whyItMatters": "Today the only way to change a single colour is to author and side-load a .tgios-theme file. A swatch row is the affordance people actually use, and this client's whole premise is appearance control.",
+      "whereItGoes": "TGTheme's palette accessors already funnel every colour through one object, so an accent override is an overlay on -accentColour, -bubbleMineColour and -barColour; the UI is one row of tappable circles in the appearance section of TGSettingsViewController.m. Local, no TDLib. Distinct from the peer accent colours the catalogue marks 'blocked'.",
+      "tdlib": ["none - local setting only"],
+      "effort": "small"
+    },
+    {
+      "name": "Export the current palette as a theme file",
+      "whatItIs": "EditThemeController lets a user tweak a theme and share it as a .tgios-theme file or t.me/addtheme link.",
+      "whyItMatters": "TGThemeFile reads both formats but writes neither, so a palette assembled on this device cannot leave it. Lower value than the rest of this list, but the parser is symmetric and the serialiser is short.",
+      "whereItGoes": "A +writePalette: counterpart in src/TGThemeFile.m and a 'Share theme' row next to the imported-theme list in TGSettingsViewController.m, handing the file to the existing send-document path.",
+      "tdlib": ["none for the file itself; sending it uses the already-wrapped sendMessage inputMessageDocument"],
+      "effort": "small"
+    },
+    {
+      "name": "System dark-mode following",
+      "whatItIs": "The .system trigger of AutomaticThemeSwitchTrigger follows UITraitCollection.userInterfaceStyle.",
+      "whyItMatters": "Listed only so the auto-night screen does not promise it: iOS 6.1.3 has no system-level dark mode and no userInterfaceStyle, so the modern default trigger has no meaning here and the time-based and brightness triggers must carry the whole feature.",
+      "whereItGoes": "Omit the 'System' option from the auto-night screen in TGSettingsViewController.m.",
+      "tdlib": ["none"],
+      "effort": "blocked"
+    }
+  ]
+}

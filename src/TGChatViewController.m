@@ -31,6 +31,8 @@
 #import "TGClient+Translation.h"
 #import "TGClient+Search.h"
 #import "TGClient+WebLinks.h"
+#import "TGClient+Notifications.h"
+#import "TGVideoCaptureViewController.h"
 #import <ImageIO/ImageIO.h>
 
 // Their design system is drawn for Android at 360dp; a 4S is 320pt, so
@@ -678,6 +680,326 @@ static UIColor *TGChatHexColour(unsigned int rgb) {
 	[_images removeAllObjects];
 	[_imagesRequested removeAllObjects];
 	[_table reloadData];
+}
+
+@end
+
+#pragma mark - full screen photo viewer
+
+static const CGFloat kPhotoPageGap = 20.0f;
+
+@interface TGPhotoPageView : UIScrollView <UIScrollViewDelegate>
+@property (nonatomic, strong) UIImageView *photoView;
+@property (nonatomic, assign) NSInteger pageIndex;
+@property (nonatomic, assign) BOOL wired;
+- (void)setPhoto:(UIImage *)photo;
+- (void)resetZoom;
+- (BOOL)isZoomed;
+@end
+
+@implementation TGPhotoPageView
+
+- (id)initWithFrame:(CGRect)frame {
+	self = [super initWithFrame:frame];
+	if (!self)
+		return nil;
+	self.delegate = self;
+	self.backgroundColor = [UIColor blackColor];
+	self.showsHorizontalScrollIndicator = NO;
+	self.showsVerticalScrollIndicator = NO;
+	self.scrollsToTop = NO;
+	self.bouncesZoom = YES;
+	self.minimumZoomScale = 1.0f;
+	self.maximumZoomScale = 1.0f;
+	self.pageIndex = -1;
+
+	self.photoView = [[UIImageView alloc] initWithFrame:self.bounds];
+	self.photoView.contentMode = UIViewContentModeScaleAspectFit;
+	self.photoView.backgroundColor = [UIColor clearColor];
+	[self addSubview:self.photoView];
+	return self;
+}
+
+- (void)setPhoto:(UIImage *)photo {
+	self.photoView.image = photo;
+	[self resetZoom];
+}
+
+- (void)resetZoom {
+	self.zoomScale = 1.0f;
+	self.minimumZoomScale = 1.0f;
+
+	UIImage *photo = self.photoView.image;
+	CGFloat ceiling = 1.0f;
+	CGSize box = self.bounds.size;
+	if (photo.size.width > 1 && photo.size.height > 1 && box.width > 1 && box.height > 1){
+		CGFloat fit = MIN(box.width / photo.size.width, box.height / photo.size.height);
+		if (fit > 0.0f)
+			ceiling = MAX(2.0f, MIN(1.0f / fit, 4.0f));
+	}
+	self.maximumZoomScale = ceiling;
+	self.photoView.frame = self.bounds;
+	self.contentSize = box;
+	self.contentOffset = CGPointZero;
+}
+
+- (BOOL)isZoomed {
+	return self.zoomScale > self.minimumZoomScale + 0.001f;
+}
+
+- (UIView *)viewForZoomingInScrollView:(UIScrollView *)scrollView {
+	return self.photoView;
+}
+
+- (void)scrollViewDidZoom:(UIScrollView *)scrollView {
+	CGSize box = self.bounds.size;
+	CGRect frame = self.photoView.frame;
+	frame.origin.x = (frame.size.width < box.width)
+			? floorf((box.width - frame.size.width) / 2) : 0;
+	frame.origin.y = (frame.size.height < box.height)
+			? floorf((box.height - frame.size.height) / 2) : 0;
+	self.photoView.frame = frame;
+}
+
+@end
+
+@interface TGPhotoBrowserView : UIView <UIScrollViewDelegate>
+@property (nonatomic, copy) UIImage *(^cachedPhoto)(NSNumber *fileId);
+@property (nonatomic, copy) void (^fetchPhoto)(NSNumber *fileId, void (^done)(UIImage *photo));
+@property (nonatomic, copy) void (^onShowing)(UIImage *photo);
+@property (nonatomic, copy) void (^onDismiss)(void);
+@property (nonatomic, copy) void (^onHold)(void);
+- (id)initWithFrame:(CGRect)frame
+			fileIds:(NSArray *)fileIds
+			  index:(NSInteger)index
+			  photo:(UIImage *)photo;
+- (void)start;
+- (UIImage *)currentPhoto;
+@end
+
+@implementation TGPhotoBrowserView {
+	UIScrollView *_paging;
+	NSArray *_fileIds;
+	UIImage *_openingPhoto;
+	NSInteger _openingIndex;
+	NSInteger _index;
+	NSInteger _pageCount;
+	NSMutableArray *_pages;
+	NSMutableArray *_queue;
+}
+
+- (id)initWithFrame:(CGRect)frame
+			fileIds:(NSArray *)fileIds
+			  index:(NSInteger)index
+			  photo:(UIImage *)photo
+{
+	self = [super initWithFrame:frame];
+	if (!self)
+		return nil;
+
+	_fileIds = fileIds ?: @[];
+	_pageCount = MAX((NSInteger)1, (NSInteger)_fileIds.count);
+	_index = MAX((NSInteger)0, MIN(index, _pageCount - 1));
+	_openingIndex = _index;
+	_openingPhoto = photo;
+	_pages = [NSMutableArray array];
+	_queue = [NSMutableArray array];
+	self.backgroundColor = [UIColor blackColor];
+	self.clipsToBounds = YES;
+
+	_paging = [[UIScrollView alloc] initWithFrame:
+			CGRectMake(-kPhotoPageGap / 2, 0,
+					   frame.size.width + kPhotoPageGap, frame.size.height)];
+	_paging.pagingEnabled = YES;
+	_paging.alwaysBounceHorizontal = YES;
+	_paging.alwaysBounceVertical = NO;
+	_paging.scrollsToTop = NO;
+	_paging.showsHorizontalScrollIndicator = NO;
+	_paging.showsVerticalScrollIndicator = NO;
+	_paging.backgroundColor = [UIColor blackColor];
+	_paging.delegate = self;
+	[self addSubview:_paging];
+	return self;
+}
+
+- (void)start {
+	CGFloat pageW = _paging.bounds.size.width;
+	_paging.contentSize = CGSizeMake(pageW * _pageCount, _paging.bounds.size.height);
+	_paging.contentOffset = CGPointMake(pageW * _index, 0);
+	[self layoutPages];
+	[self announceCurrent];
+}
+
+- (void)layoutSubviews {
+	[super layoutSubviews];
+	CGRect wanted = CGRectMake(-kPhotoPageGap / 2, 0,
+							   self.bounds.size.width + kPhotoPageGap,
+							   self.bounds.size.height);
+	if (CGRectEqualToRect(_paging.frame, wanted))
+		return;
+
+	_paging.frame = wanted;
+	CGFloat pageW = wanted.size.width;
+	_paging.contentSize = CGSizeMake(pageW * _pageCount, wanted.size.height);
+	for (TGPhotoPageView *page in _pages){
+		page.frame = CGRectMake(page.pageIndex * pageW + kPhotoPageGap / 2, 0,
+								pageW - kPhotoPageGap, wanted.size.height);
+		[page resetZoom];
+	}
+	_paging.contentOffset = CGPointMake(pageW * _index, 0);
+}
+
+- (TGPhotoPageView *)pageAtIndex:(NSInteger)index {
+	for (TGPhotoPageView *page in _pages)
+		if (page.pageIndex == index)
+			return page;
+	return nil;
+}
+
+- (UIImage *)currentPhoto {
+	return [self pageAtIndex:_index].photoView.image;
+}
+
+- (void)announceCurrent {
+	if (self.onShowing)
+		self.onShowing([self currentPhoto]);
+}
+
+- (void)layoutPages {
+	CGFloat pageW = _paging.bounds.size.width;
+	CGFloat pageH = _paging.bounds.size.height;
+	NSInteger first = MAX((NSInteger)0, _index - 1);
+	NSInteger last = MIN(_pageCount - 1, _index + 1);
+
+	for (TGPhotoPageView *page in [_pages copy]){
+		if (page.pageIndex >= first && page.pageIndex <= last)
+			continue;
+		[page setPhoto:nil];
+		[page removeFromSuperview];
+		[_pages removeObject:page];
+		[_queue addObject:page];
+	}
+
+	for (NSInteger i = first; i <= last; i++){
+		TGPhotoPageView *page = [self pageAtIndex:i];
+		if (page){
+			if (i != _index && [page isZoomed])
+				[page resetZoom];
+			continue;
+		}
+
+		page = [_queue lastObject];
+		if (page)
+			[_queue removeLastObject];
+		else
+			page = [[TGPhotoPageView alloc] initWithFrame:CGRectZero];
+
+		page.pageIndex = i;
+		page.frame = CGRectMake(i * pageW + kPhotoPageGap / 2, 0,
+								pageW - kPhotoPageGap, pageH);
+		if (!page.wired){
+			page.wired = YES;
+
+			UITapGestureRecognizer *twice = [[UITapGestureRecognizer alloc]
+					initWithTarget:self action:@selector(pageDoubleTapped:)];
+			twice.numberOfTapsRequired = 2;
+			[page addGestureRecognizer:twice];
+
+			UITapGestureRecognizer *once = [[UITapGestureRecognizer alloc]
+					initWithTarget:self action:@selector(pageTapped:)];
+			[once requireGestureRecognizerToFail:twice];
+			[page addGestureRecognizer:once];
+
+			[page addGestureRecognizer:[[UILongPressGestureRecognizer alloc]
+					initWithTarget:self action:@selector(pageHeld:)]];
+		}
+		[_paging addSubview:page];
+		[_pages addObject:page];
+		[self fillPage:page];
+	}
+}
+
+- (void)fillPage:(TGPhotoPageView *)page {
+	NSNumber *fileId = (page.pageIndex >= 0 && page.pageIndex < (NSInteger)_fileIds.count)
+			? _fileIds[page.pageIndex] : nil;
+
+	if (page.pageIndex == _openingIndex && _openingPhoto){
+		[page setPhoto:_openingPhoto];
+		if (fileId == nil)
+			return;
+	}
+
+	if (!fileId)
+		return;
+
+	UIImage *have = self.cachedPhoto ? self.cachedPhoto(fileId) : nil;
+	if (have){
+		[page setPhoto:have];
+		return;
+	}
+	if (!self.fetchPhoto || page.photoView.image)
+		return;
+
+	NSInteger wanted = page.pageIndex;
+	__weak TGPhotoBrowserView *weakSelf = self;
+	__weak TGPhotoPageView *weakPage = page;
+	self.fetchPhoto(fileId, ^(UIImage *photo){
+		TGPhotoBrowserView *me = weakSelf;
+		TGPhotoPageView *target = weakPage;
+		if (!me || !target || !photo || target.pageIndex != wanted)
+			return;
+		[target setPhoto:photo];
+		if (wanted == me->_index)
+			[me announceCurrent];
+	});
+}
+
+- (void)pageTapped:(UITapGestureRecognizer *)tap {
+	if (self.onDismiss)
+		self.onDismiss();
+}
+
+- (void)pageHeld:(UILongPressGestureRecognizer *)hold {
+	if (hold.state != UIGestureRecognizerStateBegan)
+		return;
+	if (self.onHold)
+		self.onHold();
+}
+
+- (void)pageDoubleTapped:(UITapGestureRecognizer *)tap {
+	TGPhotoPageView *page = (TGPhotoPageView *)tap.view;
+	if (![page isKindOfClass:TGPhotoPageView.class])
+		return;
+
+	if ([page isZoomed]){
+		[page setZoomScale:page.minimumZoomScale animated:YES];
+		return;
+	}
+	CGFloat scale = page.maximumZoomScale;
+	if (scale <= page.minimumZoomScale + 0.001f)
+		return;
+
+	CGPoint at = [tap locationInView:page.photoView];
+	CGFloat w = page.bounds.size.width / scale;
+	CGFloat h = page.bounds.size.height / scale;
+	[page zoomToRect:CGRectMake(at.x - w / 2, at.y - h / 2, w, h) animated:YES];
+}
+
+- (void)scrollViewDidScroll:(UIScrollView *)scrollView {
+	if (scrollView != _paging)
+		return;
+	CGFloat pageW = _paging.bounds.size.width;
+	if (pageW < 1)
+		return;
+
+	NSInteger now = (NSInteger)floorf((_paging.contentOffset.x + pageW / 2) / pageW);
+	now = MAX((NSInteger)0, MIN(now, _pageCount - 1));
+	if (now == _index)
+		return;
+
+	_index = now;
+	[self layoutPages];
+	[self announceCurrent];
 }
 
 @end
@@ -1892,7 +2214,8 @@ static UIColor *TGChatHexColour(unsigned int rgb) {
 
 - (void)muteFromChat:(UIButton *)button {
 	BOOL muting = [button.currentTitle hasPrefix:@"Mute"];
-	[[TGClient shared] setChat:self.chatId muted:muting];
+	[[TGClient shared] setChat:self.chatId
+				muteForSeconds:(muting ? TGNotificationMuteForever : 0)];
 	[button setTitle:(muting ? @"Unmute" : @"Mute channel") forState:UIControlStateNormal];
 }
 
@@ -2672,17 +2995,102 @@ static const NSInteger kSelectionDeleteSheetTag = 48;
 static const NSInteger kLinkSheetTag        = 49;
 static const NSInteger kReportTextAlertTag  = 61;
 
+- (Class)videoCaptureClass {
+	if (![UIImagePickerController isSourceTypeAvailable:
+			UIImagePickerControllerSourceTypeCamera])
+		return Nil;
+	return NSClassFromString(@"TGVideoCaptureViewController");
+}
+
 - (void)attachTapped {
+	NSMutableArray *titles = [NSMutableArray arrayWithObject:@"Photo or Video"];
+	if ([self videoCaptureClass]){
+		[titles addObject:@"Video"];
+		[titles addObject:@"Video Message"];
+	}
+	[titles addObject:@"Location"];
+	[titles addObject:@"Contact"];
+
 	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
 													  delegate:self
 											 cancelButtonTitle:nil
 										destructiveButtonTitle:nil
-											 otherButtonTitles:@"Photo or Video",
-														   @"Location",
-														   @"Contact", nil];
+											 otherButtonTitles:nil];
+	for (NSString *title in titles)
+		[sheet addButtonWithTitle:title];
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 	sheet.tag = kAttachSheetTag;
 	[sheet showInView:self.view];
+}
+
+- (void)captureVideoRound:(BOOL)round {
+	Class shooterClass = [self videoCaptureClass];
+	if (!shooterClass)
+		return;
+
+	TGVideoCaptureViewController *shooter =
+			[[shooterClass alloc] initWithRoundVideoNote:round];
+	if (!shooter)
+		return;
+
+	__weak typeof(self) weakSelf = self;
+	shooter.onFinish = ^(NSString *path, NSTimeInterval duration, CGSize dimensions){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		[me sendCapturedVideoAtPath:path duration:duration
+							   size:dimensions round:round];
+	};
+
+	[self presentViewController:shooter animated:YES completion:nil];
+}
+
+- (void)sendCapturedVideoAtPath:(NSString *)path
+					   duration:(NSTimeInterval)duration
+						   size:(CGSize)dimensions
+						  round:(BOOL)round
+{
+	if (!path.length || self.postingBlocked)
+		return;
+
+	if (!round){
+		[[TGClient shared] sendVideoAtPath:path
+									toChat:self.chatId
+									thread:self.threadId
+								   caption:@""
+								  duration:(NSInteger)duration
+									 width:(NSInteger)dimensions.width
+									height:(NSInteger)dimensions.height
+								   spoiler:NO
+					   selfDestructSeconds:0];
+		[self clearComposeState];
+		dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+				dispatch_get_main_queue(), ^{ [self reload]; });
+		return;
+	}
+
+	NSInteger side = (NSInteger)MIN(dimensions.width, dimensions.height);
+	if (side <= 0)
+		side = 240;
+
+	NSMutableDictionary *request = [NSMutableDictionary dictionaryWithDictionary:@{
+			@"@type"   : @"sendMessage",
+			@"chat_id" : @(self.chatId),
+			@"input_message_content" : @{
+					@"@type"      : @"inputMessageVideoNote",
+					@"video_note" : @{@"@type" : @"inputFileLocal", @"path" : path},
+					@"duration"   : @((NSInteger)duration),
+					@"length"     : @(side)}}];
+	if (self.threadId)
+		request[@"message_thread_id"] = @(self.threadId);
+	if (self.replyToId)
+		request[@"reply_to"] = @{@"@type" : @"inputMessageReplyToMessage",
+								 @"message_id" : @(self.replyToId)};
+	[[TGClient shared] send:request];
+
+	[self clearComposeState];
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+			dispatch_get_main_queue(), ^{ [self reload]; });
 }
 
 - (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
@@ -2735,9 +3143,18 @@ static const NSInteger kReportTextAlertTag  = 61;
 	}
 	if (sheet.tag != kAttachSheetTag)
 		return;
-	if (index == 0)      [self pickMedia];
-	else if (index == 1) [self sendCurrentLocation];
-	else                 [self pickContact];
+
+	NSString *chosen = [sheet buttonTitleAtIndex:index] ?: @"";
+	if ([chosen isEqualToString:@"Photo or Video"])
+		[self pickMedia];
+	else if ([chosen isEqualToString:@"Video"])
+		[self captureVideoRound:NO];
+	else if ([chosen isEqualToString:@"Video Message"])
+		[self captureVideoRound:YES];
+	else if ([chosen isEqualToString:@"Location"])
+		[self sendCurrentLocation];
+	else if ([chosen isEqualToString:@"Contact"])
+		[self pickContact];
 }
 
 #pragma mark - links
@@ -2765,7 +3182,7 @@ static const NSInteger kReportTextAlertTag  = 61;
 			return;
 		}
 		if (link && ![link[@"supported"] boolValue]){
-			[me showAlertTitle:@"" message:@"This link is not supported in this app."];
+			[me showAlertTitle:@"" message:@"This link cannot be opened."];
 			return;
 		}
 		[me confirmExternalLink:url];
@@ -3448,7 +3865,7 @@ static const NSInteger kReportTextAlertTag  = 61;
 		NSNumber *fileId = [m[@"photoId"] isKindOfClass:NSNumber.class] ? m[@"photoId"] : nil;
 		UIImage *img = fileId ? self.images[fileId] : nil;
 		if (img){
-			[self showFullScreenImage:img];
+			[self showPhotoWithFileId:fileId image:img];
 			return;
 		}
 		if (!fileId)
@@ -3469,7 +3886,7 @@ static const NSInteger kReportTextAlertTag  = 61;
 				return;
 			me.images[fileId] = loaded;
 			[me.table reloadData];
-			[me showFullScreenImage:loaded];
+			[me showPhotoWithFileId:fileId image:loaded];
 		}];
 		return;
 	}
@@ -3548,12 +3965,8 @@ static const NSInteger kReportTextAlertTag  = 61;
 	}
 }
 
-- (UIView *)viewForZoomingInScrollView:(UIScrollView *)scrollView {
-	return [scrollView viewWithTag:0xF118];
-}
-
-- (void)saveFullScreenImage:(UILongPressGestureRecognizer *)hold {
-	if (hold.state != UIGestureRecognizerStateBegan || !self.fullScreenImage)
+- (void)saveFullScreenImage {
+	if (!self.fullScreenImage)
 		return;
 	UIImageWriteToSavedPhotosAlbum(self.fullScreenImage, self,
 			@selector(image:didFinishSavingWithError:contextInfo:), NULL);
@@ -3587,38 +4000,79 @@ static const NSInteger kReportTextAlertTag  = 61;
 	[alert show];
 }
 
-/// Simple full-screen viewer: black backdrop, tap anywhere to dismiss.
-- (void)showFullScreenImage:(UIImage *)image {
+- (NSArray *)photoFileIdsInHistory {
+	NSMutableArray *fileIds = [NSMutableArray array];
+	for (NSDictionary *m in self.messages){
+		if (![m[@"kind"] isEqualToString:@"messagePhoto"])
+			continue;
+		NSNumber *fileId = [m[@"photoId"] isKindOfClass:NSNumber.class] ? m[@"photoId"] : nil;
+		if (fileId && ![fileIds containsObject:fileId])
+			[fileIds addObject:fileId];
+	}
+	return fileIds;
+}
+
+- (void)showPhotoWithFileId:(NSNumber *)fileId image:(UIImage *)image {
 	UIWindow *window = [UIApplication sharedApplication].keyWindow;
+
+	NSArray *fileIds = fileId ? [self photoFileIdsInHistory] : @[];
+	NSUInteger found = fileId ? [fileIds indexOfObject:fileId] : NSNotFound;
+	if (found == NSNotFound){
+		fileIds = fileId ? @[fileId] : @[];
+		found = 0;
+	}
 
 	UIView *backdrop = [[UIView alloc] initWithFrame:window.bounds];
 	backdrop.backgroundColor = [UIColor blackColor];
 	backdrop.tag = 0xF117;
 
-	// A scroll view is all zooming needs; a 4S has no room for a custom one.
-	UIScrollView *zoom = [[UIScrollView alloc] initWithFrame:backdrop.bounds];
-	zoom.minimumZoomScale = 1.0f;
-	zoom.maximumZoomScale = 4.0f;
-	zoom.delegate = self;
-	zoom.showsHorizontalScrollIndicator = NO;
-	zoom.showsVerticalScrollIndicator = NO;
-	[backdrop addSubview:zoom];
-
-	UIImageView *view = [[UIImageView alloc] initWithFrame:backdrop.bounds];
-	view.contentMode = UIViewContentModeScaleAspectFit;
-	view.image = image;
-	view.tag = 0xF118;
-	[zoom addSubview:view];
-
-	UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc]
-			initWithTarget:self action:@selector(dismissFullScreen:)];
-	[backdrop addGestureRecognizer:tap];
-
-	// Hold the picture to keep it - the only way out of the app for an image.
 	self.fullScreenImage = image;
-	UILongPressGestureRecognizer *hold = [[UILongPressGestureRecognizer alloc]
-			initWithTarget:self action:@selector(saveFullScreenImage:)];
-	[backdrop addGestureRecognizer:hold];
+
+	TGPhotoBrowserView *browser = [[TGPhotoBrowserView alloc]
+			initWithFrame:backdrop.bounds
+				  fileIds:fileIds
+					index:(NSInteger)found
+					photo:image];
+	browser.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+							   UIViewAutoresizingFlexibleHeight;
+
+	__weak typeof(self) weakSelf = self;
+	browser.cachedPhoto = ^UIImage *(NSNumber *wanted){
+		TGChatViewController *me = weakSelf;
+		return me ? me.images[wanted] : nil;
+	};
+	browser.fetchPhoto = ^(NSNumber *wanted, void (^done)(UIImage *photo)){
+		TGChatViewController *me = weakSelf;
+		if (!me || !done)
+			return;
+		[[TGClient shared] downloadFile:wanted.integerValue completion:^(NSString *path){
+			TGChatViewController *inner = weakSelf;
+			if (!inner || !path)
+				return;
+			UIImage *loaded = [UIImage imageWithContentsOfFile:path];
+			if (!loaded && [path.pathExtension.lowercaseString isEqualToString:@"webp"])
+				loaded = [UIImage convertFromWebP:path compressedData:nil error:nil];
+			if (!loaded)
+				return;
+			inner.images[wanted] = loaded;
+			done(loaded);
+		}];
+	};
+	browser.onShowing = ^(UIImage *shown){
+		if (shown)
+			weakSelf.fullScreenImage = shown;
+	};
+	browser.onHold = ^{ [weakSelf saveFullScreenImage]; };
+	__weak UIView *weakBackdrop = backdrop;
+	browser.onDismiss = ^{
+		UIView *going = weakBackdrop;
+		if (!going)
+			return;
+		[UIView animateWithDuration:0.2 animations:^{ going.alpha = 0; }
+						 completion:^(BOOL done){ [going removeFromSuperview]; }];
+	};
+	[backdrop addSubview:browser];
+	[browser start];
 
 	UILabel *hint = [[UILabel alloc] initWithFrame:
 			CGRectMake(0, backdrop.bounds.size.height - 34, backdrop.bounds.size.width, 20)];
@@ -3627,17 +4081,14 @@ static const NSInteger kReportTextAlertTag  = 61;
 	hint.textAlignment = NSTextAlignmentCenter;
 	hint.textColor = [UIColor colorWithWhite:1 alpha:0.6f];
 	hint.backgroundColor = [UIColor clearColor];
+	hint.userInteractionEnabled = NO;
+	hint.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+							UIViewAutoresizingFlexibleTopMargin;
 	[backdrop addSubview:hint];
 
 	backdrop.alpha = 0;
 	[window addSubview:backdrop];
 	[UIView animateWithDuration:0.2 animations:^{ backdrop.alpha = 1; }];
-}
-
-- (void)dismissFullScreen:(UITapGestureRecognizer *)tap {
-	UIView *backdrop = tap.view;
-	[UIView animateWithDuration:0.2 animations:^{ backdrop.alpha = 0; }
-					 completion:^(BOOL done){ [backdrop removeFromSuperview]; }];
 }
 
 - (BOOL)textFieldShouldReturn:(UITextField *)textField {
@@ -3717,7 +4168,7 @@ static const NSInteger kReportTextAlertTag  = 61;
 /// and only drops it to its own line when it does not. Anything else leaves a
 /// gap under short messages, which is what looked wrong.
 - (BOOL)stampFitsInlineFor:(NSDictionary *)m {
-	NSString *text = m[@"text"] ?: @"";
+	NSString *text = [self textOf:m] ?: @"";
 	if (!text.length || [text rangeOfString:@"\n"].location != NSNotFound)
 		return NO;
 	if ([self previewSizeFor:m].height > 0)
@@ -3790,7 +4241,7 @@ static const NSInteger kReportTextAlertTag  = 61;
 }
 
 - (CGSize)bodySizeFor:(NSDictionary *)m {
-	NSString *text = m[@"text"] ?: @"";
+	NSString *text = [self textOf:m] ?: @"";
 	if (!text.length)
 		return CGSizeZero;
 	return [text sizeWithFont:[UIFont systemFontOfSize:[TGTheme shared].messageFontSize]
@@ -3818,9 +4269,6 @@ static const NSInteger kReportTextAlertTag  = 61;
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
 	NSDictionary *m = self.messages[indexPath.row];
-	// A voice message is a fixed block rather than a run of text: the disc,
-	// the bars and the duration, sized the way their media components are.
-	BOOL isVoice = [m[@"kind"] isEqualToString:@"messageVoiceNote"];
 
 	CGSize body = [self bodySizeFor:m];
 	CGSize pic  = [self imageSizeFor:m];
@@ -3956,9 +4404,10 @@ static UIColor *TGSenderColour(int64_t userId) {
 		TGTheme *serviceTheme = [TGTheme shared];
 		// "joined the group" reads oddly with nobody attached to it.
 		NSString *who = [[TGClient shared] nameForUserId:[m[@"senderId"] longLongValue]];
+		NSString *body = [self textOf:m] ?: @"";
 		NSString *line = who.length
-				? [NSString stringWithFormat:@"%@ %@", who, m[@"text"]]
-				: (m[@"text"] ?: @"");
+				? [NSString stringWithFormat:@"%@ %@", who, body]
+				: body;
 
 		// Their service message is a plate the width of its own text, centred -
 		// not a bar across the chat. It sits over the wallpaper, so it is a
@@ -4115,7 +4564,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 	if ([kind isEqualToString:@"messageCall"]){
 		TGTheme *callTheme = [TGTheme shared];
 		BOOL missed = [m[@"callState"] isEqualToString:@"missed"];
-		NSString *line = m[@"text"] ?: @"Call";
+		NSString *line = [self textOf:m] ?: @"Call";
 
 		CGFloat width = MIN(kBubbleMaxW,
 				[line sizeWithFont:[UIFont systemFontOfSize:15]].width + 76);
@@ -4156,7 +4605,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 	if ([kind isEqualToString:@"messageDocument"] ||
 		[kind isEqualToString:@"messageContact"]){
 		BOOL isDoc = [kind isEqualToString:@"messageDocument"];
-		NSArray *lines = [m[@"text"] componentsSeparatedByString:@"\n"];
+		NSArray *lines = [([self textOf:m] ?: @"") componentsSeparatedByString:@"\n"];
 		NSString *first = lines.count ? lines[0] : @"";
 		NSString *second = lines.count > 1 ? lines[1] : @"";
 
@@ -4507,7 +4956,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 	cell.body.hidden = (body.height == 0);
 	cell.body.numberOfLines = 0;
 	cell.body.font = [UIFont systemFontOfSize:[TGTheme shared].messageFontSize];
-	cell.body.text = m[@"text"];
+	cell.body.text = [self textOf:m] ?: @"";
 	[self highlightTimestampInLabel:cell.body];
 	cell.body.frame = CGRectMake(kPadH, y, body.width, body.height);
 

@@ -1,0 +1,93 @@
+{
+  "cluster": "premium-stars",
+  "gaps": [
+    {
+      "name": "Gift and giveaway service messages render as generic fallback text",
+      "whatItIs": "Modern clients draw messageGift / messageUpgradedGift / messageGiftedPremium / messageGiftedStars / messagePremiumGiftCode / messageGiveaway / messageGiveawayCompleted / messageGiveawayWinners as distinct in-bubble cards with the gift name, star value and an action button.",
+      "whyItMatters": "Today TGClient.m's content switch has no branch for any of these, so they fall through to TGPhraseFromTypeName and a user sees the literal words 'Gift' or 'Giveaway Winners' with no sender, no amount, no way to act. Receiving a gift or winning a giveaway is invisible.",
+      "whereItGoes": "The ctype chain in /Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGClient.m around lines 700-800 (service text) and 1640-1685 (chat-list preview), rendered by ChatViewCell.m as a service line with a tappable detail push.",
+      "tdlib": ["message content types messageGift, messageUpgradedGift, messageGiftedPremium, messageGiftedStars, messagePremiumGiftCode, messageGiveaway, messageGiveawayCompleted, messageGiveawayWinners - pure parsing, no new API call", "getReceivedGift already wrapped as receivedGiftWithId: in TGClient+Payments.h"],
+      "effort": "small"
+    },
+    {
+      "name": "Paid (star) reactions on channel posts",
+      "whatItIs": "Long-pressing the star reaction on a channel post lets you send N stars at once, with a 5-second undo window before the batch commits, an anonymous toggle, and a top-reactors strip on the post.",
+      "whyItMatters": "Star reactions are now the default reaction on most large channels. Without it those posts show a star count our client can display but never contribute to, and incoming paid reactions on the user's own posts are unreadable.",
+      "whereItGoes": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGReactionPickerView.m for the picker entry plus a small stepper sheet; the undo window can reuse the existing undo banner from TGSnackbar.m.",
+      "tdlib": ["addPaidMessageReaction - wrapped as addPaidReactionToMessage:", "commitPendingPaidMessageReactions - wrapped as commitPaidReactionsOnMessage:", "removePendingPaidMessageReactions - wrapped as cancelPaidReactionsOnMessage:", "togglePaidMessageReactionIsAnonymous - wrapped as setPaidReactionAnonymous:", "getChatAvailablePaidMessageReactionSenders - wrapped as paidReactionSendersInChat:"],
+      "effort": "small"
+    },
+    {
+      "name": "Sending a star gift to a user",
+      "whatItIs": "GiftOptionsScreen shows the catalogue of purchasable star gifts (price, remaining supply, limited badges); GiftSetupScreen adds an optional message, a hide-my-name toggle and an upgrade-included toggle, then sends.",
+      "whyItMatters": "The client can read every gift the user has received but cannot send one. Gifting is the main social use of a star balance, and the balance itself is already visible on the Stars screen.",
+      "whereItGoes": "A new 'Send a Gift' row on TGProfileViewController.m pushing a plain grouped table of gifts, reusing the detail-pairs style already in TGStarsViewController.m pushGiftDetails:.",
+      "tdlib": ["getAvailableGifts - wrapped as availableGiftsWithCompletion:", "sendGift - wrapped as sendGiftWithId:", "getGiftUpgradePreview - wrapped as giftUpgradePreviewForGiftId:"],
+      "effort": "small"
+    },
+    {
+      "name": "Acting on a received gift (keep, hide, convert, transfer, upgrade)",
+      "whatItIs": "GiftViewScreen lets the owner show or hide a gift on their profile, convert it to stars, upgrade it to a unique collectible, transfer it to another user, or set a resale price.",
+      "whyItMatters": "TGStarsViewController.m pushGiftDetails: is read-only; it even prints 'On My Profile: Shown/Hidden' as static text. Every mutation is already wrapped, so the user can see their gifts but do nothing with them, including converting an unwanted gift back to stars.",
+      "whereItGoes": "Extra action rows at the bottom of pushGiftDetails: in /Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGStarsViewController.m, confirmations via TGAlertView.",
+      "tdlib": ["toggleGiftIsSaved - wrapped as setReceivedGift:saved:", "sellGift - wrapped as sellReceivedGift:", "upgradeGift - wrapped as upgradeReceivedGift:", "transferGift - wrapped as transferReceivedGift:", "setGiftResalePrice - wrapped as setResalePrice:"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Star subscriptions management",
+      "whatItIs": "A list of recurring star subscriptions (paid channels, bot subscriptions) with next-charge date, expiring warnings, and cancel / re-join actions.",
+      "whyItMatters": "A subscription started on another device keeps draining the balance with no way to see or cancel it here. Expiring subscriptions silently drop the user out of paid channels.",
+      "whereItGoes": "A third section in /Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGStarsViewController.m alongside Transactions and Gifts Received.",
+      "tdlib": ["getStarSubscriptions - wrapped as starSubscriptionsOnlyExpiring:", "editStarSubscription - wrapped as setStarSubscription:", "reuseStarSubscription - wrapped as reuseStarSubscription:"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Giveaway info sheet on a giveaway message",
+      "whatItIs": "Tapping a giveaway post opens 'How it works': prize, number of winners, end date, whether you are participating and why not, and for finished giveaways whether you won.",
+      "whyItMatters": "Giveaways are how most users get Premium without paying. Our client cannot tell the user they are eligible, entered, or a winner.",
+      "whereItGoes": "A detail push from the giveaway service line added in gap 1; can reuse the existing key/value detail table in TGStarsViewController.m.",
+      "tdlib": ["getGiveawayInfo - wrapped as giveawayInfoForMessage:", "getUserGifts / getGiftCodeInfo - checkGiftCode: and applyGiftCode: already wrapped for the claim path"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Paid media (locked media purchase)",
+      "whatItIs": "A channel post whose photo or video is blurred behind a star price, with an unlock button that spends stars and reveals the media in place.",
+      "whyItMatters": "messagePaidMedia posts currently render as unsupported, so a paid-media channel is a wall of blank messages. The unlock call is already wrapped and only spends existing balance.",
+      "whereItGoes": "A locked-media branch in ChatViewCell.m plus the content branch in TGClient.m; the existing spoiler blur path is the closest precedent.",
+      "tdlib": ["messagePaidMedia content parsing", "clickPremiumSubscriptionButton not needed; getPaymentForm + sendPaymentForm - wrapped as paymentFormForMessage: and payStarsPaymentForm:", "unlockPaidMedia is wrapped as unlockPaidMediaInMessage:"],
+      "effort": "small"
+    },
+    {
+      "name": "Paid messages (per-DM star fee, both directions)",
+      "whatItIs": "Charging strangers N stars to message you, and on the sending side a confirmation that this message will cost stars before it goes out, plus a refund-and-allow action for a sender you decide to trust.",
+      "whyItMatters": "If the account has a fee configured elsewhere the user cannot see or change it here; more importantly, sending to a chat that charges will fail with an opaque error because there is no confirm step in the composer.",
+      "whereItGoes": "A toggle plus star-count row in TGPrivacyViewController.m for the outgoing side; a confirm alert in the send path of TGChatViewController.m; an 'Allow free messages' action on TGProfileViewController.m.",
+      "tdlib": ["setChatMessageAutoDeleteTime not involved; setChatPaidMessageStarCount - wrapped as setChat:paidMessageStarCount:", "getUserChatPaidMessageRevenue - wrapped as paidMessageRevenueFromUser:", "allowUnpaidMessagesFromUser - wrapped as allowUnpaidMessagesFromUser:refundPayments:"],
+      "effort": "small"
+    },
+    {
+      "name": "Gift Premium to a contact using stars",
+      "whatItIs": "PremiumGiftScreen offers 3/6/12-month Premium gift options for a chosen user, paid out of the star balance rather than through the App Store.",
+      "whyItMatters": "This is the one Premium purchase path that does not need StoreKit, so it is the only way this client can ever hand out Premium. Both the option list and the purchase are already wrapped and unused.",
+      "whereItGoes": "A 'Gift Premium' row on TGProfileViewController.m, with the option list rendered as rows in the existing TGPremiumViewController.m style.",
+      "tdlib": ["getGiftPremiumOptions / getStarGiftPaymentOptions - wrapped as starGiftPaymentOptionsForUser:", "giftPremiumWithStars - wrapped as giftPremiumWithStarsToUser:"],
+      "effort": "small"
+    },
+    {
+      "name": "Star gift resale marketplace and auctions",
+      "whatItIs": "GiftStoreScreen and the GiftAuction* screens: a filterable grid of resold unique gifts with model/backdrop/symbol attribute filters, live bidding, and purchase confirmation.",
+      "whyItMatters": "This is where unique gifts actually change hands now. Our client can already set a resale price (gap 4) but cannot browse or buy.",
+      "whereItGoes": "Would need a new browsing screen; the attribute filters and gift previews are animated-sticker grids, which is exactly what a 320x480 UITableView-only client handles worst.",
+      "tdlib": ["getGiftsForResale - wrapped as giftsForResaleWithGiftId:", "buyGiftForResale - wrapped as buyResoldGiftNamed:", "auction and crafting methods are not wrapped in TGClient+Payments.h"],
+      "effort": "substantial"
+    },
+    {
+      "name": "Topping up the star balance",
+      "whatItIs": "Buying stars through an in-app purchase, which every spend path falls back to when the balance is short (BalanceNeededScreen).",
+      "whyItMatters": "Every feature above works only while the balance lasts; when it runs out there is no recovery inside the app.",
+      "whereItGoes": "Would belong on TGStarsViewController.m next to the Balance row; instead that row should say where to top up (another device or the web) so the dead end is at least explained.",
+      "tdlib": ["canPurchaseFromStore / assignStoreTransaction - not wrapped and not usable"],
+      "effort": "blocked"
+    }
+  ]
+}

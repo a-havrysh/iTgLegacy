@@ -1,0 +1,106 @@
+{
+  "cluster": "calls",
+  "gaps": [
+    {
+      "name": "Call tones: ringback, ringtone, busy, connecting, ended",
+      "whatItIs": "Modern TelegramCallsUI/PresentationCallToneData.swift plays a distinct looped tone per call state - ringback while the other side rings, a ringtone plus vibration on an incoming call, busy/failed on rejection, and a short end tone on hang-up, all through the call audio session.",
+      "whyItMatters": "Right now an incoming call takes over the screen in complete silence and an outgoing call gives no audible feedback at all: TGCall.mm and TGCallViewController.m contain no AudioServices/AVAudioPlayer/vibration code whatsoever. A phone that rings silently is effectively a phone that misses every call.",
+      "whereItGoes": "TGCall.mm state transitions (pending/exchangingKeys/ready/discarded) driving a small tone player; UI hook in TGCallViewController.m. Telegraph (twelve/Telegraph) ships the original tone assets and a TGCallAudioPlayer-style loop, so the assets and the loop are a cheap port.",
+      "tdlib": ["none - purely local audio; state already comes from updateCall via TGCall handleUpdate:"],
+      "effort": "small"
+    },
+    {
+      "name": "Speaker / audio route toggle during a call",
+      "whatItIs": "CallControllerButtonsNode plus CallRouteActionSheetItem let the user switch between earpiece, speaker and Bluetooth mid-call.",
+      "whyItMatters": "TGCallViewController only builds Mute, End and Answer. The audio session is pinned to AVAudioSessionModeVoiceChat (TGCall.mm ~line 429), so there is no way to put a call on speaker - you cannot set the phone down, and with no echo canceller in our libtgvoip build the speaker path also needs to be an explicit, warned-about user choice rather than an accident.",
+      "whereItGoes": "A third button in TGCallViewController.m next to Mute, calling AVAudioSession overrideOutputAudioPort: (available on iOS 6). A route action sheet on top of TGActionSheet only if Bluetooth is worth it; speaker/earpiece alone covers the real need.",
+      "tdlib": ["none - local AVAudioSession"],
+      "effort": "small"
+    },
+    {
+      "name": "Emoji key verification on the call screen",
+      "whatItIs": "CallControllerKeyButton / CallControllerKeyPreviewNode show the four emoji derived from the call key in the top-right corner; tapping expands them with the 'compare these with your partner' explainer.",
+      "whyItMatters": "It is the only user-visible proof that the call is end-to-end encrypted and not intercepted, and it was already present in the very first Telegram calls UI. TDLib hands the emoji to us for free: TGCall.mm handleUpdate: reaches callStateReady and passes state straight to startMediaWithState: without ever reading state[\"emojis\"].",
+      "whereItGoes": "TGCall.h expose an NSArray *keyEmoji populated in handleUpdate:; TGCallViewController.m renders a four-emoji label top-right plus a tap-to-expand panel (the rating panel already establishes the overlay pattern in that file).",
+      "tdlib": ["callStateReady.emojis - already arriving in the update TGCall parses, no new call"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Recent Calls list",
+      "whatItIs": "CallListUI is a whole tab: calls grouped by peer and day, incoming/outgoing/missed arrows, missed shown in red, an All/Missed segmented filter, swipe or edit-mode delete, tap to call back, info button to open the chat.",
+      "whyItMatters": "There is no call history screen at all - nothing in src/ calls -callLogWithOffset:onlyMissed:limit:completion:, -clearCallLogRevoke:, -frequentlyCalledContactsWithCompletion: or -searchCallMessagesOnlyMissed:. A user cannot see who called while the app was closed, cannot call anyone back, and cannot tell a missed call happened. The 2013 client had exactly this tab, so it is period-correct as well as useful.",
+      "whereItGoes": "A new TGCallListViewController next to TGChatListViewController, reachable from the tab bar / root; rows reuse the avatar+two-line cell pattern of TGContactsViewController. Every field the cell needs (name, date, outgoing, missed, video, duration, ready-made subtitle text) is already returned by the wrapper.",
+      "tdlib": [
+        "searchCallMessages - wrapped twice (TGClient+Calls callLogWithOffset:onlyMissed:limit:completion: and TGClient+Search searchCallMessagesOnlyMissed:)",
+        "deleteMessages via clearCallLogRevoke:completion: - wrapped",
+        "getTopChats topChatCategoryCalls via frequentlyCalledContactsWithCompletion: - wrapped",
+        "removeTopChat via removeFrequentlyCalledChat: - wrapped"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Return-to-call bar when the call screen is dismissed",
+      "whatItIs": "CallStatusBarNode: a green bar under the status bar showing the running call timer while the user browses chats; tapping it returns to the call screen.",
+      "whyItMatters": "TGCallViewController is presented as a full-screen modal with no way out except ending the call, so during a call the whole app is unusable - you cannot look up an address or a name mid-conversation, which is the single most common reason to touch the phone while talking.",
+      "whereItGoes": "A minimize control in TGCallViewController.m plus a small always-on-top UIWindow (windowLevel above status bar) driven by TGCall.state and -duration; presented/hidden from AppDelegate.m where TGWatchForIncomingCalls already owns the call lifecycle.",
+      "tdlib": ["none - TGCall already publishes state and duration"],
+      "effort": "small"
+    },
+    {
+      "name": "Incoming calls while the app is backgrounded or the screen is locked",
+      "whatItIs": "Modern Telegram receives calls via a VoIP push and CallKit, so the call screen appears even when the app is not running.",
+      "whyItMatters": "src/Info.plist declares no UIBackgroundModes at all, so TDLib's connection dies on suspend and an incoming call simply never arrives unless the app is in the foreground. That makes voice calling on this client effectively receive-only-while-staring-at-it. iOS 6 does support the `voip` background mode with setKeepAliveTimeout:handler:, which is the pre-PushKit mechanism the era's VoIP apps used and which fits this device.",
+      "whereItGoes": "Info.plist UIBackgroundModes = voip, plus a keep-alive/reconnect path around the TDLib client in TGClient.m and a call-arrival hook in AppDelegate.m next to TGWatchForIncomingCalls. CallKit and PushKit are unavailable on iOS 6, so the presentation is a local notification plus the existing full-screen controller.",
+      "tdlib": ["updateCall - already handled; the gap is process lifetime, not API"],
+      "effort": "substantial"
+    },
+    {
+      "name": "Missed-call notification",
+      "whatItIs": "notificationTypeNewCall / notificationGroupTypeCalls produce a 'Missed call from X' banner and badge that opens the call log.",
+      "whyItMatters": "Nothing in src/ ever creates a UILocalNotification (only TGClient+Notifications.h mentions the type), so a call missed while the app was not on screen leaves no trace anywhere - no banner, no badge, and, until the Recent Calls list exists, no history either.",
+      "whereItGoes": "AppDelegate.m alongside TGWatchForIncomingCalls: on callStateDiscarded with reason callDiscardReasonMissed while not active, schedule a UILocalNotification whose userInfo routes to the call log / chat.",
+      "tdlib": ["updateCall callStateDiscarded reason - already parsed in TGCall.mm humanReason:"],
+      "effort": "small"
+    },
+    {
+      "name": "Peer-to-peer calls privacy setting",
+      "whatItIs": "The privacy screen exposes 'Calls -> Peer-to-Peer' separately from 'Who can call me', letting the user force every call through Telegram's reflectors instead of a direct connection.",
+      "whyItMatters": "P2P mode reveals your IP address to whoever you talk to; on the modern client turning it off is the standard advice. TGClient+Privacy.m already knows AllowPeerToPeerCalls and even has the display string 'Peer-to-Peer Calls', but TGSettingsViewController.m +privacySettings / +privacyTitles omit it, so it is unreachable.",
+      "whereItGoes": "Two array literals in TGSettingsViewController.m (around lines 540-556) - add \"AllowPeerToPeerCalls\" and its title; the existing privacy detail screen handles the rest unchanged.",
+      "tdlib": ["getUserPrivacySettingRules / setUserPrivacySettingRules for userPrivacySettingAllowPeerToPeerCalls - fully wrapped in TGClient+Privacy"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Call data usage rows",
+      "whatItIs": "Data and Storage shows bytes sent/received and total airtime spent on calls, with a reset-statistics action.",
+      "whyItMatters": "On a 2013-era metered plan this is exactly the number a user watches, and calls are the heaviest thing this client does. -callNetworkUsageWithCompletion: and -resetNetworkUsageWithCompletion: are wrapped in TGClient+Calls but nothing in src/ calls either of them.",
+      "whereItGoes": "A section in TGSettingsViewController.m next to the existing 'Calls' / 'Use less data for calls' group (around line 773), or the storage screen; three static rows plus a destructive reset row.",
+      "tdlib": ["getNetworkStatistics - wrapped (callNetworkUsageWithCompletion:)", "resetNetworkStatistics - wrapped"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Connection-quality feedback during a call",
+      "whatItIs": "CallControllerToastNode surfaces 'Weak network signal', 'Your microphone is muted', low-battery and reconnecting states; the modern status node also drives signal bars off the media layer.",
+      "whyItMatters": "Our call screen shows only a state word and a timer, so a call degrading over EDGE looks identical to a call that is fine, and the user hangs up blaming the app. libtgvoip already reports signal bars and a reconnecting state through its callbacks; TGCall.mm subscribes to neither.",
+      "whereItGoes": "Wire libtgvoip's signal-bar / state callbacks into TGCall.mm as a published property, and render bars plus a transient toast strip in TGCallViewController.m.",
+      "tdlib": ["none - libtgvoip callbacks only"],
+      "effort": "small"
+    },
+    {
+      "name": "1-to-1 video calls",
+      "whatItIs": "Full video calling with camera switch, picture-in-picture self view and mid-call upgrade from voice.",
+      "whyItMatters": "userFullInfo.supports_video_calls is a visible capability on modern peers and the call button offers it; we can only place voice calls.",
+      "whereItGoes": "Would have to land in TGCall.mm / TGCallViewController.m. It should not: video calls require the tgcalls WebRTC stack with DTLS-SRTP and VP8/H.264 negotiation that our libtgvoip 1-to-1 reflector transport does not implement, and the 4S front camera plus one A5 core and ~50MB of usable RAM cannot encode and decode a live stream alongside the audio path. Record the peer capability so the UI can say 'video calls are not supported on this device' rather than failing obscurely.",
+      "tdlib": ["createCall is_video - would need the media layer, not the API"],
+      "effort": "blocked"
+    },
+    {
+      "name": "Group calls and video chats (join, even listen-only)",
+      "whatItIs": "VideoChatScreen / VoiceChatController: joining a channel or group voice chat, participant list with speaking indicators, raise hand, mute others, scheduling, screencast.",
+      "whyItMatters": "Video chats are how most groups now hold live conversation, and links to them arrive in ordinary chats. We already parse the service messages and can decline an invitation, which is the honest floor.",
+      "whereItGoes": "Nothing to build. Group calls use an SFU with WebRTC DTLS-SRTP, Opus simulcast and per-participant streams; our media layer is a single-peer libtgvoip reflector connection, and decoding several concurrent audio streams on one A5 core with 512MB is out of reach. The existing groupCallServiceTextForContent:, declineGroupCallInvitationInChat: and isGroupCallLink: in TGClient+Calls are the right coverage - the only work worth doing is making sure every video-chat link and invitation actually routes into them.",
+      "tdlib": ["joinGroupCall, toggleGroupCallParticipantIsMuted, toggleGroupCallParticipantIsHandRaised - deliberately not wrapped", "groupCallServiceTextForContent:, declineGroupCallInvitationInChat:, isGroupCallLink: - already wrapped"],
+      "effort": "blocked"
+    }
+  ]
+}

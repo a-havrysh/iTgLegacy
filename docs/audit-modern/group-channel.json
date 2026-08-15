@@ -1,0 +1,121 @@
+{
+  "cluster": "group-channel",
+  "gaps": [
+    {
+      "name": "Create a new group or channel",
+      "whatItIs": "Modern client has a full creation flow: pick contacts, name + photo, then for channels a public/private step with username check, then landing in the new chat. Basic groups can also be upgraded to supergroups when a limit is hit.",
+      "whyItMatters": "There is no way at all to create a group or channel from our client. A user can only join what already exists. This is the single largest hole in this area.",
+      "whereItGoes": "New TGCreateGroupViewController pushed from a '+' item on TGChatListViewController and from TGContactsViewController; reuse the existing member-picker style from TGGroupMembersViewController. twelve/Telegraph has TGCreateGroupController and TGGroupInfoSelectContactController, so the flow can be ported almost verbatim.",
+      "tdlib": [
+        "createNewBasicGroupChat - wrapped as -createBasicGroupWithTitle: (unused)",
+        "createNewSupergroupChat - wrapped as -createSupergroupWithTitle: (unused)",
+        "upgradeBasicGroupChatToSupergroupChat - wrapped as -upgradeBasicGroupToSupergroup: (unused)",
+        "setChatPhoto / setChatDescription - wrapped in TGClient+Groups"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Public username / t.me link for a group or channel",
+      "whatItIs": "ChannelVisibilityController lets an owner switch a chat between private (invite link only) and public, type a username, see live availability checking, and see the list of public chats already created when the limit is hit.",
+      "whyItMatters": "Owners cannot make a chat public or change its @name from our client, so a chat created elsewhere can never be published or renamed here.",
+      "whereItGoes": "New section in the admin rows of TGProfileViewController ('Chat Type: Private/Public'), pushing a small username editor. twelve/Telegraph has TGCheckUsernameAvailabilityActor and TGApplyUsernameActor.",
+      "tdlib": [
+        "checkChatUsername - wrapped as -checkGroupUsername:forChat: (unused)",
+        "setSupergroupUsername - wrapped as -setGroupChat:username: (unused)",
+        "getCreatedPublicChats - wrapped as -createdPublicChatsWithCompletion: (unused)"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Per-post statistics",
+      "whatItIs": "MessageStatsController shows views/forwards/reactions overview for one channel post, an interaction graph, a reaction graph, and a paged list of public channels that reposted it.",
+      "whyItMatters": "Channel admins currently get chat-level numbers only; they cannot tell which post performed and who reshared it, which is the main reason to open statistics at all.",
+      "whereItGoes": "New controller in TGProfileViewController.m alongside TGProfileStatisticsController, opened by tapping a recent post row; also reachable from the message action sheet in TGChatViewController for own channel posts.",
+      "tdlib": [
+        "getMessageStatistics - wrapped as -statisticsForMessage:inChat:isDark: (unused)",
+        "getMessagePublicForwards - wrapped as -publicForwardsOfMessage:inChat:offset:limit: (unused)",
+        "getStatisticalGraph - wrapped and already used"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Recent posts list in channel statistics",
+      "whatItIs": "The channel stats screen ends with a 'Recent posts' section: each post with its thumbnail/first line, view count, share count and reaction count.",
+      "whyItMatters": "This is the entry point to per-post stats and the only per-post feedback an admin gets. Our stats screen drops the data entirely.",
+      "whereItGoes": "Third mode of TGProfileStatisticsController in TGProfileViewController.m; the payload is already parsed by TGClient under 'recent_interactions' but is never read by the UI.",
+      "tdlib": [
+        "getChatStatistics - already wrapped and called; 'recent_interactions' key already returned",
+        "getMessage - wrapped, needed for the post preview text"
+      ],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Full graph set in statistics",
+      "whatItIs": "ChannelStatsController and GroupStatsController render every graph TDLib returns (growth, followers, mute, views by hour, view sources, language, message/action/day-hour graphs for groups) with zoom.",
+      "whyItMatters": "TGProfileStatisticsController calls -loadFirstGraph and shows exactly one chart; the other eight to ten graphs are fetched, held in self.graphs and thrown away.",
+      "whereItGoes": "TGProfileStatisticsController in TGProfileViewController.m - the drawing code already exists, it needs a graph selector (segmented control or one section per graph) and a loop instead of loadFirstGraph.",
+      "tdlib": [
+        "getStatisticalGraph - wrapped, already used for one graph"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Top admins and top inviters in supergroup statistics",
+      "whatItIs": "Group statistics list not just top posters but top admins (deletions, bans, restrictions) and top inviters (members added), each with a context menu to promote, restrict or open the profile.",
+      "whyItMatters": "Moderating a busy group means knowing who is doing the moderating and who is bringing people in. We render only 'Top posters'.",
+      "whereItGoes": "TGProfileStatisticsController in TGProfileViewController.m - 'top_administrators' and 'top_inviters' are already in the dictionary TGClient returns and are simply ignored.",
+      "tdlib": [
+        "getChatStatistics - already wrapped and called; both keys already returned"
+      ],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Group management toggles that are wrapped but never shown",
+      "whatItIs": "Modern group settings expose: chat history visible to new members, hide member list, aggressive anti-spam, approve new members (join by request), join to send messages, and restrict saving content.",
+      "whyItMatters": "Every one of these is an admin decision with real consequences (spam floods, member-list privacy, forward protection) and none of them can be changed from our client even though the calls are wrapped.",
+      "whereItGoes": "Admin rows section of TGProfileViewController (next to the existing Permissions / Slow Mode rows) - plain switch rows.",
+      "tdlib": [
+        "toggleSupergroupIsAllHistoryAvailable - wrapped as -setGroup:allHistoryAvailable: (unused)",
+        "toggleSupergroupHasHiddenMembers - wrapped as -setGroup:hiddenMembers: (unused)",
+        "toggleSupergroupHasAggressiveAntiSpamEnabled - wrapped as -setGroup:aggressiveAntiSpam: (unused)",
+        "toggleSupergroupJoinByRequest / toggleSupergroupJoinToSendMessages - wrapped as -setGroup:joinToSend:joinByRequest: (unused)",
+        "toggleChatHasProtectedContent - wrapped as -setGroup:protectedContent: (unused)"
+      ],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Transfer chat ownership",
+      "whatItIs": "OwnershipTransferController hands a channel or supergroup to another admin after a password and recent-login check, with the specific TDLib error states (2FA not set, password too fresh, session too fresh) surfaced as instructions.",
+      "whyItMatters": "An owner who wants to hand over a chat has no path at all here; it is irreversible and account-critical, so it is the sort of thing users go looking for and expect to find.",
+      "whereItGoes": "Action in the member action sheet of TGGroupMembersViewController when the target is already an admin, backed by a small password prompt. Modern reference: submodules/TelegramUI/Components/PeerManagement/OwnershipTransferController.",
+      "tdlib": [
+        "transferChatOwnership - wrapped as -transferOwnershipOfGroup:toUser:password: (unused)",
+        "getPasswordState - wrapped in TGClient+Account"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Group sticker set",
+      "whatItIs": "GroupStickerPackSetupController lets an admin attach a sticker pack to a supergroup so members see it in the sticker panel without installing it, with short-name search and a preview.",
+      "whyItMatters": "It is a visible identity feature of a group and the sticker panel silently misses the group pack today.",
+      "whereItGoes": "Admin rows of TGProfileViewController pushing a search field over the existing sticker list UI in TGStickersViewController; the panel side is TGStickerPanelView.",
+      "tdlib": [
+        "setSupergroupStickerSet - wrapped as -setGroup:stickerSetName: (unused)",
+        "searchStickerSet - wrapped in TGClient+Stickers"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Similar / recommended channels",
+      "whatItIs": "Opening a channel profile shows a row of similar channels TDLib recommends, so a user can discover related channels from the one they just found.",
+      "whyItMatters": "It is the only in-app channel discovery surface; without it, channels are only reachable via links and search.",
+      "whereItGoes": "A section at the bottom of the channel branch of TGProfileViewController, rendered as a plain list of rows rather than the modern horizontal card strip.",
+      "tdlib": [
+        "getChatSimilarChats - NOT wrapped anywhere in TGClient+*.h",
+        "getChatSimilarChatCount - NOT wrapped",
+        "openChatSimilarChat - NOT wrapped"
+      ],
+      "effort": "small"
+    }
+  ]
+}

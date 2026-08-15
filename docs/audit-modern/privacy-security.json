@@ -1,0 +1,85 @@
+{
+  "cluster": "privacy-security",
+  "gaps": [
+    {
+      "name": "Passcode lock window (the passcode currently does nothing)",
+      "whatItIs": "Modern Telegram puts a full-screen keypad window above everything when the app returns from background after the auto-lock interval, and blanks the snapshot on resign-active so the task switcher cannot leak chats.",
+      "whyItMatters": "TGPasscodeViewController already lets the user set a passcode, store an auto-lock interval and toggle it On, but nothing in the app ever reads passcodeIsSet outside that settings screen - AppDelegate and RootViewController contain no reference. A user who turns the passcode on believes the phone is protected and it is not. This is a security-misleading half-feature, worse than not shipping the screen.",
+      "whereItGoes": "New lock window owned by AppDelegate.m, driven by +passcodeIsSet / +passcodeMatches: / +autoLockSeconds already exposed in src/TGPrivacyViewController.h (which explicitly notes 'The lock window itself is not owned here'). Telegraph has TGPasscodeWindow.m and TGPasscodeSettingsController.m - a direct port of the window and its keypad view.",
+      "tdlib": ["none - purely local; passcode state lives in NSUserDefaults/keychain"],
+      "effort": "small"
+    },
+    {
+      "name": "Blocked Users screen",
+      "whatItIs": "A list of blocked users and chats with avatar, name and phone, swipe-to-unblock, a plus button to block someone from the contact picker, and an empty state.",
+      "whyItMatters": "Blocking exists on the profile screen but there is no way to see or undo it. Once a user is blocked from a profile the entry point disappears; the block becomes unreachable. Nothing in src/ references blockedSendersFromOffset:.",
+      "whereItGoes": "New screen pushed from the Security section of TGPrivacyViewController (which today has exactly three rows: Passcode, Two-Step, Active Sessions). Telegraph implements it as TGBlockedController.m.",
+      "tdlib": ["getBlockedMessageSenders - wrapped as -blockedSendersFromOffset:limit:completion: in TGClient+Privacy.h", "setMessageSenderBlockList - wrapped as -setUser:blocked:completion:"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Editable privacy exceptions (Always / Never Share With)",
+      "whatItIs": "Inside each privacy rule, two rows that open a multi-select contact picker to add or remove per-user exceptions on top of the Everybody/Contacts/Nobody base.",
+      "whyItMatters": "TGPrivacyRuleViewController shows the exception rows only when another client already set them, marks them non-selectable and footers them with 'Exceptions set on another device are kept as they are.' So exceptions are visible but read-only here. Hiding your last seen from one person is the single most-used privacy action and it is currently impossible on this client.",
+      "whereItGoes": "TGPrivacyViewController.m, the section-1 rows of TGPrivacyRuleViewController; needs the same multi-select contact picker that group member adding needs.",
+      "tdlib": ["setUserPrivacySettingRules - already wrapped with exception lists as -setPrivacyRule:to:allowedUsers:restrictedUsers:completion:", "getUserPrivacySettingRules - wrapped as -privacyRuleDetailed:completion:"],
+      "effort": "small"
+    },
+    {
+      "name": "Connected Websites (Telegram Login sessions)",
+      "whatItIs": "List of websites signed in via Telegram Login, with domain, bot, browser, IP and last-active, swipe to disconnect one and a Disconnect All button.",
+      "whyItMatters": "This is an authorization surface the user cannot audit or revoke from the phone at all. The API is fully wrapped and unused - no file in src/ calls connectedWebsitesWithCompletion:.",
+      "whereItGoes": "New screen off the Security section of TGPrivacyViewController, or a second section inside TGSessionsViewController (which already renders exactly this cell shape for app sessions).",
+      "tdlib": ["getConnectedWebsites, disconnectWebsite, disconnectAllWebsites - all wrapped in TGClient+Privacy.h"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Global default auto-delete timer",
+      "whatItIs": "A 'Auto-Delete Messages' row in Privacy that sets the default self-destruct timer applied to every new chat (off / 1 day / 1 week / 1 month), with an optional 'apply to my existing chats' step.",
+      "whyItMatters": "Per-chat auto-delete works (TGProfileViewController sets it), but the global default is wrapped and never surfaced: -defaultAutoDeleteSecondsWithCompletion: / -setDefaultAutoDeleteSeconds: have no caller in src/. Users who want auto-delete want it everywhere, not chat by chat.",
+      "whereItGoes": "A row plus a TGActionSheet in TGPrivacyViewController's Privacy section, mirroring the account-TTL sheet already in TGSettingsViewController.m. The 'apply to existing chats' bulk step can be skipped.",
+      "tdlib": ["getOption/setOption message_auto_delete_time - wrapped as -defaultAutoDeleteSecondsWithCompletion: and -setDefaultAutoDeleteSeconds:completion:"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Read date privacy (Show When You Read)",
+      "whatItIs": "A privacy rule controlling whether others see the exact time you read their private message; turning it off reciprocally hides theirs from you.",
+      "whyItMatters": "The catalogue files this as 'blocked', which is wrong - it is not premium-gated and needs no hardware capability. It is one more name in the same three-way rule list the client already renders, and TGClient+Messages.h already has -readDateOfMessage: to display the other half.",
+      "whereItGoes": "Add userPrivacySettingShowReadDate to +privacySettingNames / +titleForPrivacySetting: in TGClient+Privacy.m; the row and radio screen then appear for free. CATALOGUE BUCKET CORRECTION: 'Read receipts / read date privacy' should be trivial, not blocked.",
+      "tdlib": ["setUserPrivacySettingRules with userPrivacySettingShowReadDate - the generic wrapper already takes any setting name"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Restrict messages from unknown users",
+      "whatItIs": "A 'Messages' privacy screen where you choose who may start a private chat with you - everyone, or contacts only - with non-contacts sent to a request state instead.",
+      "whyItMatters": "Also catalogued as 'blocked', also wrong: the non-paid half of this setting is free and is the main anti-spam control modern Telegram gives users. On a client with no spam reporting UI beyond reportChat, it matters more, not less. The paid-messages half genuinely is blocked (Stars) and should be omitted.",
+      "whereItGoes": "New wrapper in TGClient+Privacy.m plus a two-option radio screen in TGPrivacyViewController.m, reusing TGPrivacyRuleViewController's layout. CATALOGUE BUCKET CORRECTION: 'Restrict new chats from unknown users' should be design, not blocked.",
+      "tdlib": ["getNewChatPrivacySettings - NOT wrapped", "setNewChatPrivacySettings (allow_new_chats_from_unknown_users) - NOT wrapped"],
+      "effort": "small"
+    },
+    {
+      "name": "Two-step password reset with waiting period",
+      "whatItIs": "When there is no recovery email, Telegram lets you request deletion of the 2SV password after a 7-day wait, showing a pending countdown row and a Cancel Reset action.",
+      "whyItMatters": "-resetPasswordWithCompletion:, -cancelPasswordResetWithCompletion: and the pendingResetDate field of the password state are wrapped and have no caller. A user who forgets a password set without a recovery email is permanently stuck on this client - the login screen's 'Forgot password?' only covers the email path.",
+      "whereItGoes": "Two extra rows in TGTwoStepViewController (src/TGPrivacyViewController.m, the password-state table) and a matching branch in the login-side password screen in TGLoginViewController.m.",
+      "tdlib": ["requestPasswordRecovery, recoverPassword, resetPassword, cancelPasswordReset, getPasswordState - all wrapped in TGClient+Privacy.h"],
+      "effort": "small"
+    },
+    {
+      "name": "Login email address management",
+      "whatItIs": "Setting or changing the email used to receive login codes instead of SMS, with a code confirmation step; the state screen shows the masked address.",
+      "whyItMatters": "Catalogued as blocked, but -setLoginEmailAddress is already wrapped in TGClient+Account.h and passwordStateWithCompletion: already returns loginEmailPattern. Nothing about it needs modern hardware. Users whose account was created with a login email cannot see or change it here.",
+      "whereItGoes": "A row under Two-Step Verification in TGTwoStepViewController, reusing the existing TGSecurityStepViewController text-entry chain that the recovery-email flow already uses. CATALOGUE BUCKET CORRECTION: 'Login email address' should be design, not blocked.",
+      "tdlib": ["setLoginEmailAddress - wrapped", "checkLoginEmailAddressCode / resendLoginEmailAddressCode - NOT wrapped"],
+      "effort": "small"
+    },
+    {
+      "name": "Data and Privacy housekeeping screen",
+      "whatItIs": "A sub-screen with the destructive one-shots: clear saved payment and shipping info, delete all cloud drafts, reset imported contacts, and the 'suggest frequent contacts' toggle.",
+      "whyItMatters": "These are the actions a user reaches for when handing the phone to someone or leaving a shared device, and none of them are reachable. Two of the four calls are already wrapped, so most of the work is one table.",
+      "whereItGoes": "New grouped table pushed from TGPrivacyViewController; the frequent-contacts toggle also belongs beside the existing search suggestions.",
+      "tdlib": ["deleteSavedCredentials - wrapped (TGClient+Payments.m)", "clearImportedContacts - wrapped (TGClient+Contacts.h)", "clearAllDraftMessages - NOT wrapped", "toggleTopChatsAreDisabled / getOption disable_top_chats - NOT wrapped"],
+      "effort": "small"
+    }
+  ]
+}

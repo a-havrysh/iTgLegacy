@@ -25,12 +25,34 @@ static CGFloat TGEventsRetinaPixel(void) {
 }
 
 static NSArray *TGEventsAllFilters(void) {
-	return [NSArray arrayWithObjects:
-			@"messageEdits", @"messageDeletions", @"messagePins",
-			@"memberJoins", @"memberLeaves", @"memberInvites",
-			@"memberPromotions", @"memberRestrictions",
-			@"infoChanges", @"settingChanges", @"inviteLinkChanges",
-			@"videoChatChanges", @"forumChanges", nil];
+	static NSArray *filters = nil;
+	if (!filters){
+		filters = [NSArray arrayWithObjects:
+				@"messageEdits", @"messageDeletions", @"messagePins",
+				@"memberJoins", @"memberLeaves", @"memberInvites",
+				@"memberPromotions", @"memberRestrictions",
+				@"infoChanges", @"settingChanges", @"inviteLinkChanges",
+				@"videoChatChanges", @"forumChanges", nil];
+	}
+	return filters;
+}
+
+static NSNumber *TGEventsNumber(NSDictionary *source, NSString *key) {
+	id value = [source isKindOfClass:[NSDictionary class]] ? source[key] : nil;
+	return [value isKindOfClass:[NSNumber class]] ? value : nil;
+}
+
+static long long TGEventsLongLong(NSDictionary *source, NSString *key) {
+	return [TGEventsNumber(source, key) longLongValue];
+}
+
+static int TGEventsInt(NSDictionary *source, NSString *key) {
+	return [TGEventsNumber(source, key) intValue];
+}
+
+static NSString *TGEventsText(NSDictionary *source, NSString *key) {
+	id value = [source isKindOfClass:[NSDictionary class]] ? source[key] : nil;
+	return [value isKindOfClass:[NSString class]] ? value : nil;
 }
 
 static NSDictionary *TGEventsCategory(NSString *title, NSArray *filters) {
@@ -72,12 +94,14 @@ static NSString *TGEventsInitials(NSString *name) {
 	if (![name isKindOfClass:[NSString class]] || !name.length)
 		return @"?";
 	NSMutableString *initials = [NSMutableString string];
+	NSInteger taken = 0;
 	NSArray *words = [name componentsSeparatedByString:@" "];
 	for (NSString *word in words){
 		if (!word.length)
 			continue;
-		[initials appendString:[[word substringToIndex:1] uppercaseString]];
-		if (initials.length >= 2)
+		NSRange first = [word rangeOfComposedCharacterSequenceAtIndex:0];
+		[initials appendString:[[word substringWithRange:first] uppercaseString]];
+		if (++taken >= 2)
 			break;
 	}
 	return initials.length ? initials : @"?";
@@ -120,9 +144,8 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 									   : [NSMutableArray array];
 		if (!_userSelection.count){
 			for (NSDictionary *admin in _administrators){
-				NSNumber *userId = [admin isKindOfClass:[NSDictionary class]]
-						? admin[@"userId"] : nil;
-				if ([userId isKindOfClass:[NSNumber class]])
+				NSNumber *userId = TGEventsNumber(admin, @"userId");
+				if (userId)
 					[_userSelection addObject:userId];
 			}
 		}
@@ -179,32 +202,30 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 	return self.selection.count == TGEventsAllFilters().count;
 }
 
-- (NSNumber *)userIdAtRow:(NSInteger)row {
+- (NSDictionary *)adminAtRow:(NSInteger)row {
 	if (row < 1 || row - 1 >= (NSInteger)self.administrators.count)
 		return nil;
 	NSDictionary *admin = self.administrators[row - 1];
-	if (![admin isKindOfClass:[NSDictionary class]])
-		return nil;
-	NSNumber *userId = admin[@"userId"];
-	return [userId isKindOfClass:[NSNumber class]] ? userId : nil;
+	return [admin isKindOfClass:[NSDictionary class]] ? admin : nil;
+}
+
+- (NSNumber *)userIdAtRow:(NSInteger)row {
+	return TGEventsNumber([self adminAtRow:row], @"userId");
 }
 
 - (NSString *)adminNameAtRow:(NSInteger)row {
-	NSDictionary *admin = self.administrators[row - 1];
-	NSString *name = [admin isKindOfClass:[NSDictionary class]] ? admin[@"name"] : nil;
-	if (![name isKindOfClass:[NSString class]] || !name.length)
-		return @"Admin";
-	return name;
+	NSString *name = TGEventsText([self adminAtRow:row], @"name");
+	return name.length ? name : @"Admin";
 }
 
 - (NSString *)adminStatusAtRow:(NSInteger)row {
-	NSDictionary *admin = self.administrators[row - 1];
-	if (![admin isKindOfClass:[NSDictionary class]])
+	NSDictionary *admin = [self adminAtRow:row];
+	if (!admin)
 		return @"admin";
-	NSString *custom = admin[@"customTitle"];
-	if ([custom isKindOfClass:[NSString class]] && custom.length)
+	NSString *custom = TGEventsText(admin, @"customTitle");
+	if (custom.length)
 		return custom;
-	return [admin[@"isOwner"] boolValue] ? @"creator" : @"admin";
+	return [TGEventsNumber(admin, @"isOwner") boolValue] ? @"creator" : @"admin";
 }
 
 - (void)viewDidLoad {
@@ -242,7 +263,8 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 - (void)updateDone {
 	if (!self.doneButton)
 		return;
-	BOOL enabled = self.selection.count != 0;
+	BOOL enabled = self.selection.count != 0
+			&& (self.administrators.count == 0 || self.userSelection.count != 0);
 	self.doneButton.enabled = enabled;
 	self.doneButton.alpha = enabled ? 1.0f : 0.4f;
 }
@@ -253,6 +275,8 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 
 - (void)donePressed {
 	if (!self.selection.count)
+		return;
+	if (self.administrators.count && !self.userSelection.count)
 		return;
 	NSArray *result = nil;
 	if (self.selection.count < TGEventsAllFilters().count)
@@ -450,12 +474,12 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 	[self.userSelection removeAllObjects];
 	if (toggle.on){
 		for (NSDictionary *admin in self.administrators){
-			NSNumber *userId = [admin isKindOfClass:[NSDictionary class]]
-					? admin[@"userId"] : nil;
-			if ([userId isKindOfClass:[NSNumber class]])
+			NSNumber *userId = TGEventsNumber(admin, @"userId");
+			if (userId)
 				[self.userSelection addObject:userId];
 		}
 	}
+	[self updateDone];
 	[self.tableView reloadData];
 }
 
@@ -502,6 +526,7 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 		[self.userSelection removeObject:userId];
 	else
 		[self.userSelection addObject:userId];
+	[self updateDone];
 	[tableView reloadData];
 }
 
@@ -652,6 +677,7 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 }
 
 - (void)dealloc {
+	[[NSNotificationCenter defaultCenter] removeObserver:self];
 	_tableView.delegate = nil;
 	_tableView.dataSource = nil;
 }
@@ -713,8 +739,23 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 			[[UIBarButtonItem alloc] initWithCustomView:filterButton];
 
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+
+	[[NSNotificationCenter defaultCenter] addObserver:self
+											 selector:@selector(themeChanged)
+												 name:TGThemeChangedNotification
+											   object:nil];
+
 	[self loadAdministrators];
 	[self reload];
+}
+
+- (void)themeChanged {
+	TGTheme *theme = [TGTheme shared];
+	[theme styleNavigationBar:self.navigationController.navigationBar];
+	self.view.backgroundColor = theme.isDark ? [theme listBackgroundColour]
+											 : [UIColor whiteColor];
+	self.tableView.backgroundColor = self.view.backgroundColor;
+	[self.tableView reloadData];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -843,7 +884,7 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 			if (![event isKindOfClass:[NSDictionary class]])
 				continue;
 			[self.events addObject:event];
-			long long eventId = [event[@"eventId"] longLongValue];
+			long long eventId = TGEventsLongLong(event, @"eventId");
 			if (eventId != 0)
 				self.oldestEventId = eventId;
 		}
@@ -907,9 +948,12 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 	if (parts.tm_year == nowParts.tm_year && parts.tm_yday == nowParts.tm_yday - 1)
 		return @"Yesterday";
 
-	NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-	formatter.dateStyle = NSDateFormatterMediumStyle;
-	formatter.timeStyle = NSDateFormatterNoStyle;
+	static NSDateFormatter *formatter = nil;
+	if (!formatter){
+		formatter = [[NSDateFormatter alloc] init];
+		formatter.dateStyle = NSDateFormatterMediumStyle;
+		formatter.timeStyle = NSDateFormatterNoStyle;
+	}
 	return [formatter stringFromDate:
 			[NSDate dateWithTimeIntervalSince1970:(NSTimeInterval)date]];
 }
@@ -920,7 +964,7 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 	NSString *currentTitle = nil;
 	NSMutableArray *currentRows = nil;
 	for (NSDictionary *event in self.events){
-		NSString *title = [self dayTitleForDate:[event[@"date"] intValue]];
+		NSString *title = [self dayTitleForDate:TGEventsInt(event, @"date")];
 		if (!currentTitle || ![title isEqualToString:currentTitle]){
 			currentTitle = title;
 			currentRows = [NSMutableArray array];
@@ -941,11 +985,11 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 }
 
 - (NSString *)summaryForEvent:(NSDictionary *)event {
-	NSString *text = event[@"text"];
-	if ([text isKindOfClass:[NSString class]] && text.length)
+	NSString *text = TGEventsText(event, @"text");
+	if (text.length)
 		return text;
-	NSString *action = event[@"action"];
-	if ([action isKindOfClass:[NSString class]] && action.length)
+	NSString *action = TGEventsText(event, @"action");
+	if (action.length)
 		return action;
 	return @"Unknown action";
 }
@@ -996,19 +1040,24 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 	if (section >= (NSInteger)self.sections.count)
 		return nil;
 
+	BOOL plainPlate = (![TGTheme shared].isDark && [TGTheme shared].importedName == nil);
+
 	CGFloat width = tableView.bounds.size.width;
 	UIView *container = [[UIView alloc] initWithFrame:
 			CGRectMake(0, 0, width, TGEventsHeaderHeight)];
-	container.backgroundColor = TGEventsRGB(0xe4e9f0);
+	container.backgroundColor = plainPlate ? TGEventsRGB(0xe4e9f0)
+										   : [[TGTheme shared] listBackgroundColour];
 
-	NSString *name = section == 0 ? @"CategoryDividerFirst.png" : @"CategoryDivider.png";
-	UIImage *art = [UIImage imageNamed:name];
-	if (art){
-		UIImage *stretched = [art stretchableImageWithLeftCapWidth:0 topCapHeight:0];
-		UIImageView *background = [[UIImageView alloc] initWithImage:stretched];
-		background.frame = CGRectMake(0, 0, width, TGEventsHeaderHeight);
-		background.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-		[container addSubview:background];
+	if (plainPlate){
+		NSString *name = section == 0 ? @"CategoryDividerFirst.png" : @"CategoryDivider.png";
+		UIImage *art = [UIImage imageNamed:name];
+		if (art){
+			UIImage *stretched = [art stretchableImageWithLeftCapWidth:0 topCapHeight:0];
+			UIImageView *background = [[UIImageView alloc] initWithImage:stretched];
+			background.frame = CGRectMake(0, 0, width, TGEventsHeaderHeight);
+			background.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+			[container addSubview:background];
+		}
 	}
 
 	UILabel *label = [[UILabel alloc] initWithFrame:
@@ -1016,7 +1065,7 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 	label.backgroundColor = [UIColor clearColor];
 	label.font = [UIFont boldSystemFontOfSize:13];
 	label.text = self.sections[section][@"title"];
-	if ([[TGTheme shared] isDark]){
+	if (!plainPlate){
 		label.textColor = [[TGTheme shared] sectionHeaderColour];
 	} else {
 		label.textColor = TGEventsRGB(0x697487);
@@ -1045,8 +1094,8 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 	NSDictionary *event = [self eventAtIndexPath:indexPath];
 	BOOL dark = [[TGTheme shared] isDark];
 
-	NSString *name = event[@"name"];
-	if (![name isKindOfClass:[NSString class]] || !name.length)
+	NSString *name = TGEventsText(event, @"name");
+	if (!name.length)
 		name = @"Someone";
 
 	cell.backgroundColor = dark ? [[TGTheme shared] listBackgroundColour]
@@ -1061,15 +1110,15 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 	cell.bodyLabel.textColor = dark ? [[TGTheme shared] secondaryTextColour]
 									: TGEventsRGB(0x536c8c);
 
-	cell.dateLabel.text = [TGDateUtils stringForShortTime:[event[@"date"] intValue]];
+	cell.dateLabel.text = [TGDateUtils stringForShortTime:TGEventsInt(event, @"date")];
 	cell.dateLabel.textColor = dark ? [[TGTheme shared] secondaryTextColour]
 									: TGEventsRGB(0x337acc);
 
 	cell.hairline.backgroundColor = [[TGTheme shared] separatorColour];
-	cell.selectionStyle = [event[@"messageId"] longLongValue] != 0
+	cell.selectionStyle = TGEventsLongLong(event, @"messageId") != 0
 			? UITableViewCellSelectionStyleBlue : UITableViewCellSelectionStyleNone;
 
-	int64_t userId = [event[@"userId"] longLongValue];
+	int64_t userId = (int64_t)TGEventsLongLong(event, @"userId");
 	cell.avatarView.image = [TGIcons avatarWithInitials:TGEventsInitials(name)
 												   size:TGEventsAvatarSide
 											   colourId:userId];
@@ -1096,8 +1145,9 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 	if (!event)
 		return;
 
-	int64_t messageId = (int64_t)[event[@"messageId"] longLongValue];
-	BOOL canReportNotSpam = [event[@"canReportNotSpam"] boolValue] && messageId != 0;
+	int64_t messageId = (int64_t)TGEventsLongLong(event, @"messageId");
+	BOOL canReportNotSpam = [TGEventsNumber(event, @"canReportNotSpam") boolValue]
+			&& messageId != 0;
 	if (messageId == 0)
 		return;
 

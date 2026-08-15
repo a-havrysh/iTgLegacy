@@ -1,0 +1,77 @@
+{
+  "cluster": "drafts-scheduling",
+  "gaps": [
+    {
+      "name": "Draft preview in the chat list row",
+      "whatItIs": "A chat with an unsent draft shows a red \"Draft:\" prefix and the draft text in the subtitle line, overriding the last message.",
+      "whyItMatters": "Without it there is no way to see from the chat list which conversations still have something half-written; the user has to open every chat to find it. TGClient.m already exposes chat[\"draft\"] and TGSavedMessagesViewController already renders it for topics, so the chat list is the odd one out.",
+      "whereItGoes": "src/TGChatListViewController.m cell subtitle rendering; data already comes from src/TGClient.m:2350 (info[\"draft\"]) and is documented in src/TGClient+ChatList.h:240.",
+      "tdlib": ["updateChatDraftMessage (already handled in TGClient.m chat info mapping)", "no new call needed"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Draft saved on backgrounding and termination",
+      "whatItIs": "The composer draft is flushed to TDLib whenever the app resigns active or is about to terminate, not only when the chat screen is popped.",
+      "whyItMatters": "Today saveDraft runs only in -viewWillDisappear (src/TGChatViewController.m:1675). Home-button out of a chat and let iOS 6 jetsam kill the app - which happens constantly on a 512MB 4S - and the typed text is gone. This is the single most common way a draft is lost on this hardware.",
+      "whereItGoes": "src/AppDelegate.m (applicationDidEnterBackground / applicationWillTerminate) calling into the visible TGChatViewController, or an NSNotification observer added in src/TGChatViewController.m next to restoreDraft.",
+      "tdlib": ["setChatDraftMessage - already wrapped as -setDraftText:replyTo:inChat:thread: in TGClient+Messages.h:185"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Custom date and time picker for scheduling",
+      "whatItIs": "ChatScheduleTimeController presents a wheel picker for any date/time, with a minimum time and a \"Send when online\" branch; the presets are shortcuts on top of it, not the whole feature.",
+      "whyItMatters": "We only offer In 1 Hour / In 8 Hours / Tomorrow Morning / When Online (src/TGChatViewController.m runSendOption). Anything else - a birthday message next week, a post at 18:00 tomorrow - is impossible. UIDatePicker exists on iOS 6, so the only reason it is missing is that nobody built the sheet.",
+      "whereItGoes": "A small UIDatePicker sheet reachable from the \"Schedule Message\" branch in src/TGChatViewController.m runSendOption:, feeding self.scheduledSendDate.",
+      "tdlib": ["messageSchedulingStateSendAtDate via the existing sendOptionsDictionary \"sendDate\" key (TGClient+Messages.h:20)"],
+      "effort": "small"
+    },
+    {
+      "name": "Real scheduled-messages screen with reschedule, edit and delete",
+      "whatItIs": "The modern client opens the chat in a scheduled mode: the pending messages are shown as normal bubbles, ordered by send time, each with a context menu offering Send Now, Reschedule, Edit and Delete.",
+      "whyItMatters": "Ours is a flat UIActionSheet listing scheduled messages, and the only action is Send Now (showScheduledMessages / sendScheduledMessageAtIndex in src/TGChatViewController.m). A scheduled message with the wrong time or a typo can only be sent immediately or left to fire wrong - it cannot be moved or cancelled. rescheduleMessage is already wrapped and unused by any UI.",
+      "whereItGoes": "A new lightweight list screen pushed from the send-options sheet, or reuse of TGChatViewController in a scheduled mode; actions via src/TGMessageActionsSheet.m.",
+      "tdlib": ["getChatScheduledMessages (wrapped: -scheduledMessagesInChat:completion:)", "editMessageSchedulingState (wrapped: -rescheduleMessage: and -sendScheduledMessageNow:, reschedule path unused)", "editMessageText (wrapped)", "deleteMessages (wrapped)"],
+      "effort": "substantial"
+    },
+    {
+      "name": "Scheduled-messages entry point outside the long-press",
+      "whatItIs": "When a chat has pending scheduled messages the modern client shows a clock button in the navigation bar so the pending queue is visible and reachable at a glance.",
+      "whyItMatters": "Our only route to scheduled messages is a long-press on Send, and the row only appears if the list happens to be loaded. A user who scheduled something yesterday has no signal it is still pending and no obvious way back to it.",
+      "whereItGoes": "src/TGChatViewController.m navigation bar, driven by the existing self.scheduledMessages array populated by loadScheduledMessages.",
+      "tdlib": ["getChatScheduledMessages (already wrapped)"],
+      "effort": "small"
+    },
+    {
+      "name": "Live refresh when a scheduled message fires or is changed elsewhere",
+      "whatItIs": "TDLib pushes updateNewMessage / updateDeleteMessages for the scheduled queue and updateChatDraftMessage when another device edits the draft; the modern client reacts to both.",
+      "whyItMatters": "loadScheduledMessages runs once on open, and restoreDraft is guarded by draftRestored so it never runs twice. A message that fires while the chat is open leaves a stale entry in our list, and a draft typed on another device never appears - or worse, our stale composer text overwrites it on exit.",
+      "whereItGoes": "The update dispatch in src/TGClient.m plus the handlers in src/TGChatViewController.m (restoreDraft / loadScheduledMessages).",
+      "tdlib": ["updateChatDraftMessage", "updateNewMessage with scheduling state", "updateDeleteMessages"],
+      "effort": "small"
+    },
+    {
+      "name": "Reminders in Saved Messages",
+      "whatItIs": "In Saved Messages the scheduling UI is relabelled as reminders - \"Set a reminder\", a reminders list - and the fired message arrives as a notification to yourself.",
+      "whyItMatters": "This is the cheapest genuinely useful scheduling use case on a phone that is mostly used for messaging, and it is the one place the wording matters: \"Schedule Message\" to yourself reads as nonsense. The mechanism is identical to what we already have.",
+      "whereItGoes": "Wording and entry point in src/TGSavedMessagesViewController.m and the send-options sheet in src/TGChatViewController.m when chatId is the self chat.",
+      "tdlib": ["messageSchedulingStateSendAtDate (already used)", "getChatScheduledMessages (already wrapped)"],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Draft carries formatting, reply target and media caption",
+      "whatItIs": "A TDLib draftMessage holds a full formattedText with entities, an input_message_reply_to and can survive an attachment caption, not just a plain string.",
+      "whyItMatters": "We store and restore plain text plus a reply id, and restoreDraft only shows a generic \"Reply to message\" banner without the quoted message. Bold/link markup and any caption typed under an attachment are silently dropped when the chat is reopened.",
+      "whereItGoes": "src/TGClient+Messages.m setDraftText/draftForChat (widen to formatted text) and the compose banner restore in src/TGChatViewController.m restoreDraft.",
+      "tdlib": ["setChatDraftMessage with draftMessage.input_message_text.text.entities (currently sent as plain text)", "inputMessageReplyToMessage"],
+      "effort": "small"
+    },
+    {
+      "name": "Message effects on send",
+      "whatItIs": "A Premium sender picks an effect next to the send button and the recipient's client plays a full-screen animation over the bubble.",
+      "whyItMatters": "A user would notice effects arriving from modern clients and nothing happening, but there is no fix: the payload is a TGS/webm animation and effect_id can only be set by an active Premium account.",
+      "whereItGoes": "Would be the send-options sheet in src/TGChatViewController.m; already catalogued as blocked and correctly so.",
+      "tdlib": ["getMessageEffect", "messageSendOptions.effect_id"],
+      "effort": "blocked"
+    }
+  ]
+}

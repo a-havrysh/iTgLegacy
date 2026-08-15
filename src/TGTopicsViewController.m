@@ -43,6 +43,38 @@ static NSString *TGTopicDate(NSTimeInterval unix) {
 	return [full stringFromDate:date];
 }
 
+static BOOL TGTopicFlag(NSDictionary *topic, NSString *key) {
+	id value = [topic isKindOfClass:[NSDictionary class]] ? topic[key] : nil;
+	return [value isKindOfClass:[NSNumber class]] && [value boolValue];
+}
+
+static NSInteger TGTopicInteger(NSDictionary *topic, NSString *key) {
+	id value = [topic isKindOfClass:[NSDictionary class]] ? topic[key] : nil;
+	return [value isKindOfClass:[NSNumber class]] ? [value integerValue] : 0;
+}
+
+static long long TGTopicLongLong(NSDictionary *topic, NSString *key) {
+	id value = [topic isKindOfClass:[NSDictionary class]] ? topic[key] : nil;
+	return [value isKindOfClass:[NSNumber class]] ? [value longLongValue] : 0;
+}
+
+static double TGTopicDouble(NSDictionary *topic, NSString *key) {
+	id value = [topic isKindOfClass:[NSDictionary class]] ? topic[key] : nil;
+	return [value isKindOfClass:[NSNumber class]] ? [value doubleValue] : 0;
+}
+
+static NSString *TGTopicString(NSDictionary *topic, NSString *key) {
+	id value = [topic isKindOfClass:[NSDictionary class]] ? topic[key] : nil;
+	return [value isKindOfClass:[NSString class]] ? value : @"";
+}
+
+static NSString *TGTopicInitial(NSString *name) {
+	if (!name.length)
+		return @"?";
+	NSRange first = [name rangeOfComposedCharacterSequenceAtIndex:0];
+	return [[name substringWithRange:first] uppercaseString];
+}
+
 static UIImage *TGTopicPlateImage(void) {
 	static UIImage *plate = nil;
 	if (!plate)
@@ -93,22 +125,27 @@ static UIImage *TGTopicDrawAvatar(NSString *initials, CGFloat size, NSInteger rg
 	return image;
 }
 
-static UIImage *TGTopicAvatarImage(NSString *initials, CGFloat size, NSInteger rgb) {
-	static NSMutableDictionary *cache = nil;
-	if (!cache)
-		cache = [[NSMutableDictionary alloc] init];
+static NSMutableDictionary *TGTopicAvatarCache = nil;
 
-	unichar letter = initials.length ? [initials characterAtIndex:0] : (unichar)'?';
-	NSString *key = [NSString stringWithFormat:@"%ld.%d.%d", (long)rgb, (int)letter, (int)size];
-	UIImage *cached = [cache objectForKey:key];
+static void TGTopicFlushAvatarCache(void) {
+	[TGTopicAvatarCache removeAllObjects];
+}
+
+static UIImage *TGTopicAvatarImage(NSString *initials, CGFloat size, NSInteger rgb) {
+	if (!TGTopicAvatarCache)
+		TGTopicAvatarCache = [[NSMutableDictionary alloc] init];
+
+	NSString *letter = initials.length ? initials : @"?";
+	NSString *key = [NSString stringWithFormat:@"%ld.%@.%d", (long)rgb, letter, (int)size];
+	UIImage *cached = [TGTopicAvatarCache objectForKey:key];
 	if (cached)
 		return cached;
 
 	UIImage *image = TGTopicDrawAvatar(initials, size, rgb);
 	if (image){
-		if (cache.count > 48)
-			[cache removeAllObjects];
-		[cache setObject:image forKey:key];
+		if (TGTopicAvatarCache.count > 48)
+			[TGTopicAvatarCache removeAllObjects];
+		[TGTopicAvatarCache setObject:image forKey:key];
 	}
 	return image;
 }
@@ -365,6 +402,11 @@ static const NSInteger kTopicDeleteAlert = 93;
 	[[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
+- (void)didReceiveMemoryWarning {
+	[super didReceiveMemoryWarning];
+	TGTopicFlushAvatarCache();
+}
+
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
 	if (self.loadedOnce)
@@ -418,6 +460,7 @@ static const NSInteger kTopicDeleteAlert = 93;
 
 - (void)themeChanged {
 	TGTheme *theme = [TGTheme shared];
+	TGTopicFlushAvatarCache();
 	[theme styleNavigationBar:self.navigationController.navigationBar];
 	self.tableView.backgroundColor = [theme listBackgroundColour];
 	self.tableView.separatorColor = [theme separatorColour];
@@ -471,7 +514,6 @@ static const NSInteger kTopicDeleteAlert = 93;
 		[me updateEmptyState];
 		[me updateSubtitle];
 		[me.tableView reloadData];
-		NSLog(@"TDLIB TOPICS: %lu", (unsigned long)clean.count);
 	}];
 }
 
@@ -489,11 +531,11 @@ static const NSInteger kTopicDeleteAlert = 93;
 - (NSArray *)orderedTopics:(NSArray *)topics {
 	NSMutableArray *ordered = [NSMutableArray arrayWithCapacity:topics.count];
 	for (NSDictionary *topic in topics){
-		if ([topic[@"isPinned"] boolValue])
+		if (TGTopicFlag(topic, @"isPinned"))
 			[ordered addObject:topic];
 	}
 	for (NSDictionary *topic in topics){
-		if (![topic[@"isPinned"] boolValue])
+		if (!TGTopicFlag(topic, @"isPinned"))
 			[ordered addObject:topic];
 	}
 	return ordered;
@@ -515,12 +557,9 @@ static const NSInteger kTopicDeleteAlert = 93;
 	}
 
 	self.loadingMore = YES;
-	NSInteger offsetDate = [offset[@"date"] respondsToSelector:@selector(integerValue)]
-			? [offset[@"date"] integerValue] : 0;
-	int64_t offsetMessageId = [offset[@"messageId"] respondsToSelector:@selector(longLongValue)]
-			? [offset[@"messageId"] longLongValue] : 0;
-	int32_t offsetTopicId = [offset[@"topicId"] respondsToSelector:@selector(intValue)]
-			? (int32_t)[offset[@"topicId"] intValue] : 0;
+	NSInteger offsetDate = TGTopicInteger(offset, @"date");
+	int64_t offsetMessageId = TGTopicLongLong(offset, @"messageId");
+	int32_t offsetTopicId = (int32_t)TGTopicInteger(offset, @"topicId");
 
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] forumTopicsForChat:self.chatId
@@ -602,14 +641,13 @@ static const NSInteger kTopicDeleteAlert = 93;
 		return cell;
 
 	NSDictionary *t = self.topics[indexPath.row];
-	NSInteger unread = [t[@"unread"] respondsToSelector:@selector(integerValue)]
-			? [t[@"unread"] integerValue] : 0;
+	NSInteger unread = TGTopicInteger(t, @"unread");
 
-	NSString *name = [t[@"name"] isKindOfClass:NSString.class] ? t[@"name"] : @"";
-	NSString *preview = [t[@"text"] isKindOfClass:NSString.class] ? t[@"text"] : @"";
+	NSString *name = TGTopicString(t, @"name");
+	NSString *preview = TGTopicString(t, @"text");
 	NSString *title = name.length ? name : @"Topic";
-	BOOL closed = [t[@"isClosed"] boolValue];
-	BOOL hidden = [t[@"isHidden"] boolValue];
+	BOOL closed = TGTopicFlag(t, @"isClosed");
+	BOOL hidden = TGTopicFlag(t, @"isHidden");
 
 	cell.titleLabel.text = title;
 	if (closed){
@@ -623,8 +661,8 @@ static const NSInteger kTopicDeleteAlert = 93;
 	} else {
 		cell.previewLabel.text = preview;
 	}
-	cell.dateLabel.text = TGTopicDate([t[@"date"] doubleValue]);
-	cell.pinIcon.hidden = ![t[@"isPinned"] boolValue];
+	cell.dateLabel.text = TGTopicDate(TGTopicDouble(t, @"date"));
+	cell.pinIcon.hidden = !TGTopicFlag(t, @"isPinned");
 
 	if (plainPlate){
 		UIImageView *plate = (UIImageView *)cell.backgroundView;
@@ -639,9 +677,8 @@ static const NSInteger kTopicDeleteAlert = 93;
 		}
 	}
 
-	NSString *initials = [title substringToIndex:1].uppercaseString;
-	NSInteger rgb = [t[@"iconColor"] respondsToSelector:@selector(integerValue)]
-			? [t[@"iconColor"] integerValue] : 0;
+	NSString *initials = TGTopicInitial(title);
+	NSInteger rgb = TGTopicInteger(t, @"iconColor");
 	cell.avatar.image = (rgb > 0)
 			? TGTopicAvatarImage(initials, kTopicAvatar, rgb)
 			: [TGIcons avatarWithInitials:initials size:kTopicAvatar
@@ -649,8 +686,7 @@ static const NSInteger kTopicDeleteAlert = 93;
 
 	cell.muteIcon.hidden = ![self topicIsMuted:t];
 
-	NSInteger mentions = [t[@"unreadMentions"] respondsToSelector:@selector(integerValue)]
-			? [t[@"unreadMentions"] integerValue] : 0;
+	NSInteger mentions = TGTopicInteger(t, @"unreadMentions");
 	if (unread > 0){
 		cell.badge.text = unread < 1000
 				? [NSString stringWithFormat:@"%ld", (long)unread]
@@ -677,12 +713,11 @@ static const NSInteger kTopicDeleteAlert = 93;
 		return;
 
 	NSDictionary *t = self.topics[indexPath.row];
-	long long threadId = [t[@"threadId"] respondsToSelector:@selector(longLongValue)]
-			? [t[@"threadId"] longLongValue] : 0;
+	long long threadId = TGTopicLongLong(t, @"threadId");
 	if (threadId == 0)
 		return;
 
-	NSString *name = [t[@"name"] isKindOfClass:NSString.class] ? t[@"name"] : @"";
+	NSString *name = TGTopicString(t, @"name");
 	TGChatViewController *vc = [[TGChatViewController alloc] init];
 	vc.chatId = self.chatId;
 	vc.threadId = threadId;
@@ -691,17 +726,17 @@ static const NSInteger kTopicDeleteAlert = 93;
 	[self.navigationController pushViewController:vc animated:YES];
 
 	int32_t topicId = [self topicIdOf:t];
-	if (topicId != 0 && [t[@"unread"] integerValue] > 0)
+	if (topicId != 0 && TGTopicInteger(t, @"unread") > 0)
 		[[TGClient shared] markForumTopicReadInChat:self.chatId topic:topicId completion:nil];
 }
 
 #pragma mark - topic actions
 
 - (int32_t)topicIdOf:(NSDictionary *)topic {
-	id value = topic[@"topicId"];
-	if (![value respondsToSelector:@selector(intValue)])
-		value = topic[@"threadId"];
-	return [value respondsToSelector:@selector(intValue)] ? (int32_t)[value intValue] : 0;
+	int32_t topicId = (int32_t)TGTopicInteger(topic, @"topicId");
+	if (topicId == 0)
+		topicId = (int32_t)TGTopicLongLong(topic, @"threadId");
+	return topicId;
 }
 
 - (void)showError:(NSString *)message {
@@ -710,14 +745,13 @@ static const NSInteger kTopicDeleteAlert = 93;
 }
 
 - (BOOL)topicIsMuted:(NSDictionary *)topic {
-	id value = topic[@"muteFor"];
-	return [value respondsToSelector:@selector(integerValue)] && [value integerValue] > 0;
+	return TGTopicInteger(topic, @"muteFor") > 0;
 }
 
 - (NSInteger)pinnedCount {
 	NSInteger count = 0;
 	for (NSDictionary *topic in self.topics){
-		if ([topic[@"isPinned"] boolValue])
+		if (TGTopicFlag(topic, @"isPinned"))
 			count++;
 		else
 			break;
@@ -737,10 +771,10 @@ static const NSInteger kTopicDeleteAlert = 93;
 	NSDictionary *t = self.topics[path.row];
 	self.actionTopic = t;
 
-	BOOL general = [t[@"isGeneral"] boolValue];
-	BOOL closed = [t[@"isClosed"] boolValue];
-	BOOL pinned = [t[@"isPinned"] boolValue];
-	BOOL hidden = [t[@"isHidden"] boolValue];
+	BOOL general = TGTopicFlag(t, @"isGeneral");
+	BOOL closed = TGTopicFlag(t, @"isClosed");
+	BOOL pinned = TGTopicFlag(t, @"isPinned");
+	BOOL hidden = TGTopicFlag(t, @"isHidden");
 
 	NSMutableArray *items = [NSMutableArray array];
 	NSMutableArray *keys = [NSMutableArray array];
@@ -769,8 +803,8 @@ static const NSInteger kTopicDeleteAlert = 93;
 					   @"icon"  : (muted ? @"unmute" : @"mute")}];
 	[keys addObject:@"mute"];
 
-	if ([t[@"unread"] integerValue] > 0 || [t[@"unreadMentions"] integerValue] > 0
-			|| [t[@"unreadReactions"] integerValue] > 0){
+	if (TGTopicInteger(t, @"unread") > 0 || TGTopicInteger(t, @"unreadMentions") > 0
+			|| TGTopicInteger(t, @"unreadReactions") > 0){
 		[items addObject:@{@"title" : @"Mark as Read", @"icon" : @"unmute"}];
 		[keys addObject:@"read"];
 	}
@@ -818,7 +852,7 @@ static const NSInteger kTopicDeleteAlert = 93;
 	}
 
 	if ([key isEqualToString:@"pin"]){
-		BOOL pin = ![t[@"isPinned"] boolValue];
+		BOOL pin = !TGTopicFlag(t, @"isPinned");
 		[[TGClient shared] setForumTopicInChat:self.chatId topic:topicId pinned:pin
 									completion:^(BOOL success){
 			if (!success)
@@ -827,7 +861,7 @@ static const NSInteger kTopicDeleteAlert = 93;
 			[weakSelf reloadTopics];
 		}];
 	} else if ([key isEqualToString:@"close"]){
-		BOOL close = ![t[@"isClosed"] boolValue];
+		BOOL close = !TGTopicFlag(t, @"isClosed");
 		[[TGClient shared] setForumTopicInChat:self.chatId topic:topicId closed:close
 									completion:^(BOOL success){
 			if (!success)
@@ -869,7 +903,7 @@ static const NSInteger kTopicDeleteAlert = 93;
 		[self confirmDeleteTopic:t];
 		return;
 	} else if ([key isEqualToString:@"hide"]){
-		BOOL hide = ![t[@"isHidden"] boolValue];
+		BOOL hide = !TGTopicFlag(t, @"isHidden");
 		[[TGClient shared] setGeneralForumTopicInChat:self.chatId hidden:hide
 										   completion:^(BOOL success){
 			if (!success)
@@ -910,7 +944,9 @@ static const NSInteger kTopicDeleteAlert = 93;
 
 - (void)confirmDeleteTopic:(NSDictionary *)topic {
 	self.actionTopic = topic;
-	NSString *name = [topic[@"name"] isKindOfClass:NSString.class] ? topic[@"name"] : @"this topic";
+	NSString *name = TGTopicString(topic, @"name");
+	if (!name.length)
+		name = @"this topic";
 	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Delete Topic"
 													message:[NSString stringWithFormat:
 															@"Delete %@ and all of its messages?", name]
@@ -955,7 +991,7 @@ static const NSInteger kTopicDeleteAlert = 93;
 
 	NSMutableArray *ids = [NSMutableArray array];
 	for (NSDictionary *topic in self.topics){
-		if (![topic[@"isPinned"] boolValue])
+		if (!TGTopicFlag(topic, @"isPinned"))
 			break;
 		int32_t topicId = [self topicIdOf:topic];
 		if (topicId != 0)
@@ -1043,16 +1079,14 @@ targetIndexPathForMoveFromRowAtIndexPath:(NSIndexPath *)from
 	alert.tag = kTopicNameAlertEdit;
 	if ([alert respondsToSelector:@selector(setAlertViewStyle:)]){
 		alert.alertViewStyle = UIAlertViewStylePlainTextInput;
-		NSString *name = [topic[@"name"] isKindOfClass:NSString.class] ? topic[@"name"] : @"";
-		[alert textFieldAtIndex:0].text = name;
+		[alert textFieldAtIndex:0].text = TGTopicString(topic, @"name");
 	}
 	[alert show];
 }
 
 - (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {
 	if (buttonIndex == alertView.cancelButtonIndex){
-		if (alertView.tag == kTopicDeleteAlert)
-			self.actionTopic = nil;
+		self.actionTopic = nil;
 		return;
 	}
 
@@ -1129,8 +1163,12 @@ targetIndexPathForMoveFromRowAtIndexPath:(NSIndexPath *)from
 													  actionBlock:^(id target, NSString *action){
 		TGTopicsViewController *me = weakSelf;
 		me.currentActionSheet = nil;
-		if (!me || [action isEqualToString:@"cancel"])
+		if (!me)
 			return;
+		if ([action isEqualToString:@"cancel"]){
+			me.actionTopic = nil;
+			return;
+		}
 
 		int64_t emojiId = 0;
 		BOOL changeIcon = YES;
@@ -1139,7 +1177,7 @@ targetIndexPathForMoveFromRowAtIndexPath:(NSIndexPath *)from
 		else if (![action isEqualToString:@"clear"]){
 			NSInteger index = [[action substringFromIndex:4] integerValue];
 			if (index >= 0 && index < (NSInteger)icons.count)
-				emojiId = [icons[(NSUInteger)index][@"emojiId"] longLongValue];
+				emojiId = TGTopicLongLong(icons[(NSUInteger)index], @"emojiId");
 		}
 
 		if (editing)
@@ -1153,10 +1191,11 @@ targetIndexPathForMoveFromRowAtIndexPath:(NSIndexPath *)from
 
 - (NSInteger)iconColourForName:(NSString *)name {
 	NSArray *colours = [[TGClient shared] forumTopicIconColors];
-	if (colours.count == 0)
+	if (![colours isKindOfClass:[NSArray class]] || colours.count == 0)
 		return 0;
 	NSUInteger index = (NSUInteger)labs((long)name.hash) % colours.count;
-	return [colours[index] integerValue];
+	id colour = colours[index];
+	return [colour isKindOfClass:[NSNumber class]] ? [colour integerValue] : 0;
 }
 
 - (void)commitCreateWithName:(NSString *)name iconEmojiId:(int64_t)emojiId {

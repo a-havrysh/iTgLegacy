@@ -1,0 +1,115 @@
+{
+  "cluster": "translation-language",
+  "gaps": [
+    {
+      "name": "Voice/video note speech transcription",
+      "whatItIs": "Tap a transcribe glyph on a voice or video note bubble; the server transcribes it and the text appears under the waveform, with a pending spinner and a Good/Bad rating row when it finishes.",
+      "whyItMatters": "On a 4S in a noisy place, or with a speaker you cannot play out loud, a voice note is currently unreadable. This is the single most useful modern feature we already have fully wrapped and never call from any screen.",
+      "whereItGoes": "ChatViewCell.m voice/video-note bubble (add a glyph plus a transcript label that grows the cell height), driven from TGChatViewController.m where the message-update callback already refreshes cells; also as a 'Transcribe' row in TGMessageActionsSheet.m.",
+      "tdlib": [
+        "recognizeSpeech - wrapped (TGClient+Translation.h -recognizeSpeechForMessage:inChat:completion:, also TGClient+Premium.h -recognizeSpeechInMessage:)",
+        "messageVoiceNote.speech_recognition_result / updateMessageContent - wrapped via -speechTranscriptForMessage:inChat:completion:",
+        "rateSpeechRecognition - wrapped (-rateSpeechRecognitionForMessage:inChat:good:)"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Inline translation under the bubble instead of an alert",
+      "whatItIs": "Translating a message replaces or appends the translated text inside the bubble itself, with the original still reachable via 'Show Original'. Modern client keeps a per-message translation attribute so it survives scrolling.",
+      "whyItMatters": "Today TGChatViewController.m -translateMessage: dumps the result into a modal alert, which loses the text the moment you dismiss it and cannot be scrolled or copied comfortably in a conversation.",
+      "whereItGoes": "TGChatViewController.m:3506 -translateMessage: plus ChatViewCell.m; keep an NSMutableDictionary of messageId -> translated string on the controller and re-lay out the cell.",
+      "tdlib": [
+        "translateMessageText - wrapped (TGClient+Translation.h -translateMessage:inChat:toLanguage:tone:completion:)"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Per-chat 'Translate this chat' bar",
+      "whatItIs": "A one-line bar under the navigation bar of a chat in a foreign language: 'Translate to English' with a dismiss/settings chevron. Enabling it translates the visible messages in bulk and keeps translating as you scroll.",
+      "whyItMatters": "Translating message by message through the action sheet is unusable for a real foreign-language conversation. This is the entry point everything else in the cluster hangs off.",
+      "whereItGoes": "TGChatViewController.m — reuse the existing compose/pinned banner layout above the message list; state persisted per chat via TGClient+Translation -setChat:translatable: and updateChatIsTranslatable.",
+      "tdlib": [
+        "translateMessageText batched - wrapped (-translateMessages:...)",
+        "toggleChatIsTranslatable / updateChatIsTranslatable - wrapped (-setChat:translatable:)"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Translation settings: Show Translate Button and Do Not Translate list",
+      "whatItIs": "A Language section in Settings with a 'Show Translate Button' toggle, a target-language picker, and a multi-select 'Do Not Translate' list of languages the translate bar never offers for.",
+      "whyItMatters": "Without a do-not-translate list the chat bar nags on every chat whose language detection is fuzzy; without a target picker we can only translate to the phone's locale (hardcoded at TGChatViewController.m:3504).",
+      "whereItGoes": "New section in TGSettingsViewController.m pushing a plain grouped UITableView language list; values stored in NSUserDefaults (this is a client-side preference, not a TDLib one).",
+      "tdlib": [
+        "no new td_api calls; consumes getLanguagePackInfo names already wrapped for the picker list"
+      ],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Interface language list and switching",
+      "whatItIs": "Settings > Language lists the official language packs from the server with native names and translation completeness, and switching one re-renders the whole UI from the downloaded strings.",
+      "whyItMatters": "The client is English-only; there is not a single .strings file and no NSLocalizedString use in src/. A Russian or Spanish user gets an English UI regardless of phone language.",
+      "whereItGoes": "New TGLanguageViewController pushed from TGSettingsViewController.m. Telegraph already implements the whole screen — /Users/alexanderhavrysh/Git/iOS/twelve/Telegraph/TGLocalizationSelectionController.m plus TGLocalizationSignals.m and TGDownloadLocalizationActor.m — so the list and download half is a cheap port. The expensive half is routing our ~hundreds of hardcoded UI strings through a lookup.",
+      "tdlib": [
+        "getLocalizationTargetInfo - wrapped (-languagePacksWithCompletion:)",
+        "getLanguagePackInfo - wrapped",
+        "setOption language_pack_id - wrapped (-applyLanguagePack:completion:)",
+        "getLanguagePackStrings - wrapped",
+        "synchronizeLanguagePack - wrapped"
+      ],
+      "effort": "substantial"
+    },
+    {
+      "name": "t.me/setlanguage deep link handling",
+      "whatItIs": "Opening a setlanguage link shows a confirmation sheet with the pack's name, string count and completeness, then installs and applies it.",
+      "whyItMatters": "These links are how non-official and beta packs are shared; today the link silently does nothing.",
+      "whereItGoes": "The internalLinkType dispatch in TGClient+WebLinks.h consumers (AppDelegate.m / TGChatViewController.m link handling) plus a TGActionSheet confirmation. Depends on the language screen above to be meaningful.",
+      "tdlib": [
+        "getInternalLinkType internalLinkTypeLanguagePack - link parsing wrapped",
+        "getLanguagePackInfo / setOption - wrapped (-languagePackInfo:completion:, -applyLanguagePack:completion:)"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Speech-recognition free-trial counter and premium wall",
+      "whatItIs": "Non-premium accounts get N transcriptions per week; the client reads the remaining count and, when exhausted, shows the 'Transcribe voice messages' premium sheet with a cooldown timer.",
+      "whyItMatters": "Without it the transcribe glyph just fails with an opaque error once the quota runs out, which reads as a bug.",
+      "whereItGoes": "Alongside the transcribe glyph in ChatViewCell.m; the upsell sheet reuses TGPremiumViewController.m which already renders feature rows.",
+      "tdlib": [
+        "getOption speech_recognition_trial_count / speech_recognition_trial_weekly_number / speech_recognition_trial_cooldown_until - generic option getter exists in TGClient+AppSettings, no specific wrapper",
+        "PREMIUM error mapping from recognizeSpeech"
+      ],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Channel auto-translation for viewers",
+      "whatItIs": "Channels whose admins enabled automatic translation serve posts already translated to the reader's language; the client shows the translate bar in the on state by default and honours the chat's auto-translate flag.",
+      "whyItMatters": "The catalogue marks this blocked, which is wrong — the translation happens server-side, so nothing about the 4S prevents it. The admin-side toggle needs boost level checks (TGClient+Channels.m already reads can_enable_automatic_translation and min_automatic_translation_boost_level), but the viewer side is just honouring a flag.",
+      "whereItGoes": "Same translate bar in TGChatViewController.m, defaulted from the chat's auto-translate flag; admin toggle row in the channel section of TGProfileViewController.m.",
+      "tdlib": [
+        "supergroupFullInfo.has_automatic_translation / chat auto-translate flag - already read in TGClient+Channels.m",
+        "toggleSupergroupHasAutomaticTranslation - not wrapped"
+      ],
+      "effort": "small"
+    },
+    {
+      "name": "Translate the composer text and profile bios",
+      "whatItIs": "A Translate action on selected text in the input field and on a user's bio / channel description in the profile.",
+      "whyItMatters": "Replying in a language you do not speak is the other half of a translated conversation; today translation only reads inbound messages.",
+      "whereItGoes": "Input-bar long-press menu in TGChatViewController.m (TGPopupMenu.m already provides the menu), and a Translate row on the bio cell in TGProfileViewController.m.",
+      "tdlib": [
+        "translateText - wrapped (TGClient+Translation.h -translateText:toLanguage:tone:completion: and TGClient+Messages.h -translateText:)"
+      ],
+      "effort": "drop-in"
+    },
+    {
+      "name": "Right-to-left interface mirroring",
+      "whatItIs": "Arabic, Hebrew and Persian packs flip the whole layout: bubbles, back chevrons, table cell accessories and text alignment.",
+      "whyItMatters": "Without it those language packs produce an unreadable mixed layout, so the language list has to hide RTL packs. Worth recording as a known limit rather than a to-do.",
+      "whereItGoes": "Would touch every frame calculation in src/*ViewController.m and ChatViewCell.m.",
+      "tdlib": [
+        "languagePackInfo.is_rtl - already surfaced by -languagePacksWithCompletion: as \"rtl\""
+      ],
+      "effort": "blocked"
+    }
+  ]
+}

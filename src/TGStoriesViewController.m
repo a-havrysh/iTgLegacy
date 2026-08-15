@@ -19,6 +19,10 @@ static const CGFloat TGStoryFooterInset = 10.0f;
 static const CGFloat TGStoryFooterBottom = 10.0f;
 static const CGFloat TGStoryCaptionHeight = 50.0f;
 static const NSInteger TGStoryPhotoPixels = 640;
+static const CGFloat TGStoryPageGap = 16.0f;
+static const CGFloat TGStoryOverscroll = 48.0f;
+static const CGFloat TGStoryDismissDistance = 100.0f;
+static const CGFloat TGStoryDismissVelocity = 700.0f;
 
 static UIImage *TGStoryStretch(NSString *name, NSInteger leftCap)
 {
@@ -186,19 +190,144 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 
 @end
 
-@interface TGStoriesViewController ()
+@interface TGStoryPage : UIView
+
+@property (nonatomic, assign) NSInteger pageIndex;
+@property (nonatomic, strong) NSNumber *itemId;
+@property (nonatomic, readonly) UIImage *image;
+
+- (void)setStoryImage:(UIImage *)image animated:(BOOL)animated;
+- (void)setCaption:(NSString *)caption;
+- (void)prepareForReuse;
+- (CGRect)captionFrame;
+
+@end
+
+@implementation TGStoryPage
+{
+	UIImageView *_imageView;
+	UIView *_captionPlate;
+	UILabel *_captionLabel;
+}
+
+- (id)initWithFrame:(CGRect)frame
+{
+	self = [super initWithFrame:frame];
+	if (self != nil)
+	{
+		self.backgroundColor = [UIColor clearColor];
+
+		_imageView = [[UIImageView alloc] initWithFrame:CGRectZero];
+		_imageView.backgroundColor = [UIColor blackColor];
+		_imageView.contentMode = UIViewContentModeScaleAspectFit;
+		_imageView.userInteractionEnabled = NO;
+		[self addSubview:_imageView];
+
+		_captionPlate = [[UIView alloc] initWithFrame:CGRectZero];
+		_captionPlate.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.45f];
+		_captionPlate.userInteractionEnabled = NO;
+		_captionPlate.hidden = YES;
+		[self addSubview:_captionPlate];
+
+		_captionLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+		_captionLabel.backgroundColor = [UIColor clearColor];
+		_captionLabel.textColor = [UIColor whiteColor];
+		_captionLabel.font = [UIFont systemFontOfSize:15];
+		_captionLabel.numberOfLines = 2;
+		_captionLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+		[_captionPlate addSubview:_captionLabel];
+	}
+	return self;
+}
+
+- (UIImage *)image
+{
+	return _imageView.image;
+}
+
+- (void)setStoryImage:(UIImage *)image animated:(BOOL)animated
+{
+	if (animated && image != nil)
+	{
+		UIImageView *view = _imageView;
+		[UIView transitionWithView:view
+						  duration:0.15
+						   options:UIViewAnimationOptionTransitionCrossDissolve
+						animations:^{ view.image = image; }
+						completion:nil];
+	}
+	else
+	{
+		_imageView.image = image;
+	}
+	[self setNeedsLayout];
+}
+
+- (void)setCaption:(NSString *)caption
+{
+	_captionLabel.text = caption ?: @"";
+	_captionPlate.hidden = (caption.length == 0);
+	[self setNeedsLayout];
+}
+
+- (void)prepareForReuse
+{
+	_imageView.image = nil;
+	_captionLabel.text = @"";
+	_captionPlate.hidden = YES;
+	self.itemId = nil;
+}
+
+- (CGRect)captionFrame
+{
+	if (_captionPlate.hidden)
+		return CGRectZero;
+	return _captionPlate.frame;
+}
+
+- (void)layoutSubviews
+{
+	[super layoutSubviews];
+
+	CGRect area = self.bounds;
+	CGSize size = _imageView.image != nil ? _imageView.image.size : CGSizeMake(9.0f, 16.0f);
+	if (size.width <= 0.0f || size.height <= 0.0f)
+		size = CGSizeMake(9.0f, 16.0f);
+
+	CGFloat scale = MIN(area.size.width / size.width, area.size.height / size.height);
+	CGFloat drawWidth = floorf(size.width * scale);
+	CGFloat drawHeight = floorf(size.height * scale);
+	CGRect frame = CGRectMake(floorf((area.size.width - drawWidth) / 2.0f),
+							  floorf((area.size.height - drawHeight) / 2.0f),
+							  drawWidth, drawHeight);
+	_imageView.frame = frame;
+
+	CGFloat plateHeight = MIN(TGStoryCaptionHeight, drawHeight);
+	_captionPlate.frame = CGRectMake(frame.origin.x,
+									 CGRectGetMaxY(frame) - plateHeight,
+									 frame.size.width, plateHeight);
+	_captionLabel.frame = CGRectInset(_captionPlate.bounds, 8.0f, 6.0f);
+}
+
+@end
+
+@interface TGStoriesViewController () <UIScrollViewDelegate, UIGestureRecognizerDelegate>
 {
 	NSArray *_storyIds;
 	NSInteger _index;
 	NSMutableDictionary *_stories;
 	NSMutableSet *_seen;
 	NSInteger _openStoryId;
-	NSInteger _generation;
+
+	NSMutableArray *_posterList;
+	NSInteger _posterIndex;
+	BOOL _postersRequested;
+	BOOL _dismissing;
 
 	UIView *_stripView;
-	UIImageView *_photoView;
-	UIView *_captionPlate;
-	UILabel *_captionLabel;
+	UIScrollView *_pagingView;
+	NSMutableArray *_visiblePages;
+	NSMutableArray *_pageQueue;
 	UIView *_footerView;
 	UIButton *_replyButton;
 	UIButton *_middleButton;
@@ -334,32 +463,38 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 	_stripView.backgroundColor = [UIColor clearColor];
 	[self.view addSubview:_stripView];
 
-	_photoView = [[UIImageView alloc] initWithFrame:CGRectZero];
-	_photoView.backgroundColor = [UIColor blackColor];
-	_photoView.contentMode = UIViewContentModeScaleAspectFit;
-	_photoView.userInteractionEnabled = NO;
-	[self.view addSubview:_photoView];
+	_visiblePages = [[NSMutableArray alloc] init];
+	_pageQueue = [[NSMutableArray alloc] init];
 
-	_captionPlate = [[UIView alloc] initWithFrame:CGRectZero];
-	_captionPlate.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.45f];
-	_captionPlate.hidden = YES;
-	[self.view addSubview:_captionPlate];
-
-	_captionLabel = [[UILabel alloc] initWithFrame:CGRectZero];
-	_captionLabel.backgroundColor = [UIColor clearColor];
-	_captionLabel.textColor = [UIColor whiteColor];
-	_captionLabel.font = [UIFont systemFontOfSize:15];
-	_captionLabel.numberOfLines = 2;
-	_captionLabel.lineBreakMode = NSLineBreakByTruncatingTail;
-	[_captionPlate addSubview:_captionLabel];
+	_pagingView = [[UIScrollView alloc] initWithFrame:CGRectZero];
+	_pagingView.pagingEnabled = YES;
+	_pagingView.alwaysBounceHorizontal = YES;
+	_pagingView.alwaysBounceVertical = NO;
+	_pagingView.directionalLockEnabled = YES;
+	_pagingView.scrollsToTop = NO;
+	_pagingView.showsHorizontalScrollIndicator = NO;
+	_pagingView.showsVerticalScrollIndicator = NO;
+	_pagingView.delaysContentTouches = NO;
+	_pagingView.backgroundColor = [UIColor clearColor];
+	_pagingView.delegate = self;
+	[self.view addSubview:_pagingView];
 
 	[self buildFooter];
 
 	UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc]
 			initWithTarget:self action:@selector(viewTapped:)];
+	tap.delegate = self;
 	[self.view addGestureRecognizer:tap];
 
-	[self showIndex:_index animated:NO];
+	UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc]
+			initWithTarget:self action:@selector(viewDragged:)];
+	pan.delegate = self;
+	pan.maximumNumberOfTouches = 1;
+	[self.view addGestureRecognizer:pan];
+
+	[self updateStrip];
+	[self updateChrome];
+	[self discoverPosters];
 }
 
 - (void)buildTitleView
@@ -472,7 +607,12 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 
 	CGFloat areaTop = TGStoryPhotoTop;
 	CGFloat areaHeight = footerY - 8.0f - areaTop;
-	[self layoutPhotoInArea:CGRectMake(0, areaTop, width, areaHeight)];
+	CGRect area = CGRectMake(0, areaTop, width, areaHeight);
+	if (!CGRectEqualToRect(_pagingView.frame, area))
+	{
+		_pagingView.frame = area;
+		[self resetPagingGeometry];
+	}
 }
 
 - (void)layoutFooter
@@ -541,27 +681,6 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 	}
 }
 
-- (void)layoutPhotoInArea:(CGRect)area
-{
-	CGSize size = _photoView.image != nil ? _photoView.image.size : CGSizeMake(9.0f, 16.0f);
-	if (size.width <= 0.0f || size.height <= 0.0f)
-		size = CGSizeMake(9.0f, 16.0f);
-
-	CGFloat scale = MIN(area.size.width / size.width, area.size.height / size.height);
-	CGFloat drawWidth = floorf(size.width * scale);
-	CGFloat drawHeight = floorf(size.height * scale);
-	CGRect frame = CGRectMake(area.origin.x + floorf((area.size.width - drawWidth) / 2.0f),
-							  area.origin.y + floorf((area.size.height - drawHeight) / 2.0f),
-							  drawWidth, drawHeight);
-	_photoView.frame = frame;
-
-	CGFloat plateHeight = MIN(TGStoryCaptionHeight, drawHeight);
-	_captionPlate.frame = CGRectMake(frame.origin.x,
-									 CGRectGetMaxY(frame) - plateHeight,
-									 frame.size.width, plateHeight);
-	_captionLabel.frame = CGRectInset(_captionPlate.bounds, 8.0f, 6.0f);
-}
-
 #pragma mark - paging
 
 - (void)viewWillAppear:(BOOL)animated
@@ -593,45 +712,467 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 	}
 }
 
-- (void)showIndex:(NSInteger)index animated:(BOOL)animated
+- (CGRect)frameForPageIndex:(NSInteger)index
+{
+	CGRect bounds = _pagingView.bounds;
+	return CGRectMake(index * bounds.size.width + TGStoryPageGap / 2.0f, 0,
+					  bounds.size.width - TGStoryPageGap, bounds.size.height);
+}
+
+- (TGStoryPage *)dequeuePage
+{
+	if (_pageQueue.count != 0)
+	{
+		TGStoryPage *page = [_pageQueue objectAtIndex:0];
+		[_pageQueue removeObjectAtIndex:0];
+		return page;
+	}
+	return [[TGStoryPage alloc] initWithFrame:_pagingView.bounds];
+}
+
+- (TGStoryPage *)pageForIndex:(NSInteger)index
+{
+	for (TGStoryPage *page in _visiblePages)
+	{
+		if (page.pageIndex == index)
+			return page;
+	}
+	return nil;
+}
+
+- (void)resetPagingGeometry
+{
+	CGFloat width = _pagingView.bounds.size.width;
+	if (width < 1.0f)
+		return;
+
+	for (TGStoryPage *page in _visiblePages)
+		page.frame = [self frameForPageIndex:page.pageIndex];
+
+	_pagingView.contentSize = CGSizeMake(width * (CGFloat)_storyIds.count,
+										 _pagingView.bounds.size.height);
+	_pagingView.contentOffset = CGPointMake(width * (CGFloat)_index, 0);
+	[self layoutPages];
+}
+
+- (void)layoutPages
+{
+	CGRect bounds = _pagingView.bounds;
+	CGFloat width = bounds.size.width;
+	if (width < 1.0f)
+		return;
+
+	CGFloat offset = _pagingView.contentOffset.x;
+	CGFloat minX = offset - width;
+	CGFloat maxX = offset + width * 2.0f;
+
+	for (NSInteger i = (NSInteger)_visiblePages.count - 1; i >= 0; i--)
+	{
+		TGStoryPage *page = [_visiblePages objectAtIndex:(NSUInteger)i];
+		CGRect frame = page.frame;
+		if (CGRectGetMaxX(frame) <= minX || frame.origin.x > maxX)
+		{
+			[page prepareForReuse];
+			[page removeFromSuperview];
+			[_pageQueue addObject:page];
+			[_visiblePages removeObjectAtIndex:(NSUInteger)i];
+		}
+	}
+
+	NSInteger count = (NSInteger)_storyIds.count;
+	if (count == 0)
+		return;
+
+	NSInteger start = (NSInteger)floorf(offset / width) - 1;
+	NSInteger end = start + 2;
+	if (start < 0)
+		start = 0;
+	if (end > count - 1)
+		end = count - 1;
+
+	for (NSInteger i = start; i <= end; i++)
+	{
+		if ([self pageForIndex:i] != nil)
+			continue;
+
+		TGStoryPage *page = [self dequeuePage];
+		page.pageIndex = i;
+		page.frame = [self frameForPageIndex:i];
+		page.itemId = [_storyIds objectAtIndex:(NSUInteger)i];
+		[_visiblePages addObject:page];
+		[_pagingView addSubview:page];
+		[self loadPage:page];
+	}
+
+	NSInteger current = (NSInteger)((offset + width / 2.0f) / width);
+	if (current > count - 1)
+		current = count - 1;
+	if (current < 0)
+		current = 0;
+	[self setCurrentIndex:current];
+}
+
+- (void)setCurrentIndex:(NSInteger)index
 {
 	if (index < 0 || index >= (NSInteger)_storyIds.count)
 		return;
 
+	NSNumber *key = [_storyIds objectAtIndex:(NSUInteger)index];
+	if (index == _index && _openStoryId != 0)
+	{
+		if (![_seen containsObject:key])
+		{
+			[_seen addObject:key];
+			[self updateStrip];
+		}
+		return;
+	}
+
 	[self closeCurrent];
 	_index = index;
-	_generation++;
 
-	NSNumber *key = [_storyIds objectAtIndex:(NSUInteger)_index];
 	[_seen addObject:key];
 	_openStoryId = [key integerValue];
 	[[TGClient shared] openStory:_openStoryId inChat:_chatId];
 
 	[self updateStrip];
 	[self updateChrome];
+}
 
-	NSDictionary *known = [self currentStory];
+- (void)loadPage:(TGStoryPage *)page
+{
+	NSNumber *key = page.itemId;
+	if (key == nil)
+		return;
+
+	NSDictionary *known = [_stories objectForKey:key];
 	if (known != nil)
 	{
-		[self loadPhotoForStory:known animated:animated];
+		[page setCaption:TGStoryString(known, @"caption")];
+		[self loadPhotoForPage:page story:known];
 		return;
 	}
 
-	NSInteger generation = _generation;
+	int64_t chatId = _chatId;
 	__weak TGStoriesViewController *weakSelf = self;
+	__weak TGStoryPage *weakPage = page;
 	[[TGClient shared] storyWithId:[key integerValue]
-							inChat:_chatId
+							inChat:chatId
 						completion:^(NSDictionary *story)
 	{
 		TGStoriesViewController *strongSelf = weakSelf;
-		if (strongSelf == nil || strongSelf->_generation != generation)
+		TGStoryPage *strongPage = weakPage;
+		if (strongSelf == nil || strongSelf->_chatId != chatId)
 			return;
 		if (![story isKindOfClass:[NSDictionary class]])
 			return;
 		[strongSelf->_stories setObject:story forKey:key];
-		[strongSelf updateChrome];
-		[strongSelf loadPhotoForStory:story animated:animated];
+		if ([key isEqual:[strongSelf currentStoryKey]])
+			[strongSelf updateChrome];
+		if (strongPage == nil || ![strongPage.itemId isEqual:key])
+			return;
+		[strongPage setCaption:TGStoryString(story, @"caption")];
+		[strongSelf loadPhotoForPage:strongPage story:story];
 	}];
+}
+
+- (NSNumber *)currentStoryKey
+{
+	if (_index < 0 || _index >= (NSInteger)_storyIds.count)
+		return nil;
+	return [_storyIds objectAtIndex:(NSUInteger)_index];
+}
+
+- (UIImage *)currentImage
+{
+	return [self pageForIndex:_index].image;
+}
+
+- (void)loadPhotoForPage:(TGStoryPage *)page story:(NSDictionary *)story
+{
+	NSNumber *photoId = [story objectForKey:@"photoId"];
+	if (![photoId isKindOfClass:[NSNumber class]])
+	{
+		[page setStoryImage:nil animated:NO];
+		return;
+	}
+
+	NSNumber *key = page.itemId;
+	__weak TGStoryPage *weakPage = page;
+	[[TGClient shared] downloadFile:[photoId integerValue]
+							 offset:0
+							  limit:0
+						 completion:^(NSDictionary *file)
+	{
+		NSString *path = TGStoryString(file, @"path");
+		if (path.length == 0)
+			return;
+		if (weakPage == nil || ![weakPage.itemId isEqual:key])
+			return;
+		dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^
+		{
+			UIImage *image = TGDecodeThumbnail(path, TGStoryPhotoPixels);
+			dispatch_async(dispatch_get_main_queue(), ^
+			{
+				TGStoryPage *inner = weakPage;
+				if (inner == nil || ![inner.itemId isEqual:key])
+					return;
+				[inner setStoryImage:image animated:YES];
+			});
+		});
+	}];
+}
+
+- (void)showIndex:(NSInteger)index animated:(BOOL)animated
+{
+	if (index < 0 || index >= (NSInteger)_storyIds.count)
+		return;
+
+	CGFloat width = _pagingView.bounds.size.width;
+	if (width < 1.0f)
+	{
+		_index = index;
+		return;
+	}
+
+	[_pagingView setContentOffset:CGPointMake(width * (CGFloat)index, 0) animated:animated];
+	if (!animated)
+		[self layoutPages];
+}
+
+#pragma mark - scrolling
+
+- (void)scrollViewDidScroll:(UIScrollView *)scrollView
+{
+	(void)scrollView;
+	[self layoutPages];
+}
+
+- (void)scrollViewDidEndDragging:(UIScrollView *)scrollView willDecelerate:(BOOL)decelerate
+{
+	(void)decelerate;
+	CGFloat width = scrollView.bounds.size.width;
+	CGFloat maxOffset = MAX(0.0f, scrollView.contentSize.width - width);
+	CGFloat offset = scrollView.contentOffset.x;
+
+	if (offset > maxOffset + TGStoryOverscroll)
+		[self movePosterBy:1];
+	else if (offset < -TGStoryOverscroll)
+		[self movePosterBy:-1];
+}
+
+#pragma mark - posters
+
+- (NSDictionary *)posterEntryForCurrentChat
+{
+	return [NSDictionary dictionaryWithObjectsAndKeys:
+			[NSNumber numberWithLongLong:_chatId], @"chatId",
+			[self resolvedPosterName], @"title",
+			_storyIds, @"ids", nil];
+}
+
+- (void)discoverPosters
+{
+	if (_postersRequested)
+		return;
+	_postersRequested = YES;
+
+	_posterList = [[NSMutableArray alloc] init];
+	[_posterList addObject:[self posterEntryForCurrentChat]];
+	_posterIndex = 0;
+
+	NSArray *chats = [[TGClient shared] chats];
+	if (![chats isKindOfClass:[NSArray class]] || chats.count == 0)
+		return;
+	if (chats.count > 25)
+		chats = [chats subarrayWithRange:NSMakeRange(0, 25)];
+
+	NSMutableArray *found = [[NSMutableArray alloc] init];
+	__block NSInteger pending = 0;
+	__weak TGStoriesViewController *weakSelf = self;
+
+	for (NSDictionary *chat in chats)
+	{
+		if (![chat isKindOfClass:[NSDictionary class]])
+			continue;
+		int64_t chatId = TGStoryChatId(chat, @"id");
+		if (chatId == 0 || chatId == _chatId)
+			continue;
+
+		NSString *title = TGStoryString(chat, @"title");
+		pending++;
+		[[TGClient shared] activeStoriesForChat:chatId completion:^(NSDictionary *active)
+		{
+			TGStoriesViewController *strongSelf = weakSelf;
+			pending--;
+			if (strongSelf == nil)
+				return;
+
+			NSArray *stories = [active objectForKey:@"stories"];
+			if ([stories isKindOfClass:[NSArray class]] && stories.count > 0 &&
+				!TGStoryFlag(active, @"archived"))
+			{
+				NSMutableArray *ids = [[NSMutableArray alloc] init];
+				for (NSDictionary *story in stories)
+				{
+					if ([story isKindOfClass:[NSDictionary class]])
+						[ids addObject:[NSNumber numberWithInteger:TGStoryNumber(story, @"id")]];
+				}
+				if (ids.count > 0)
+				{
+					[found addObject:[NSDictionary dictionaryWithObjectsAndKeys:
+							[NSNumber numberWithLongLong:chatId], @"chatId",
+							title, @"title",
+							ids, @"ids",
+							([active objectForKey:@"order"] ?: [NSNumber numberWithInt:0]), @"order",
+							nil]];
+				}
+			}
+
+			if (pending > 0)
+				return;
+
+			[found sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b)
+			{
+				long long left = [[a objectForKey:@"order"] longLongValue];
+				long long right = [[b objectForKey:@"order"] longLongValue];
+				if (left == right)
+					return NSOrderedSame;
+				return left > right ? NSOrderedAscending : NSOrderedDescending;
+			}];
+			[strongSelf->_posterList addObjectsFromArray:found];
+		}];
+	}
+}
+
+- (void)movePosterBy:(NSInteger)delta
+{
+	NSInteger target = _posterIndex + delta;
+	if (_posterList == nil || target < 0 || target >= (NSInteger)_posterList.count)
+	{
+		if (delta > 0)
+			[self dismissViewer];
+		return;
+	}
+
+	NSDictionary *poster = [_posterList objectAtIndex:(NSUInteger)target];
+	NSArray *ids = [poster objectForKey:@"ids"];
+	if (![ids isKindOfClass:[NSArray class]] || ids.count == 0)
+		return;
+
+	[self closeCurrent];
+
+	_posterIndex = target;
+	_chatId = TGStoryChatId(poster, @"chatId");
+	self.posterName = TGStoryString(poster, @"title");
+	_storyIds = [ids copy];
+	[_stories removeAllObjects];
+	[_seen removeAllObjects];
+	_index = (delta > 0) ? 0 : (NSInteger)_storyIds.count - 1;
+
+	for (TGStoryPage *page in _visiblePages)
+	{
+		[page prepareForReuse];
+		[page removeFromSuperview];
+		[_pageQueue addObject:page];
+	}
+	[_visiblePages removeAllObjects];
+
+	[self layoutStrip];
+	[self updateChrome];
+
+	UIScrollView *paging = _pagingView;
+	[UIView transitionWithView:paging
+					  duration:0.2
+					   options:UIViewAnimationOptionTransitionCrossDissolve
+					animations:^{ [self resetPagingGeometry]; }
+					completion:nil];
+}
+
+#pragma mark - dismissal
+
+- (void)dismissViewer
+{
+	if (_dismissing)
+		return;
+	_dismissing = YES;
+
+	CGFloat height = self.view.bounds.size.height;
+	__weak TGStoriesViewController *weakSelf = self;
+	[UIView animateWithDuration:0.2
+					 animations:^
+	{
+		TGStoriesViewController *strongSelf = weakSelf;
+		strongSelf.view.transform = CGAffineTransformMakeTranslation(0, height);
+		strongSelf.view.alpha = 0.0f;
+	}
+					 completion:^(BOOL finished)
+	{
+		(void)finished;
+		TGStoriesViewController *strongSelf = weakSelf;
+		if (strongSelf == nil)
+			return;
+		strongSelf.view.transform = CGAffineTransformIdentity;
+		strongSelf.view.alpha = 1.0f;
+		[strongSelf.navigationController popViewControllerAnimated:NO];
+	}];
+}
+
+- (void)viewDragged:(UIPanGestureRecognizer *)recognizer
+{
+	if (_dismissing)
+		return;
+
+	CGPoint translation = [recognizer translationInView:self.view];
+	CGFloat shift = MAX(0.0f, translation.y);
+
+	if (recognizer.state == UIGestureRecognizerStateChanged)
+	{
+		self.view.transform = CGAffineTransformMakeTranslation(0, shift);
+		CGFloat height = MAX(1.0f, self.view.bounds.size.height);
+		self.view.alpha = MAX(0.4f, 1.0f - shift / height);
+		return;
+	}
+
+	if (recognizer.state == UIGestureRecognizerStateEnded ||
+		recognizer.state == UIGestureRecognizerStateCancelled ||
+		recognizer.state == UIGestureRecognizerStateFailed)
+	{
+		CGFloat velocity = [recognizer velocityInView:self.view].y;
+		BOOL leaving = (recognizer.state == UIGestureRecognizerStateEnded) &&
+				(shift > TGStoryDismissDistance || velocity > TGStoryDismissVelocity);
+		if (leaving)
+		{
+			[self dismissViewer];
+			return;
+		}
+
+		__weak TGStoriesViewController *weakSelf = self;
+		[UIView animateWithDuration:0.2
+						 animations:^
+		{
+			TGStoriesViewController *strongSelf = weakSelf;
+			strongSelf.view.transform = CGAffineTransformIdentity;
+			strongSelf.view.alpha = 1.0f;
+		}];
+	}
+}
+
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)recognizer
+{
+	if (![recognizer isKindOfClass:[UIPanGestureRecognizer class]])
+		return YES;
+
+	CGPoint velocity = [(UIPanGestureRecognizer *)recognizer velocityInView:self.view];
+	return velocity.y > 0.0f && fabsf((float)velocity.y) > fabsf((float)velocity.x);
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)recognizer
+		shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other
+{
+	(void)recognizer;
+	(void)other;
+	return YES;
 }
 
 - (void)updateChrome
@@ -645,10 +1186,6 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 	_subtitleLabel.text = age.length > 0
 			? [NSString stringWithFormat:@"%@ · %@", position, age]
 			: position;
-
-	NSString *caption = story != nil ? TGStoryString(story, @"caption") : @"";
-	_captionLabel.text = caption;
-	_captionPlate.hidden = (caption.length == 0);
 
 	if ([self isOwnStory] && (story == nil || TGStoryFlag(story, @"canGetViewers")))
 	{
@@ -672,89 +1209,43 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 	_shareButton.alpha = canForward ? 1.0f : 0.5f;
 }
 
-- (void)loadPhotoForStory:(NSDictionary *)story animated:(BOOL)animated
-{
-	NSNumber *photoId = [story objectForKey:@"photoId"];
-	if (![photoId isKindOfClass:[NSNumber class]])
-	{
-		[self setPhoto:nil animated:animated];
-		return;
-	}
-
-	NSInteger generation = _generation;
-	__weak TGStoriesViewController *weakSelf = self;
-	[[TGClient shared] downloadFile:[photoId integerValue]
-							 offset:0
-							  limit:0
-						 completion:^(NSDictionary *file)
-	{
-		TGStoriesViewController *strongSelf = weakSelf;
-		if (strongSelf == nil || strongSelf->_generation != generation)
-			return;
-		NSString *path = TGStoryString(file, @"path");
-		if (path.length == 0)
-			return;
-		dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^
-		{
-			UIImage *image = TGDecodeThumbnail(path, TGStoryPhotoPixels);
-			dispatch_async(dispatch_get_main_queue(), ^
-			{
-				TGStoriesViewController *inner = weakSelf;
-				if (inner == nil || inner->_generation != generation)
-					return;
-				[inner setPhoto:image animated:YES];
-			});
-		});
-	}];
-}
-
-- (void)setPhoto:(UIImage *)image animated:(BOOL)animated
-{
-	if (animated && image != nil)
-	{
-		[UIView transitionWithView:_photoView
-						  duration:0.15
-						   options:UIViewAnimationOptionTransitionCrossDissolve
-						animations:^{ _photoView.image = image; }
-						completion:nil];
-	}
-	else
-	{
-		_photoView.image = image;
-	}
-	[self.view setNeedsLayout];
-}
-
 - (void)viewTapped:(UITapGestureRecognizer *)recognizer
 {
 	CGPoint point = [recognizer locationInView:self.view];
 	if (CGRectContainsPoint(_footerView.frame, point))
 		return;
 
-	if (!_captionPlate.hidden && CGRectContainsPoint(_captionPlate.frame, point))
+	TGStoryPage *page = [self pageForIndex:_index];
+	CGRect caption = [page captionFrame];
+	if (page != nil && !CGRectIsEmpty(caption) &&
+		CGRectContainsPoint([self.view convertRect:caption fromView:page], point))
 	{
 		NSDictionary *story = [self currentStory];
-		NSString *caption = story != nil ? TGStoryString(story, @"caption") : @"";
-		if (caption.length > 0)
+		NSString *text = story != nil ? TGStoryString(story, @"caption") : @"";
+		if (text.length > 0)
 		{
-			TGStoryTextViewController *text = [[TGStoryTextViewController alloc] init];
-			text.text = caption;
-			text.title = [self resolvedPosterName];
-			[self.navigationController pushViewController:text animated:YES];
+			TGStoryTextViewController *reader = [[TGStoryTextViewController alloc] init];
+			reader.text = text;
+			reader.title = [self resolvedPosterName];
+			[self.navigationController pushViewController:reader animated:YES];
 		}
 		return;
 	}
 
 	CGFloat width = self.view.bounds.size.width;
-	if (point.x < width * 0.4f)
+	if (point.x < width / 3.0f)
 	{
 		if (_index > 0)
 			[self showIndex:_index - 1 animated:YES];
+		else
+			[self movePosterBy:-1];
 	}
-	else if (point.x > width * 0.6f)
+	else if (point.x > width * 2.0f / 3.0f)
 	{
 		if (_index + 1 < (NSInteger)_storyIds.count)
 			[self showIndex:_index + 1 animated:YES];
+		else
+			[self movePosterBy:1];
 	}
 }
 
@@ -856,7 +1347,7 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 	NSDictionary *story = [self currentStory];
 	NSMutableArray *actions = [[NSMutableArray alloc] init];
 
-	if (_photoView.image != nil)
+	if ([self currentImage] != nil)
 	{
 		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Save to Photos"
 															  action:@"save"]];
@@ -900,8 +1391,9 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 
 	if ([action isEqualToString:@"save"])
 	{
-		if (_photoView.image != nil)
-			UIImageWriteToSavedPhotosAlbum(_photoView.image, nil, NULL, NULL);
+		UIImage *image = [self currentImage];
+		if (image != nil)
+			UIImageWriteToSavedPhotosAlbum(image, nil, NULL, NULL);
 		return;
 	}
 
@@ -1183,11 +1675,6 @@ static NSMutableArray *TGStoryComposersInFlight(void)
 {
 	if (![UIImagePickerController isSourceTypeAvailable:UIImagePickerControllerSourceTypePhotoLibrary])
 	{
-		[[[TGAlertView alloc] initWithTitle:nil
-									message:@"No photo library"
-						  cancelButtonTitle:@"OK"
-							  okButtonTitle:nil
-							completionBlock:nil] show];
 		[self finishPosted:NO];
 		return;
 	}
