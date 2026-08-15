@@ -577,19 +577,23 @@ didFinishRecordingToOutputFileAtURL:(NSURL *)outputFileURL
 
 	__weak typeof(self) weakSelf = self;
 	dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-		AVURLAsset *asset = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:path] options:nil];
 		NSTimeInterval seconds = 0;
-		CMTime assetDuration = asset.duration;
-		if (CMTIME_IS_NUMERIC(assetDuration))
-			seconds = CMTimeGetSeconds(assetDuration);
-
 		CGSize dimensions = CGSizeZero;
-		NSArray *tracks = [asset tracksWithMediaType:AVMediaTypeVideo];
-		if (tracks.count > 0){
-			AVAssetTrack *track = tracks[0];
-			CGSize natural = CGSizeApplyAffineTransform(track.naturalSize,
-														track.preferredTransform);
-			dimensions = CGSizeMake(fabs(natural.width), fabs(natural.height));
+
+		@autoreleasepool {
+			AVURLAsset *asset = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:path]
+												   options:nil];
+			CMTime assetDuration = asset.duration;
+			if (CMTIME_IS_NUMERIC(assetDuration))
+				seconds = CMTimeGetSeconds(assetDuration);
+
+			NSArray *tracks = [asset tracksWithMediaType:AVMediaTypeVideo];
+			if (tracks.count > 0){
+				AVAssetTrack *track = tracks[0];
+				CGSize natural = CGSizeApplyAffineTransform(track.naturalSize,
+															track.preferredTransform);
+				dimensions = CGSizeMake(fabs(natural.width), fabs(natural.height));
+			}
 		}
 
 		dispatch_async(dispatch_get_main_queue(), ^{

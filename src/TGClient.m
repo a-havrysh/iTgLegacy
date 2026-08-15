@@ -98,6 +98,8 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 }
 
 - (void)receiveLoop {
+	dispatch_semaphore_t slots = dispatch_semaphore_create(48);
+
 	while (self.running){
 		@autoreleasepool {
 			[self drainOutbox];
@@ -116,8 +118,12 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 				continue;
 			}
 
+			dispatch_semaphore_wait(slots, DISPATCH_TIME_FOREVER);
 			dispatch_async(dispatch_get_main_queue(), ^{
-				[self handleUpdate:obj];
+				@autoreleasepool {
+					[self handleUpdate:obj];
+				}
+				dispatch_semaphore_signal(slots);
 			});
 		}
 	}
@@ -137,7 +143,8 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 		return;
 	}
 
-	NSMutableData *z = [data mutableCopy];   // td_json_client_send wants a C string
+	NSMutableData *z = [[NSMutableData alloc] initWithCapacity:data.length + 1];
+	[z appendData:data];
 	[z appendBytes:"\0" length:1];
 
 	[self.outboxLock lock];
@@ -150,11 +157,15 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 	if (!self.available)
 		return;
 
-	NSArray *pending;
+	NSArray *pending = nil;
 	[self.outboxLock lock];
-	pending = [self.outbox copy];
-	[self.outbox removeAllObjects];
+	if (self.outbox.count){
+		pending = [self.outbox copy];
+		[self.outbox removeAllObjects];
+	}
 	[self.outboxLock unlock];
+	if (!pending)
+		return;
 
 	for (NSData *d in pending)
 		self.td_send(self.client, d.bytes);
@@ -629,10 +640,21 @@ static NSDictionary *TGUserStatusInfo(NSDictionary *status) {
 		int64_t wasOnline = [status[@"was_online"] longLongValue];
 		NSDate *date = [NSDate dateWithTimeIntervalSince1970:wasOnline];
 		NSDate *now = [NSDate date];
-		NSCalendar *cal = [NSCalendar currentCalendar];
 
-		NSDateFormatter *timeFmt = [NSDateFormatter new];
-		timeFmt.dateFormat = @"HH:mm";
+		static NSCalendar *cal = nil;
+		static NSDateFormatter *timeFmt = nil;
+		static NSDateFormatter *dayFmt = nil;
+		static NSDateFormatter *dateFmt = nil;
+		if (!cal){
+			cal = [NSCalendar currentCalendar];
+			timeFmt = [NSDateFormatter new];
+			timeFmt.dateFormat = @"HH:mm";
+			dayFmt = [NSDateFormatter new];
+			dayFmt.dateFormat = @"EEEE";
+			dateFmt = [NSDateFormatter new];
+			dateFmt.dateFormat = @"dd.MM.yyyy";
+		}
+
 		NSString *time = [timeFmt stringFromDate:date];
 
 		NSUInteger dayUnits = NSCalendarUnitYear | NSCalendarUnitMonth | NSCalendarUnitDay;
@@ -649,13 +671,9 @@ static NSDictionary *TGUserStatusInfo(NSDictionary *status) {
 		} else if (dayDelta == 1){
 			when = [NSString stringWithFormat:@"yesterday at %@", time];
 		} else if (dayDelta > 1 && dayDelta < 7){
-			NSDateFormatter *dayFmt = [NSDateFormatter new];
-			dayFmt.dateFormat = @"EEEE";
 			when = [NSString stringWithFormat:@"on %@ at %@",
 					[dayFmt stringFromDate:date], time];
 		} else {
-			NSDateFormatter *dateFmt = [NSDateFormatter new];
-			dateFmt.dateFormat = @"dd.MM.yyyy";
 			when = [NSString stringWithFormat:@"%@ at %@",
 					[dateFmt stringFromDate:date], time];
 		}
@@ -982,7 +1000,11 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 	else if ([originType isEqualToString:@"messageOriginChat"])
 		forwardFrom = origin[@"author_signature"] ?: @"a chat";
 
-	return @{
+	static NSData *emptyWaveform = nil;
+	if (!emptyWaveform)
+		emptyWaveform = [NSData data];
+
+	NSDictionary *flat = @{
 		@"id"        : m[@"id"] ?: @(0),
 		@"text"      : text,
 		@"replyId"   : replyId    ?: [NSNull null],
@@ -1001,20 +1023,38 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		@"albumId"   : m[@"media_album_id"] ?: @"",
 		// "\U0001F44D 3" per reaction, joined - enough to show under a bubble.
 		@"reactions" : TGReactionSummary(m) ?: @"",
-		// Options of a poll, so tapping one can vote, and the parts the chat
-		// draws around them.
-		@"pollOptions"  : m[@"content"][@"poll"][@"options"] ?: @[],
-		@"pollQuestion" : m[@"content"][@"poll"][@"question"][@"text"] ?: @"",
-		@"pollTotal"    : m[@"content"][@"poll"][@"total_voter_count"] ?: @0,
-		@"pollClosed"   : m[@"content"][@"poll"][@"is_closed"] ?: @NO,
-		@"pollAnonymous": m[@"content"][@"poll"][@"is_anonymous"] ?: @YES,
 		@"duration"  : duration ?: @0,
-		@"waveform"  : waveform ?: [NSData data],
+		@"waveform"  : waveform ?: emptyWaveform,
 		@"senderId"  : m[@"sender_id"][@"user_id"] ?: @(0),
 		@"lat"       : latitude    ?: [NSNull null],
 		@"lon"       : longitude   ?: [NSNull null],
 		@"callState" : callState   ?: @"",
 	};
+
+	NSDictionary *poll = content[@"poll"];
+	if (![poll isKindOfClass:NSDictionary.class])
+		return flat;
+
+	NSArray *rawOptions = poll[@"options"];
+	NSMutableArray *options = [NSMutableArray arrayWithCapacity:rawOptions.count];
+	for (NSDictionary *option in rawOptions){
+		id optionText = option[@"text"];
+		if ([optionText isKindOfClass:NSDictionary.class])
+			optionText = @{@"text" : optionText[@"text"] ?: @""};
+		[options addObject:@{
+			@"text"            : optionText ?: @"",
+			@"vote_percentage" : option[@"vote_percentage"] ?: @0,
+			@"is_chosen"       : option[@"is_chosen"] ?: @NO,
+		}];
+	}
+
+	NSMutableDictionary *withPoll = [flat mutableCopy];
+	withPoll[@"pollOptions"]   = options;
+	withPoll[@"pollQuestion"]  = poll[@"question"][@"text"] ?: @"";
+	withPoll[@"pollTotal"]     = poll[@"total_voter_count"] ?: @0;
+	withPoll[@"pollClosed"]    = poll[@"is_closed"] ?: @NO;
+	withPoll[@"pollAnonymous"] = poll[@"is_anonymous"] ?: @YES;
+	return [withPoll copy];
 }
 
 - (void)historyForChat:(int64_t)chatId

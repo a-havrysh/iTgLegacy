@@ -26,6 +26,7 @@ static const CGFloat TGStoryDismissDistance = 100.0f;
 static const CGFloat TGStoryDismissVelocity = 700.0f;
 static const NSTimeInterval TGStoryDuration = 5.0;
 static const NSTimeInterval TGStoryTick = 0.0667;
+static const NSUInteger TGStoryPageQueueLimit = 2;
 
 static UIImage *TGStoryStretch(NSString *name, NSInteger leftCap)
 {
@@ -1023,6 +1024,30 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 	_timer = nil;
 }
 
+- (void)didReceiveMemoryWarning
+{
+	[super didReceiveMemoryWarning];
+
+	[_pageQueue removeAllObjects];
+
+	for (NSInteger i = (NSInteger)_visiblePages.count - 1;
+			i >= 0 && [self pageForIndex:_index] != nil; i--)
+	{
+		TGStoryPage *page = [_visiblePages objectAtIndex:(NSUInteger)i];
+		if (page.pageIndex == _index)
+			continue;
+		[page prepareForReuse];
+		[page removeFromSuperview];
+		[_visiblePages removeObjectAtIndex:(NSUInteger)i];
+	}
+
+	NSNumber *key = [self currentStoryKey];
+	NSDictionary *keep = key != nil ? [_stories objectForKey:key] : nil;
+	[_stories removeAllObjects];
+	if (keep != nil)
+		[_stories setObject:keep forKey:key];
+}
+
 - (void)closeCurrent
 {
 	if (_openStoryId != 0)
@@ -1048,6 +1073,14 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 		return page;
 	}
 	return [[TGStoryPage alloc] initWithFrame:_pagingView.bounds];
+}
+
+- (void)recycleSparePage:(TGStoryPage *)page
+{
+	[page prepareForReuse];
+	[page removeFromSuperview];
+	if (_pageQueue.count < TGStoryPageQueueLimit)
+		[_pageQueue addObject:page];
 }
 
 - (TGStoryPage *)pageForIndex:(NSInteger)index
@@ -1092,9 +1125,7 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 		CGRect frame = page.frame;
 		if (CGRectGetMaxX(frame) <= minX || frame.origin.x > maxX)
 		{
-			[page prepareForReuse];
-			[page removeFromSuperview];
-			[_pageQueue addObject:page];
+			[self recycleSparePage:page];
 			[_visiblePages removeObjectAtIndex:(NSUInteger)i];
 		}
 	}
@@ -1234,15 +1265,22 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 			return;
 		dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^
 		{
-			UIImage *image = TGDecodeThumbnail(path, TGStoryPhotoPixels);
-			dispatch_async(dispatch_get_main_queue(), ^
+			@autoreleasepool
 			{
-				TGStoryPage *inner = weakPage;
-				if (inner == nil || ![inner.itemId isEqual:key])
+				if (weakPage == nil || ![weakPage.itemId isEqual:key])
 					return;
-				[inner setStoryImage:image animated:YES];
-				[weakSelf updateTimeline];
-			});
+				UIImage *image = TGDecodeThumbnail(path, TGStoryPhotoPixels);
+				if (image == nil)
+					return;
+				dispatch_async(dispatch_get_main_queue(), ^
+				{
+					TGStoryPage *inner = weakPage;
+					if (inner == nil || ![inner.itemId isEqual:key])
+						return;
+					[inner setStoryImage:image animated:YES];
+					[weakSelf updateTimeline];
+				});
+			}
 		});
 	}];
 }
@@ -1415,11 +1453,7 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 	_index = (delta > 0) ? 0 : (NSInteger)_storyIds.count - 1;
 
 	for (TGStoryPage *page in _visiblePages)
-	{
-		[page prepareForReuse];
-		[page removeFromSuperview];
-		[_pageQueue addObject:page];
-	}
+		[self recycleSparePage:page];
 	[_visiblePages removeAllObjects];
 
 	_elapsed = 0.0;
@@ -2312,28 +2346,32 @@ static NSMutableArray *TGStoryComposersInFlight(void)
 		return;
 	}
 
-	CGFloat side = MAX(image.size.width, image.size.height);
-	UIImage *scaled = image;
-	if (side > 720.0f)
-	{
-		CGFloat factor = 720.0f / side;
-		CGSize target = CGSizeMake(floorf(image.size.width * factor),
-								   floorf(image.size.height * factor));
-		UIGraphicsBeginImageContextWithOptions(target, YES, 1.0f);
-		[image drawInRect:CGRectMake(0, 0, target.width, target.height)];
-		scaled = UIGraphicsGetImageFromCurrentImageContext();
-		UIGraphicsEndImageContext();
-	}
-
-	NSData *data = UIImageJPEGRepresentation(scaled, 0.87f);
-	if (data.length == 0)
-	{
-		[self finishPosted:NO];
-		return;
-	}
-
 	NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:@"story.jpg"];
-	if (![data writeToFile:path atomically:YES])
+	BOOL written = NO;
+
+	@autoreleasepool
+	{
+		CGFloat side = MAX(image.size.width, image.size.height);
+		UIImage *scaled = image;
+		if (side > 720.0f)
+		{
+			CGFloat factor = 720.0f / side;
+			CGSize target = CGSizeMake(floorf(image.size.width * factor),
+									   floorf(image.size.height * factor));
+			UIGraphicsBeginImageContextWithOptions(target, YES, 1.0f);
+			[image drawInRect:CGRectMake(0, 0, target.width, target.height)];
+			scaled = UIGraphicsGetImageFromCurrentImageContext();
+			UIGraphicsEndImageContext();
+		}
+		image = nil;
+
+		NSData *data = UIImageJPEGRepresentation(scaled, 0.87f);
+		scaled = nil;
+		if (data.length != 0)
+			written = [data writeToFile:path atomically:YES];
+	}
+
+	if (!written)
 	{
 		[self finishPosted:NO];
 		return;

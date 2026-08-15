@@ -20,7 +20,9 @@ static void tgFreePixels(void *info, const void *data, size_t size) {
 			  compressedData:(__autoreleasing NSData **)compressedData
 					   error:(NSError **)error
 {
-	NSData *data = [NSData dataWithContentsOfFile:filePath];
+	NSData *data = [NSData dataWithContentsOfFile:filePath
+										  options:NSDataReadingMappedIfSafe
+											error:NULL];
 	if (!data.length)
 		return nil;
 	if (compressedData)

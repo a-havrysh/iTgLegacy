@@ -14,6 +14,7 @@ static const CGFloat TGStickerPanelHeaderHeight = 25.0f;
 static const CGFloat TGStickerPanelTileSide = 64.0f;
 static const CGFloat TGStickerPanelSearchHeight = 44.0f;
 static const NSInteger TGStickerPanelImageCacheLimit = 96;
+static const NSUInteger TGStickerPanelImageCacheByteLimit = 4 * 1024 * 1024;
 static const CGFloat TGStickerPanelPurgeDistance = 900.0f;
 static const NSInteger TGStickerPanelPageSize = 40;
 
@@ -121,6 +122,7 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 @property (nonatomic, strong) NSMutableArray *tabButtons;
 @property (nonatomic, strong) NSMutableDictionary *imageCache;
 @property (nonatomic, strong) NSMutableArray *imageCacheOrder;
+@property (nonatomic, assign) NSUInteger imageCacheBytes;
 @property (nonatomic, strong) NSMutableDictionary *pendingImages;
 @property (nonatomic, strong) dispatch_queue_t decodeQueue;
 
@@ -242,9 +244,14 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 	_searchBar.delegate = nil;
 }
 
-- (void)handleMemoryWarning {
+- (void)clearImageCache {
 	[self.imageCache removeAllObjects];
 	[self.imageCacheOrder removeAllObjects];
+	self.imageCacheBytes = 0;
+}
+
+- (void)handleMemoryWarning {
+	[self clearImageCache];
 	[self.recycler removeAllViews];
 	[self purgeDistantSectionsAggressively:YES];
 }
@@ -255,8 +262,7 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 	self.generation += 1;
 	NSInteger generation = self.generation;
 
-	[self.imageCache removeAllObjects];
-	[self.imageCacheOrder removeAllObjects];
+	[self clearImageCache];
 	[self.pendingImages removeAllObjects];
 	[self clearTiles];
 	[self.allSections removeAllObjects];
@@ -1098,7 +1104,13 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 	CGFloat offset = self.grid.contentOffset.y;
 	CGFloat height = self.grid.bounds.size.height;
 
-	for (NSMutableDictionary *section in self.allSections){
+	NSMutableArray *candidates = [[NSMutableArray alloc] initWithArray:self.allSections];
+	for (NSMutableDictionary *section in self.searchSections){
+		if ([candidates indexOfObjectIdenticalTo:section] == NSNotFound)
+			[candidates addObject:section];
+	}
+
+	for (NSMutableDictionary *section in candidates){
 		NSInteger kind = [section[@"kind"] integerValue];
 		if (!TGStickerSectionIsSet(kind))
 			continue;
@@ -1190,16 +1202,32 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 	return self.imageCache[[self cacheKeyForFileId:fileId side:side]];
 }
 
+- (NSUInteger)byteCostOfImage:(UIImage *)image {
+	CGImageRef bitmap = image.CGImage;
+	if (bitmap == NULL)
+		return 4096;
+	return CGImageGetWidth(bitmap) * CGImageGetHeight(bitmap) * 4;
+}
+
 - (void)storeImage:(UIImage *)image forKey:(NSString *)key {
 	if (image == nil || key == nil)
 		return;
-	if (self.imageCache[key] != nil)
+
+	UIImage *existing = self.imageCache[key];
+	if (existing != nil){
+		self.imageCacheBytes -= MIN(self.imageCacheBytes, [self byteCostOfImage:existing]);
 		[self.imageCacheOrder removeObject:key];
+	}
 	self.imageCache[key] = image;
 	[self.imageCacheOrder addObject:key];
+	self.imageCacheBytes += [self byteCostOfImage:image];
 
-	while ((NSInteger)self.imageCacheOrder.count > TGStickerPanelImageCacheLimit){
+	while (self.imageCacheOrder.count > 1 &&
+		   ((NSInteger)self.imageCacheOrder.count > TGStickerPanelImageCacheLimit ||
+			self.imageCacheBytes > TGStickerPanelImageCacheByteLimit)){
 		NSString *oldest = self.imageCacheOrder[0];
+		self.imageCacheBytes -= MIN(self.imageCacheBytes,
+				[self byteCostOfImage:self.imageCache[oldest]]);
 		[self.imageCacheOrder removeObjectAtIndex:0];
 		[self.imageCache removeObjectForKey:oldest];
 	}
@@ -1244,11 +1272,13 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 			return;
 		}
 		dispatch_async(me.decodeQueue, ^{
-			UIImage *decoded = [UIImage convertFromWebP:path compressedData:nil error:nil];
-			if (decoded == nil)
-				decoded = [UIImage imageWithContentsOfFile:path];
-			UIImage *scaled = [TGStickerPanelView imageFrom:decoded fittingSide:side];
-			decoded = nil;
+			UIImage *scaled = nil;
+			@autoreleasepool {
+				UIImage *decoded = [UIImage convertFromWebP:path compressedData:nil error:nil];
+				if (decoded == nil)
+					decoded = [UIImage imageWithContentsOfFile:path];
+				scaled = [TGStickerPanelView imageFrom:decoded fittingSide:side];
+			}
 			dispatch_async(dispatch_get_main_queue(), ^{
 				TGStickerPanelView *inner = weakSelf;
 				if (inner == nil)

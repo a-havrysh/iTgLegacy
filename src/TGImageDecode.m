@@ -3,12 +3,14 @@
 
 UIImage *TGDecodeThumbnail(NSString *path, CGFloat maxPixelSize) {
 	NSURL *url = [NSURL fileURLWithPath:path];
-	CGImageSourceRef src = CGImageSourceCreateWithURL((__bridge CFURLRef)url, NULL);
+	NSDictionary *sourceOpts = @{ (id)kCGImageSourceShouldCache : @NO };
+	CGImageSourceRef src = CGImageSourceCreateWithURL((__bridge CFURLRef)url, (CFDictionaryRef)sourceOpts);
 	if (!src) return nil;
 	NSDictionary *opts = @{
 		(id)kCGImageSourceCreateThumbnailFromImageAlways : @YES,
 		(id)kCGImageSourceThumbnailMaxPixelSize : @(maxPixelSize),
 		(id)kCGImageSourceCreateThumbnailWithTransform : @YES,
+		(id)kCGImageSourceShouldCache : @NO,
 	};
 	CGImageRef cgImage = CGImageSourceCreateThumbnailAtIndex(src, 0, (CFDictionaryRef)opts);
 	CFRelease(src);
@@ -19,18 +21,21 @@ UIImage *TGDecodeThumbnail(NSString *path, CGFloat maxPixelSize) {
 }
 
 UIImage *TGDecodeSquareThumbnail(NSString *path, CGFloat side) {
-	UIImage *source = TGDecodeThumbnail(path, side * 2);
-	if (!source) return nil;
+	UIImage *square = nil;
+	@autoreleasepool {
+		UIImage *source = TGDecodeThumbnail(path, side * 2);
+		if (!source) return nil;
 
-	CGSize size = source.size;
-	CGFloat scale = MAX(side / size.width, side / size.height);
-	CGSize scaled = CGSizeMake(size.width * scale, size.height * scale);
+		CGSize size = source.size;
+		CGFloat scale = MAX(side / size.width, side / size.height);
+		CGSize scaled = CGSizeMake(size.width * scale, size.height * scale);
 
-	UIGraphicsBeginImageContextWithOptions(CGSizeMake(side, side), NO, 0.0f);
-	[source drawInRect:CGRectMake((side - scaled.width) / 2,
-								   (side - scaled.height) / 2,
-								   scaled.width, scaled.height)];
-	UIImage *square = UIGraphicsGetImageFromCurrentImageContext();
-	UIGraphicsEndImageContext();
+		UIGraphicsBeginImageContextWithOptions(CGSizeMake(side, side), NO, 0.0f);
+		[source drawInRect:CGRectMake((side - scaled.width) / 2,
+									   (side - scaled.height) / 2,
+									   scaled.width, scaled.height)];
+		square = UIGraphicsGetImageFromCurrentImageContext();
+		UIGraphicsEndImageContext();
+	}
 	return square;
 }

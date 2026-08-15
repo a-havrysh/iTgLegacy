@@ -126,8 +126,6 @@ static double TGScalarAt(NSDictionary *prop, double frame, double fallback) {
 @end
 
 @interface TGLottieView ()
-@property (nonatomic, strong) NSDictionary *animation;
-@property (nonatomic, strong) NSArray *layers;
 @property (nonatomic, strong) NSArray *reversedLayers;
 @property (nonatomic, assign) double inPoint;
 @property (nonatomic, assign) double outPoint;
@@ -161,8 +159,6 @@ static double TGScalarAt(NSDictionary *prop, double frame, double fallback) {
 	[self stop];
 	self.wantsPlayback = NO;
 	self.loaded = NO;
-	self.animation = nil;
-	self.layers = nil;
 	self.reversedLayers = nil;
 	self.layersByIndex = nil;
 
@@ -213,8 +209,6 @@ static double TGScalarAt(NSDictionary *prop, double frame, double fallback) {
 			byIndex[ind] = layer;
 	}
 
-	self.animation = anim;
-	self.layers    = layers;
 	self.reversedLayers = [[layers reverseObjectEnumerator] allObjects];
 	self.layersByIndex = byIndex;
 	self.inPoint   = ip;
@@ -307,8 +301,11 @@ static double TGScalarAt(NSDictionary *prop, double frame, double fallback) {
 	CGContextScaleCTM(ctx, scale, scale);
 
 	// Lottie paints the last layer first.
-	for (NSDictionary *layer in self.reversedLayers)
-		[self drawLottieLayer:layer inContext:ctx];
+	for (NSDictionary *layer in self.reversedLayers){
+		@autoreleasepool {
+			[self drawLottieLayer:layer inContext:ctx];
+		}
+	}
 
 	CGContextRestoreGState(ctx);
 }

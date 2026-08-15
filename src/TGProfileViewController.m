@@ -77,8 +77,8 @@
 @property (nonatomic, assign) int64_t userId;
 @property (nonatomic, strong) NSString *name;
 @property (nonatomic, strong) NSArray *details;   // label/value pairs
-@property (nonatomic, strong) NSArray *photos;    // flattened messages
-@property (nonatomic, strong) NSArray *files;
+@property (nonatomic, assign) NSInteger photoCount;
+@property (nonatomic, assign) NSInteger fileCount;
 @property (nonatomic, strong) NSArray *members;
 @property (nonatomic, strong) NSArray *gifts;
 @property (nonatomic, assign) BOOL blocked;
@@ -131,7 +131,10 @@
 @property (nonatomic, strong) NSString *storyPath;
 @property (nonatomic, strong) NSString *storyPrivacy;
 @property (nonatomic, strong) NSArray *baseDetailRows;
-@property (nonatomic, strong) NSDictionary *fullProfile;
+@property (nonatomic, strong) NSString *profileBio;
+@property (nonatomic, strong) NSString *profileBirthdayText;
+@property (nonatomic, assign) NSInteger profileCommonGroupCount;
+@property (nonatomic, assign) BOOL fullProfileLoaded;
 @property (nonatomic, strong) NSString *profileNote;
 @property (nonatomic, assign) BOOL noteLoaded;
 @property (nonatomic, strong) NSArray *commonGroups;
@@ -309,8 +312,6 @@ static UIImage *TGProfileStretched(NSString *name) {
 		_userId = userId;
 		_name = title ?: @"";
 		_details = @[];
-		_photos = @[];
-		_files = @[];
 		_manageRows = @[];
 		[self rebuildSections];
 	}
@@ -1161,8 +1162,8 @@ static UIImage *TGProfileStretched(NSString *name) {
 	}
 	if (alert.tag == 71 && self.chatId){
 		[[TGClient shared] clearHistoryInChat:self.chatId];
-		self.photos = @[];
-		self.files = @[];
+		self.photoCount = 0;
+		self.fileCount = 0;
 		[self.tableView reloadData];
 		[self showToast:@"History cleared"];
 	} else if (alert.tag == 72 && self.chatId){
@@ -1852,7 +1853,11 @@ static UIImage *TGProfileStretched(NSString *name) {
 		[[TGClient shared] userProfile:weakSelf.userId completion:^(NSDictionary *info){
 			if (![info isKindOfClass:[NSDictionary class]])
 				return;
-			weakSelf.fullProfile = info;
+			weakSelf.profileBio = TGProfileText(info[@"bio"]);
+			weakSelf.profileBirthdayText = TGProfileText(info[@"birthday"]);
+			weakSelf.profileCommonGroupCount =
+					TGProfileNumberText(info[@"commonGroups"]).integerValue;
+			weakSelf.fullProfileLoaded = YES;
 			[weakSelf rebuildDetailRows];
 		}];
 		[weakSelf loadNoteAndCommonGroups];
@@ -1868,19 +1873,17 @@ static UIImage *TGProfileStretched(NSString *name) {
 
 - (void)rebuildDetailRows {
 	NSMutableArray *more = [(self.baseDetailRows ?: @[]) mutableCopy];
-	NSDictionary *info = [self.fullProfile isKindOfClass:[NSDictionary class]]
-			? self.fullProfile : nil;
-	NSString *bio = info ? TGProfileText(info[@"bio"]) : nil;
+	NSString *bio = self.profileBio;
 	if (bio)
 		[more insertObject:@[@"about", bio] atIndex:MIN((NSUInteger)2, more.count)];
-	NSString *birthday = info ? TGProfileText(info[@"birthday"]) : nil;
+	NSString *birthday = self.profileBirthdayText;
 	if (birthday)
 		[more addObject:@[@"birthday", birthday]];
 	if (self.noteLoaded && (self.isContact || self.profileNote.length))
 		[more addObject:@[@"note", self.profileNote.length ? self.profileNote : @"Add note"]];
 	NSInteger common = self.commonGroupsLoaded
 			? (NSInteger)self.commonGroups.count
-			: (info ? TGProfileNumberText(info[@"commonGroups"]).integerValue : 0);
+			: (self.fullProfileLoaded ? self.profileCommonGroupCount : 0);
 	if (common > 0)
 		[more addObject:@[@"groups in common",
 						  [NSString stringWithFormat:@"%ld", (long)common]]];
@@ -1950,14 +1953,16 @@ static UIImage *TGProfileStretched(NSString *name) {
 	[[TGClient shared] mediaInChat:self.chatId
 							filter:@"searchMessagesFilterPhotoAndVideo"
 						completion:^(NSArray *messages){
-		weakSelf.photos = [messages isKindOfClass:[NSArray class]] ? messages : @[];
+		weakSelf.photoCount = [messages isKindOfClass:[NSArray class]]
+				? (NSInteger)messages.count : 0;
 		weakSelf.photosLoaded = YES;
 		[weakSelf.tableView reloadData];
 	}];
 	[[TGClient shared] mediaInChat:self.chatId
 							filter:@"searchMessagesFilterDocument"
 						completion:^(NSArray *messages){
-		weakSelf.files = [messages isKindOfClass:[NSArray class]] ? messages : @[];
+		weakSelf.fileCount = [messages isKindOfClass:[NSArray class]]
+				? (NSInteger)messages.count : 0;
 		weakSelf.filesLoaded = YES;
 		[weakSelf.tableView reloadData];
 	}];
@@ -2216,7 +2221,7 @@ static UIImage *TGProfileStretched(NSString *name) {
 		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 		cell.accessoryView = nil;
 		count.text = [NSString stringWithFormat:@"%lu",
-				(unsigned long)(self.photos.count + self.files.count)];
+				(unsigned long)(self.photoCount + self.fileCount)];
 	} else {
 		count.text = @"";
 		cell.accessoryType = UITableViewCellAccessoryNone;
@@ -2367,26 +2372,6 @@ static UIImage *TGProfileStretched(NSString *name) {
 		TGProfileViewController *profile = [[TGProfileViewController alloc]
 				initWithChatId:chatId userId:userId title:name];
 		[navigation pushViewController:profile animated:YES];
-	}];
-}
-
-- (void)downloadFileAtRow:(NSInteger)row {
-	if (row >= (NSInteger)self.files.count)
-		return;
-	id m = self.files[row];
-	if (![m isKindOfClass:[NSDictionary class]])
-		return;
-	id fileId = m[@"docId"];
-	if (![fileId isKindOfClass:[NSNumber class]])
-		fileId = m[@"photoId"];
-	if (![fileId isKindOfClass:[NSNumber class]] || [fileId integerValue] <= 0){
-		[self showToast:@"File unavailable"];
-		return;
-	}
-	[self showToast:@"Downloading..."];
-	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] downloadFile:[fileId integerValue] completion:^(NSString *path){
-		[weakSelf showToast:(path.length ? @"Downloaded" : @"Download failed")];
 	}];
 }
 

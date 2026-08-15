@@ -104,6 +104,31 @@ static const CGFloat kPreviewThumb = 52.0f;
 static const CGFloat kPreviewLargeMax = 160.0f;
 static const CGFloat kInstantHeight   = 33.0f;
 
+static const CGFloat kMapCardW = 220.0f;
+static const CGFloat kMapCardH = 130.0f;
+
+static CGSize TGDrawnSizeForImageSize(CGSize source) {
+	if (source.width < 1 || source.height < 1)
+		return CGSizeZero;
+	CGFloat scale = MIN(kImageMax / source.width, kImageMax / source.height);
+	scale = MIN(scale, 1.0f);
+	return CGSizeMake(floorf(source.width * scale), floorf(source.height * scale));
+}
+
+static UIImage *TGImageDrawnAtPointSize(UIImage *source, CGSize points) {
+	if (!source || points.width < 1 || points.height < 1)
+		return source;
+	CGFloat screen = [UIScreen mainScreen].scale;
+	if (source.size.width * source.scale <= points.width * screen &&
+		source.size.height * source.scale <= points.height * screen)
+		return source;
+	UIGraphicsBeginImageContextWithOptions(points, NO, 0.0f);
+	[source drawInRect:CGRectMake(0, 0, points.width, points.height)];
+	UIImage *smaller = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return smaller ?: source;
+}
+
 static UIColor *TGChatHexColour(unsigned int rgb) {
 	return [UIColor colorWithRed:((rgb >> 16) & 0xFF) / 255.0f
 						   green:((rgb >> 8) & 0xFF) / 255.0f
@@ -1894,6 +1919,25 @@ static const CGFloat kPhotoPageGap = 20.0f;
 	self.actionsSheet = nil;
 }
 
+- (void)didReceiveMemoryWarning {
+	[super didReceiveMemoryWarning];
+
+	NSMutableSet *keep = [NSMutableSet set];
+	for (NSIndexPath *path in [self.table indexPathsForVisibleRows]){
+		if (path.row < 0 || path.row >= (NSInteger)self.messages.count)
+			continue;
+		NSDictionary *m = self.messages[path.row];
+		if ([m[@"id"] isKindOfClass:NSNumber.class])
+			[keep addObject:m[@"id"]];
+	}
+	for (NSNumber *key in [self.maps allKeys])
+		if (![keep containsObject:key])
+			[self.maps removeObjectForKey:key];
+
+	if (![[UIApplication sharedApplication].keyWindow viewWithTag:0xF117])
+		self.fullScreenImage = nil;
+}
+
 - (void)dealloc {
 	[self.playbackTimer invalidate];
 	[[NSNotificationCenter defaultCenter] removeObserver:self];
@@ -1943,7 +1987,7 @@ static const CGFloat kPhotoPageGap = 20.0f;
 /// clients this old. So this is a stylised plan view with a pin - honest about
 /// being a placeholder, and it works with no network.
 - (UIImage *)mapCardForLatitude:(double)lat longitude:(double)lon {
-	CGSize size = CGSizeMake(220, 130);
+	CGSize size = CGSizeMake(kMapCardW, kMapCardH);
 	UIGraphicsBeginImageContextWithOptions(size, YES, 0);
 	CGContextRef ctx = UIGraphicsGetCurrentContext();
 
@@ -1996,17 +2040,23 @@ static const CGFloat kPhotoPageGap = 20.0f;
 	return card;
 }
 
-- (void)fetchMissingMaps {
-	for (NSDictionary *m in self.messages){
-		NSNumber *lat = m[@"lat"], *lon = m[@"lon"];
-		if (![lat isKindOfClass:NSNumber.class] || ![lon isKindOfClass:NSNumber.class])
-			continue;
-		NSNumber *key = m[@"id"];
-		if (self.maps[key])
-			continue;
-		self.maps[key] = [self mapCardForLatitude:lat.doubleValue
-										longitude:lon.doubleValue];
-	}
+- (BOOL)messageCarriesMapCard:(NSDictionary *)m {
+	return [m[@"lat"] isKindOfClass:NSNumber.class] &&
+		   [m[@"lon"] isKindOfClass:NSNumber.class];
+}
+
+- (UIImage *)mapCardFor:(NSDictionary *)m {
+	if (![self messageCarriesMapCard:m])
+		return nil;
+	NSNumber *key = [m[@"id"] isKindOfClass:NSNumber.class] ? m[@"id"] : nil;
+	UIImage *card = key ? self.maps[key] : nil;
+	if (card)
+		return card;
+	card = [self mapCardForLatitude:[m[@"lat"] doubleValue]
+						  longitude:[m[@"lon"] doubleValue]];
+	if (key && card)
+		self.maps[key] = card;
+	return card;
 }
 
 /// Group messages need a name over the bubble, and TDLib only volunteers
@@ -2150,7 +2200,6 @@ static const CGFloat kPhotoPageGap = 20.0f;
 
 - (void)fetchMissingImages {
 	__weak typeof(self) weakSelf = self;
-	[self fetchMissingMaps];
 	[self fetchMissingReactionChips];
 	[self fetchMissingLinkPreviews];
 
@@ -2803,7 +2852,8 @@ static const CGFloat kPhotoPageGap = 20.0f;
 		[[TGClient shared] downloadFile:fileId.integerValue completion:^(NSString *path){
 			UIImage *photo = path ? [UIImage imageWithContentsOfFile:path] : nil;
 			if (!photo) return;
-			weakSelf.senderAvatars[key] = photo;
+			weakSelf.senderAvatars[key] = TGImageDrawnAtPointSize(photo,
+					CGSizeMake(kAvatarSide, kAvatarSide));
 			[weakSelf.table reloadData];
 		}];
 	};
@@ -4830,7 +4880,11 @@ static const NSInteger kModerationSheetTag  = 50;
 		if (!going)
 			return;
 		[UIView animateWithDuration:0.2 animations:^{ going.alpha = 0; }
-						 completion:^(BOOL done){ [going removeFromSuperview]; }];
+						 completion:^(BOOL done){
+			[going removeFromSuperview];
+			if (![[UIApplication sharedApplication].keyWindow viewWithTag:0xF117])
+				weakSelf.fullScreenImage = nil;
+		}];
 	};
 	[backdrop addSubview:browser];
 	[browser start];
@@ -5169,21 +5223,20 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 }
 
 - (UIImage *)imageFor:(NSDictionary *)m {
-	UIImage *map = self.maps[m[@"id"]];
-	if (map)
-		return map;
+	if ([self messageCarriesMapCard:m])
+		return [self mapCardFor:m];
 	NSNumber *fileId = m[@"photoId"];
 	return [fileId isKindOfClass:NSNumber.class] ? self.images[fileId] : nil;
 }
 
 - (CGSize)imageSizeFor:(NSDictionary *)m {
+	if ([self messageCarriesMapCard:m])
+		return TGDrawnSizeForImageSize(CGSizeMake(kMapCardW, kMapCardH));
+
 	UIImage *img = [self imageFor:m];
 	if (!img)
 		return CGSizeZero;
-
-	CGFloat scale = MIN(kImageMax / img.size.width, kImageMax / img.size.height);
-	scale = MIN(scale, 1.0f);
-	return CGSizeMake(floorf(img.size.width * scale), floorf(img.size.height * scale));
+	return TGDrawnSizeForImageSize(img.size);
 }
 
 - (NSString *)dayStringForMessage:(NSDictionary *)m {

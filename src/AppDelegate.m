@@ -17,6 +17,7 @@
 #import "TGChatViewController.h"
 #import "TGTopicsViewController.h"
 #import "TGHacks.h"
+#import "TGIcons.h"
 #import <QuartzCore/QuartzCore.h>
 #include <stdio.h>
 
@@ -92,6 +93,19 @@ static void TGWatchForIncomingCalls(void) {
 	[self startTDLib];
 
 	return YES;
+}
+
+#pragma mark - memory
+
+- (void)applicationDidReceiveMemoryWarning:(UIApplication *)application {
+	NSLog(@"memory warning: dropping discardable caches");
+	[TGIcons flush];
+	[[NSURLCache sharedURLCache] removeAllCachedResponses];
+}
+
+- (void)applicationDidEnterBackground:(UIApplication *)application {
+	[TGIcons flush];
+	[[NSURLCache sharedURLCache] removeAllCachedResponses];
 }
 
 #pragma mark - TDLib
@@ -722,6 +736,7 @@ static void TGWatchForIncomingCalls(void) {
 
 	if ([host isEqualToString:@"screenshot"]){
 		dispatch_async(dispatch_get_main_queue(), ^{
+			@autoreleasepool {
 			// Opaque: with an alpha channel, white text over a solid bubble
 			// composited wrongly and came out orange in the capture - a
 			// screenshot artifact that looked exactly like a colour bug.
@@ -747,6 +762,7 @@ static void TGWatchForIncomingCalls(void) {
 			NSString *path = [dir stringByAppendingPathComponent:@"screen.png"];
 			BOOL ok = [UIImagePNGRepresentation(img) writeToFile:path atomically:YES];
 			NSLog(@"screenshot %@", ok ? @"saved" : @"FAILED");
+			}
 		});
 		return YES;
 	}

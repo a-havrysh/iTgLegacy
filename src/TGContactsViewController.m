@@ -23,6 +23,15 @@ static const CGFloat kContactBadgeSide = 14.0f;
 static const CGFloat kContactBadgeGap = 3.0f;
 static const CGFloat kContactActionRowHeight = 44.0f;
 static const CGFloat kContactAvatarCorner = 4.0f;
+static const NSUInteger kContactPhotoCacheCount = 80;
+static const NSUInteger kContactPhotoCacheBytes = 2 * 1024 * 1024;
+
+static NSUInteger TGContactPhotoCost(UIImage *image) {
+	CGImageRef bitmap = image.CGImage;
+	if (!bitmap)
+		return (NSUInteger)(image.size.width * image.size.height * 4);
+	return (NSUInteger)(CGImageGetWidth(bitmap) * CGImageGetHeight(bitmap) * 4);
+}
 
 static NSString *const TGContactActionInvite = @"invite";
 static NSString *const TGContactActionNewGroup = @"newGroup";
@@ -674,7 +683,7 @@ static BOOL TGCanSendSMS(void) {
 @property (nonatomic, strong) NSArray *filteredUsers;
 @property (nonatomic, strong) NSArray *sectionTitles;
 @property (nonatomic, strong) NSArray *sections;
-@property (nonatomic, strong) NSMutableDictionary *photos;
+@property (nonatomic, strong) NSCache *photos;
 @property (nonatomic, strong) NSMutableSet *photosRequested;
 @property (nonatomic, strong) UISearchBar *searchBar;
 @property (nonatomic, strong) NSString *searchQuery;
@@ -1575,7 +1584,9 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 		self.title = @"Contacts";
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
 	self.users = @[];
-	self.photos = [NSMutableDictionary dictionary];
+	self.photos = [[NSCache alloc] init];
+	self.photos.countLimit = kContactPhotoCacheCount;
+	self.photos.totalCostLimit = kContactPhotoCacheBytes;
 	self.photosRequested = [NSMutableSet set];
 	self.closeFriendIds = [NSMutableSet set];
 	self.badges = [NSMutableDictionary dictionary];
@@ -1867,8 +1878,78 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 	return [fileId isKindOfClass:NSNumber.class] ? fileId.stringValue : nil;
 }
 
-- (void)fetchMissingPhotos {
+- (UIImage *)diskThumbAtPath:(NSString *)path {
+	if (![[NSFileManager defaultManager] fileExistsAtPath:path])
+		return nil;
+	UIImage *stored = [UIImage imageWithContentsOfFile:path];
+	CGFloat scale = [UIScreen mainScreen].scale;
+	CGImageRef bitmap = stored.CGImage;
+	if (bitmap
+			&& fabs((CGFloat)CGImageGetWidth(bitmap) - kContactAvatar * scale) < 0.5f
+			&& fabs((CGFloat)CGImageGetHeight(bitmap) - kContactAvatar * scale) < 0.5f)
+		return [UIImage imageWithCGImage:bitmap scale:scale
+							 orientation:UIImageOrientationUp];
+	[[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+	return nil;
+}
+
+- (UIImage *)photoForUser:(NSDictionary *)u {
+	NSNumber *fileId = [u[@"photoFileId"] isKindOfClass:NSNumber.class]
+			? u[@"photoFileId"] : nil;
+	if (!fileId)
+		return nil;
+	UIImage *photo = [self.photos objectForKey:fileId];
+	if (photo)
+		return photo;
+	NSString *cacheKey = [self thumbCacheKeyForUser:u];
+	if (!cacheKey)
+		return nil;
+	NSString *cachePath = [self thumbCachePathForKey:cacheKey];
+	photo = [self diskThumbAtPath:cachePath];
+	if (photo){
+		[self.photos setObject:photo forKey:fileId cost:TGContactPhotoCost(photo)];
+		return photo;
+	}
+	[self requestPhotoForFileId:fileId cachePath:cachePath];
+	return nil;
+}
+
+- (void)requestPhotoForFileId:(NSNumber *)fileId cachePath:(NSString *)cachePath {
+	if (!fileId || !cachePath.length || [self.photosRequested containsObject:fileId])
+		return;
+	[self.photosRequested addObject:fileId];
 	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] downloadFile:fileId.integerValue completion:^(NSString *path){
+		if (!path){
+			TGContactsViewController *me = weakSelf;
+			[me.photosRequested removeObject:fileId];
+			return;
+		}
+		dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+			@autoreleasepool {
+				UIImage *thumb = TGDecodeSquareThumbnail(path, kContactAvatar);
+				if (thumb)
+					[UIImagePNGRepresentation(thumb) writeToFile:cachePath
+													  atomically:YES];
+				dispatch_async(dispatch_get_main_queue(), ^{
+					TGContactsViewController *me = weakSelf;
+					if (!me || !thumb)
+						return;
+					[me.photos setObject:thumb forKey:fileId
+									cost:TGContactPhotoCost(thumb)];
+					[me reloadTableSoon];
+				});
+			}
+		});
+	}];
+}
+
+- (void)didReceiveMemoryWarning {
+	[super didReceiveMemoryWarning];
+	[self.photos removeAllObjects];
+}
+
+- (void)fetchMissingPhotos {
 	NSMutableSet *liveKeys = [NSMutableSet set];
 	for (NSDictionary *u in self.users){
 		NSString *key = [self thumbCacheKeyForUser:u];
@@ -1877,45 +1958,18 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 	}
 	[self pruneThumbCacheKeeping:liveKeys];
 
+	NSFileManager *fileManager = [NSFileManager defaultManager];
 	for (NSDictionary *u in self.users){
 		NSNumber *fileId = u[@"photoFileId"];
 		NSString *cacheKey = [self thumbCacheKeyForUser:u];
 		if (![fileId isKindOfClass:NSNumber.class] || !cacheKey)
 			continue;
-		if (self.photos[fileId] || [self.photosRequested containsObject:fileId])
+		if ([self.photosRequested containsObject:fileId])
 			continue;
-		[self.photosRequested addObject:fileId];
-
 		NSString *cachePath = [self thumbCachePathForKey:cacheKey];
-		if ([[NSFileManager defaultManager] fileExistsAtPath:cachePath]){
-			UIImage *cached = [UIImage imageWithContentsOfFile:cachePath];
-			if (cached && fabs(cached.size.width - kContactAvatar) < 0.5f
-					   && fabs(cached.size.height - kContactAvatar) < 0.5f){
-				self.photos[fileId] = cached;
-				continue;
-			}
-			[[NSFileManager defaultManager] removeItemAtPath:cachePath error:nil];
-		}
-
-		[[TGClient shared] downloadFile:fileId.integerValue completion:^(NSString *path){
-			if (!path){
-				TGContactsViewController *me = weakSelf;
-				[me.photosRequested removeObject:fileId];
-				return;
-			}
-			dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-				UIImage *thumb = TGDecodeSquareThumbnail(path, kContactAvatar);
-				if (thumb)
-					[UIImagePNGRepresentation(thumb) writeToFile:cachePath atomically:YES];
-				dispatch_async(dispatch_get_main_queue(), ^{
-					TGContactsViewController *me = weakSelf;
-					if (!me || !thumb)
-						return;
-					me.photos[fileId] = thumb;
-					[me reloadTableSoon];
-				});
-			});
-		}];
+		if ([fileManager fileExistsAtPath:cachePath])
+			continue;
+		[self requestPhotoForFileId:fileId cachePath:cachePath];
 	}
 }
 
@@ -2148,8 +2202,7 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 	}
 	[cell setNeedsLayout];
 
-	NSNumber *fileId = u[@"photoFileId"];
-	UIImage *photo = [fileId isKindOfClass:NSNumber.class] ? self.photos[fileId] : nil;
+	UIImage *photo = [self photoForUser:u];
 	if (!photo)
 		photo = [TGIcons avatarWithInitials:
 					(name.length ? [name substringToIndex:1].uppercaseString : @"?")

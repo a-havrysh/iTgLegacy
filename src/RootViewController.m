@@ -14,6 +14,7 @@
 @interface RootViewController () <TGTabBarDelegate, UINavigationControllerDelegate>
 @property (nonatomic, strong) TGTabBar *customTabBar;
 @property (nonatomic, strong) id layoutDelegate;
+@property (nonatomic, strong) NSMutableIndexSet *insetTabs;
 @end
 
 @implementation RootViewController
@@ -51,18 +52,34 @@
 
 	self.tabBar.hidden = true;
 
-	for (UINavigationController *nc in @[contactsNC, chatsNC, settingsNC]){
+	for (UINavigationController *nc in @[contactsNC, chatsNC, settingsNC])
 		nc.delegate = self;
-		if ([nc.topViewController isKindOfClass:[UITableViewController class]]){
-			UITableView *tableView = ((UITableViewController *)nc.topViewController).tableView;
-			tableView.contentInset = UIEdgeInsetsMake(tableView.contentInset.top, 0, 49, 0);
-			tableView.scrollIndicatorInsets = tableView.contentInset;
-		}
-	}
+
+	[self applyTabBarInsetForIndex:self.selectedIndex];
+}
+
+- (void)applyTabBarInsetForIndex:(NSUInteger)index {
+	if (index >= self.viewControllers.count)
+		return;
+	if (!self.insetTabs)
+		self.insetTabs = [NSMutableIndexSet indexSet];
+	if ([self.insetTabs containsIndex:index])
+		return;
+	id controller = self.viewControllers[index];
+	if (![controller isKindOfClass:[UINavigationController class]])
+		return;
+	UIViewController *top = [[(UINavigationController *)controller viewControllers] firstObject];
+	if (![top isKindOfClass:[UITableViewController class]])
+		return;
+	[self.insetTabs addIndex:index];
+	UITableView *tableView = ((UITableViewController *)top).tableView;
+	tableView.contentInset = UIEdgeInsetsMake(tableView.contentInset.top, 0, 49, 0);
+	tableView.scrollIndicatorInsets = tableView.contentInset;
 }
 
 - (void)viewDidAppear:(BOOL)animated {
 	[super viewDidAppear:animated];
+	[self applyTabBarInsetForIndex:self.selectedIndex];
 	[self updateUnreadBadge];
 }
 
@@ -79,13 +96,16 @@
 - (void)setSelectedIndex:(NSUInteger)selectedIndex {
 	if (selectedIndex >= self.viewControllers.count)
 		return;
+	[self applyTabBarInsetForIndex:selectedIndex];
 	[super setSelectedIndex:selectedIndex];
 	[self.customTabBar setSelectedIndex:(int)selectedIndex];
 }
 
 - (void)setSelectedViewController:(UIViewController *)selectedViewController {
-	[super setSelectedViewController:selectedViewController];
 	NSUInteger index = [self.viewControllers indexOfObject:selectedViewController];
+	if (index != NSNotFound)
+		[self applyTabBarInsetForIndex:index];
+	[super setSelectedViewController:selectedViewController];
 	if (index != NSNotFound)
 		[self.customTabBar setSelectedIndex:(int)index];
 }

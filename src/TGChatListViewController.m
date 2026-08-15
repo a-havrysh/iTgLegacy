@@ -2212,6 +2212,66 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	}
 }
 
+static UIImage *TGAvatarThumbnail(UIImage *source, CGFloat sidePoints) {
+	if (!source || sidePoints < 1)
+		return source;
+	CGSize points = source.size;
+	if (points.width < 1 || points.height < 1)
+		return source;
+	CGFloat screenScale = [UIScreen mainScreen].scale;
+	if (screenScale < 1.0f)
+		screenScale = 1.0f;
+	CGFloat shortSidePixels = MIN(points.width, points.height) * source.scale;
+	if (shortSidePixels <= sidePoints * screenScale + 0.5f)
+		return source;
+
+	CGFloat factor = MAX(sidePoints / points.width, sidePoints / points.height);
+	CGSize target = CGSizeMake(points.width * factor, points.height * factor);
+	if (UIGraphicsBeginImageContextWithOptions != NULL)
+		UIGraphicsBeginImageContextWithOptions(target, NO, 0.0f);
+	else
+		UIGraphicsBeginImageContext(target);
+	[source drawInRect:CGRectMake(0, 0, target.width, target.height)];
+	UIImage *scaled = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return scaled ?: source;
+}
+
+- (NSSet *)avatarFileIdsInUse {
+	NSMutableSet *keep = [NSMutableSet set];
+	NSArray *rows = [self visibleChats];
+	NSInteger headerCount = (NSInteger)[self headerRows].count;
+	for (NSIndexPath *path in ([self.tableView indexPathsForVisibleRows] ?: @[])){
+		NSInteger index = path.row - headerCount;
+		if (index < 0 || index >= (NSInteger)rows.count)
+			continue;
+		id fileId = rows[index][@"photoFileId"];
+		if ([fileId isKindOfClass:[NSNumber class]])
+			[keep addObject:fileId];
+	}
+	for (NSDictionary *poster in (self.storyPosters ?: @[])){
+		id fileId = poster[@"photoFileId"];
+		if ([fileId isKindOfClass:[NSNumber class]])
+			[keep addObject:fileId];
+	}
+	return keep;
+}
+
+- (void)dropAvatar:(id)fileId {
+	[self.avatars removeObjectForKey:fileId];
+	[self.avatarsRequested removeObject:fileId];
+}
+
+- (void)didReceiveMemoryWarning {
+	[super didReceiveMemoryWarning];
+	NSSet *keep = [self avatarFileIdsInUse];
+	for (id fileId in [self.avatars.allKeys copy]){
+		if ([keep containsObject:fileId])
+			continue;
+		[self dropAvatar:fileId];
+	}
+}
+
 /// Avatars are fetched once each and cached by file id.
 - (void)fetchMissingAvatars {
 	__weak typeof(self) weakSelf = self;
@@ -2228,7 +2288,10 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 			NSString *path = TGReplyString(reply);
 			if (!me || !path.length)
 				return;
-			UIImage *img = [UIImage imageWithContentsOfFile:path];
+			UIImage *img = nil;
+			@autoreleasepool {
+				img = TGAvatarThumbnail([UIImage imageWithContentsOfFile:path], kAvatar);
+			}
 			if (!img)
 				return;
 			me.avatars[fileId] = img;

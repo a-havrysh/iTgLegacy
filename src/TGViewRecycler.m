@@ -1,10 +1,12 @@
 #import "TGViewRecycler.h"
 
-static const NSUInteger TGViewRecyclerMaxPoolSize = 24;
+static const NSUInteger TGViewRecyclerMaxPoolSize = 12;
+static const NSUInteger TGViewRecyclerMaxTotalPoolSize = 32;
 
 @interface TGViewRecycler ()
 
 @property (nonatomic, strong) NSMutableDictionary *reusableViews;
+@property (nonatomic, assign) NSUInteger pooledViewCount;
 
 @end
 
@@ -16,6 +18,8 @@ static const NSUInteger TGViewRecyclerMaxPoolSize = 24;
 		dispatch_async(dispatch_get_main_queue(), ^{
 			[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(didReceiveMemoryWarning)
 					name:UIApplicationDidReceiveMemoryWarningNotification object:nil];
+			[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(didReceiveMemoryWarning)
+					name:UIApplicationDidEnterBackgroundNotification object:nil];
 		});
 		self.reusableViews = [[NSMutableDictionary alloc] init];
 	}
@@ -41,6 +45,10 @@ static const NSUInteger TGViewRecyclerMaxPoolSize = 24;
 	UIView<TGReusableView> *view = [views lastObject];
 	if (view != nil){
 		[views removeLastObject];
+		if (self.pooledViewCount > 0)
+			self.pooledViewCount--;
+		if (views.count == 0)
+			[self.reusableViews removeObjectForKey:reuseIdentifier];
 		[view prepareForReuse];
 	}
 	return view;
@@ -56,16 +64,12 @@ static const NSUInteger TGViewRecyclerMaxPoolSize = 24;
 	if (reuseIdentifier == nil)
 		reuseIdentifier = NSStringFromClass([view class]);
 
-	NSMutableArray *views = self.reusableViews[reuseIdentifier];
-	if (views == nil){
-		views = [[NSMutableArray alloc] init];
-		self.reusableViews[reuseIdentifier] = views;
-	}
+	if (view.superview != nil)
+		[view removeFromSuperview];
 
 	[view prepareForRecycle:self];
 
-	if (view.superview != nil)
-		[view removeFromSuperview];
+	NSMutableArray *views = self.reusableViews[reuseIdentifier];
 
 	if ([views indexOfObjectIdenticalTo:view] != NSNotFound)
 		return;
@@ -73,7 +77,16 @@ static const NSUInteger TGViewRecyclerMaxPoolSize = 24;
 	if (views.count >= TGViewRecyclerMaxPoolSize)
 		return;
 
+	if (self.pooledViewCount >= TGViewRecyclerMaxTotalPoolSize)
+		return;
+
+	if (views == nil){
+		views = [[NSMutableArray alloc] init];
+		self.reusableViews[reuseIdentifier] = views;
+	}
+
 	[views addObject:view];
+	self.pooledViewCount++;
 }
 
 - (int)recycledCount:(NSString *)identifier {
@@ -86,6 +99,7 @@ static const NSUInteger TGViewRecyclerMaxPoolSize = 24;
 
 - (void)removeAllViews {
 	[self.reusableViews removeAllObjects];
+	self.pooledViewCount = 0;
 }
 
 @end

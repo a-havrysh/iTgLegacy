@@ -87,26 +87,33 @@ static NSData *TGMCBase64(id value) {
 		ready = YES;
 	}
 
-	NSData *ascii = [encoded dataUsingEncoding:NSASCIIStringEncoding];
-	if (!ascii.length)
-		return [NSData data];
-
-	const unsigned char *src = ascii.bytes;
-	NSUInteger length = ascii.length;
-	NSMutableData *out = [NSMutableData dataWithCapacity:(length / 4) * 3 + 3];
-	unsigned int accumulator = 0;
-	int bits = 0;
-	for (NSUInteger i = 0; i < length; i++){
-		signed char decoded = table[src[i]];
-		if (decoded < 0)
-			continue;
-		accumulator = (accumulator << 6) | (unsigned int)decoded;
-		bits += 6;
-		if (bits >= 8){
-			bits -= 8;
-			unsigned char byte = (unsigned char)((accumulator >> bits) & 0xFF);
-			[out appendBytes:&byte length:1];
+	NSMutableData *out = nil;
+	@autoreleasepool {
+		NSData *ascii = [encoded dataUsingEncoding:NSASCIIStringEncoding];
+		const unsigned char *src = ascii.bytes;
+		NSUInteger length = ascii.length;
+		out = [[NSMutableData alloc] initWithCapacity:(length / 4) * 3 + 3];
+		unsigned char chunk[3072];
+		NSUInteger filled = 0;
+		unsigned int accumulator = 0;
+		int bits = 0;
+		for (NSUInteger i = 0; i < length; i++){
+			signed char decoded = table[src[i]];
+			if (decoded < 0)
+				continue;
+			accumulator = (accumulator << 6) | (unsigned int)decoded;
+			bits += 6;
+			if (bits >= 8){
+				bits -= 8;
+				chunk[filled++] = (unsigned char)((accumulator >> bits) & 0xFF);
+				if (filled == sizeof(chunk)){
+					[out appendBytes:chunk length:filled];
+					filled = 0;
+				}
+			}
 		}
+		if (filled)
+			[out appendBytes:chunk length:filled];
 	}
 	return out;
 }

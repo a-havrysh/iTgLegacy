@@ -476,7 +476,6 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 		[_tiles addObject:tile];
 	}
 
-	CGFloat scale = [UIScreen mainScreen].scale;
 	for (NSInteger i = 0; i < (NSInteger)items.count; i++){
 		TGMediaTileView *tile = _tiles[i];
 		NSDictionary *item = items[i];
@@ -486,7 +485,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 
 		NSNumber *thumbId = item[@"thumbId"];
 		[tile loadWithFileId:[thumbId isKindOfClass:NSNumber.class] ? thumbId : nil
-					  square:TGMediaTileSide * scale
+					  square:TGMediaTileSide
 				 placeholder:TGMediaTilePlaceholder()
 				   forceFade:false];
 
@@ -1585,6 +1584,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 		if ([key integerValue] != _currentIndex)
 			[_imageCache removeObjectForKey:key];
 	}
+	[_pagePool removeAllObjects];
 }
 
 - (void)dealloc {

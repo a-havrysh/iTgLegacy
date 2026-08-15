@@ -20,6 +20,12 @@ static NSCache *TGRemoteImageMemoryCache(void) {
 													  usingBlock:^(NSNotification *__unused note){
 			[cache removeAllObjects];
 		}];
+		[[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidEnterBackgroundNotification
+														  object:nil
+														   queue:[NSOperationQueue mainQueue]
+													  usingBlock:^(NSNotification *__unused note){
+			[cache removeAllObjects];
+		}];
 	});
 	return cache;
 }
@@ -51,6 +57,9 @@ static NSUInteger TGRemoteImageCost(UIImage *image) {
 
 - (void)prepareForRecycle:(TGViewRecycler *)__unused recycler {
 	[self cancelLoading];
+	self.fileId = nil;
+	self.currentCacheKey = nil;
+	self.image = self.placeholderImage;
 }
 
 - (UIImage *)currentImage {
@@ -121,13 +130,17 @@ static NSUInteger TGRemoteImageCost(UIImage *image) {
 
 	dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
 		UIImage *cached = nil;
-		NSData *cachedData = [NSData dataWithContentsOfFile:cachePath];
-		if (cachedData.length){
-			cached = [UIImage imageWithData:cachedData scale:screenScale];
-			CGFloat expected = side * screenScale;
-			if (cached && (fabs(cached.size.width * cached.scale - expected) > 0.5f ||
-						   fabs(cached.size.height * cached.scale - expected) > 0.5f))
-				cached = nil;
+		@autoreleasepool {
+			NSData *cachedData = [NSData dataWithContentsOfFile:cachePath
+														options:NSDataReadingMappedIfSafe
+														  error:NULL];
+			if (cachedData.length){
+				UIImage *decoded = [UIImage imageWithData:cachedData scale:screenScale];
+				CGFloat expected = side * screenScale;
+				if (decoded && fabs(decoded.size.width * decoded.scale - expected) <= 0.5f &&
+					fabs(decoded.size.height * decoded.scale - expected) <= 0.5f)
+					cached = decoded;
+			}
 		}
 		if (cached){
 			[TGRemoteImageMemoryCache() setObject:cached forKey:cacheKey cost:TGRemoteImageCost(cached)];
@@ -146,9 +159,11 @@ static NSUInteger TGRemoteImageCost(UIImage *image) {
 					UIImage *thumb = TGDecodeSquareThumbnail(path, side);
 					if (!thumb)
 						return;
-					NSData *data = UIImagePNGRepresentation(thumb);
-					if (data.length != 0)
-						[data writeToFile:cachePath atomically:YES];
+					@autoreleasepool {
+						NSData *data = UIImagePNGRepresentation(thumb);
+						if (data.length != 0)
+							[data writeToFile:cachePath atomically:YES];
+					}
 					[TGRemoteImageMemoryCache() setObject:thumb forKey:cacheKey cost:TGRemoteImageCost(thumb)];
 					dispatch_async(dispatch_get_main_queue(), ^{ deliver(thumb); });
 				});

@@ -69,12 +69,46 @@ static NSDictionary *TGFlattenSticker(id object){
 	};
 }
 
+static BOOL TGIsFlattenableSticker(id object){
+	NSDictionary *sticker = TGDict(object);
+	return [TGDict(sticker[@"sticker"])[@"id"] isKindOfClass:[NSNumber class]];
+}
+
+static NSArray *TGFlattenStickerRange(id list, NSUInteger location, NSUInteger length){
+	NSMutableArray *out = [NSMutableArray arrayWithCapacity:length];
+	NSUInteger index = 0;
+	for (id item in TGArray(list)){
+		if (!TGIsFlattenableSticker(item))
+			continue;
+		if (index++ < location)
+			continue;
+		if (out.count >= length)
+			break;
+		@autoreleasepool {
+			NSDictionary *sticker = TGFlattenSticker(item);
+			if (sticker)
+				[out addObject:sticker];
+		}
+	}
+	return out;
+}
+
+static NSUInteger TGCountFlattenableStickers(id list){
+	NSUInteger count = 0;
+	for (id item in TGArray(list))
+		if (TGIsFlattenableSticker(item))
+			count++;
+	return count;
+}
+
 static NSArray *TGFlattenStickers(id list){
 	NSMutableArray *out = [NSMutableArray array];
 	for (id item in TGArray(list)){
-		NSDictionary *sticker = TGFlattenSticker(item);
-		if (sticker)
-			[out addObject:sticker];
+		@autoreleasepool {
+			NSDictionary *sticker = TGFlattenSticker(item);
+			if (sticker)
+				[out addObject:sticker];
+		}
 	}
 	return out;
 }
@@ -798,8 +832,11 @@ static NSDictionary *TGInputFileWithId(NSInteger fileId){
 			return;
 		}
 		BOOL found = NO;
-		for (NSDictionary *sticker in TGFlattenStickers(result[@"stickers"])){
-			if ([sticker[@"fileId"] integerValue] == fileId){
+		for (id item in TGArray(result[@"stickers"])){
+			NSNumber *stickerFileId = TGDict(TGDict(item)[@"sticker"])[@"id"];
+			if (![stickerFileId isKindOfClass:[NSNumber class]])
+				continue;
+			if ([stickerFileId integerValue] == fileId){
 				found = YES;
 				break;
 			}
@@ -858,9 +895,8 @@ static NSDictionary *TGInputFileWithId(NSInteger fileId){
 			completion(nil, 0);
 			return;
 		}
-		NSDictionary *set = TGFlattenStickerSet(result);
-		NSArray *stickers = TGArray(set[@"stickers"]) ?: [NSArray array];
-		NSInteger total = (NSInteger)stickers.count;
+		id raw = result[@"stickers"];
+		NSInteger total = (NSInteger)TGCountFlattenableStickers(raw);
 		if (offset >= total){
 			completion([NSArray array], total);
 			return;
@@ -868,7 +904,7 @@ static NSDictionary *TGInputFileWithId(NSInteger fileId){
 		NSInteger length = total - offset;
 		if (length > limit)
 			length = limit;
-		completion([stickers subarrayWithRange:NSMakeRange(offset, length)], total);
+		completion(TGFlattenStickerRange(raw, (NSUInteger)offset, (NSUInteger)length), total);
 	}];
 }
 

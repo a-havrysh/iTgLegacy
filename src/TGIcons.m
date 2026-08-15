@@ -33,16 +33,38 @@ static BOOL TGInitialsAreName(NSString *initials) {
 	return NO;
 }
 
+static NSUInteger TGImageByteCost(UIImage *image) {
+	CGFloat scale = image.scale > 0 ? image.scale : 1.0f;
+	CGFloat w = image.size.width * scale;
+	CGFloat h = image.size.height * scale;
+	if (w < 1) w = 1;
+	if (h < 1) h = 1;
+	return (NSUInteger)(w * h * 4.0f);
+}
+
 static NSCache *TGAvatarCache(void) {
 	static dispatch_once_t once;
 	dispatch_once(&once, ^{
 		sAvatarCache = [[NSCache alloc] init];
 		sAvatarCache.countLimit = 64;
+		sAvatarCache.totalCostLimit = 1536 * 1024;
 	});
 	return sAvatarCache;
 }
 
 @implementation TGIcons
+
++ (void)load {
+	@autoreleasepool {
+		[[NSNotificationCenter defaultCenter]
+				addObserverForName:UIApplicationDidReceiveMemoryWarningNotification
+							object:nil
+							 queue:[NSOperationQueue mainQueue]
+						usingBlock:^(NSNotification *note){
+			[TGIcons flush];
+		}];
+	}
+}
 
 + (void)flush {
 	[sCache removeAllObjects];
@@ -951,7 +973,7 @@ static UIImage *TGGlyphAvatar(CGFloat side, void (^draw)(CGContextRef ctx, CGFlo
 	UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
 	UIGraphicsEndImageContext();
 	if (image)
-		[TGAvatarCache() setObject:image forKey:cacheKey];
+		[TGAvatarCache() setObject:image forKey:cacheKey cost:TGImageByteCost(image)];
 	return image;
 }
 

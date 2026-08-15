@@ -256,9 +256,11 @@ static NSDictionary *TGStoryFlattened(NSDictionary *raw) {
 static NSArray *TGStoriesFlattened(NSArray *list) {
 	NSMutableArray *out = [NSMutableArray array];
 	for (NSDictionary *one in TGStoryArray(list)){
-		NSDictionary *flat = TGStoryFlattened(one);
-		if (flat)
-			[out addObject:flat];
+		@autoreleasepool {
+			NSDictionary *flat = TGStoryFlattened(one);
+			if (flat)
+				[out addObject:flat];
+		}
 	}
 	return out;
 }

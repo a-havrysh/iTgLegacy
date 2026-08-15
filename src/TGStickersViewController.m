@@ -28,6 +28,7 @@ static const NSInteger kTrendingPageSize = 20;
 
 static const CGFloat kBottomBarHeight = 45.0f;
 static const NSUInteger kCoverCacheLimit = 220;
+static const NSUInteger kCoverCacheByteLimit = 8 * 1024 * 1024;
 
 static const NSInteger TGStickersPageMasks = 5;
 
@@ -214,6 +215,8 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 @property (nonatomic, strong) NSMutableArray *sets;
 @property (nonatomic, strong) NSArray *stickers;
 @property (nonatomic, strong) NSMutableDictionary *covers;
+@property (nonatomic, strong) NSMutableArray *coverOrder;
+@property (nonatomic, assign) NSUInteger coverBytes;
 @property (nonatomic, strong) NSMutableSet *coversInFlight;
 @property (nonatomic, strong) UIView *bottomBar;
 @property (nonatomic, strong) UIView *bottomBarLine;
@@ -249,6 +252,7 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		_page = TGStickersPageRoot;
 		_sets = [NSMutableArray array];
 		_covers = [NSMutableDictionary dictionary];
+		_coverOrder = [NSMutableArray array];
 		_coversInFlight = [NSMutableSet set];
 	}
 	return self;
@@ -400,7 +404,7 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 
 - (void)didReceiveMemoryWarning {
 	[super didReceiveMemoryWarning];
-	[self.covers removeAllObjects];
+	[self flushCovers];
 	[self.table reloadData];
 }
 
@@ -982,10 +986,42 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 
 #pragma mark - images
 
-- (void)pruneCoversIfNeeded {
-	if (self.covers.count <= kCoverCacheLimit)
-		return;
+- (void)flushCovers {
 	[self.covers removeAllObjects];
+	[self.coverOrder removeAllObjects];
+	self.coverBytes = 0;
+}
+
+- (NSUInteger)byteCostOfImage:(UIImage *)image {
+	CGImageRef bitmap = image.CGImage;
+	if (!bitmap)
+		return 4096;
+	return CGImageGetWidth(bitmap) * CGImageGetHeight(bitmap) * 4;
+}
+
+- (void)storeCover:(UIImage *)image forKey:(NSString *)key {
+	if (!image || !key)
+		return;
+
+	UIImage *existing = self.covers[key];
+	if (existing){
+		self.coverBytes -= MIN(self.coverBytes, [self byteCostOfImage:existing]);
+		[self.coverOrder removeObject:key];
+	}
+
+	self.covers[key] = image;
+	[self.coverOrder addObject:key];
+	self.coverBytes += [self byteCostOfImage:image];
+
+	while (self.coverOrder.count > 1 &&
+		   (self.coverBytes > kCoverCacheByteLimit ||
+			self.covers.count > kCoverCacheLimit)){
+		NSString *oldest = self.coverOrder[0];
+		UIImage *evicted = self.covers[oldest];
+		self.coverBytes -= MIN(self.coverBytes, [self byteCostOfImage:evicted]);
+		[self.covers removeObjectForKey:oldest];
+		[self.coverOrder removeObjectAtIndex:0];
+	}
 }
 
 - (UIImage *)scale:(UIImage *)image toSide:(CGFloat)side {
@@ -1032,12 +1068,14 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		[strongSelf.coversInFlight removeObject:key];
 		if (!path)
 			return;
-		UIImage *decoded = [UIImage convertFromWebP:path compressedData:nil error:nil];
-		UIImage *small = [strongSelf scale:decoded toSide:side];
+		UIImage *small = nil;
+		@autoreleasepool {
+			UIImage *decoded = [UIImage convertFromWebP:path compressedData:nil error:nil];
+			small = [strongSelf scale:decoded toSide:side];
+		}
 		if (!small)
 			return;
-		strongSelf.covers[key] = small;
-		[strongSelf pruneCoversIfNeeded];
+		[strongSelf storeCover:small forKey:key];
 		if (!indexPath)
 			return;
 		if (indexPath.section >= [strongSelf.table numberOfSections])
