@@ -183,6 +183,19 @@ static void TGWatchForIncomingCalls(void) {
 	[self.window setRootViewController:vc];
 }
 
+- (UIViewController *)topControllerOnScreen {
+	UINavigationController *detail = [RootViewController detailNavigationController];
+	if (detail != nil && ![detail.topViewController isKindOfClass:
+			NSClassFromString(@"TGDetailPlaceholderViewController")])
+		return detail.topViewController;
+	UITabBarController *tabs = (UITabBarController *)self.rootViewController;
+	if (![tabs isKindOfClass:UITabBarController.class])
+		return nil;
+	id nc = tabs.viewControllers[tabs.selectedIndex];
+	return [nc isKindOfClass:UINavigationController.class]
+			? [(UINavigationController *)nc topViewController] : nc;
+}
+
 - (void)showMainUI {
 	if (!self.rootViewController)
 		self.rootViewController = [[RootViewController alloc] init];
@@ -554,7 +567,7 @@ static void TGWatchForIncomingCalls(void) {
 			UITabBarController *tabs = (UITabBarController *)self.rootViewController;
 			if (![tabs isKindOfClass:UITabBarController.class])
 				return;
-			UIViewController *top = [tabs.viewControllers[tabs.selectedIndex] topViewController];
+			UIViewController *top = [self topControllerOnScreen];
 			if (![top respondsToSelector:@selector(showActionsForRow:)]){
 				NSLog(@"holdrow: %@ has no row menu", [top class]);
 				return;
@@ -578,7 +591,7 @@ static void TGWatchForIncomingCalls(void) {
 			UITabBarController *tabs = (UITabBarController *)self.rootViewController;
 			if (![tabs isKindOfClass:UITabBarController.class])
 				return;
-			UIViewController *top = [tabs.viewControllers[tabs.selectedIndex] topViewController];
+			UIViewController *top = [self topControllerOnScreen];
 			UIView *view = top.view;
 			UIScrollView *scroll = [view isKindOfClass:UIScrollView.class]
 					? (UIScrollView *)view : nil;
@@ -610,7 +623,7 @@ static void TGWatchForIncomingCalls(void) {
 			UITabBarController *tabs = (UITabBarController *)self.rootViewController;
 			if (![tabs isKindOfClass:UITabBarController.class])
 				return;
-			UIViewController *top = [tabs.viewControllers[tabs.selectedIndex] topViewController];
+			UIViewController *top = [self topControllerOnScreen];
 			if ([top respondsToSelector:@selector(toggleStickerPanel)])
 				[top performSelector:@selector(toggleStickerPanel)];
 		});
@@ -651,8 +664,7 @@ static void TGWatchForIncomingCalls(void) {
 			UITabBarController *tabs = (UITabBarController *)self.rootViewController;
 			if (![tabs isKindOfClass:UITabBarController.class])
 				return;
-			UINavigationController *nc = tabs.viewControllers[tabs.selectedIndex];
-			UIViewController *top = nc.topViewController;
+			UIViewController *top = [self topControllerOnScreen];
 			if ([top respondsToSelector:@selector(openProfile)])
 				[top performSelector:@selector(openProfile)];
 			else
@@ -669,8 +681,7 @@ static void TGWatchForIncomingCalls(void) {
 			UITabBarController *tabs = (UITabBarController *)self.rootViewController;
 			if (![tabs isKindOfClass:UITabBarController.class])
 				return;
-			UINavigationController *nc = tabs.viewControllers[tabs.selectedIndex];
-			UIViewController *top = nc.topViewController;
+			UIViewController *top = [self topControllerOnScreen];
 			if (![top isKindOfClass:[TGChatViewController class]]){
 				NSLog(@"send: no chat open");
 				return;
@@ -701,8 +712,7 @@ static void TGWatchForIncomingCalls(void) {
 				UITabBarController *tabs = (UITabBarController *)self.rootViewController;
 				if (![tabs isKindOfClass:UITabBarController.class])
 					return;
-				UINavigationController *nc = tabs.viewControllers[tabs.selectedIndex];
-				top = nc.topViewController;
+				top = [self topControllerOnScreen];
 			}
 			// Any table screen can answer this, not only a chat: rows are not
 			// controls, so touch/ cannot reach them and every list would
