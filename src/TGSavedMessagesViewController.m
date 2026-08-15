@@ -153,9 +153,10 @@ static NSString *TGSavedTopicTitle(NSDictionary *topic) {
 	self.tableView.backgroundColor = [theme listBackgroundColour];
 	self.tableView.separatorColor = [theme separatorColour];
 
-	UIView *background = [[UIView alloc] initWithFrame:self.tableView.bounds];
-	background.backgroundColor = [theme listBackgroundColour];
-	background.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+	self.tableView.backgroundView = nil;
+	self.view.layer.backgroundColor = [theme listBackgroundColour].CGColor;
+
+	UIView *background = self.tableView;
 
 	self.emptyLabel = [[UILabel alloc] initWithFrame:
 			CGRectMake(0, 120, background.bounds.size.width, 22)];
@@ -175,7 +176,8 @@ static NSString *TGSavedTopicTitle(NSDictionary *topic) {
 	self.spinner.hidesWhenStopped = YES;
 	[background addSubview:self.spinner];
 
-	self.tableView.backgroundView = background;
+	[self.tableView bringSubviewToFront:self.emptyLabel];
+	[self.tableView bringSubviewToFront:self.spinner];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -823,9 +825,10 @@ static NSString *TGSavedTopicTitle(NSDictionary *topic) {
 			? UITableViewCellSeparatorStyleNone
 			: UITableViewCellSeparatorStyleSingleLine;
 
-	UIView *background = [[UIView alloc] initWithFrame:self.tableView.bounds];
-	background.backgroundColor = [theme listBackgroundColour];
-	background.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+	self.tableView.backgroundView = nil;
+	self.view.layer.backgroundColor = [theme listBackgroundColour].CGColor;
+
+	UIView *background = self.tableView;
 	[self buildEmptyContainerInside:background];
 
 	self.spinner = [[UIActivityIndicatorView alloc]
@@ -836,7 +839,8 @@ static NSString *TGSavedTopicTitle(NSDictionary *topic) {
 	self.spinner.hidesWhenStopped = YES;
 	[background addSubview:self.spinner];
 
-	self.tableView.backgroundView = background;
+	[self.tableView bringSubviewToFront:self.emptyContainer];
+	[self.tableView bringSubviewToFront:self.spinner];
 }
 
 - (void)buildReminderBanner {
@@ -985,7 +989,7 @@ static NSString *TGSavedTopicTitle(NSDictionary *topic) {
 	[theme styleNavigationBar:self.navigationController.navigationBar];
 	self.tableView.backgroundColor = [theme listBackgroundColour];
 	self.tableView.separatorColor = [theme separatorColour];
-	self.tableView.backgroundView.backgroundColor = [theme listBackgroundColour];
+	self.view.layer.backgroundColor = [theme listBackgroundColour].CGColor;
 	[self updateReminderBanner];
 
 	BOOL plainPlate = (!theme.isDark && theme.importedName == nil);

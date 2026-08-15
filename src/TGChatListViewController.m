@@ -1250,7 +1250,9 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
 		self.edgesForExtendedLayout = UIRectEdgeNone;
 
+	self.tableView.backgroundView = nil;
 	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	self.view.layer.backgroundColor = [[TGTheme shared] listBackgroundColour].CGColor;
 	self.tableView.separatorColor = [[TGTheme shared] separatorColour];
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
 	[[TGTheme shared] styleTabBar:self.tabBarController.tabBar];
@@ -1308,6 +1310,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 		[TGIcons flush];
 		[[TGTheme shared] styleNavigationBar:weakSelf.navigationController.navigationBar];
 		weakSelf.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+		weakSelf.view.layer.backgroundColor = [[TGTheme shared] listBackgroundColour].CGColor;
 		weakSelf.tableView.separatorColor = [[TGTheme shared] separatorColour];
 		[weakSelf applySeparatorStyle];
 		[[TGTheme shared] styleTabBar:weakSelf.tabBarController.tabBar];
@@ -1662,6 +1665,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	CGFloat height = rowsTop + (showArchive ? kRowHeight : 0);
 
 	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, height)];
+	header.backgroundColor = [[TGTheme shared] listBackgroundColour];
 	self.searchBar.frame = CGRectMake(0, 0, width, 44);
 	[header addSubview:self.searchBar];
 
@@ -2460,23 +2464,12 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 }
 
 - (void)composeTapped {
-	UIView *host = self.navigationController.view;
-	UIView *button = self.navigationItem.rightBarButtonItem.customView;
-	CGPoint where = button != nil
-			? [button convertPoint:CGPointMake(CGRectGetMidX(button.bounds),
-											   CGRectGetMaxY(button.bounds)) toView:host]
-			: CGPointMake(host.bounds.size.width - 30, 54);
-
-	NSArray *items = @[@{@"title": @"New Message"}, @{@"title": @"Add Story"}];
-
-	__weak typeof(self) weakSelf = self;
-	[TGPopupMenu showItems:items atPoint:where inView:host
-				  onChoice:^(NSInteger choice, NSString *title){
-		if (choice == 1)
-			[weakSelf addStory];
-		else
-			[weakSelf startNewMessage];
-	}];
+	[self closeOpenSwipeCellAnimated:NO];
+	self.sheetItems = @[
+		@{@"kind" : @"newMessage", @"title" : @"New Message"},
+		@{@"kind" : @"addStory",   @"title" : @"Add Story"},
+	];
+	[self presentSheetForItemsWithTitle:@"Compose" cancelTitle:@"Cancel"];
 }
 
 - (void)startNewMessage {
@@ -2773,6 +2766,8 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 		[self markCurrentListAsRead];
 	} else if ([kind isEqualToString:@"editFolders"]){
 		[self openFolderManagement];
+	} else if ([kind isEqualToString:@"newMessage"]){
+		[self startNewMessage];
 	} else if ([kind isEqualToString:@"addStory"]){
 		[self addStory];
 	} else if ([kind isEqualToString:@"folderLink"]){

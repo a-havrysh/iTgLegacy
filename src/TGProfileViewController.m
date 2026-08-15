@@ -1644,7 +1644,8 @@ static UIImage *TGProfileStretched(NSString *name) {
 		[kinds addObject:@"personal"];
 	if (self.manageRows.count)
 		[kinds addObject:@"manage"];
-	[kinds addObject:@"members"];
+	if (self.members.count)
+		[kinds addObject:@"members"];
 	[kinds addObject:@"media"];
 	if (self.userId && self.isContact)
 		[kinds addObject:@"delete"];
@@ -2831,6 +2832,7 @@ static UIImage *TGProfileStretched(NSString *name) {
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] membersOfChat:self.chatId completion:^(NSArray *members){
 		weakSelf.members = [members isKindOfClass:[NSArray class]] ? members : @[];
+		[weakSelf rebuildSections];
 		[weakSelf.tableView reloadData];
 	}];
 	[[TGClient shared] chatProfile:self.chatId completion:^(NSDictionary *info){
@@ -3136,9 +3138,11 @@ static UIImage *TGProfileStretched(NSString *name) {
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
+	NSString *kind = [self kindForSection:section];
+	if (section != 0 && [self tableView:tableView numberOfRowsInSection:section] == 0)
+		return 0;
 	if ([self isGroupProfile])
 		return 8;
-	NSString *kind = [self kindForSection:section];
 	if (section == 0)
 		return ([kind isEqualToString:@"details"] && !self.details.count) ? 2 : 12;
 	if ([kind isEqualToString:@"actions"])
@@ -3149,6 +3153,8 @@ static UIImage *TGProfileStretched(NSString *name) {
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForFooterInSection:(NSInteger)section {
+	if ([self tableView:tableView numberOfRowsInSection:section] == 0)
+		return 0;
 	if ([self isGroupProfile])
 		return 1;
 	if ([[self kindForSection:section] isEqualToString:@"details"])

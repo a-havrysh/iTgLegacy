@@ -71,6 +71,9 @@ static __weak RootViewController *gSplitRoot = nil;
 - (void)viewDidLoad {
 	[super viewDidLoad];
 
+	if (gSplitRoot != nil && gSplitRoot != self)
+		self.isSplitMaster = YES;
+
 	if ([RootViewController isPadIdiom] && !self.isSplitMaster){
 		[self buildSplitLayout];
 		return;
@@ -127,15 +130,14 @@ static __weak RootViewController *gSplitRoot = nil;
 	self.splitController.delegate = self;
 	self.splitController.viewControllers = @[master, self.detailNav];
 
-	[self addChildViewController:self.splitController];
-	self.splitController.view.frame = self.view.bounds;
-	self.splitController.view.autoresizingMask =
-			UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-	[self.view addSubview:self.splitController.view];
-	if ([self.splitController respondsToSelector:@selector(didMoveToParentViewController:)])
-		[self.splitController didMoveToParentViewController:self];
-
 	self.tabBar.hidden = true;
+
+	UISplitViewController *split = self.splitController;
+	dispatch_async(dispatch_get_main_queue(), ^{
+		UIWindow *window = [UIApplication sharedApplication].keyWindow;
+		if (window.rootViewController == self)
+			window.rootViewController = split;
+	});
 }
 
 - (BOOL)isSplitLayoutActive {
@@ -228,7 +230,7 @@ static __weak RootViewController *gSplitRoot = nil;
 - (BOOL)splitViewController:(UISplitViewController *)svc
 		shouldHideViewController:(UIViewController *)vc
 			   inOrientation:(UIInterfaceOrientation)orientation {
-	return UIInterfaceOrientationIsPortrait(orientation);
+	return NO;
 }
 
 - (void)splitViewController:(UISplitViewController *)svc

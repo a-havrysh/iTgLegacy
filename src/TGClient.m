@@ -1081,19 +1081,39 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 	}
 
 	NSString *forwardFrom = nil;
-	NSDictionary *origin = m[@"forward_info"][@"origin"];
+	NSDictionary *forwardInfo = m[@"forward_info"];
+	NSDictionary *origin = forwardInfo[@"origin"];
 	NSString *originType = origin[@"@type"];
-	if ([originType isEqualToString:@"messageOriginUser"])
-		forwardFrom = [[TGClient shared] nameForUserId:
-				[origin[@"sender_user_id"] longLongValue]] ?: @"a user";
+	int64_t forwardUserId = 0;
+	int64_t forwardChatId = 0;
+	int64_t forwardMessageId = 0;
+	if ([originType isEqualToString:@"messageOriginUser"]){
+		forwardUserId = [origin[@"sender_user_id"] longLongValue];
+		forwardFrom = [[TGClient shared] nameForUserId:forwardUserId] ?: @"a user";
+	}
 	else if ([originType isEqualToString:@"messageOriginHiddenUser"])
 		forwardFrom = origin[@"sender_name"];
 	else if ([originType isEqualToString:@"messageOriginChannel"]){
 		NSString *signature = origin[@"author_signature"];
 		forwardFrom = signature.length ? signature : @"a channel";
+		forwardChatId    = [origin[@"chat_id"] longLongValue];
+		forwardMessageId = [origin[@"message_id"] longLongValue];
 	}
-	else if ([originType isEqualToString:@"messageOriginChat"])
+	else if ([originType isEqualToString:@"messageOriginChat"]){
 		forwardFrom = origin[@"author_signature"] ?: @"a chat";
+		forwardChatId = [origin[@"sender_chat_id"] longLongValue];
+	}
+
+	NSDictionary *forwardSource = forwardInfo[@"source"];
+	if ([forwardSource isKindOfClass:NSDictionary.class] && !forwardMessageId){
+		int64_t sourceChat = [forwardSource[@"chat_id"] longLongValue];
+		int64_t sourceMessage = [forwardSource[@"message_id"] longLongValue];
+		if (sourceChat && sourceMessage &&
+			(!forwardChatId || forwardChatId == sourceChat)){
+			forwardChatId    = sourceChat;
+			forwardMessageId = sourceMessage;
+		}
+	}
 
 	static NSData *emptyWaveform = nil;
 	if (!emptyWaveform)
@@ -1105,6 +1125,9 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		@"replyId"   : replyId    ?: [NSNull null],
 		@"replyText" : replyText  ?: @"",
 		@"forward"   : forwardFrom ?: @"",
+		@"forwardUserId"    : [NSNumber numberWithLongLong:forwardUserId],
+		@"forwardChatId"    : [NSNumber numberWithLongLong:forwardChatId],
+		@"forwardMessageId" : [NSNumber numberWithLongLong:forwardMessageId],
 		@"edited"    : @([m[@"edit_date"] doubleValue] > 0),
 		@"kind"      : ctype ?: @"",
 		@"date"      : m[@"date"] ?: @(0),

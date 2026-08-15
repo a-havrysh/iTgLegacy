@@ -17,6 +17,7 @@
 @property (nonatomic, assign) BOOL isGroup;
 /// Non-zero when this is one topic of a forum supergroup.
 @property (nonatomic, assign) int64_t threadId;
+@property (nonatomic, assign) int64_t focusMessageId;
 
 /// Run the tap handler for a row, without a touch. Used by
 /// itglegacy://tap/N so playback and viewers can be exercised remotely.

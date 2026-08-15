@@ -2240,7 +2240,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		return ([self showsSuggestions] ? 9 : 8)
 				+ (self.tableView.isEditing ? 1 : 0);
 	switch (self.page){
-		case TGSettingsPageAppearance:    return 3;
+		case TGSettingsPageAppearance:    return 4;
 		case TGSettingsPageData:          return 3;
 		case TGSettingsPageNotifications: return TGSettingsNotifSectionCount;
 		case TGSettingsPagePrivacy:       return 3;
@@ -2270,6 +2270,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		case TGSettingsPageAppearance:
 			if (section == 0) return 3;                          // styles
 			if (section == 1) return 2;                          // wallpaper, size
+			if (section == 2) return 3;
 			return [TGTheme availableThemeFiles].count + 1;      // + "None"
 		case TGSettingsPageData:
 			if (section == 0) return 5;
@@ -2363,7 +2364,9 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	switch (self.page){
 		case TGSettingsPageAppearance:
 			if (section == 0) return @"Style";
-			if (section == 2) return @"Telegram themes";
+			if (section == 1) return @"Appearance";
+			if (section == 2) return @"Chats";
+			if (section == 3) return @"Telegram themes";
 			return nil;
 		case TGSettingsPagePrivacy:
 			return section == 0 ? @"Who can see" : nil;
@@ -2486,7 +2489,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 }
 
 - (NSString *)appearanceFooterForSection:(NSInteger)section {
-	if (section == 2)
+	if (section == 3)
 		return @"Theme files made for the official clients - .tgios-theme and "
 			   @".attheme - are read from the app's Documents folder, or from "
 			   @"one received in a chat.";
@@ -2598,8 +2601,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	if (!rows)
 		rows = @[@[@"Notifications and Sounds", @"notifications"],
 				 @[@"Blocked Users",            @"privacy"],
-				 @[@"Chat Settings",            @"chat"],
-				 @[@"Chat Folders",             @"folder"]];
+				 @[@"Chat Settings",            @"chat"]];
 	return rows;
 }
 
@@ -2609,8 +2611,6 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		rows = @[@[@"Account",                  @"devices"],
 				 @[@"Privacy and Security",     @"privacy"],
 				 @[@"Data and Storage",         @"data"],
-				 @[@"Stickers",                 @"react"],
-				 @[@"Chat List",                @"folder"],
 				 @[@"Proxy",                    @"data"],
 				 @[@"Devices",                  @"devices"],
 				 @[@"Language",                 @"language"]];
@@ -2684,12 +2684,6 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 - (void)decorateRootCell:(UITableViewCell *)cell
 					kind:(NSInteger)kind
 				   title:(NSString *)title {
-	if (kind == TGSettingsRootKindSettings
-			&& [title isEqualToString:@"Chat List"]){
-		cell.detailTextLabel.text = [TGSettingsViewController chatListLayoutTitle];
-		cell.detailTextLabel.textColor = TGSettingsRGB(0x356596);
-		cell.detailTextLabel.font = [UIFont systemFontOfSize:16];
-	}
 	if (kind == TGSettingsRootKindTelegram
 			&& [title isEqualToString:@"Telegram Premium"]){
 		cell.detailTextLabel.text = self.premiumSummary.length
@@ -3242,6 +3236,22 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 			cell.textLabel.text = @"Message text size";
 			cell.detailTextLabel.text = [NSString stringWithFormat:@"%.0f pt",
 					[TGTheme shared].messageFontSize];
+		}
+		[self markDisclosure:cell];
+		return cell;
+	}
+
+	if (indexPath.section == 2){
+		if (indexPath.row == 0){
+			cell.textLabel.text = @"Chat List";
+			cell.detailTextLabel.text =
+					[TGSettingsViewController chatListLayoutTitle];
+			cell.detailTextLabel.textColor = TGSettingsRGB(0x356596);
+			cell.detailTextLabel.font = [UIFont systemFontOfSize:16];
+		} else if (indexPath.row == 1){
+			cell.textLabel.text = @"Chat Folders";
+		} else {
+			cell.textLabel.text = @"Stickers";
 		}
 		[self markDisclosure:cell];
 		return cell;
@@ -4070,12 +4080,8 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		[self openPage:TGSettingsPageNotifications];
 	} else if (row == 1){
 		[self openPage:TGSettingsPageBlocked];
-	} else if (row == 2){
-		[self openPage:TGSettingsPageAppearance];
 	} else {
-		TGFoldersViewController *folders = [[TGFoldersViewController alloc] init];
-		folders.page = TGFoldersPageList;
-		[self openViewController:folders];
+		[self openPage:TGSettingsPageAppearance];
 	}
 }
 
@@ -4105,21 +4111,11 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		case 1: [self openPage:TGSettingsPagePrivacy]; break;
 		case 2: [self openPage:TGSettingsPageData]; break;
 		case 3: {
-			TGStickersViewController *stickers =
-					[[TGStickersViewController alloc] init];
-			stickers.page = TGStickersPageRoot;
-			[self openViewController:stickers];
-			break;
-		}
-		case 4:
-			[self openPage:(TGSettingsPage)TGSettingsPageChatListLayout];
-			break;
-		case 5: {
 			TGProxyViewController *proxy = [[TGProxyViewController alloc] init];
 			[self openViewController:proxy];
 			break;
 		}
-		case 6: {
+		case 4: {
 			UIViewController *sessions = [[TGSessionsViewController alloc] init];
 			[self openViewController:sessions];
 			break;
@@ -4436,6 +4432,22 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	if (indexPath.section == 1){
 		if (indexPath.row == 0) [self openPage:(TGSettingsPage)TGSettingsPageWallpaper];
 		else                    [self chooseTextSize];
+		return;
+	}
+
+	if (indexPath.section == 2){
+		if (indexPath.row == 0){
+			[self openPage:(TGSettingsPage)TGSettingsPageChatListLayout];
+		} else if (indexPath.row == 1){
+			TGFoldersViewController *folders = [[TGFoldersViewController alloc] init];
+			folders.page = TGFoldersPageList;
+			[self openViewController:folders];
+		} else {
+			TGStickersViewController *stickers =
+					[[TGStickersViewController alloc] init];
+			stickers.page = TGStickersPageRoot;
+			[self openViewController:stickers];
+		}
 		return;
 	}
 

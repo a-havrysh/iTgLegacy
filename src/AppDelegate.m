@@ -186,9 +186,13 @@ static void TGWatchForIncomingCalls(void) {
 - (void)showMainUI {
 	if (!self.rootViewController)
 		self.rootViewController = [[RootViewController alloc] init];
-	if (self.window.rootViewController != self.rootViewController){
+	UIViewController *wanted = self.rootViewController;
+	if ([RootViewController isSplitLayoutActive])
+		wanted = [self.window.rootViewController isKindOfClass:[UISplitViewController class]]
+				? self.window.rootViewController : wanted;
+	if (self.window.rootViewController != wanted){
 		self.loginVC = nil;
-		[self.window setRootViewController:self.rootViewController];
+		[self.window setRootViewController:wanted];
 	}
 }
 

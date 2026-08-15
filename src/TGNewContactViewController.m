@@ -168,7 +168,9 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 @property (nonatomic, strong) UILabel *labelView;
 @property (nonatomic, strong) UIImageView *verticalSeparator;
 @property (nonatomic, strong) UITextField *field;
+@property (nonatomic, strong) UIButton *removeButton;
 @property (nonatomic, assign) BOOL lastInGroup;
+- (void)setShowsRemoveControl:(BOOL)shows;
 @end
 
 @implementation TGNewContactPhoneCell
@@ -195,7 +197,25 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 		self.verticalSeparator.backgroundColor = [[TGTheme shared] separatorColour];
 	}
 	[self.contentView addSubview:self.verticalSeparator];
+
+	self.removeButton = [UIButton buttonWithType:UIButtonTypeCustom];
+	self.removeButton.frame = CGRectMake(7, 6, 30, 30);
+	self.removeButton.exclusiveTouch = YES;
+	self.removeButton.adjustsImageWhenHighlighted = NO;
+	self.removeButton.hidden = YES;
+	UIImage *switchImage = [UIImage imageNamed:@"ListEditingSwitch.png"];
+	if (switchImage)
+		[self.removeButton setBackgroundImage:switchImage forState:UIControlStateNormal];
+	UIView *minus = [[UIView alloc] initWithFrame:CGRectMake(8, 14, 14, 2)];
+	minus.backgroundColor = [UIColor whiteColor];
+	minus.userInteractionEnabled = NO;
+	[self.removeButton addSubview:minus];
+	[self addSubview:self.removeButton];
 	return self;
+}
+
+- (void)setShowsRemoveControl:(BOOL)shows {
+	self.removeButton.hidden = !shows;
 }
 
 - (void)setField:(UITextField *)field {
@@ -216,6 +236,7 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 	self.verticalSeparator.frame = CGRectMake(72, 0, 1.0f, lineHeight);
 	self.field.font = [UIFont boldSystemFontOfSize:15];
 	self.field.frame = CGRectMake(78, 11, bounds.size.width - 80, 20);
+	self.removeButton.frame = CGRectMake(7, 6, 30, 30);
 }
 
 @end
@@ -340,6 +361,7 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 	self.lastNameField  = [self makeFieldWithPlaceholder:@"Last" font:[UIFont boldSystemFontOfSize:16]];
 	self.lastNameField.returnKeyType = UIReturnKeyDefault;
 
+	[self.phoneEntries addObject:[self makePhoneEntry]];
 	[self.phoneEntries addObject:[self makePhoneEntry]];
 
 	[self buildTableHeader];
@@ -520,6 +542,13 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 		BOOL hadText = [[entry objectForKey:@"hadText"] boolValue];
 		[entry setObject:[NSNumber numberWithBool:hasText] forKey:@"hadText"];
 		[self appendEmptyPhoneRowIfNeeded];
+		NSUInteger row = [self.phoneEntries indexOfObject:entry];
+		if (row != NSNotFound){
+			id cell = [self.tableView cellForRowAtIndexPath:
+					[NSIndexPath indexPathForRow:(NSInteger)row inSection:0]];
+			if ([cell isKindOfClass:[TGNewContactPhoneCell class]])
+				[(TGNewContactPhoneCell *)cell setShowsRemoveControl:hasText];
+		}
 		if (hasText != hadText){
 			[self.tableView beginUpdates];
 			[self.tableView endUpdates];
@@ -887,6 +916,11 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 		cell.labelView.text = [entry objectForKey:@"label"];
 		cell.field = [entry objectForKey:@"field"];
 		cell.lastInGroup = (indexPath.row == (NSInteger)self.phoneEntries.count - 1);
+		[cell setShowsRemoveControl:[self rowCarriesNumber:indexPath]];
+		[cell.removeButton removeTarget:self action:NULL
+					   forControlEvents:UIControlEventTouchUpInside];
+		[cell.removeButton addTarget:self action:@selector(removePhoneRowPressed:)
+					forControlEvents:UIControlEventTouchUpInside];
 		[[TGTheme shared] styleCell:cell];
 		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
 		[cell setNeedsLayout];
@@ -943,13 +977,24 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 }
 
 - (UITableViewCellEditingStyle)tableView:(UITableView *)tableView editingStyleForRowAtIndexPath:(NSIndexPath *)indexPath {
-	if ([self rowCarriesNumber:indexPath])
-		return UITableViewCellEditingStyleDelete;
 	return UITableViewCellEditingStyleNone;
 }
 
 - (BOOL)tableView:(UITableView *)tableView shouldIndentWhileEditingRowAtIndexPath:(NSIndexPath *)indexPath {
-	return NO;
+	return [self rowCarriesNumber:indexPath];
+}
+
+- (void)removePhoneRowPressed:(UIButton *)button {
+	UIView *view = button;
+	while (view && ![view isKindOfClass:[TGNewContactPhoneCell class]])
+		view = view.superview;
+	if (!view)
+		return;
+	NSIndexPath *indexPath = [self.tableView indexPathForCell:(UITableViewCell *)view];
+	if (!indexPath)
+		return;
+	[self tableView:self.tableView commitEditingStyle:UITableViewCellEditingStyleDelete
+	forRowAtIndexPath:indexPath];
 }
 
 - (void)tableView:(UITableView *)tableView commitEditingStyle:(UITableViewCellEditingStyle)editingStyle forRowAtIndexPath:(NSIndexPath *)indexPath {

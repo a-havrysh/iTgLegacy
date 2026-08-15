@@ -40,6 +40,7 @@
 #import "TGClient+ChatManagement.h"
 #import "TGClient+Stickers.h"
 #import "TGClient+Files.h"
+#import "TGClient+ChatList.h"
 
 // Their design system is drawn for Android at 360dp; a 4S is 320pt, so
 // everything taken from it is scaled by 0.889 and rounded to a whole point.
@@ -134,6 +135,8 @@ static const CGFloat kFileTile    = 71.0f;
 static const CGFloat kFileDisc    = 37.0f;
 // A picture in a bubble is clipped to the same radius their media uses.
 static const CGFloat kMediaRadius = 6.0f;
+static const CGFloat kAlbumGap    = 2.0f;
+static const CGFloat kAlbumMinPhotoHeight = 60.0f;
 // One option of a poll: a 16 circle, the text, the share, and the bar under it.
 static const CGFloat kPollRow     = 30.0f;
 // One row of reaction chips, the height the rulebook fixes them at.
@@ -1134,6 +1137,10 @@ static const CGFloat kPhotoPageGap = 20.0f;
 @property (nonatomic, assign) int64_t pollMessageId;
 /// "Forwarded from X" above the content, whatever the content turns out to be.
 @property (nonatomic, strong) UILabel *forwardLabel;
+@property (nonatomic, assign) int64_t forwardChatId;
+@property (nonatomic, assign) int64_t forwardMessageId;
+@property (nonatomic, assign) int64_t forwardUserId;
+@property (nonatomic, copy)   NSString *forwardTitle;
 /// Msg_In.png / Msg_Out.png stretched behind the content box.
 @property (nonatomic, strong) UIImageView *bubbleBg;
 @property (nonatomic, strong) UIImageView *checkView;
@@ -2569,6 +2576,34 @@ static const NSInteger kClearRecentAlertTag  = 85;
 
 @end
 
+static UIColor *TGChatInputPlaceholderColour(void) {
+	return [UIColor colorWithRed:0.616f green:0.655f blue:0.702f alpha:1.0f];
+}
+
+@interface TGChatInputTextField : UITextField
+@end
+
+@implementation TGChatInputTextField
+
+- (CGRect)placeholderRectForBounds:(CGRect)bounds {
+	return [self textRectForBounds:bounds];
+}
+
+- (void)drawPlaceholderInRect:(CGRect)rect {
+	NSString *text = self.placeholder;
+	if (!text.length)
+		return;
+	UIFont *font = self.font ?: [UIFont systemFontOfSize:16];
+	[TGChatInputPlaceholderColour() set];
+	CGFloat lineHeight = [@"Ag" sizeWithFont:font].height;
+	CGRect line = CGRectMake(rect.origin.x,
+			rect.origin.y + floorf((rect.size.height - lineHeight) / 2),
+			rect.size.width, lineHeight);
+	[text drawInRect:line withFont:font lineBreakMode:UILineBreakModeTailTruncation];
+}
+
+@end
+
 typedef NS_ENUM(NSInteger, TGComposeMode) {
 	TGComposeModeNew = 0,
 	TGComposeModeReply,
@@ -2580,6 +2615,8 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 		ABPeoplePickerNavigationControllerDelegate, MPMediaPickerControllerDelegate,
 		UIGestureRecognizerDelegate, UISplitViewControllerDelegate>
 - (CGFloat)bubbleWidthBudget;
+- (BOOL)scrollToMessageId:(int64_t)messageId;
+- (void)loadDeeperHistoryAndScrollTo:(int64_t)messageId;
 @property (nonatomic, strong) UITableView *table;
 @property (nonatomic, strong) UIView *inputBar;
 @property (nonatomic, strong) UITextField *input;
@@ -2654,6 +2691,7 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 @property (nonatomic, strong) NSDate *lastTypingSent;
 @property (nonatomic, assign) BOOL postingBlocked;
 @property (nonatomic, assign) int64_t pinnedMessageId;
+@property (nonatomic, strong) NSDictionary *pinnedMessage;
 @property (nonatomic, strong) UIView *pinnedBanner;
 @property (nonatomic, assign) CGFloat pinnedBannerInset;
 @property (nonatomic, assign) BOOL deeperHistoryPending;
@@ -2682,6 +2720,7 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 @property (nonatomic, strong) UIDatePicker *schedulePicker;
 @property (nonatomic, strong) UIImage *pendingPastedImage;
 @property (nonatomic, strong) UIPanGestureRecognizer *replySwipe;
+@property (nonatomic, strong) UILongPressGestureRecognizer *messageHold;
 @property (nonatomic, assign) NSInteger swipingRow;
 @property (nonatomic, strong) UIImageView *swipeArrow;
 @property (nonatomic, strong) NSMutableDictionary *translations;
@@ -2810,8 +2849,13 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 	[self.view addSubview:self.wallpaperView];
 
 	// Hold a message for the things a chat needs and a tap cannot carry.
-	[self.table addGestureRecognizer:[[UILongPressGestureRecognizer alloc]
-			initWithTarget:self action:@selector(messageHeld:)]];
+	self.messageHold = [[UILongPressGestureRecognizer alloc]
+			initWithTarget:self action:@selector(messageHeld:)];
+	self.messageHold.minimumPressDuration = 0.3;
+	self.messageHold.allowableMovement = 10.0f;
+	self.messageHold.cancelsTouchesInView = YES;
+	self.messageHold.delegate = self;
+	[self.table addGestureRecognizer:self.messageHold];
 
 	UITapGestureRecognizer *doubleTap = [[UITapGestureRecognizer alloc]
 			initWithTarget:self action:@selector(messageDoubleTapped:)];
@@ -3131,8 +3175,9 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 }
 
 - (void)buildInputBarTextField:(CGRect)b retinaPixel:(CGFloat)retinaPixel {
-	self.input = [[UITextField alloc] initWithFrame:
-			CGRectMake(49, 5 - retinaPixel, b.size.width - 150, 34)];
+	self.input = [[TGChatInputTextField alloc] initWithFrame:
+			CGRectMake(49, 5 - retinaPixel, b.size.width - 158, 34)];
+	self.input.contentVerticalAlignment = UIControlContentVerticalAlignmentCenter;
 	self.input.borderStyle = UITextBorderStyleNone;
 	self.input.background = nil;
 	self.input.backgroundColor = [UIColor clearColor];
@@ -3144,13 +3189,6 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 			? UIKeyboardAppearanceAlert : UIKeyboardAppearanceDefault;
 	self.input.delegate = self;
 	self.input.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-	if ([self.input respondsToSelector:@selector(setAttributedPlaceholder:)]){
-		self.input.attributedPlaceholder = [[NSAttributedString alloc]
-				initWithString:@"Message"
-					attributes:@{NSForegroundColorAttributeName :
-							[UIColor colorWithRed:0.616f green:0.655f blue:0.702f alpha:1.0f],
-							NSFontAttributeName : [UIFont systemFontOfSize:16]}];
-	}
 	[self.inputBar addSubview:self.input];
 }
 
@@ -3238,7 +3276,7 @@ static UIImage *TGChatStickerGlyph(UIColor *colour) {
 
 - (void)buildInputBarStickerButton:(CGRect)b retinaPixel:(CGFloat)retinaPixel {
 	self.stickerButton = [UIButton buttonWithType:UIButtonTypeCustom];
-	self.stickerButton.frame = CGRectMake(b.size.width - 97, 7 + retinaPixel, 29, 30);
+	self.stickerButton.frame = CGRectMake(b.size.width - 105, 7 - retinaPixel, 29, 30);
 	self.stickerButton.exclusiveTouch = YES;
 	UIColor *stickerInk = [UIColor colorWithRed:0.616f green:0.655f blue:0.702f alpha:1.0f];
 	[self.stickerButton setImage:TGChatStickerGlyph(stickerInk)
@@ -3535,6 +3573,14 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 		[me fetchMissingImages];
 		[me resolveUnknownSenders];
 		[me fetchMissingQuotes];
+
+		if (me.focusMessageId){
+			int64_t wanted = me.focusMessageId;
+			me.focusMessageId = 0;
+			me.anchorToBottom = NO;
+			if (![me scrollToMessageId:wanted])
+				[me loadDeeperHistoryAndScrollTo:wanted];
+		}
 
 		// A message with no id would put NSNull, or nothing, into the array and
 		// take the app down inside markRead.
@@ -4135,17 +4181,22 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 
 	if (!self.scrollDownButton){
 		self.scrollDownButton = [UIButton buttonWithType:UIButtonTypeCustom];
-		self.scrollDownButton.frame = CGRectMake(0, 0, 34, 34);
-		self.scrollDownButton.layer.cornerRadius = 17;
-		self.scrollDownButton.clipsToBounds = YES;
-		self.scrollDownButton.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.9f];
-		self.scrollDownButton.layer.borderWidth = 1.0f;
-		self.scrollDownButton.layer.borderColor =
-				[[TGTheme shared] separatorColour].CGColor;
-		[self.scrollDownButton setTitle:@"▼" forState:UIControlStateNormal];
-		self.scrollDownButton.titleLabel.font = [UIFont systemFontOfSize:13];
-		[self.scrollDownButton setTitleColor:[[TGTheme shared] accentColour]
-									forState:UIControlStateNormal];
+		self.scrollDownButton.frame = CGRectMake(0, 0, 36, 36);
+		[self.scrollDownButton setBackgroundImage:
+				[UIImage imageNamed:@"ConversationScrollDown.png"]
+										 forState:UIControlStateNormal];
+		[self.scrollDownButton setBackgroundImage:
+				[UIImage imageNamed:@"ConversationScrollDown_Highlighted.png"]
+										 forState:UIControlStateHighlighted];
+		self.scrollDownButton.showsTouchWhenHighlighted = NO;
+		self.scrollDownButton.adjustsImageWhenHighlighted = NO;
+		self.scrollDownButton.layer.shadowColor = [UIColor blackColor].CGColor;
+		self.scrollDownButton.layer.shadowOffset = CGSizeMake(0, 1);
+		self.scrollDownButton.layer.shadowRadius = 1.0f;
+		self.scrollDownButton.layer.shadowOpacity = 0.25f;
+		self.scrollDownButton.layer.shadowPath =
+				[UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, 36, 36)
+										   cornerRadius:5.0f].CGPath;
 		self.scrollDownButton.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin |
 												 UIViewAutoresizingFlexibleTopMargin;
 		[self.scrollDownButton addTarget:self action:@selector(scrollDownTapped)
@@ -4153,8 +4204,8 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 		[self.view addSubview:self.scrollDownButton];
 	}
 	self.scrollDownButton.hidden = NO;
-	self.scrollDownButton.frame = CGRectMake(self.view.bounds.size.width - 44,
-			CGRectGetMinY(self.inputBar.frame) - 44, 34, 34);
+	self.scrollDownButton.frame = CGRectMake(self.view.bounds.size.width - 36 - 7,
+			CGRectGetMinY(self.inputBar.frame) - 36 - 7, 36, 36);
 	[self.view bringSubviewToFront:self.scrollDownButton];
 }
 
@@ -4228,11 +4279,10 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 
 /// Telegram puts the chat's picture top right, and it opens the profile.
 - (void)buildAvatarButton {
-	// 42dp in their header, which is 37 here and still clears a 44pt bar.
-	CGFloat side = 37;
+	CGFloat side = 35;
 	UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
 	button.frame = CGRectMake(0, 0, side, side);
-	button.layer.cornerRadius = side / 2;
+	button.layer.cornerRadius = 4.0f;
 	button.clipsToBounds = YES;
 	[button addTarget:self action:@selector(openProfile)
 	 forControlEvents:UIControlEventTouchUpInside];
@@ -4387,6 +4437,43 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	return [self.messages[row + 1][@"albumId"] isEqualToString:album];
 }
 
+- (BOOL)rowBelongsToAlbum:(NSInteger)row {
+	if (row < 0 || row >= (NSInteger)self.messages.count)
+		return NO;
+	return [self continuesAlbumAtRow:row] || [self albumContinuesAfterRow:row];
+}
+
+- (CGFloat)albumColumnWidthForRow:(NSInteger)row {
+	return [self maxBubbleWidthFor:self.messages[row]] - 2 * kPadH;
+}
+
+- (BOOL)rowIsBareAlbumPhoto:(NSInteger)row {
+	if (![self rowBelongsToAlbum:row])
+		return NO;
+	NSDictionary *m = self.messages[row];
+	if ([m[@"service"] boolValue] || [self imageSizeFor:m].height < 1)
+		return NO;
+	if ([self bodySizeFor:m].height > 0 || [self decorationHeightFor:m] > 0.5f)
+		return NO;
+	NSString *kind = m[@"kind"];
+	return [kind isEqualToString:@"messagePhoto"] ||
+		   [kind isEqualToString:@"messageVideo"] ||
+		   [kind isEqualToString:@"messageAnimation"];
+}
+
+- (CGSize)imageSizeForRow:(NSInteger)row {
+	NSDictionary *m = self.messages[row];
+	CGSize pic = [self imageSizeFor:m];
+	if (pic.width < 1 || pic.height < 1 || ![self rowBelongsToAlbum:row])
+		return pic;
+
+	CGFloat w = [self albumColumnWidthForRow:row];
+	CGFloat h = floorf(pic.height * (w / pic.width));
+	h = MIN(h, floorf(w * 1.25f));
+	h = MAX(h, kAlbumMinPhotoHeight);
+	return CGSizeMake(w, h);
+}
+
 /// Copy the received file into Documents first: TDLib owns its cache and can
 /// delete it, and a theme has to survive the next launch.
 - (void)applyThemeFromMessage:(NSDictionary *)m {
@@ -4495,6 +4582,36 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 
 #pragma mark - pinned message
 
+static UIImage *TGPinnedBadgeImage(void) {
+	static UIImage *badge = nil;
+	if (!badge){
+		UIImage *raw = [UIImage imageNamed:@"DialogListUnreadBadge.png"];
+		badge = [raw stretchableImageWithLeftCapWidth:(int)(raw.size.width / 2)
+										 topCapHeight:(int)(raw.size.height / 2)];
+	}
+	return badge;
+}
+
+static UIImage *TGPinnedBadgeGlyph(void) {
+	static UIImage *glyph = nil;
+	if (glyph)
+		return glyph;
+
+	CGSize size = CGSizeMake(11, 13);
+	UIGraphicsBeginImageContextWithOptions(size, NO, 0);
+	CGContextRef ctx = UIGraphicsGetCurrentContext();
+	CGContextSetRGBFillColor(ctx, 1, 1, 1, 1);
+	CGContextFillEllipseInRect(ctx, CGRectMake(1.5f, 0, 8, 8));
+	CGContextMoveToPoint(ctx, 3.5f, 7);
+	CGContextAddLineToPoint(ctx, 7.5f, 7);
+	CGContextAddLineToPoint(ctx, 5.5f, 13);
+	CGContextClosePath(ctx);
+	CGContextFillPath(ctx);
+	glyph = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return glyph;
+}
+
 /// A strip under the navigation bar, the way clients surface what is pinned.
 - (void)loadPinnedMessage {
 	__weak typeof(self) weakSelf = self;
@@ -4506,6 +4623,7 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 		NSNumber *messageId = m[@"id"];
 		me.pinnedMessageId = [messageId isKindOfClass:NSNumber.class]
 				? messageId.longLongValue : 0;
+		me.pinnedMessage = [m isKindOfClass:NSDictionary.class] ? m : nil;
 		if (!text.length && me.pinnedMessageId == 0){
 			[me hidePinnedBanner];
 			return;
@@ -4544,12 +4662,21 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	[banner addGestureRecognizer:[[UILongPressGestureRecognizer alloc]
 			initWithTarget:self action:@selector(pinnedBannerHeld:)]];
 
-	UIView *rule = [[UIView alloc] initWithFrame:CGRectMake(9, 5, 2, height - 10)];
-	rule.backgroundColor = [[TGTheme shared] accentColour];
-	[banner addSubview:rule];
+	const CGFloat badgeWidth = 27;
+	const CGFloat badgeHeight = 21;
+	UIImageView *badge = [[UIImageView alloc] initWithImage:TGPinnedBadgeImage()];
+	badge.frame = CGRectMake(9, (height - 1 - badgeHeight) / 2, badgeWidth, badgeHeight);
+	[banner addSubview:badge];
 
+	UIImageView *glyph = [[UIImageView alloc] initWithImage:TGPinnedBadgeGlyph()];
+	glyph.frame = CGRectMake((badgeWidth - glyph.image.size.width) / 2,
+							 (badgeHeight - glyph.image.size.height) / 2 - 1,
+							 glyph.image.size.width, glyph.image.size.height);
+	[badge addSubview:glyph];
+
+	const CGFloat textLeft = 9 + badgeWidth + 8;
 	UILabel *caption = [[UILabel alloc] initWithFrame:
-			CGRectMake(19, 3, b.size.width - 29, 16)];
+			CGRectMake(textLeft, 3, b.size.width - textLeft - 10, 16)];
 	caption.text = @"Pinned message";
 	caption.font = [UIFont boldSystemFontOfSize:13];
 	caption.textColor = [UIColor colorWithRed:0.302f green:0.408f blue:0.549f alpha:1.0f];
@@ -4558,7 +4685,7 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	[banner addSubview:caption];
 
 	UILabel *body = [[UILabel alloc] initWithFrame:
-			CGRectMake(19, 19, b.size.width - 29, 17)];
+			CGRectMake(textLeft, 19, b.size.width - textLeft - 10, 17)];
 	body.text = text;
 	body.font = [UIFont systemFontOfSize:13];
 	body.textColor = [UIColor colorWithWhite:0.533f alpha:1.0f];
@@ -4597,7 +4724,28 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 		return;
 	if ([self scrollToMessageId:self.pinnedMessageId])
 		return;
+
+	if ([self insertPinnedMessagePlaceholder]){
+		[self.table reloadData];
+		[self scrollToMessageId:self.pinnedMessageId];
+	}
 	[self loadDeeperHistoryAndScrollTo:self.pinnedMessageId];
+}
+
+- (BOOL)insertPinnedMessagePlaceholder {
+	NSDictionary *pinned = self.pinnedMessage;
+	if (![pinned[@"id"] isKindOfClass:NSNumber.class])
+		return NO;
+
+	NSMutableArray *merged = [self.messages mutableCopy] ?: [NSMutableArray array];
+	NSInteger index = 0;
+	while (index < (NSInteger)merged.count &&
+		   [merged[index][@"id"] longLongValue] < self.pinnedMessageId)
+		index++;
+	[merged insertObject:pinned atIndex:index];
+	self.messages = merged;
+	self.anchorToBottom = NO;
+	return YES;
 }
 
 - (void)loadDeeperHistoryAndScrollTo:(int64_t)messageId {
@@ -4615,18 +4763,38 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 			return;
 		me.deeperHistoryPending = NO;
 		if (messages.count > me.messages.count){
-			me.messages = messages;
+			me.messages = [me messagesMerging:messages];
 			me.anchorToBottom = NO;
 			[me.table reloadData];
 			[me fetchMissingImages];
 			[me resolveUnknownSenders];
 			[me fetchMissingQuotes];
 		}
-		if ([me scrollToMessageId:messageId])
-			return;
-		[me showAlertTitle:@""
-				   message:@"This message is further back than the history loaded here."];
+		[me scrollToMessageId:messageId];
 	}];
+}
+
+- (NSArray *)messagesMerging:(NSArray *)incoming {
+	NSMutableDictionary *byId = [NSMutableDictionary dictionary];
+	NSMutableArray *unkeyed = [NSMutableArray array];
+	for (NSArray *source in @[self.messages ?: @[], incoming ?: @[]]){
+		for (NSDictionary *m in source){
+			if ([m[@"id"] isKindOfClass:NSNumber.class] && [m[@"id"] longLongValue] != 0)
+				byId[m[@"id"]] = m;
+			else
+				[unkeyed addObject:m];
+		}
+	}
+	NSArray *keys = [[byId allKeys] sortedArrayUsingComparator:^NSComparisonResult(NSNumber *a, NSNumber *b){
+		int64_t left = a.longLongValue, right = b.longLongValue;
+		if (left == right) return NSOrderedSame;
+		return left < right ? NSOrderedAscending : NSOrderedDescending;
+	}];
+	NSMutableArray *out = [NSMutableArray arrayWithCapacity:byId.count + unkeyed.count];
+	for (NSNumber *key in keys)
+		[out addObject:byId[key]];
+	[out addObjectsFromArray:unkeyed];
+	return out;
 }
 
 /// Holding the banner is where "Unpin all" lives, behind the red button of a
@@ -4868,6 +5036,7 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	if (self.stickerPanel){
 		[self.stickerPanel removeFromSuperview];
 		self.stickerPanel = nil;
+		[self shiftForKeyboardHeight:0];
 		return;
 	}
 
@@ -4877,8 +5046,7 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	BOOL landscape = b.size.width > b.size.height;
 	CGFloat height = [TGStickerPanelView preferredHeightForLandscape:landscape];
 	TGStickerPanelView *panel = [[TGStickerPanelView alloc] initWithFrame:
-			CGRectMake(0, CGRectGetMinY(self.inputBar.frame) - height,
-					   b.size.width, height)];
+			CGRectMake(0, b.size.height - height, b.size.width, height)];
 	panel.autoresizingMask = UIViewAutoresizingFlexibleWidth |
 							 UIViewAutoresizingFlexibleTopMargin;
 
@@ -4903,6 +5071,7 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 
 	[self.view addSubview:panel];
 	self.stickerPanel = panel;
+	[self shiftForKeyboardHeight:height];
 }
 
 #pragma mark - voice
@@ -5945,10 +6114,19 @@ static const NSInteger kStickerLinkAlertTag = 102;
 	}];
 }
 
+- (void)touchedMessageBackground {
+	if ([self.input isFirstResponder])
+		[self.input resignFirstResponder];
+	else if ([self.chatSearchBar isFirstResponder])
+		[self.chatSearchBar resignFirstResponder];
+}
+
 - (void)openLinkInMessage:(NSDictionary *)m {
 	NSString *text = [self originalTextOf:m];
-	if (!text.length)
+	if (!text.length){
+		[self touchedMessageBackground];
 		return;
+	}
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] entitiesInText:text completion:^(NSArray *entities){
 		TGChatViewController *me = weakSelf;
@@ -5975,8 +6153,10 @@ static const NSInteger kStickerLinkAlertTag = 102;
 									  @"mention" : [fragment substringFromIndex:1] }];
 			}
 		}
-		if (!targets.count)
+		if (!targets.count){
+			[me touchedMessageBackground];
 			return;
+		}
 		if (targets.count == 1){
 			[me followTextTarget:[targets objectAtIndex:0]];
 			return;
@@ -6187,20 +6367,36 @@ static const NSInteger kStickerLinkAlertTag = 102;
 }
 
 - (void)openChatId:(int64_t)targetChatId title:(NSString *)title isGroup:(BOOL)isGroup {
-	if (targetChatId == self.chatId)
+	[self openChatId:targetChatId title:title isGroup:isGroup focusMessage:0];
+}
+
+- (void)openChatId:(int64_t)targetChatId
+			 title:(NSString *)title
+		   isGroup:(BOOL)isGroup
+	  focusMessage:(int64_t)messageId
+{
+	if (targetChatId == self.chatId){
+		if (messageId && ![self scrollToMessageId:messageId])
+			[self loadDeeperHistoryAndScrollTo:messageId];
 		return;
+	}
 	for (UIViewController *existing in self.navigationController.viewControllers){
 		if (![existing isKindOfClass:TGChatViewController.class])
 			continue;
-		if (((TGChatViewController *)existing).chatId != targetChatId)
+		TGChatViewController *open = (TGChatViewController *)existing;
+		if (open.chatId != targetChatId)
 			continue;
+		open.focusMessageId = messageId;
 		[self.navigationController popToViewController:existing animated:YES];
+		if (messageId && ![open scrollToMessageId:messageId])
+			[open loadDeeperHistoryAndScrollTo:messageId];
 		return;
 	}
 	TGChatViewController *controller = [[TGChatViewController alloc] init];
 	controller.chatId = targetChatId;
 	controller.chatTitle = title.length ? title : @"Chat";
 	controller.isGroup = isGroup;
+	controller.focusMessageId = messageId;
 	[self.navigationController pushViewController:controller animated:YES];
 }
 
@@ -6261,8 +6457,11 @@ static const NSInteger kStickerLinkAlertTag = 102;
 			return;
 
 	NSIndexPath *path = [self.table indexPathForRowAtPoint:point];
-	if (path)
-		[self showActionsForRow:path.row];
+	if (!path)
+		return;
+
+	[self.table deselectRowAtIndexPath:path animated:NO];
+	[self showActionsForRow:path.row];
 }
 
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)recognizer {
@@ -6643,14 +6842,16 @@ static const NSInteger kStickerLinkAlertTag = 102;
 	if (!self.isGroup || [m[@"outgoing"] boolValue])
 		return;
 	int64_t senderId = [m[@"senderId"] longLongValue];
-	if (!senderId)
+	if (senderId <= 0)
+		return;
+	if (!self.view.window)
 		return;
 
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] myAdministratorRightsInGroup:self.chatId
 										 completion:^(NSDictionary *rights, NSString *status){
 		TGChatViewController *me = weakSelf;
-		if (!me || !rights)
+		if (!me || !rights || !me.view.window)
 			return;
 		BOOL canRestrict = [rights[@"can_restrict_members"] boolValue] ||
 						   [status isEqualToString:@"creator"];
@@ -7456,6 +7657,8 @@ static const NSInteger kStickerLinkAlertTag = 102;
 		}];
 		return;
 	}
+
+	[self touchedMessageBackground];
 }
 
 /// The effect is a sticker TDLib names for us: fetch it, show it over the
@@ -7854,8 +8057,27 @@ static const NSInteger kStickerLinkAlertTag = 102;
 	NSString *from = m[@"forward"];
 	if (![from length]){
 		cell.forwardLabel.hidden = YES;
+		cell.forwardLabel.userInteractionEnabled = NO;
+		cell.forwardChatId = 0;
+		cell.forwardMessageId = 0;
+		cell.forwardUserId = 0;
+		cell.forwardTitle = nil;
 		return 0;
 	}
+
+	int64_t originChat = [m[@"forwardChatId"] longLongValue];
+	NSString *originTitle = originChat
+			? [[TGClient shared] cachedTitleForChatId:originChat] : nil;
+	if (originTitle.length)
+		from = originTitle;
+
+	cell.forwardChatId    = originChat;
+	cell.forwardMessageId = [m[@"forwardMessageId"] longLongValue];
+	cell.forwardUserId    = [m[@"forwardUserId"] longLongValue];
+	cell.forwardTitle     = from;
+	cell.forwardLabel.userInteractionEnabled =
+			(cell.forwardChatId != 0 || cell.forwardUserId != 0);
+	[self attachForwardTapTo:cell.forwardLabel];
 
 	BOOL mine = [m[@"outgoing"] boolValue];
 	UIColor *titleColour = mine ? TGChatHexColour(0x3a8e26)
@@ -7884,6 +8106,69 @@ static const NSInteger kStickerLinkAlertTag = 102;
 		cell.forwardLabel.text = line;
 	}
 	return 18;
+}
+
+static const NSInteger kForwardTapTag = 0x9200;
+
+- (void)attachForwardTapTo:(UILabel *)label {
+	if (label.tag == kForwardTapTag)
+		return;
+	UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc]
+			initWithTarget:self action:@selector(forwardHeaderTapped:)];
+	[label addGestureRecognizer:tap];
+	label.tag = kForwardTapTag;
+}
+
+- (void)forwardHeaderTapped:(UITapGestureRecognizer *)tap {
+	UIView *view = tap.view;
+	while (view && ![view isKindOfClass:TGBubbleCell.class])
+		view = view.superview;
+	TGBubbleCell *cell = (TGBubbleCell *)view;
+	if (!cell)
+		return;
+
+	if (cell.forwardChatId){
+		[self openForwardOriginChat:cell.forwardChatId
+							  title:cell.forwardTitle
+							message:cell.forwardMessageId];
+		return;
+	}
+	if (cell.forwardUserId)
+		[self openForwardOriginUser:cell.forwardUserId title:cell.forwardTitle];
+}
+
+- (void)openForwardOriginUser:(int64_t)userId title:(NSString *)title {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] privateChatWithUser:userId completion:^(int64_t chatId){
+		TGChatViewController *me = weakSelf;
+		if (!me || !chatId)
+			return;
+		[me openChatId:chatId
+				 title:(title.length ? title : @"Chat")
+			   isGroup:NO
+		   focusMessage:0];
+	}];
+}
+
+- (void)openForwardOriginChat:(int64_t)chatId
+						title:(NSString *)title
+					  message:(int64_t)messageId
+{
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] titleForChatId:chatId completion:^(NSString *name){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (!name.length && !title.length){
+			[me showAlertTitle:@""
+					   message:@"The original chat is not available."];
+			return;
+		}
+		[me openChatId:chatId
+				 title:(name.length ? name : title)
+			   isGroup:YES
+		   focusMessage:messageId];
+	}];
 }
 
 /// Question, the "N voted" line, one row per option, and the stamp.
@@ -8228,8 +8513,12 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 - (CGFloat)messageHeightForRowAtIndexPath:(NSIndexPath *)indexPath {
 	NSDictionary *m = self.messages[indexPath.row];
 
+	if ([self rowIsBareAlbumPhoto:indexPath.row])
+		return [self imageSizeForRow:indexPath.row].height +
+				([self continuesAlbumAtRow:indexPath.row] ? kAlbumGap : 3);
+
 	CGSize body = [self bodySizeFor:m];
-	CGSize pic  = [self imageSizeFor:m];
+	CGSize pic  = [self imageSizeForRow:indexPath.row];
 	// A forwarded anything carries a line saying where it came from.
 	CGFloat forwarded = [m[@"forward"] length] ? 18 : 0;
 
@@ -8927,6 +9216,91 @@ static UIColor *TGSenderColour(int64_t userId) {
 	}
 }
 
+- (void)configureAlbumPhotoCell:(TGBubbleCell *)cell
+						message:(NSDictionary *)m
+					atIndexPath:(NSIndexPath *)indexPath
+						inTable:(UITableView *)tableView {
+	BOOL mine = [m[@"outgoing"] boolValue];
+	BOOL first = ![self continuesAlbumAtRow:indexPath.row];
+	BOOL last  = ![self albumContinuesAfterRow:indexPath.row];
+	CGSize pic = [self imageSizeForRow:indexPath.row];
+	CGFloat top = first ? 3 : kAlbumGap;
+
+	int64_t senderId = [m[@"senderId"] longLongValue];
+	NSString *senderName = (self.isGroup && !mine)
+			? [[TGClient shared] nameForUserId:senderId] : nil;
+
+	CGFloat x = mine ? (tableView.bounds.size.width - pic.width - 8) : 8;
+	CGFloat avatarX = x - kBubbleTailOverhang + 4;
+	if (senderName.length)
+		x += kAvatarSide + 4;
+
+	cell.bubble.frame = CGRectMake(x, top, pic.width, pic.height);
+	cell.bubble.backgroundColor = [UIColor clearColor];
+	cell.bubble.layer.borderWidth = 0.0f;
+	cell.bubble.layer.cornerRadius = kMediaRadius;
+	cell.bubbleBg.hidden = YES;
+	cell.tail.hidden = YES;
+	cell.body.hidden = YES;
+	cell.quote.hidden = YES;
+	cell.quoteBar.hidden = YES;
+	cell.forwardLabel.hidden = YES;
+	cell.subtitle.hidden = YES;
+	cell.icon.hidden = YES;
+	cell.wave.hidden = YES;
+	cell.lottie.hidden = YES;
+	[cell.lottie stop];
+	cell.sender.hidden = YES;
+
+	cell.picture.hidden = NO;
+	[self applyPictureTo:cell.picture message:m];
+	cell.picture.layer.cornerRadius = 0.0f;
+	cell.picture.frame = CGRectMake(0, 0, pic.width, pic.height);
+
+	BOOL failedPicture = [self pictureFailedFor:m] && ![self imageFor:m];
+	BOOL playable = [m[@"kind"] isEqualToString:@"messageVideo"] ||
+					[m[@"kind"] isEqualToString:@"messageAnimation"];
+	cell.disc.hidden = !playable && !failedPicture;
+	if (!cell.disc.hidden){
+		CGFloat disc = 42;
+		cell.disc.image = failedPicture ? [self retryGlyphOfSide:disc]
+										: [TGIcons mediaDiscOfSide:disc playing:NO];
+		cell.disc.frame = CGRectMake((pic.width - disc) / 2,
+									 (pic.height - disc) / 2, disc, disc);
+	}
+
+	cell.senderAvatar.hidden = !(senderName.length && last);
+	if (!cell.senderAvatar.hidden){
+		cell.senderAvatar.image = [self avatarForUser:senderId name:senderName];
+		cell.senderAvatar.frame = CGRectMake(avatarX,
+											 top + pic.height - kAvatarSide - 1,
+											 kAvatarSide, kAvatarSide);
+	}
+
+	cell.mediaStamp.hidden = !last;
+	cell.ticks.hidden = YES;
+	if (last){
+		NSString *stamp = [self stampFor:m];
+		CGFloat plateW = [stamp sizeWithFont:cell.mediaStamp.font].width +
+				(mine ? 30 : 14);
+		cell.mediaStamp.backgroundColor = [[TGTheme shared] mediaStampColour];
+		cell.mediaStamp.text = stamp;
+		cell.mediaStamp.frame = CGRectMake(pic.width - plateW - 5,
+										   pic.height - 21, plateW, 16);
+		if (mine){
+			cell.ticks.hidden = NO;
+			cell.ticks.image = [self statusGlyphForMessage:m white:YES];
+			cell.ticks.frame = CGRectMake(
+					x + CGRectGetMaxX(cell.mediaStamp.frame) - 20,
+					top + CGRectGetMidY(cell.mediaStamp.frame) - 4, 15, 9);
+		}
+	}
+
+	cell.time.text = @"";
+	cell.time.hidden = YES;
+	cell.dateBadge.hidden = YES;
+}
+
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
 	static NSString *reuse = @"TGBubbleCell";
 	TGBubbleCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
@@ -8995,12 +9369,18 @@ static UIColor *TGSenderColour(int64_t userId) {
 		return cell;
 	}
 
+	if ([self rowIsBareAlbumPhoto:indexPath.row]){
+		[self configureAlbumPhotoCell:cell message:m
+						  atIndexPath:indexPath inTable:tableView];
+		return cell;
+	}
+
 	// A voice message is a fixed block rather than a run of text: the disc,
 	// the bars and the duration, sized the way their media components are.
 	BOOL isVoice = [m[@"kind"] isEqualToString:@"messageVoiceNote"];
 
 	CGSize body = [self bodySizeFor:m];
-	CGSize pic  = [self imageSizeFor:m];
+	CGSize pic  = [self imageSizeForRow:indexPath.row];
 
 	// The bubble has to fit whichever is widest: the text, a picture, the
 	// quoted message, or the timestamp. Sizing it on the text alone squeezed
@@ -9085,14 +9465,11 @@ static UIColor *TGSenderColour(int64_t userId) {
 	cell.bubble.layer.cornerRadius = [theme bubbleCornerRadius];
 	BOOL bareMedia = [self stampSitsOnPictureFor:m] &&
 			[self decorationHeightFor:m] < 0.5f;
-	if (bareMedia){
+	if (!isSticker && ![self applyBubbleArtworkTo:cell outgoing:mine] && bareMedia){
 		cell.bubble.backgroundColor = [UIColor clearColor];
 		cell.bubble.layer.borderWidth = 0.0f;
 		cell.bubble.layer.cornerRadius = 0.0f;
-		cell.bubbleBg.hidden = YES;
 		cell.tail.hidden = YES;
-	} else if (!isSticker){
-		[self applyBubbleArtworkTo:cell outgoing:mine];
 	}
 	cell.body.textColor = [theme isDark] ? [theme primaryTextColour]
 										 : TGMessageBodyColour();
@@ -11119,6 +11496,10 @@ static UIColor *TGSenderColour(int64_t userId) {
 
 - (void)keyboardWillShow:(NSNotification *)note {
 	CGRect kb = [[note.userInfo objectForKey:UIKeyboardFrameEndUserInfoKey] CGRectValue];
+	if (self.stickerPanel){
+		[self.stickerPanel removeFromSuperview];
+		self.stickerPanel = nil;
+	}
 	[self shiftForKeyboardHeight:kb.size.height];
 }
 
@@ -11143,11 +11524,11 @@ static UIColor *TGSenderColour(int64_t userId) {
 		}
 		if (self.stickerPanel){
 			CGRect panel = self.stickerPanel.frame;
-			panel.origin.y = top - panel.size.height;
+			panel.origin.y = top + kInputHeight;
 			self.stickerPanel.frame = panel;
 		}
 		if (self.scrollDownButton && !self.scrollDownButton.hidden)
-			self.scrollDownButton.frame = CGRectMake(b.size.width - 44, top - 44, 34, 34);
+			self.scrollDownButton.frame = CGRectMake(b.size.width - 36 - 7, top - 36 - 7, 36, 36);
 		if (self.mentionButton && !self.mentionButton.hidden)
 			self.mentionButton.frame = CGRectMake(b.size.width - 44, top - 88, 34, 34);
 		if (self.reactionButton && !self.reactionButton.hidden)
