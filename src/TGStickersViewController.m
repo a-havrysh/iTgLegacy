@@ -38,6 +38,7 @@ static const NSInteger TGStickersPageEmojiArchived = 8;
 static const NSInteger TGStickersPageMasksArchived = 9;
 static const NSInteger TGStickersPageRecent = 10;
 static const NSInteger TGStickersPagePremium = 11;
+static const NSInteger TGStickersPageGreeting = 12;
 
 static const NSInteger kSearchLimit = 40;
 static const NSInteger kPremiumLimit = 40;
@@ -90,6 +91,307 @@ static CGFloat TGStickersRetinaPixel(void) {
 static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	return [NSString stringWithFormat:@"%d-%d", (int)fileId, (int)side];
 }
+
+@interface TGStickerEmojiKeywordsViewController : UIViewController
+		<UITableViewDataSource, UITableViewDelegate, UISearchBarDelegate>
+
+@property (nonatomic, strong) NSDictionary *category;
+
+@end
+
+@interface TGStickerEmojiKeywordsViewController ()
+
+@property (nonatomic, strong) UITableView *table;
+@property (nonatomic, strong) UISearchBar *searchBar;
+@property (nonatomic, strong) UIActivityIndicatorView *spinner;
+@property (nonatomic, strong) NSArray *categories;
+@property (nonatomic, strong) NSArray *suggestions;
+@property (nonatomic, strong) NSArray *exactEmojis;
+@property (nonatomic, assign) BOOL searching;
+@property (nonatomic, assign) BOOL loaded;
+@property (nonatomic, assign) BOOL failed;
+
+@end
+
+@implementation TGStickerEmojiKeywordsViewController
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+	self.title = self.category ? (self.category[@"name"] ?: @"Emoji") : @"Emoji Keywords";
+	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
+		self.edgesForExtendedLayout = UIRectEdgeNone;
+	self.view.backgroundColor = [[TGTheme shared] listBackgroundColour];
+
+	self.table = [[UITableView alloc] initWithFrame:self.view.bounds
+											  style:UITableViewStyleGrouped];
+	self.table.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+			UIViewAutoresizingFlexibleHeight;
+	self.table.dataSource = self;
+	self.table.delegate = self;
+	self.table.separatorColor = [[TGTheme shared] separatorColour];
+	self.table.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	if ([[TGTheme shared] isDark])
+		self.table.backgroundView = nil;
+	[self.view addSubview:self.table];
+
+	if (!self.category){
+		self.searchBar = [[UISearchBar alloc] initWithFrame:
+				CGRectMake(0, 0, self.view.bounds.size.width, kSearchBarHeight)];
+		self.searchBar.delegate = self;
+		self.searchBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+		self.searchBar.placeholder = @"Search Emoji";
+		self.table.tableHeaderView = self.searchBar;
+	}
+
+	self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:
+			UIActivityIndicatorViewStyleGray];
+	self.spinner.hidesWhenStopped = YES;
+	[self.view addSubview:self.spinner];
+
+	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+
+	if (self.category){
+		self.loaded = YES;
+		return;
+	}
+	[self loadCategories];
+}
+
+- (void)viewDidLayoutSubviews {
+	[super viewDidLayoutSubviews];
+	self.spinner.center = CGPointMake(floorf(self.view.bounds.size.width / 2),
+			floorf(self.view.bounds.size.height / 2));
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+	[super viewWillDisappear:animated];
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+											 selector:@selector(runEmojiSearch) object:nil];
+}
+
+- (void)loadCategories {
+	[self.spinner startAnimating];
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] emojiCategoriesForStickers:NO completion:^(NSArray *categories){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		[strongSelf.spinner stopAnimating];
+		strongSelf.loaded = YES;
+		strongSelf.failed = (categories.count == 0);
+		strongSelf.categories = categories ?: @[];
+		[strongSelf.table reloadData];
+	}];
+}
+
+- (NSString *)trimmedQuery {
+	return [self.searchBar.text stringByTrimmingCharactersInSet:
+			[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+
+- (BOOL)searchBarShouldBeginEditing:(UISearchBar *)searchBar {
+	[searchBar setShowsCancelButton:YES animated:YES];
+	return YES;
+}
+
+- (void)searchBarTextDidEndEditing:(UISearchBar *)searchBar {
+	[searchBar setShowsCancelButton:NO animated:YES];
+}
+
+- (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {
+	[searchBar resignFirstResponder];
+}
+
+- (void)searchBarCancelButtonClicked:(UISearchBar *)searchBar {
+	searchBar.text = @"";
+	[searchBar resignFirstResponder];
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+											 selector:@selector(runEmojiSearch) object:nil];
+	self.searching = NO;
+	self.suggestions = nil;
+	self.exactEmojis = nil;
+	[self.table reloadData];
+}
+
+- (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)text {
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+											 selector:@selector(runEmojiSearch) object:nil];
+	if ([self trimmedQuery].length == 0){
+		self.searching = NO;
+		self.suggestions = nil;
+		self.exactEmojis = nil;
+		[self.table reloadData];
+		return;
+	}
+	[self performSelector:@selector(runEmojiSearch) withObject:nil afterDelay:0.3];
+}
+
+- (void)runEmojiSearch {
+	NSString *query = [self trimmedQuery];
+	if (query.length == 0)
+		return;
+	self.searching = YES;
+	[self.spinner startAnimating];
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] emojiSuggestionsForText:query completion:^(NSArray *suggestions){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf || !strongSelf.searching)
+			return;
+		if (![[strongSelf trimmedQuery] isEqualToString:query])
+			return;
+		[strongSelf.spinner stopAnimating];
+		strongSelf.suggestions = suggestions ?: @[];
+		[strongSelf.table reloadData];
+	}];
+
+	[[TGClient shared] keywordEmojisForText:query completion:^(NSArray *emojis){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf || !strongSelf.searching)
+			return;
+		if (![[strongSelf trimmedQuery] isEqualToString:query])
+			return;
+		strongSelf.exactEmojis = emojis ?: @[];
+		[strongSelf.table reloadData];
+	}];
+}
+
+- (NSArray *)categoryEmojis {
+	NSArray *emojis = self.category[@"emojis"];
+	return [emojis isKindOfClass:[NSArray class]] ? emojis : @[];
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+	if (self.category)
+		return 1;
+	return self.searching ? 2 : 1;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	if (self.category)
+		return (NSInteger)[self categoryEmojis].count;
+	if (!self.searching)
+		return (NSInteger)self.categories.count;
+	return section == 0 ? (NSInteger)self.exactEmojis.count
+						: (NSInteger)self.suggestions.count;
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
+	if (self.category || !self.searching)
+		return nil;
+	if (section == 0)
+		return self.exactEmojis.count ? @"Exact Keyword" : nil;
+	return self.suggestions.count ? @"Suggestions" : nil;
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+	if (self.category)
+		return [self categoryEmojis].count ? @"Tap an emoji to copy it." : @"This category is empty.";
+	if (self.searching){
+		if (section != 1)
+			return nil;
+		if (self.exactEmojis.count == 0 && self.suggestions.count == 0)
+			return @"No emoji match that word.";
+		return @"Tap an emoji to copy it.";
+	}
+	if (!self.loaded)
+		return @"Loading...";
+	if (self.failed || self.categories.count == 0)
+		return @"The emoji list could not be loaded. Check the connection and try again.";
+	return @"Type a word to look up the emoji it stands for.";
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView
+		 cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"emoji"];
+	if (!cell)
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
+									  reuseIdentifier:@"emoji"];
+	[[TGTheme shared] styleCell:cell];
+	cell.accessoryType = UITableViewCellAccessoryNone;
+	cell.detailTextLabel.font = [UIFont systemFontOfSize:16];
+	cell.detailTextLabel.textColor = [[TGTheme shared] cellDetailColour];
+	cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
+
+	if (self.category){
+		NSArray *emojis = [self categoryEmojis];
+		if (indexPath.row >= (NSInteger)emojis.count)
+			return cell;
+		cell.textLabel.font = [UIFont systemFontOfSize:24];
+		cell.textLabel.text = emojis[indexPath.row];
+		cell.detailTextLabel.text = @"";
+		return cell;
+	}
+
+	if (!self.searching){
+		if (indexPath.row >= (NSInteger)self.categories.count)
+			return cell;
+		NSDictionary *category = self.categories[indexPath.row];
+		NSInteger count = (NSInteger)[category[@"emojis"] count];
+		cell.textLabel.font = [UIFont systemFontOfSize:19];
+		cell.textLabel.text = category[@"name"];
+		cell.detailTextLabel.text = count ? [NSString stringWithFormat:@"%d", (int)count] : @"";
+		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+		return cell;
+	}
+
+	cell.textLabel.font = [UIFont systemFontOfSize:24];
+	if (indexPath.section == 0){
+		if (indexPath.row >= (NSInteger)self.exactEmojis.count)
+			return cell;
+		cell.textLabel.text = self.exactEmojis[indexPath.row];
+		cell.detailTextLabel.text = @"";
+		return cell;
+	}
+	if (indexPath.row >= (NSInteger)self.suggestions.count)
+		return cell;
+	NSDictionary *suggestion = self.suggestions[indexPath.row];
+	cell.textLabel.text = suggestion[@"emoji"];
+	cell.detailTextLabel.text = suggestion[@"keyword"];
+	return cell;
+}
+
+- (void)copyEmoji:(NSString *)emoji {
+	if (emoji.length == 0)
+		return;
+	[UIPasteboard generalPasteboard].string = emoji;
+	TGAlertView *alert = [[TGAlertView alloc] initWithTitle:@"Copied"
+			message:[NSString stringWithFormat:@"%@ copied to the clipboard.", emoji]
+								   cancelButtonTitle:@"OK" okButtonTitle:nil
+									 completionBlock:nil];
+	[alert show];
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+
+	if (self.category){
+		NSArray *emojis = [self categoryEmojis];
+		if (indexPath.row < (NSInteger)emojis.count)
+			[self copyEmoji:emojis[indexPath.row]];
+		return;
+	}
+
+	if (!self.searching){
+		if (indexPath.row >= (NSInteger)self.categories.count)
+			return;
+		TGStickerEmojiKeywordsViewController *next =
+				[[TGStickerEmojiKeywordsViewController alloc] init];
+		next.category = self.categories[indexPath.row];
+		[self.navigationController pushViewController:next animated:YES];
+		return;
+	}
+
+	if (indexPath.section == 0){
+		if (indexPath.row < (NSInteger)self.exactEmojis.count)
+			[self copyEmoji:self.exactEmojis[indexPath.row]];
+		return;
+	}
+	if (indexPath.row < (NSInteger)self.suggestions.count)
+		[self copyEmoji:self.suggestions[indexPath.row][@"emoji"]];
+}
+
+@end
 
 @interface TGStickerTilesCell : UITableViewCell
 
@@ -280,7 +582,8 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 - (BOOL)isGridPage {
 	return self.page == TGStickersPageFavourites || self.page == TGStickersPageSet ||
 			(NSInteger)self.page == TGStickersPageRecent ||
-			(NSInteger)self.page == TGStickersPagePremium;
+			(NSInteger)self.page == TGStickersPagePremium ||
+			(NSInteger)self.page == TGStickersPageGreeting;
 }
 
 - (BOOL)isMaskPage {
@@ -337,6 +640,8 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		return @"Recently Used";
 	if ((NSInteger)self.page == TGStickersPagePremium)
 		return @"Premium Stickers";
+	if ((NSInteger)self.page == TGStickersPageGreeting)
+		return @"Greeting Stickers";
 	switch (self.page){
 		case TGStickersPageTrending:   return @"Trending Stickers";
 		case TGStickersPageArchived:   return @"Archived Stickers";
@@ -762,6 +1067,10 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		[self reloadPremium];
 		return;
 	}
+	if ((NSInteger)self.page == TGStickersPageGreeting){
+		[self reloadGreeting];
+		return;
+	}
 	switch (self.page){
 		case TGStickersPageFavourites: [self reloadFavourites]; break;
 		case TGStickersPageSet:        [self reloadSet]; break;
@@ -884,6 +1193,29 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		if (stickers.count == 0){
 			[strongSelf showTitle:@"No Premium Stickers"
 							 body:@"There are no premium stickers in the sets you have installed."];
+			return;
+		}
+		[strongSelf showContent];
+		[strongSelf.table reloadData];
+	}];
+}
+
+- (void)reloadGreeting {
+	[self showLoading];
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] greetingStickersWithCompletion:^(NSArray *stickers){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		strongSelf.loaded = YES;
+		if (!stickers){
+			[strongSelf showFailure];
+			return;
+		}
+		strongSelf.stickers = stickers;
+		if (stickers.count == 0){
+			[strongSelf showTitle:@"No Greeting Stickers"
+							 body:@"There is nothing suggested for saying hello right now."];
 			return;
 		}
 		[strongSelf showContent];
@@ -1350,6 +1682,106 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	return nil;
 }
 
+- (UIImage *)renderOutlinePaths:(NSArray *)paths
+						  width:(CGFloat)width
+						 height:(CGFloat)height
+						   side:(CGFloat)side {
+	if (paths.count == 0 || width <= 0 || height <= 0)
+		return nil;
+
+	CGFloat factor = MIN(side / width, side / height);
+	CGSize target = CGSizeMake(floorf(width * factor), floorf(height * factor));
+	if (target.width < 1 || target.height < 1)
+		return nil;
+
+	UIBezierPath *bezier = [UIBezierPath bezierPath];
+	for (NSArray *path in paths){
+		if (![path isKindOfClass:[NSArray class]] || path.count == 0)
+			continue;
+		NSInteger index = 0;
+		for (NSDictionary *command in path){
+			if (![command isKindOfClass:[NSDictionary class]])
+				continue;
+			CGPoint point = CGPointMake([command[@"x"] doubleValue] * factor,
+					[command[@"y"] doubleValue] * factor);
+			if (index == 0){
+				[bezier moveToPoint:point];
+			} else if ([command[@"type"] isEqualToString:@"curve"]){
+				CGPoint control1 = CGPointMake([command[@"c1x"] doubleValue] * factor,
+						[command[@"c1y"] doubleValue] * factor);
+				CGPoint control2 = CGPointMake([command[@"c2x"] doubleValue] * factor,
+						[command[@"c2y"] doubleValue] * factor);
+				[bezier addCurveToPoint:point controlPoint1:control1 controlPoint2:control2];
+			} else {
+				[bezier addLineToPoint:point];
+			}
+			index++;
+		}
+		[bezier closePath];
+	}
+	if (bezier.isEmpty)
+		return nil;
+
+	UIImage *result = nil;
+	@autoreleasepool {
+		UIGraphicsBeginImageContextWithOptions(target, NO, [UIScreen mainScreen].scale);
+		UIColor *fill = [[TGTheme shared] isDark] ? TGStickersRGB(0x3a3f45)
+												  : TGStickersRGB(0xd8dde2);
+		[fill setFill];
+		[bezier fill];
+		result = UIGraphicsGetImageFromCurrentImageContext();
+		UIGraphicsEndImageContext();
+	}
+	return result;
+}
+
+- (UIImage *)outlineForSticker:(NSDictionary *)sticker
+						  side:(CGFloat)side
+					 indexPath:(NSIndexPath *)indexPath {
+	NSInteger fileId = [sticker[@"fileId"] integerValue];
+	if (fileId == 0)
+		return nil;
+
+	NSString *key = [@"o" stringByAppendingString:TGStickersCacheKey(fileId, side)];
+	UIImage *cached = self.covers[key];
+	if (cached)
+		return cached;
+	if ([self.coversInFlight containsObject:key])
+		return nil;
+	[self.coversInFlight addObject:key];
+
+	CGFloat width = [sticker[@"width"] doubleValue];
+	CGFloat height = [sticker[@"height"] doubleValue];
+	if (width <= 0 || height <= 0){
+		width = 512;
+		height = 512;
+	}
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] stickerOutlineForFileId:fileId completion:^(NSArray *paths){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		[strongSelf.coversInFlight removeObject:key];
+		UIImage *outline = [strongSelf renderOutlinePaths:paths width:width height:height
+													 side:side];
+		if (!outline)
+			return;
+		[strongSelf storeCover:outline forKey:key];
+		if (!indexPath)
+			return;
+		if (indexPath.section >= [strongSelf.table numberOfSections])
+			return;
+		if (indexPath.row >= [strongSelf.table numberOfRowsInSection:indexPath.section])
+			return;
+		if (![strongSelf.table cellForRowAtIndexPath:indexPath])
+			return;
+		[strongSelf.table reloadRowsAtIndexPaths:@[indexPath]
+								withRowAnimation:UITableViewRowAnimationNone];
+	}];
+	return nil;
+}
+
 - (NSInteger)coverFileIdForSet:(NSDictionary *)set {
 	NSArray *covers = set[@"covers"];
 	for (NSDictionary *sticker in covers){
@@ -1413,6 +1845,8 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		if ([self stickerIsStill:sticker])
 			image = [self imageForFileId:[sticker[@"fileId"] integerValue] side:kTileSide
 							   indexPath:indexPath];
+		if (!image)
+			image = [self outlineForSticker:sticker side:kTileSide indexPath:indexPath];
 		if (image){
 			[tile setTitle:@"" forState:UIControlStateNormal];
 			[tile setImage:image forState:UIControlStateNormal];
@@ -2037,6 +2471,8 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 						  @"page": @(TGStickersPageMasks)}];
 	[rows addObject:@{@"title": @"Premium Stickers", @"detail": @"",
 					  @"page": @(TGStickersPagePremium)}];
+	[rows addObject:@{@"title": @"Greeting Stickers", @"detail": @"",
+					  @"page": @(TGStickersPageGreeting)}];
 	return rows;
 }
 
@@ -2065,7 +2501,7 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	if (self.page != TGStickersPageRoot)
 		return (NSInteger)self.sets.count;
 	if (section == kRootSectionSettings)
-		return 2;
+		return 3;
 	if (section == kRootSectionPages)
 		return (NSInteger)[self rootPageRows].count;
 	if (section == kRootSectionSets)
@@ -2335,6 +2771,13 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		return cell;
 	}
 
+	if (row == 2){
+		cell.textLabel.text = @"Emoji Keywords";
+		cell.detailTextLabel.text = @"";
+		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+		return cell;
+	}
+
 	cell.textLabel.text = @"Loop Animated Stickers";
 	cell.detailTextLabel.text = @"";
 	cell.accessoryType = UITableViewCellAccessoryNone;
@@ -2418,6 +2861,9 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	if (indexPath.section == kRootSectionSettings){
 		if (indexPath.row == 0)
 			[self presentSuggestModeSheet];
+		else if (indexPath.row == 2)
+			[self.navigationController pushViewController:
+					[[TGStickerEmojiKeywordsViewController alloc] init] animated:YES];
 		return;
 	}
 	if (indexPath.section == kRootSectionPages){

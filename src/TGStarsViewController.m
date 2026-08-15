@@ -1127,7 +1127,9 @@ enum {
 		[pairs addObject:@[@"Refunded", @"Yes"]];
 
 	NSString *transactionId = transaction[@"id"];
-	if ([transactionId isKindOfClass:[NSString class]] && transactionId.length)
+	if (![transactionId isKindOfClass:[NSString class]])
+		transactionId = nil;
+	if (transactionId.length)
 		[pairs addObject:@[@"ID", transactionId]];
 
 	NSString *title = [self counterpartyForTransaction:transaction];
@@ -1139,6 +1141,45 @@ enum {
 			[[TGStarsDetailViewController alloc] initWithTitle:title
 														 pairs:pairs
 													   comment:comment];
+
+	int64_t partnerId = [transaction[@"userId"] longLongValue];
+	if (stars > 0 && partnerId && transactionId.length &&
+		![self transactionIsRefund:transaction])
+	{
+		__weak typeof(self) weakSelf = self;
+		__weak TGStarsDetailViewController *weakController = controller;
+		NSString *partner = [[TGClient shared] nameForUserId:partnerId];
+		NSString *amount = [self starsText:stars signed:NO];
+		controller.actions = @[TGStarsAction(@"Refund This Payment", nil, YES, ^{
+			typeof(self) strongSelf = weakSelf;
+			TGStarsDetailViewController *strongController = weakController;
+			if (!strongSelf || !strongController)
+				return;
+			[strongSelf confirmWithTitle:@"Refund Payment"
+								 message:[NSString stringWithFormat:@"Return %@ to %@?",
+										 amount, partner.length ? partner : @"the payer"]
+								  action:@"Refund"
+								   block:^{
+				typeof(self) innerSelf = weakSelf;
+				if (!innerSelf)
+					return;
+				strongController.busy = YES;
+				[strongController.tableView reloadData];
+				[[TGClient shared] refundStarPaymentWithChargeId:transactionId
+													    toUserId:partnerId
+													  completion:^(BOOL ok)
+				{
+					typeof(self) doneSelf = weakSelf;
+					if (doneSelf)
+						[doneSelf finishAction:strongController
+									   success:ok
+									   failure:@"This payment could not be refunded."];
+				}];
+			}];
+		})];
+		controller.actionsComment = @"Only a payment received by a bot of yours can be refunded.";
+	}
+
 	[self.navigationController pushViewController:controller animated:YES];
 }
 
@@ -1637,7 +1678,7 @@ enum {
 				[self pushTransactionsWithDirection:@"outgoing" title:@"Outgoing Payments"];
 				break;
 			case TGStarsMoreInvoice: [self openInvoiceByName]; break;
-			case TGStarsMorePaidMessages: [self editPaidMessagePrice]; break;
+			case TGStarsMorePaidMessages: [self pushPaidMessages]; break;
 			default: [self clearSavedPaymentInfo]; break;
 		}
 		return;
@@ -1758,7 +1799,8 @@ enum {
 				if (!userId)
 					continue;
 				NSString *name = [strongSelf nameFromUser:user];
-				[strongList appendRow:TGStarsRow(name, nil, nil, ^{
+				NSString *badge = [TGClient isPremiumUser:user] ? @"Premium" : nil;
+				[strongList appendRow:TGStarsRow(name, badge, nil, ^{
 					typeof(self) innerSelf = weakSelf;
 					if (!innerSelf)
 						return;
@@ -2819,6 +2861,91 @@ enum {
 						[strongSelf starsText:stars signed:NO]]
 				: @"Anybody may write to you for free."];
 	}];
+}
+
+- (void)allowFreeMessagesFromUser:(int64_t)userId
+							  name:(NSString *)name
+							 refund:(BOOL)refund
+{
+	__weak typeof(self) weakSelf = self;
+	[self confirmWithTitle:refund ? @"Free and Refund" : @"Write for Free"
+				   message:refund
+						   ? [NSString stringWithFormat:
+								   @"%@ may write for free, and the stars already paid go back.",
+								   name.length ? name : @"This contact"]
+						   : [NSString stringWithFormat:@"%@ may write to you for free from now on.",
+								   name.length ? name : @"This contact"]
+					action:refund ? @"Refund" : @"Allow"
+					 block:^{
+		typeof(self) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		[[TGClient shared] allowUnpaidMessagesFromUser:userId refundPayments:refund];
+		[strongSelf.navigationController popViewControllerAnimated:YES];
+		[strongSelf showMessage:refund
+				? @"The stars were returned and this contact writes for free."
+				: @"This contact writes for free."];
+	}];
+}
+
+- (void)pushPaidMessageDetailForUser:(int64_t)userId name:(NSString *)name {
+	TGStarsDetailViewController *controller =
+			[[TGStarsDetailViewController alloc] initWithTitle:name.length ? name : @"Contact"
+														 pairs:@[@[@"Paid So Far", @"..."]]
+													   comment:nil];
+	__weak typeof(self) weakSelf = self;
+	__weak TGStarsDetailViewController *weakController = controller;
+	[self.navigationController pushViewController:controller animated:YES];
+	[[TGClient shared] paidMessageRevenueFromUser:userId completion:^(long long stars){
+		typeof(self) strongSelf = weakSelf;
+		TGStarsDetailViewController *strongController = weakController;
+		if (!strongSelf || !strongController)
+			return;
+		strongController.pairs = @[@[@"Paid So Far",
+				[strongSelf starsText:stars signed:NO]]];
+		NSMutableArray *actions = [NSMutableArray array];
+		[actions addObject:TGStarsAction(@"Let Them Write for Free", nil, NO, ^{
+			typeof(self) innerSelf = weakSelf;
+			if (innerSelf)
+				[innerSelf allowFreeMessagesFromUser:userId name:name refund:NO];
+		})];
+		if (stars > 0){
+			[actions addObject:TGStarsAction(@"Free and Refund Stars", nil, YES, ^{
+				typeof(self) innerSelf = weakSelf;
+				if (innerSelf)
+					[innerSelf allowFreeMessagesFromUser:userId name:name refund:YES];
+			})];
+		}
+		strongController.actions = actions;
+		strongController.actionsComment =
+				@"Allowing a contact cannot be undone from here.";
+		[strongController.tableView reloadData];
+	}];
+}
+
+- (void)pushPaidMessages {
+	TGStarsListViewController *list =
+			[[TGStarsListViewController alloc] initWithTitle:@"Charge for Messages"];
+	list.comment = @"Strangers pay stars to write to you. A contact you allow always writes for free.";
+	__weak typeof(self) weakSelf = self;
+	[list appendRow:TGStarsRow(@"Price per Message", nil, nil, ^{
+		typeof(self) strongSelf = weakSelf;
+		if (strongSelf)
+			[strongSelf editPaidMessagePrice];
+	})];
+	[list appendRow:TGStarsRow(@"Free for a Contact", nil, nil, ^{
+		typeof(self) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		[strongSelf pickUserWithTitle:@"Write for Free"
+							  handler:^(int64_t userId, NSString *name)
+		{
+			typeof(self) innerSelf = weakSelf;
+			if (innerSelf)
+				[innerSelf pushPaidMessageDetailForUser:userId name:name];
+		}];
+	})];
+	[self.navigationController pushViewController:list animated:YES];
 }
 
 - (void)clearSavedPaymentInfo {

@@ -13,6 +13,7 @@
 #import "TGClient+Channels.h"
 #import "TGClient+Contacts.h"
 #import "TGClient+ChatList.h"
+#import "TGClient+Forums.h"
 #import "TGClient+UserStatus.h"
 #import "TGClient+Stories.h"
 #import "TGGroupMembersViewController.h"
@@ -52,6 +53,14 @@
 @interface TGProfileCommonGroupsController : UITableViewController
 @property (nonatomic, assign) int64_t userId;
 @property (nonatomic, strong) NSArray *chats;
+@end
+
+@interface TGProfileLinkJoinsController : UITableViewController
+@property (nonatomic, assign) int64_t chatId;
+@property (nonatomic, strong) NSString *link;
+@property (nonatomic, strong) NSArray *members;
+@property (nonatomic, assign) NSInteger total;
+@property (nonatomic, assign) BOOL loaded;
 @end
 
 @interface TGProfileBoostsController : UITableViewController
@@ -155,6 +164,9 @@
 @property (nonatomic, strong) NSString *contactRelation;
 @property (nonatomic, strong) NSArray *reportOptions;
 @property (nonatomic, strong) NSString *reportOptionId;
+@property (nonatomic, assign) BOOL isForumChat;
+@property (nonatomic, assign) BOOL forumTopicsKnown;
+@property (nonatomic, assign) NSInteger forumTopicCount;
 @end
 
 static const NSInteger kPickerModeChatPhoto = 0;
@@ -1272,13 +1284,24 @@ static UIImage *TGProfileStretched(NSString *name) {
 	}
 
 	if (sheet.tag == 92){
-		if (index == 0){
+		NSString *pressed = [sheet buttonTitleAtIndex:index];
+		if ([pressed isEqualToString:@"Copy Link"]){
 			[UIPasteboard generalPasteboard].string = self.primaryInviteLink ?: @"";
 			[self showToast:@"Invite link copied"];
 			return;
 		}
-		if (index == 1 && self.isChatAdmin)
+		if ([pressed isEqualToString:@"Who Joined"]){
+			[self openLinkJoins];
+			return;
+		}
+		if ([pressed isEqualToString:@"Revoke and Create New"] && self.isChatAdmin)
 			[self replacePrimaryInviteLink];
+		return;
+	}
+
+	if (sheet.tag == 94){
+		if (index == 0)
+			[self setForumMode:NO];
 		return;
 	}
 
@@ -1367,6 +1390,10 @@ static UIImage *TGProfileStretched(NSString *name) {
 	}
 	if (alert.tag == 88){
 		[self upgradeToSupergroup];
+		return;
+	}
+	if (alert.tag == 93){
+		[self setForumMode:YES];
 		return;
 	}
 	if (alert.tag == 90 && self.chatId){
@@ -1485,6 +1512,7 @@ static UIImage *TGProfileStretched(NSString *name) {
 		weakSelf.canEditChat = TGProfileBool(info[@"canBeEdited"]) || admin;
 		weakSelf.isChannelChat = TGProfileBool(info[@"isChannel"]);
 		weakSelf.isSupergroupChat = TGProfileBool(info[@"isSupergroup"]);
+		weakSelf.isForumChat = TGProfileBool(info[@"isForum"]);
 		weakSelf.slowModeDelay = [info[@"slowModeDelay"] isKindOfClass:[NSNumber class]]
 				? [info[@"slowModeDelay"] integerValue] : 0;
 
@@ -1504,6 +1532,7 @@ static UIImage *TGProfileStretched(NSString *name) {
 		weakSelf.managementLoaded = YES;
 		[weakSelf rebuildManageRows];
 		[weakSelf loadChannelExtras];
+		[weakSelf loadForumTopicCount];
 	}];
 }
 
@@ -1552,6 +1581,7 @@ static UIImage *TGProfileStretched(NSString *name) {
 			[rows addObject:@[@"Slow Mode", @"slowmode",
 							  [self slowModeTitle:self.slowModeDelay]]];
 			[rows addObject:@[@"Group Stickers", @"stickers", @""]];
+			[rows addObject:@[@"Topics", @"topics", [self forumRowValue]]];
 			[rows addObject:@[@"Convert to Broadcast Group", @"broadcast", @""]];
 		} else {
 			[rows addObject:@[@"Upgrade to Supergroup", @"upgrade", @""]];
@@ -1729,6 +1759,8 @@ static UIImage *TGProfileStretched(NSString *name) {
 	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:title
 			delegate:self cancelButtonTitle:nil destructiveButtonTitle:nil
 			otherButtonTitles:@"Copy Link", nil];
+	if (self.isChatAdmin && self.primaryLinkJoinCount > 0)
+		[sheet addButtonWithTitle:@"Who Joined"];
 	if (self.isChatAdmin)
 		[sheet addButtonWithTitle:@"Revoke and Create New"];
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
@@ -1840,6 +1872,74 @@ static UIImage *TGProfileStretched(NSString *name) {
 											  : @"Saving content allowed")
 								: @"Could not change content protection")];
 	}];
+}
+
+- (NSString *)forumRowValue {
+	if (!self.isForumChat)
+		return @"Off";
+	if (!self.forumTopicsKnown)
+		return @"On";
+	if (self.forumTopicCount == 1)
+		return @"1 topic";
+	return [NSString stringWithFormat:@"%ld topics", (long)self.forumTopicCount];
+}
+
+- (void)loadForumTopicCount {
+	if (!self.chatId || !self.isForumChat)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] forumTopicRowsForChat:self.chatId completion:^(NSArray *topics){
+		if (![topics isKindOfClass:[NSArray class]])
+			return;
+		weakSelf.forumTopicsKnown = YES;
+		weakSelf.forumTopicCount = (NSInteger)topics.count;
+		[weakSelf rebuildManageRows];
+	}];
+}
+
+- (void)setForumMode:(BOOL)isForum {
+	if (!self.chatId)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] managementInfoForChat:self.chatId
+								  completion:^(NSDictionary *info){
+		int64_t supergroupId = [info isKindOfClass:[NSDictionary class]]
+				? TGProfileInt64(info[@"supergroupId"]) : 0;
+		if (!supergroupId){
+			[weakSelf showToast:@"Only the owner can change topics"];
+			return;
+		}
+		[weakSelf applyForumMode:isForum toSupergroup:supergroupId];
+	}];
+}
+
+- (void)applyForumMode:(BOOL)isForum toSupergroup:(int64_t)supergroupId {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] setSupergroup:supergroupId
+							 isForum:isForum
+							 hasTabs:NO
+						  completion:^(BOOL success){
+		if (success){
+			weakSelf.isForumChat = isForum;
+			weakSelf.forumTopicsKnown = NO;
+			weakSelf.forumTopicCount = 0;
+			[weakSelf rebuildManageRows];
+			[weakSelf loadForumTopicCount];
+		}
+		[weakSelf showToast:(success ? (isForum ? @"Topics turned on"
+												: @"Topics turned off")
+									 : @"Only the owner can change topics")];
+	}];
+}
+
+- (void)openLinkJoins {
+	if (!self.primaryInviteLink.length || !self.navigationController)
+		return;
+	TGProfileLinkJoinsController *joins =
+			[[TGProfileLinkJoinsController alloc] initWithStyle:UITableViewStylePlain];
+	joins.chatId = self.chatId;
+	joins.link = self.primaryInviteLink;
+	[self.navigationController pushViewController:joins animated:YES];
 }
 
 - (void)openDiscussionGroup {
@@ -2016,6 +2116,27 @@ static UIImage *TGProfileStretched(NSString *name) {
 		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 		sheet.tag = 89;
 		[sheet showInView:self.view];
+		return;
+	}
+
+	if ([key isEqualToString:@"topics"]){
+		if (self.isForumChat){
+			UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:
+					@"Messages will go back to one list and the topics will be lost."
+					delegate:self cancelButtonTitle:nil
+					destructiveButtonTitle:@"Turn Off Topics"
+					otherButtonTitles:nil];
+			sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+			sheet.tag = 94;
+			[sheet showInView:self.view];
+			return;
+		}
+		UIAlertView *confirm = [[UIAlertView alloc] initWithTitle:@"Topics"
+				message:@"Members will be able to open separate topics instead of "
+						@"one message list. Only the owner may change this."
+			   delegate:self cancelButtonTitle:@"Cancel" otherButtonTitles:@"Turn On", nil];
+		confirm.tag = 93;
+		[confirm show];
 		return;
 	}
 
@@ -4410,6 +4531,117 @@ static UIImage *TGStatsStretch(NSString *name, int leftCap) {
 	chat.chatId = chatId;
 	chat.chatTitle = TGProfileText([raw objectForKey:@"title"]) ?: @"";
 	[self.navigationController pushViewController:chat animated:YES];
+}
+
+@end
+
+@implementation TGProfileLinkJoinsController
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+	self.title = @"Joined via Link";
+	self.tableView.backgroundColor = TGProfileListBackground();
+	self.tableView.separatorColor = [[TGTheme shared] separatorColour];
+	[self reload];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+	[super viewWillAppear:animated];
+	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+}
+
+- (void)reload {
+	if (!self.chatId || !self.link.length){
+		self.loaded = YES;
+		[self.tableView reloadData];
+		return;
+	}
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] membersJoinedViaInviteLink:self.link
+										   inChat:self.chatId
+											limit:100
+									   completion:^(NSArray *members, NSInteger total){
+		weakSelf.loaded = YES;
+		weakSelf.members = [members isKindOfClass:[NSArray class]] ? members : @[];
+		weakSelf.total = total;
+		[weakSelf.tableView reloadData];
+	}];
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	return self.members.count;
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
+	return kMemberRowHeight;
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
+	if (!self.loaded)
+		return nil;
+	if (!self.members.count)
+		return @"Nobody has joined through this link";
+	if (self.total > (NSInteger)self.members.count)
+		return [NSString stringWithFormat:@"%ld joined, showing the latest %ld",
+				(long)self.total, (long)self.members.count];
+	return [NSString stringWithFormat:@"%ld joined", (long)self.total];
+}
+
+- (NSString *)dateTextFor:(id)value {
+	if (![value isKindOfClass:[NSNumber class]])
+		return @"";
+	NSTimeInterval seconds = [value doubleValue];
+	if (seconds <= 0)
+		return @"";
+	static NSDateFormatter *formatter = nil;
+	if (!formatter){
+		formatter = [[NSDateFormatter alloc] init];
+		formatter.dateStyle = NSDateFormatterMediumStyle;
+		formatter.timeStyle = NSDateFormatterShortStyle;
+	}
+	return [formatter stringFromDate:
+			[NSDate dateWithTimeIntervalSince1970:seconds]];
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView
+		 cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"join"];
+	if (!cell)
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+									  reuseIdentifier:@"join"];
+	[[TGTheme shared] styleCell:cell];
+	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:16];
+	cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
+	cell.detailTextLabel.font = [UIFont systemFontOfSize:13];
+	cell.detailTextLabel.textColor = [[TGTheme shared] secondaryTextColour];
+	id raw = indexPath.row < (NSInteger)self.members.count
+			? self.members[indexPath.row] : nil;
+	NSDictionary *member = [raw isKindOfClass:[NSDictionary class]] ? raw : @{};
+	NSString *name = TGProfileText(member[@"name"]) ?: @"";
+	cell.textLabel.text = name;
+	cell.detailTextLabel.text = [self dateTextFor:member[@"date"]];
+	cell.imageView.image = [TGIcons avatarWithInitials:TGProfileInitial(name)
+												  size:kMemberAvatarSide
+											  colourId:TGProfileInt64(member[@"userId"])];
+	return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	id raw = indexPath.row < (NSInteger)self.members.count
+			? self.members[indexPath.row] : nil;
+	if (![raw isKindOfClass:[NSDictionary class]])
+		return;
+	int64_t userId = TGProfileInt64([raw objectForKey:@"userId"]);
+	if (!userId)
+		return;
+	NSString *name = TGProfileText([raw objectForKey:@"name"]) ?: @"";
+	TGProfileViewController *profile =
+			[[TGProfileViewController alloc] initWithChatId:self.chatId
+													 userId:userId
+													  title:name];
+	[self.navigationController pushViewController:profile animated:YES];
 }
 
 @end

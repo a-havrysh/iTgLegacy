@@ -42,7 +42,8 @@ enum {
 	TGSettingsPageWallpaper      = 102,
 	TGSettingsPageChatListLayout = 103,
 	TGSettingsPageDataUsage      = 104,
-	TGSettingsPageNotificationExceptions = 110
+	TGSettingsPageNotificationExceptions = 110,
+	TGSettingsPageNotificationSounds     = 111
 };
 
 enum {
@@ -60,6 +61,7 @@ enum {
 	TGSettingsNotifSectionReactions,
 	TGSettingsNotifSectionStories,
 	TGSettingsNotifSectionContacts,
+	TGSettingsNotifSectionSounds,
 	TGSettingsNotifSectionReset,
 	TGSettingsNotifSectionCount
 };
@@ -84,6 +86,8 @@ static NSString *const TGSettingsStoriesEnabledKey = @"TGStoriesEnabled";
 static NSString *const TGSettingsChatListLayoutKey = @"TGChatListLayout";
 static NSString *const TGSettingsReactionSourceKey = @"TGReactionNotificationSource";
 static NSString *const TGSettingsReactionPreviewKey = @"TGReactionNotificationPreview";
+static NSString *const TGSettingsPollVoteSourceKey = @"TGPollVoteNotificationSource";
+static NSString *const TGSettingsLastProxyKey = @"TGLastEnabledProxyId";
 static NSString *const TGSettingsContactRegisteredOption =
 		@"disable_contact_registered_notifications";
 static NSString *const TGSettingsStoriesExceptionsScope = @"stories";
@@ -908,6 +912,22 @@ static NSString *TGSettingsDuration(double seconds) {
 @property (nonatomic, strong) NSString *suggestedLanguage;
 @property (nonatomic, strong) NSDictionary *pressedBackground;
 @property (nonatomic, strong) NSDictionary *pressedPack;
+@property (nonatomic, strong) NSString *premiumSummary;
+@property (nonatomic, strong) NSArray *savedSounds;
+@property (nonatomic, assign) BOOL savedSoundsLoaded;
+@property (nonatomic, strong) NSDictionary *pressedSound;
+@property (nonatomic, assign) NSInteger activeProxyId;
++ (NSString *)pollVoteSource;
+- (void)writeReactionSource:(NSString *)source
+			 pollVoteSource:(NSString *)pollVoteSource
+					preview:(BOOL)preview;
+- (void)openNotificationSounds;
+- (void)loadSavedSounds;
+- (UITableViewCell *)fillSoundCell:(UITableViewCell *)cell at:(NSIndexPath *)path;
+- (void)tapSound:(NSIndexPath *)path;
+- (BOOL)canClearExceptions;
+- (void)confirmClearExceptions;
+- (void)showProxySheet;
 + (NSArray *)generalRows;
 + (NSArray *)rootSettingsRows;
 + (NSArray *)telegramRows;
@@ -922,7 +942,6 @@ static NSString *TGSettingsDuration(double seconds) {
 + (NSArray *)reactionSourceTitles;
 + (NSString *)reactionSource;
 + (BOOL)reactionPreview;
-- (void)writeReactionSource:(NSString *)source preview:(BOOL)preview;
 - (NSDictionary *)settingsForScopeAtSection:(NSInteger)section;
 - (void)openExceptionsForScope:(NSString *)scope;
 - (NSString *)displayName;
@@ -982,6 +1001,8 @@ static NSString *TGSettingsDuration(double seconds) {
 			boolForKey:TGSettingsLessCallDataKey];
 	self.wallpaperBlurred = [[NSUserDefaults standardUserDefaults]
 			boolForKey:TGSettingsWallpaperBlurKey];
+	self.activeProxyId = -1;
+	self.savedSounds = @[];
 
 	if ((NSInteger)self.page == TGSettingsPageAutoDownload)
 		self.title = @"Auto-Download Media";
@@ -996,6 +1017,8 @@ static NSString *TGSettingsDuration(double seconds) {
 	else if ((NSInteger)self.page == TGSettingsPageNotificationExceptions)
 		self.title = [self.exceptionsScope isEqualToString:TGSettingsStoriesExceptionsScope]
 				? @"Story Exceptions" : @"Exceptions";
+	else if ((NSInteger)self.page == TGSettingsPageNotificationSounds)
+		self.title = @"Notification Sounds";
 	else switch (self.page){
 		case TGSettingsPageAppearance:    self.title = @"Chat Settings"; break;
 		case TGSettingsPageData:          self.title = @"Data and Storage"; break;
@@ -1015,6 +1038,8 @@ static NSString *TGSettingsDuration(double seconds) {
 		[self buildVersionFooter];
 	}
 	if (self.page == TGSettingsPageLanguage
+			|| self.page == TGSettingsPageRoot
+			|| (NSInteger)self.page == TGSettingsPageNotificationSounds
 			|| (NSInteger)self.page == TGSettingsPageWallpaper){
 		UILongPressGestureRecognizer *press =
 				[[UILongPressGestureRecognizer alloc] initWithTarget:self
@@ -1345,6 +1370,11 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	if (self.page == TGSettingsPageRoot){
 		[self loadSuggestions];
 		[self loadProxyStatus];
+		[[TGClient shared] premiumStateWithCompletion:^(NSString *summary){
+			weakSelf.premiumSummary = [summary isKindOfClass:[NSString class]]
+					? summary : nil;
+			[weakSelf.tableView reloadData];
+		}];
 		[[TGClient shared] autosaveSettingsWithCompletion:^(NSDictionary *privateChats,
 														   NSDictionary *groups,
 														   NSDictionary *channels){
@@ -1388,6 +1418,12 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 					? [value boolValue] : NO;
 			[weakSelf.tableView reloadData];
 		}];
+		[self loadSavedSounds];
+		return;
+	}
+
+	if ((NSInteger)self.page == TGSettingsPageNotificationSounds){
+		[self loadSavedSounds];
 		return;
 	}
 
@@ -1577,6 +1613,12 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 - (void)loadProxyStatus {
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] activeProxyIdWithCompletion:^(NSInteger proxyId){
+		weakSelf.activeProxyId = proxyId;
+		if (proxyId >= 0){
+			[[NSUserDefaults standardUserDefaults] setInteger:proxyId
+													   forKey:TGSettingsLastProxyKey];
+			[[NSUserDefaults standardUserDefaults] synchronize];
+		}
 		if (proxyId < 0){
 			weakSelf.proxyDetail = @"Off";
 			[weakSelf.tableView reloadData];
@@ -1725,15 +1767,29 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	return [stored boolValue];
 }
 
-- (void)writeReactionSource:(NSString *)source preview:(BOOL)preview {
++ (NSString *)pollVoteSource {
+	NSString *stored = [[NSUserDefaults standardUserDefaults]
+			objectForKey:TGSettingsPollVoteSourceKey];
+	if ([stored isKindOfClass:[NSString class]]
+			&& [[TGSettingsViewController reactionSources] containsObject:stored])
+		return stored;
+	return @"contacts";
+}
+
+- (void)writeReactionSource:(NSString *)source
+			 pollVoteSource:(NSString *)pollVoteSource
+					preview:(BOOL)preview {
 	[[NSUserDefaults standardUserDefaults] setObject:source
 											  forKey:TGSettingsReactionSourceKey];
+	[[NSUserDefaults standardUserDefaults] setObject:pollVoteSource
+											  forKey:TGSettingsPollVoteSourceKey];
 	[[NSUserDefaults standardUserDefaults] setObject:@(preview)
 											  forKey:TGSettingsReactionPreviewKey];
 	[[NSUserDefaults standardUserDefaults] synchronize];
-	[[TGClient shared] setReactionNotificationSource:source
-										 showPreview:preview
-											 soundId:0];
+	[[TGClient shared] setReactionNotificationsSource:source
+									   pollVoteSource:pollVoteSource
+										  showPreview:preview
+											  soundId:0];
 }
 
 - (NSDictionary *)settingsForScopeAtSection:(NSInteger)section {
@@ -1905,6 +1961,8 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	if ((NSInteger)self.page == TGSettingsPageChatListLayout)
 		return 1;
 	if ((NSInteger)self.page == TGSettingsPageNotificationExceptions)
+		return [self canClearExceptions] ? 2 : 1;
+	if ((NSInteger)self.page == TGSettingsPageNotificationSounds)
 		return 1;
 	if (self.page == TGSettingsPageRoot)
 		return ([self showsSuggestions] ? 8 : 7)
@@ -1949,7 +2007,10 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	if ((NSInteger)self.page == TGSettingsPageChatListLayout)
 		return (NSInteger)[TGSettingsViewController chatListLayouts].count;
 	if ((NSInteger)self.page == TGSettingsPageNotificationExceptions)
-		return (NSInteger)MAX((NSUInteger)1, self.exceptions.count);
+		return section == 1
+				? 1 : (NSInteger)MAX((NSUInteger)1, self.exceptions.count);
+	if ((NSInteger)self.page == TGSettingsPageNotificationSounds)
+		return (NSInteger)MAX((NSUInteger)1, self.savedSounds.count);
 	switch (self.page){
 		case TGSettingsPageAppearance:
 			if (section == 0) return 3;                          // styles
@@ -1963,7 +2024,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 			if (section <= TGSettingsNotifSectionChannels)
 				return (NSInteger)[TGSettingsViewController
 						notificationRowsForSection:section].count;
-			if (section == TGSettingsNotifSectionReactions) return 2;
+			if (section == TGSettingsNotifSectionReactions) return 3;
 			return 1;
 		case TGSettingsPagePrivacy:
 			if (section == 0) return [[TGSettingsViewController privacySettings] count];
@@ -2026,6 +2087,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 			if (section == TGSettingsNotifSectionReactions) return @"Reactions";
 			if (section == TGSettingsNotifSectionStories)   return @"Stories";
 			if (section == TGSettingsNotifSectionContacts)  return @"Contacts";
+			if (section == TGSettingsNotifSectionSounds)    return @"Sounds";
 			return nil;
 		case TGSettingsPageData:
 			return section == 1 ? @"Archive" : nil;
@@ -2094,7 +2156,13 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	if (self.page == TGSettingsPageNotifications){
 		if (section == TGSettingsNotifSectionReactions)
 			return @"Who may raise a notification when they react to your "
-				   @"messages or your stories.";
+				   @"messages or your stories, or answer one of your polls. "
+				   @"Telegram cannot report these back, so the rows show what "
+				   @"this device last wrote.";
+		if (section == TGSettingsNotifSectionSounds)
+			return @"Sounds uploaded to your account. They play in the app; "
+				   @"alerts raised while Telegram is closed use the sound the "
+				   @"system gives them.";
 		if (section == TGSettingsNotifSectionContacts)
 			return @"Telegram announces a phone-book contact the first time "
 				   @"they sign up. Turn this off to keep that quiet.";
@@ -2103,6 +2171,13 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 				   @"fresh account has.";
 		return nil;
 	}
+	if ((NSInteger)self.page == TGSettingsPageNotificationSounds)
+		return self.savedSoundsLoaded && !self.savedSounds.count
+			? @"Nothing here yet. Sounds are uploaded from a desktop or mobile "
+			  @"Telegram and appear on every device signed into the account."
+			: @"Hold or tap a sound to drop it from the account.";
+	if ((NSInteger)self.page == TGSettingsPageNotificationExceptions && section == 1)
+		return @"Every chat in the list above goes back to the scope default.";
 	if ((NSInteger)self.page == TGSettingsPageNotificationExceptions)
 		return [self.exceptionsScope isEqualToString:TGSettingsStoriesExceptionsScope]
 			? @"These chats have a story setting of their own. Tap one to hand "
@@ -2172,6 +2247,8 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		return [self fillChatListLayoutCell:cell at:indexPath];
 	if ((NSInteger)self.page == TGSettingsPageNotificationExceptions)
 		return [self fillExceptionCell:cell at:indexPath];
+	if ((NSInteger)self.page == TGSettingsPageNotificationSounds)
+		return [self fillSoundCell:cell at:indexPath];
 	if (self.page == TGSettingsPageRoot
 			&& [self rootKindForSection:indexPath.section] == TGSettingsRootKindStories)
 		return [self fillStoriesCell:cell];
@@ -2263,6 +2340,13 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		if (kind == TGSettingsRootKindSettings
 				&& [row[0] isEqualToString:@"Chat List"]){
 			cell.detailTextLabel.text = [TGSettingsViewController chatListLayoutTitle];
+			cell.detailTextLabel.textColor = TGSettingsRGB(0x356596);
+			cell.detailTextLabel.font = [UIFont systemFontOfSize:16];
+		}
+		if (kind == TGSettingsRootKindTelegram
+				&& [row[0] isEqualToString:@"Telegram Premium"]){
+			cell.detailTextLabel.text = self.premiumSummary.length
+					? self.premiumSummary : @"";
 			cell.detailTextLabel.textColor = TGSettingsRGB(0x356596);
 			cell.detailTextLabel.font = [UIFont systemFontOfSize:16];
 		}
@@ -2430,6 +2514,17 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 			[self markDisclosure:cell];
 			return cell;
 		}
+		if (path.row == 1){
+			cell.textLabel.text = @"Notify About Poll Votes";
+			NSUInteger index = [[TGSettingsViewController reactionSources]
+					indexOfObject:[TGSettingsViewController pollVoteSource]];
+			if (index == NSNotFound)
+				index = 1;
+			cell.detailTextLabel.text =
+					[TGSettingsViewController reactionSourceTitles][index];
+			[self markDisclosure:cell];
+			return cell;
+		}
 		cell.textLabel.text = @"Reaction Preview";
 		cell.selectionStyle = UITableViewCellSelectionStyleNone;
 		cell.accessoryView = [self notificationSwitchOn:
@@ -2441,6 +2536,14 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	if (path.section == TGSettingsNotifSectionStories){
 		cell.textLabel.text = @"Story Exceptions";
 		NSNumber *count = self.exceptionCounts[TGSettingsStoriesExceptionsScope];
+		cell.detailTextLabel.text = count ? [count stringValue] : @"";
+		[self markDisclosure:cell];
+		return cell;
+	}
+
+	if (path.section == TGSettingsNotifSectionSounds){
+		cell.textLabel.text = @"Notification Sounds";
+		NSNumber *count = self.savedSoundsLoaded ? @(self.savedSounds.count) : nil;
 		cell.detailTextLabel.text = count ? [count stringValue] : @"";
 		[self markDisclosure:cell];
 		return cell;
@@ -2499,7 +2602,35 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	return cell;
 }
 
+- (UITableViewCell *)fillSoundCell:(UITableViewCell *)cell at:(NSIndexPath *)path {
+	if (!self.savedSounds.count){
+		cell.textLabel.text = self.savedSoundsLoaded ? @"No saved sounds"
+													 : @"Loading...";
+		cell.textLabel.font = [UIFont systemFontOfSize:15];
+		cell.textLabel.textColor = [[TGTheme shared] secondaryTextColour];
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		return cell;
+	}
+	NSDictionary *sound = self.savedSounds[path.row];
+	if (![sound isKindOfClass:[NSDictionary class]])
+		return cell;
+	NSString *title = [sound[@"title"] isKindOfClass:[NSString class]]
+			? sound[@"title"] : nil;
+	cell.textLabel.text = title.length ? title : @"Sound";
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+	cell.detailTextLabel.textColor = [[TGTheme shared] secondaryTextColour];
+	cell.detailTextLabel.text = TGSettingsDuration([sound[@"duration"] doubleValue]);
+	return cell;
+}
+
 - (UITableViewCell *)fillExceptionCell:(UITableViewCell *)cell at:(NSIndexPath *)path {
+	if (path.section == 1){
+		cell.textLabel.text = @"Clear All Exceptions";
+		cell.textLabel.textColor = TGSettingsRGB(0xc4362f);
+		cell.textLabel.textAlignment = NSTextAlignmentCenter;
+		cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+		return cell;
+	}
 	if (!self.exceptions.count){
 		cell.textLabel.text = self.exceptionsLoaded ? @"No exceptions" : @"Loading...";
 		cell.textLabel.font = [UIFont systemFontOfSize:15];
@@ -3117,6 +3248,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 
 	if (section == TGSettingsNotifSectionReactions){
 		[self writeReactionSource:[TGSettingsViewController reactionSource]
+				   pollVoteSource:[TGSettingsViewController pollVoteSource]
 						  preview:toggle.on];
 		return;
 	}
@@ -3182,6 +3314,22 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		[self openExceptionsForScope:TGSettingsStoriesExceptionsScope];
 		return;
 	}
+	if (path.section == TGSettingsNotifSectionSounds){
+		[self openNotificationSounds];
+		return;
+	}
+	if (path.section == TGSettingsNotifSectionReactions && path.row == 1){
+		UIActionSheet *sheet = [[UIActionSheet alloc]
+				initWithTitle:@"Notify about poll votes from"
+					 delegate:self
+			cancelButtonTitle:nil
+	   destructiveButtonTitle:nil
+			otherButtonTitles:@"Everybody", @"My Contacts", @"Nobody", nil];
+		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+		sheet.tag = 142;
+		[sheet showInView:self.view];
+		return;
+	}
 	if (path.section == TGSettingsNotifSectionReactions && path.row == 0){
 		UIActionSheet *sheet = [[UIActionSheet alloc]
 				initWithTitle:@"Notify about reactions from"
@@ -3207,7 +3355,67 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	}
 }
 
+- (BOOL)canClearExceptions {
+	if ((NSInteger)self.page != TGSettingsPageNotificationExceptions)
+		return NO;
+	if ([self.exceptionsScope isEqualToString:TGSettingsStoriesExceptionsScope])
+		return NO;
+	return self.exceptions.count > 0;
+}
+
+- (void)confirmClearExceptions {
+	UIAlertView *confirm = [[UIAlertView alloc]
+			initWithTitle:@"Clear all exceptions"
+				  message:@"Every chat with a setting of its own goes back to "
+						  @"the scope default."
+				 delegate:self
+		cancelButtonTitle:@"Cancel"
+		otherButtonTitles:@"Clear", nil];
+	confirm.tag = 407;
+	[confirm show];
+}
+
+- (void)openNotificationSounds {
+	TGSettingsViewController *next = [[TGSettingsViewController alloc] init];
+	next.page = (TGSettingsPage)TGSettingsPageNotificationSounds;
+	[self.navigationController pushViewController:next animated:YES];
+}
+
+- (void)loadSavedSounds {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] savedNotificationSoundsWithCompletion:^(NSArray *sounds){
+		weakSelf.savedSounds = [sounds isKindOfClass:[NSArray class]] ? sounds : @[];
+		weakSelf.savedSoundsLoaded = YES;
+		[weakSelf.tableView reloadData];
+	}];
+}
+
+- (void)tapSound:(NSIndexPath *)path {
+	if ((NSUInteger)path.row >= self.savedSounds.count)
+		return;
+	NSDictionary *sound = self.savedSounds[path.row];
+	if (![sound isKindOfClass:[NSDictionary class]]
+			|| ![sound[@"id"] longLongValue])
+		return;
+	self.pressedSound = sound;
+	NSString *title = [sound[@"title"] isKindOfClass:[NSString class]]
+			? sound[@"title"] : @"Sound";
+	UIActionSheet *sheet = [[UIActionSheet alloc]
+			initWithTitle:title.length ? title : @"Sound"
+				 delegate:self
+		cancelButtonTitle:nil
+   destructiveButtonTitle:@"Delete Sound"
+		otherButtonTitles:nil];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = 155;
+	[sheet showInView:self.view];
+}
+
 - (void)tapException:(NSIndexPath *)path {
+	if (path.section == 1){
+		[self confirmClearExceptions];
+		return;
+	}
 	if ((NSUInteger)path.row >= self.exceptions.count)
 		return;
 	NSDictionary *chat = self.exceptions[path.row];
@@ -3251,6 +3459,10 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	}
 	if ((NSInteger)self.page == TGSettingsPageNotificationExceptions){
 		[self tapException:indexPath];
+		return;
+	}
+	if ((NSInteger)self.page == TGSettingsPageNotificationSounds){
+		[self tapSound:indexPath];
 		return;
 	}
 	if ((NSInteger)self.page == TGSettingsPageChatListLayout){
@@ -3564,6 +3776,23 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	if (!path)
 		return;
 
+	if ((NSInteger)self.page == TGSettingsPageNotificationSounds){
+		[self tapSound:path];
+		return;
+	}
+
+	if (self.page == TGSettingsPageRoot){
+		if ([self rootKindForSection:path.section] != TGSettingsRootKindSettings)
+			return;
+		NSArray *rows = [TGSettingsViewController rootSettingsRows];
+		if ((NSUInteger)path.row >= rows.count)
+			return;
+		if (![[rows[path.row] objectAtIndex:0] isEqualToString:@"Proxy"])
+			return;
+		[self showProxySheet];
+		return;
+	}
+
 	if (self.page == TGSettingsPageLanguage){
 		if ((NSUInteger)path.row >= self.languages.count)
 			return;
@@ -3602,6 +3831,29 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		otherButtonTitles:@"Copy Link", nil];
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 	sheet.tag = 152;
+	[sheet showInView:self.view];
+}
+
+- (void)showProxySheet {
+	BOOL on = self.activeProxyId >= 0;
+	NSInteger remembered = [[NSUserDefaults standardUserDefaults]
+			integerForKey:TGSettingsLastProxyKey];
+	if (!on && remembered <= 0){
+		UIAlertView *empty = [[UIAlertView alloc] initWithTitle:@"Proxy"
+				message:@"No proxy has been used on this device yet. Add one in "
+						@"the proxy list first."
+			   delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+		[empty show];
+		return;
+	}
+	UIActionSheet *sheet = [[UIActionSheet alloc]
+			initWithTitle:self.proxyDetail.length ? self.proxyDetail : @"Proxy"
+				 delegate:self
+		cancelButtonTitle:nil
+   destructiveButtonTitle:on ? @"Connect Directly" : nil
+		otherButtonTitles:on ? nil : @"Use Last Proxy", nil];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = 154;
 	[sheet showInView:self.view];
 }
 
@@ -3908,12 +4160,56 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		return;
 	}
 
-	if (sheet.tag == 141){
+	if (sheet.tag == 141 || sheet.tag == 142){
 		NSArray *sources = [TGSettingsViewController reactionSources];
 		if ((NSUInteger)index >= sources.count)
 			return;
-		[self writeReactionSource:sources[index]
-						  preview:[TGSettingsViewController reactionPreview]];
+		if (sheet.tag == 141)
+			[self writeReactionSource:sources[index]
+					   pollVoteSource:[TGSettingsViewController pollVoteSource]
+							  preview:[TGSettingsViewController reactionPreview]];
+		else
+			[self writeReactionSource:[TGSettingsViewController reactionSource]
+					   pollVoteSource:sources[index]
+							  preview:[TGSettingsViewController reactionPreview]];
+		[self.tableView reloadData];
+		return;
+	}
+
+	if (sheet.tag == 154){
+		BOOL enable = self.activeProxyId < 0;
+		NSInteger proxyId = enable
+				? [[NSUserDefaults standardUserDefaults]
+						integerForKey:TGSettingsLastProxyKey]
+				: self.activeProxyId;
+		__weak typeof(self) weakSelf = self;
+		[[TGClient shared] setProxy:proxyId
+							enabled:enable
+						 completion:^(BOOL ok){
+			if (!ok){
+				UIAlertView *failed = [[UIAlertView alloc] initWithTitle:@"Proxy"
+						message:@"Telegram would not change the proxy. Try again "
+								@"from the proxy list."
+					   delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+				[failed show];
+			}
+			[weakSelf loadProxyStatus];
+		}];
+		return;
+	}
+
+	if (sheet.tag == 155){
+		long long soundId = [self.pressedSound[@"id"] longLongValue];
+		if (!soundId)
+			return;
+		[[TGClient shared] removeSavedNotificationSound:soundId];
+		NSMutableArray *rest = [NSMutableArray array];
+		for (NSDictionary *sound in self.savedSounds){
+			if ([sound[@"id"] longLongValue] != soundId)
+				[rest addObject:sound];
+		}
+		self.savedSounds = rest;
+		self.pressedSound = nil;
 		[self.tableView reloadData];
 		return;
 	}
@@ -4196,8 +4492,13 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		return;
 	if (alertView.tag == 401){
 		[[TGClient shared] logOutWithCompletion:^(BOOL ok){
-			if (ok)
+			if (ok){
+				[[TGClient shared] forgetAutoDownloadSettingsMirror];
+				[[NSUserDefaults standardUserDefaults]
+						removeObjectForKey:TGSettingsPresetDefaultsKey];
+				[[NSUserDefaults standardUserDefaults] synchronize];
 				return;
+			}
 			UIAlertView *failed = [[UIAlertView alloc] initWithTitle:@"Log out"
 					message:@"Telegram could not close this session. Try again "
 							@"once the connection is back."
@@ -4230,6 +4531,23 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 			weakSelf.usageReceived = 0;
 			[weakSelf loadUsage];
 			[weakSelf.tableView reloadData];
+		}];
+	}
+	else if (alertView.tag == 407){
+		__weak typeof(self) weakSelf = self;
+		[[TGClient shared] clearNotificationExceptionsForScope:self.exceptionsScope
+													completion:^(NSInteger resetCount){
+			weakSelf.exceptions = @[];
+			weakSelf.exceptionsLoaded = YES;
+			[weakSelf.tableView reloadData];
+			if (resetCount <= 0)
+				return;
+			UIAlertView *done = [[UIAlertView alloc] initWithTitle:@"Exceptions"
+					message:[NSString stringWithFormat:
+							@"%d chats went back to the scope default.",
+							(int)resetCount]
+				   delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+			[done show];
 		}];
 	}
 	else if (alertView.tag == 404){

@@ -1061,6 +1061,9 @@ static UIImage *TGSecretKeyImage(NSArray *cells) {
 @property (nonatomic, strong) NSDictionary *birthdayUser;
 @property (nonatomic, strong) NSDictionary *phoneShareUser;
 @property (nonatomic, strong) NSDictionary *tokenUser;
+@property (nonatomic, copy) NSString *myUsernameLink;
+@property (nonatomic, strong) NSDictionary *myBirthdate;
+@property (nonatomic, assign) BOOL myBirthdateKnown;
 @end
 
 @implementation TGContactsViewController
@@ -1157,8 +1160,47 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 	return left > 0 ? left : 0;
 }
 
+- (NSString *)shareableLink {
+	return self.contactLink.length ? self.contactLink : self.myUsernameLink;
+}
+
+- (void)reloadMyUsernames {
+	if (self.isPickerMode)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] myUsernamesWithCompletion:^(NSDictionary *usernames){
+		TGContactsViewController *me = weakSelf;
+		if (!me)
+			return;
+		NSString *pick = nil;
+		if ([usernames isKindOfClass:NSDictionary.class]){
+			NSArray *active = [usernames[@"active"] isKindOfClass:NSArray.class]
+					? usernames[@"active"] : nil;
+			for (NSString *one in active){
+				if ([one isKindOfClass:NSString.class] && one.length){
+					pick = one;
+					break;
+				}
+			}
+			if (!pick.length){
+				NSString *editable = usernames[@"editable"];
+				if ([editable isKindOfClass:NSString.class] && editable.length)
+					pick = editable;
+			}
+		}
+		NSString *link = pick.length
+				? [NSString stringWithFormat:@"https://t.me/%@", pick] : nil;
+		BOOL appears = (link.length && !me.myUsernameLink.length && !me.contactLink.length);
+		me.myUsernameLink = link;
+		if (appears)
+			[me refreshTable];
+		else
+			[me reloadTableSoon];
+	}];
+}
+
 - (NSString *)contactLinkSubtitle {
-	NSString *display = self.contactLink;
+	NSString *display = [self shareableLink];
 	for (NSString *prefix in @[@"https://", @"http://"]){
 		if ([display hasPrefix:prefix])
 			display = [display substringFromIndex:prefix.length];
@@ -1195,11 +1237,13 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 }
 
 - (void)contactLinkTapped {
-	if (!self.contactLink.length)
+	NSString *link = [self shareableLink];
+	if (!link.length)
 		return;
-	if ([self contactLinkSecondsRemaining] <= 0 && self.contactLinkExpiresIn > 0)
+	if (self.contactLink.length && [self contactLinkSecondsRemaining] <= 0
+			&& self.contactLinkExpiresIn > 0)
 		[self reloadContactLink];
-	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:self.contactLink
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:link
 													   delegate:self
 											  cancelButtonTitle:nil
 										 destructiveButtonTitle:nil
@@ -1218,6 +1262,27 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 		[sheet showInView:self.navigationController.view];
 }
 
+- (void)reloadMyBirthdate {
+	if (self.isPickerMode)
+		return;
+	int64_t myId = [[TGClient shared].me[@"id"] longLongValue];
+	if (myId == 0)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] birthdateForUser:myId completion:^(NSDictionary *birthdate){
+		TGContactsViewController *me = weakSelf;
+		if (!me)
+			return;
+		me.myBirthdate = [birthdate isKindOfClass:NSDictionary.class] ? birthdate : nil;
+		me.myBirthdateKnown = YES;
+	}];
+}
+
+- (NSString *)myBirthdateText {
+	NSString *text = self.myBirthdate[@"text"];
+	return ([text isKindOfClass:NSString.class] && text.length) ? text : nil;
+}
+
 - (void)importFooterTapped {
 	if (self.importing)
 		return;
@@ -1232,6 +1297,11 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 		otherButtonTitles:nil];
 	[sheet addButtonWithTitle:@"Sync Contacts"];
 	[sheet addButtonWithTitle:@"Add by Link"];
+	NSString *mine = [self myBirthdateText];
+	[sheet addButtonWithTitle:mine.length
+			? [NSString stringWithFormat:@"My Birthday · %@", mine] : @"Set My Birthday"];
+	if (mine.length)
+		[sheet addButtonWithTitle:@"Remove My Birthday"];
 	if (!self.birthdaysHidden && [self hasAnyBirthdayToday])
 		[sheet addButtonWithTitle:@"Hide Birthdays Today"];
 	if (self.importedCountKnown && self.importedCount > 0)
@@ -1603,6 +1673,37 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 
 - (void)showBirthdayPickerForUser:(NSDictionary *)u {
 	self.birthdayUser = u;
+	[self showBirthdayPickerWithDoneTitle:@"Suggest"
+									action:@selector(sendBirthdaySuggestion)
+							   initialDate:nil];
+}
+
+- (void)showBirthdayPickerForSelf {
+	self.birthdayUser = nil;
+	NSDate *initial = nil;
+	NSInteger day = [self.myBirthdate[@"day"] integerValue];
+	NSInteger month = [self.myBirthdate[@"month"] integerValue];
+	if (day > 0 && month > 0){
+		NSDateComponents *parts = [[NSDateComponents alloc] init];
+		parts.day = day;
+		parts.month = month;
+		NSInteger year = [self.myBirthdate[@"year"] integerValue];
+		if (year <= 0){
+			NSDateComponents *now = [[NSCalendar currentCalendar]
+					components:NSYearCalendarUnit fromDate:[NSDate date]];
+			year = now.year;
+		}
+		parts.year = year;
+		initial = [[NSCalendar currentCalendar] dateFromComponents:parts];
+	}
+	[self showBirthdayPickerWithDoneTitle:@"Save"
+									action:@selector(saveMyBirthday)
+							   initialDate:initial];
+}
+
+- (void)showBirthdayPickerWithDoneTitle:(NSString *)doneTitle
+								 action:(SEL)action
+							initialDate:(NSDate *)initialDate {
 	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
 													   delegate:self
 											  cancelButtonTitle:nil
@@ -1620,14 +1721,16 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 			initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace
 								 target:nil action:nil];
 	UIBarButtonItem *done = [[UIBarButtonItem alloc]
-			initWithTitle:@"Suggest" style:UIBarButtonItemStyleDone
-				   target:self action:@selector(sendBirthdaySuggestion)];
+			initWithTitle:doneTitle style:UIBarButtonItemStyleDone
+				   target:self action:action];
 	bar.items = @[cancel, space, done];
 	[sheet addSubview:bar];
 
 	UIDatePicker *picker = [[UIDatePicker alloc] initWithFrame:CGRectMake(0, 44, 320, 216)];
 	picker.datePickerMode = UIDatePickerModeDate;
 	picker.maximumDate = [NSDate date];
+	if (initialDate)
+		picker.date = initialDate;
 	[sheet addSubview:picker];
 	self.birthdayPicker = picker;
 	self.birthdaySheet = sheet;
@@ -1666,6 +1769,64 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 								   delegate:nil
 						  cancelButtonTitle:@"OK"
 						  otherButtonTitles:nil] show];
+	}];
+}
+
+- (void)saveMyBirthday {
+	NSDate *date = self.birthdayPicker.date;
+	[self.birthdaySheet dismissWithClickedButtonIndex:-1 animated:YES];
+	self.birthdaySheet = nil;
+	self.birthdayPicker = nil;
+	self.birthdayUser = nil;
+	if (!date)
+		return;
+	NSDateComponents *parts = [[NSCalendar currentCalendar]
+			components:(NSDayCalendarUnit | NSMonthCalendarUnit | NSYearCalendarUnit)
+			  fromDate:date];
+	if (parts.day <= 0 || parts.month <= 0)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] setMyBirthdateDay:parts.day
+								   month:parts.month
+									year:parts.year
+							  completion:^(BOOL ok){
+		TGContactsViewController *me = weakSelf;
+		[[[UIAlertView alloc] initWithTitle:nil
+									message:ok ? @"Your birthday is saved."
+											   : @"Could not save your birthday."
+								   delegate:nil
+						  cancelButtonTitle:@"OK"
+						  otherButtonTitles:nil] show];
+		if (ok)
+			[me reloadMyBirthdate];
+	}];
+}
+
+- (void)confirmRemoveMyBirthday {
+	UIAlertView *alert = [[UIAlertView alloc]
+			initWithTitle:nil
+				  message:@"Remove your birthday from your profile?"
+				 delegate:self
+		cancelButtonTitle:@"Cancel"
+		otherButtonTitles:@"Remove", nil];
+	alert.tag = 13;
+	[alert show];
+}
+
+- (void)removeMyBirthday {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] setMyBirthdateDay:0 month:0 year:0 completion:^(BOOL ok){
+		TGContactsViewController *me = weakSelf;
+		if (!ok){
+			[[[UIAlertView alloc] initWithTitle:nil
+										message:@"Could not remove your birthday."
+									   delegate:nil
+							  cancelButtonTitle:@"OK"
+							  otherButtonTitles:nil] show];
+			return;
+		}
+		me.myBirthdate = nil;
+		[me reloadMyBirthdate];
 	}];
 }
 
@@ -1740,6 +1901,14 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 			[self promptForContactToken];
 			return;
 		}
+		if ([title isEqualToString:@"Remove My Birthday"]){
+			[self confirmRemoveMyBirthday];
+			return;
+		}
+		if ([title hasPrefix:@"My Birthday"] || [title isEqualToString:@"Set My Birthday"]){
+			[self showBirthdayPickerForSelf];
+			return;
+		}
 		if ([title isEqualToString:@"Hide Birthdays Today"]){
 			[[TGClient shared] hideContactCloseBirthdays];
 			self.birthdaysHidden = YES;
@@ -1763,15 +1932,16 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 		return;
 	}
 	if (sheet.tag == 4){
-		if (!self.contactLink.length)
+		NSString *link = [self shareableLink];
+		if (!link.length)
 			return;
 		if (index == 0){
-			[UIPasteboard generalPasteboard].string = self.contactLink;
+			[UIPasteboard generalPasteboard].string = link;
 			return;
 		}
 		if (index == 1){
 			UIActivityViewController *share = [[UIActivityViewController alloc]
-					initWithActivityItems:@[self.contactLink] applicationActivities:nil];
+					initWithActivityItems:@[link] applicationActivities:nil];
 			[self presentViewController:share animated:YES completion:nil];
 		}
 	}
@@ -1882,6 +2052,12 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 		if (index == alertView.cancelButtonIndex || !user)
 			return;
 		[self addTokenUser:user];
+		return;
+	}
+	if (alertView.tag == 13){
+		if (index == alertView.cancelButtonIndex)
+			return;
+		[self removeMyBirthday];
 		return;
 	}
 	if (alertView.tag == 12){
@@ -2008,7 +2184,7 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 		return nil;
 	NSMutableArray *rows = [NSMutableArray arrayWithObjects:
 			TGContactActionInvite, TGContactActionNewGroup, TGContactActionSync, nil];
-	if (self.contactLink.length)
+	if ([self shareableLink].length)
 		[rows addObject:TGContactActionLink];
 	return rows;
 }
@@ -2397,12 +2573,15 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 		[self reloadCloseFriends];
 		[self reloadImportedCount];
 		[self reloadContactLink];
+		[self reloadMyUsernames];
+		[self reloadMyBirthdate];
 	}
 }
 
 - (NSString *)inviteMessageText {
-	NSString *link = self.contactLink.length ? self.contactLink : nil;
-	if (!link){
+	NSString *link = [self shareableLink];
+	if (!link.length){
+		link = nil;
 		NSDictionary *me = [TGClient shared].me;
 		NSDictionary *usernameBox = [me isKindOfClass:NSDictionary.class] ? me[@"usernames"] : nil;
 		NSArray *usernames = [usernameBox isKindOfClass:NSDictionary.class]

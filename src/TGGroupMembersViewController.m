@@ -108,6 +108,29 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 
 @end
 
+@interface TGGroupPublicLinkViewController : UIViewController <UITableViewDataSource,
+		UITableViewDelegate, UITextFieldDelegate> {
+	int64_t _chatId;
+}
+
+@property (nonatomic, strong) UITableView *tableView;
+@property (nonatomic, strong) UITextField *field;
+@property (nonatomic, strong) UIView *footerView;
+@property (nonatomic, strong) UILabel *footerLabel;
+@property (nonatomic, strong) NSArray *sections;
+@property (nonatomic, strong) NSArray *publicChats;
+@property (nonatomic, strong) NSString *existingUsername;
+@property (nonatomic, strong) NSString *checkedUsername;
+@property (nonatomic, assign) BOOL isChannel;
+@property (nonatomic, assign) BOOL checkOk;
+@property (nonatomic, assign) BOOL saving;
+@property (nonatomic, assign) NSInteger checkGeneration;
+@property (nonatomic, copy) void (^onChanged)(void);
+
+- (id)initWithChatId:(int64_t)chatId username:(NSString *)username isChannel:(BOOL)isChannel;
+
+@end
+
 @interface TGGroupMemberCell : UITableViewCell
 @property (nonatomic, strong) UIImageView *avatarView;
 @property (nonatomic, strong) UILabel *titleLabel;
@@ -810,6 +833,357 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 
 @end
 
+@implementation TGGroupPublicLinkViewController
+
+- (id)initWithChatId:(int64_t)chatId username:(NSString *)username isChannel:(BOOL)isChannel {
+	self = [super init];
+	if (!self)
+		return nil;
+	_chatId = chatId;
+	self.isChannel = isChannel;
+	self.existingUsername = username.length ? username : nil;
+	self.publicChats = [NSArray array];
+	return self;
+}
+
+- (void)dealloc {
+	[NSObject cancelPreviousPerformRequestsWithTarget:self];
+}
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+
+	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
+		self.edgesForExtendedLayout = UIRectEdgeNone;
+
+	self.title = @"Public Link";
+	self.view.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+
+	self.tableView = [[UITableView alloc] initWithFrame:self.view.bounds
+												  style:UITableViewStyleGrouped];
+	self.tableView.autoresizingMask =
+			UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+	self.tableView.dataSource = self;
+	self.tableView.delegate = self;
+	self.tableView.rowHeight = 44;
+	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	self.tableView.separatorColor = [[TGTheme shared] separatorColour];
+	[self.view addSubview:self.tableView];
+
+	self.footerView = [[UIView alloc] initWithFrame:
+			CGRectMake(0, 0, self.view.bounds.size.width, 44)];
+	self.footerView.backgroundColor = [UIColor clearColor];
+	self.footerLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 6, 280, 30)];
+	self.footerLabel.backgroundColor = [UIColor clearColor];
+	self.footerLabel.font = [UIFont systemFontOfSize:13];
+	self.footerLabel.textColor = [[TGTheme shared] secondaryTextColour];
+	self.footerLabel.numberOfLines = 0;
+	[self.footerView addSubview:self.footerLabel];
+
+	self.field = [[UITextField alloc] initWithFrame:CGRectMake(65, 0, 225, 43)];
+	self.field.delegate = self;
+	self.field.font = [UIFont systemFontOfSize:17];
+	self.field.textColor = [[TGTheme shared] primaryTextColour];
+	self.field.placeholder = @"link";
+	self.field.text = self.existingUsername ?: @"";
+	self.field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+	self.field.autocorrectionType = UITextAutocorrectionTypeNo;
+	self.field.clearButtonMode = UITextFieldViewModeWhileEditing;
+	self.field.returnKeyType = UIReturnKeyDone;
+	[self.field addTarget:self action:@selector(fieldChanged)
+		 forControlEvents:UIControlEventEditingChanged];
+
+	self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
+			initWithTitle:@"Save" style:UIBarButtonItemStyleDone
+				   target:self action:@selector(save)];
+	self.navigationItem.rightBarButtonItem.enabled = NO;
+
+	[self rebuildSections];
+	[self setFooterText:(self.isChannel
+			? @"People can share this link and find this channel by searching for it."
+			: @"People can share this link and find this group by searching for it.")
+					 ok:NO];
+	[self.field becomeFirstResponder];
+}
+
+- (void)rebuildSections {
+	NSMutableArray *sections = [NSMutableArray arrayWithObject:@"link"];
+	if (self.existingUsername.length)
+		[sections addObject:@"remove"];
+	if (self.publicChats.count)
+		[sections addObject:@"chats"];
+	self.sections = sections;
+}
+
+- (NSString *)kindOfSection:(NSInteger)section {
+	if (section < 0 || section >= (NSInteger)self.sections.count)
+		return @"";
+	return [self.sections objectAtIndex:(NSUInteger)section];
+}
+
+- (CGFloat)footerHeight {
+	CGSize size = [self.footerLabel.text sizeWithFont:self.footerLabel.font
+									constrainedToSize:CGSizeMake(280, 400)
+										lineBreakMode:NSLineBreakByWordWrapping];
+	self.footerLabel.frame = CGRectMake(20, 6, 280, size.height);
+	return size.height + 16;
+}
+
+- (void)setFooterText:(NSString *)text ok:(BOOL)ok {
+	self.footerLabel.text = text ?: @"";
+	self.footerLabel.textColor = ok
+			? [UIColor colorWithRed:0.16f green:0.55f blue:0.16f alpha:1.0f]
+			: [[TGTheme shared] secondaryTextColour];
+	[self footerHeight];
+	[self.tableView beginUpdates];
+	[self.tableView endUpdates];
+}
+
+- (NSString *)cleanedText {
+	NSMutableString *clean = [NSMutableString string];
+	NSString *raw = self.field.text ?: @"";
+	for (NSUInteger i = 0; i < raw.length; i++){
+		unichar c = [raw characterAtIndex:i];
+		if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+				|| (c >= '0' && c <= '9') || c == '_')
+			[clean appendFormat:@"%C", c];
+	}
+	return clean;
+}
+
+- (void)fieldChanged {
+	NSString *clean = [self cleanedText];
+	if (![clean isEqualToString:self.field.text ?: @""])
+		self.field.text = clean;
+
+	self.checkOk = NO;
+	self.checkedUsername = nil;
+	self.navigationItem.rightBarButtonItem.enabled = NO;
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+											 selector:@selector(runCheck)
+											   object:nil];
+
+	if (clean.length == 0){
+		[self setFooterText:(self.isChannel
+				? @"People can share this link and find this channel by searching for it."
+				: @"People can share this link and find this group by searching for it.") ok:NO];
+		return;
+	}
+	if (clean.length < 5){
+		[self setFooterText:@"A link needs at least five characters." ok:NO];
+		return;
+	}
+	[self setFooterText:@"Checking..." ok:NO];
+	[self performSelector:@selector(runCheck) withObject:nil afterDelay:0.4f];
+}
+
+- (void)runCheck {
+	NSString *name = [self cleanedText];
+	if (name.length < 5)
+		return;
+	self.checkGeneration++;
+	NSInteger generation = self.checkGeneration;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] checkGroupUsername:name
+								  forChat:_chatId
+							   completion:^(NSString *status){
+		TGGroupPublicLinkViewController *me = weakSelf;
+		if (!me || me.checkGeneration != generation)
+			return;
+		NSString *value = [status isKindOfClass:NSString.class] ? status : @"error";
+		[me handleCheckStatus:value forName:name];
+	}];
+}
+
+- (void)handleCheckStatus:(NSString *)status forName:(NSString *)name {
+	if ([status isEqualToString:@"ok"]){
+		self.checkOk = YES;
+		self.checkedUsername = name;
+		self.navigationItem.rightBarButtonItem.enabled = !self.saving;
+		[self setFooterText:[NSString stringWithFormat:@"t.me/%@ is free to take.", name]
+						 ok:YES];
+		return;
+	}
+	if ([status isEqualToString:@"too-many"]){
+		[self setFooterText:@"This account already holds as many public links as it may. "
+				@"Give one of them up first." ok:NO];
+		[self loadCreatedPublicChats];
+		return;
+	}
+	NSString *text = @"This link is not available.";
+	if ([status isEqualToString:@"occupied"])
+		text = @"This link is already taken.";
+	else if ([status isEqualToString:@"invalid"])
+		text = @"A link may hold only letters, digits and underscores, "
+				@"and may not start with a digit.";
+	else if ([status isEqualToString:@"error"])
+		text = @"Could not check this link. Try again.";
+	[self setFooterText:text ok:NO];
+}
+
+- (void)loadCreatedPublicChats {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] createdPublicChatsWithCompletion:^(NSArray *chats){
+		TGGroupPublicLinkViewController *me = weakSelf;
+		if (!me)
+			return;
+		NSArray *list = [chats isKindOfClass:NSArray.class] ? chats : [NSArray array];
+		if (list.count == 0)
+			return;
+		me.publicChats = list;
+		[me rebuildSections];
+		[me.field resignFirstResponder];
+		[me.tableView reloadData];
+	}];
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+	return (NSInteger)self.sections.count;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	if ([[self kindOfSection:section] isEqualToString:@"chats"])
+		return (NSInteger)self.publicChats.count;
+	return 1;
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
+	NSString *kind = [self kindOfSection:section];
+	if ([kind isEqualToString:@"link"])
+		return @"Link";
+	if ([kind isEqualToString:@"chats"])
+		return @"Your public links";
+	return nil;
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForFooterInSection:(NSInteger)section {
+	if ([[self kindOfSection:section] isEqualToString:@"link"])
+		return [self footerHeight];
+	return 10;
+}
+
+- (UIView *)tableView:(UITableView *)tableView viewForFooterInSection:(NSInteger)section {
+	if ([[self kindOfSection:section] isEqualToString:@"link"])
+		return self.footerView;
+	return nil;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView
+		 cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	NSString *kind = [self kindOfSection:indexPath.section];
+
+	if ([kind isEqualToString:@"link"]){
+		static NSString *reuse = @"TGGroupLinkFieldCell";
+		UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
+		if (!cell){
+			cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+										  reuseIdentifier:reuse];
+			cell.selectionStyle = UITableViewCellSelectionStyleNone;
+			cell.textLabel.font = [UIFont systemFontOfSize:17];
+			cell.textLabel.textColor = [[TGTheme shared] secondaryTextColour];
+		}
+		cell.textLabel.text = @"t.me/";
+		if (self.field.superview != cell.contentView)
+			[cell.contentView addSubview:self.field];
+		self.field.frame = CGRectMake(65, 0,
+				cell.contentView.bounds.size.width - 75, 43);
+		self.field.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+		return cell;
+	}
+
+	if ([kind isEqualToString:@"remove"]){
+		static NSString *removeReuse = @"TGGroupLinkRemoveCell";
+		UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:removeReuse];
+		if (!cell){
+			cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+										  reuseIdentifier:removeReuse];
+			cell.textLabel.font = [UIFont systemFontOfSize:17];
+			cell.textLabel.textAlignment = NSTextAlignmentCenter;
+			cell.textLabel.textColor = [UIColor colorWithRed:0.8f green:0.1f blue:0.1f alpha:1.0f];
+		}
+		cell.textLabel.text = @"Remove Public Link";
+		return cell;
+	}
+
+	static NSString *chatReuse = @"TGGroupLinkChatCell";
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:chatReuse];
+	if (!cell){
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+									  reuseIdentifier:chatReuse];
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		cell.textLabel.font = [UIFont systemFontOfSize:16];
+		cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
+	}
+	NSDictionary *chat = nil;
+	if (indexPath.row >= 0 && indexPath.row < (NSInteger)self.publicChats.count){
+		id entry = [self.publicChats objectAtIndex:(NSUInteger)indexPath.row];
+		chat = [entry isKindOfClass:NSDictionary.class] ? entry : nil;
+	}
+	NSString *title = chat ? TGMembersString(chat, @"title") : @"";
+	cell.textLabel.text = title.length ? title : @"Untitled";
+	return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	if (![[self kindOfSection:indexPath.section] isEqualToString:@"remove"])
+		return;
+
+	[self.field resignFirstResponder];
+	__weak typeof(self) weakSelf = self;
+	TGAlertView *alert = [[TGAlertView alloc] initWithTitle:nil
+			message:@"Remove the public link? The group becomes private and the old link "
+					@"stops working."
+								  cancelButtonTitle:@"Cancel"
+									  okButtonTitle:@"Remove"
+									completionBlock:^(bool okPressed){
+		if (okPressed)
+			[weakSelf applyUsername:@""];
+	}];
+	[alert show];
+}
+
+- (BOOL)textFieldShouldReturn:(UITextField *)textField {
+	[textField resignFirstResponder];
+	return NO;
+}
+
+- (void)save {
+	if (self.saving || !self.checkOk || !self.checkedUsername.length)
+		return;
+	[self applyUsername:self.checkedUsername];
+}
+
+- (void)applyUsername:(NSString *)username {
+	if (self.saving)
+		return;
+	self.saving = YES;
+	self.navigationItem.rightBarButtonItem.enabled = NO;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] setGroupChat:_chatId username:username completion:^(BOOL ok){
+		TGGroupPublicLinkViewController *me = weakSelf;
+		if (!me)
+			return;
+		me.saving = NO;
+		me.navigationItem.rightBarButtonItem.enabled = me.checkOk;
+		if (!ok){
+			[[[UIAlertView alloc] initWithTitle:nil
+										message:@"Could not save this link."
+									   delegate:nil
+							  cancelButtonTitle:@"OK"
+							  otherButtonTitles:nil] show];
+			return;
+		}
+		if (me.onChanged)
+			me.onChanged();
+		[me.navigationController popViewControllerAnimated:YES];
+	}];
+}
+
+@end
+
 @interface TGGroupMembersViewController () <UITableViewDataSource, UITableViewDelegate,
 		UISearchBarDelegate, UIActionSheetDelegate, UIAlertViewDelegate> {
 	UIView *_modeBar;
@@ -1224,6 +1598,8 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 	}
 	if ([self isSupergroup] && [self iMay:@"can_restrict_members"])
 		[actions addObject:@"defaultPermissions"];
+	if ([self isSupergroup] && [self iMay:@"can_change_info"])
+		[actions addObject:@"publicLink"];
 	if (![self isSupergroup] && [self.myStatus isEqualToString:@"creator"])
 		[actions addObject:@"upgrade"];
 	return actions;
@@ -1239,6 +1615,12 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 		return @"Dismiss All Requests";
 	if ([action isEqualToString:@"defaultPermissions"])
 		return @"Default Permissions";
+	if ([action isEqualToString:@"publicLink"]){
+		NSString *current = TGMembersString(self.groupInfo, @"username");
+		return current.length
+				? [NSString stringWithFormat:@"Public Link (t.me/%@)", current]
+				: @"Public Link";
+	}
 	return @"Upgrade to Supergroup";
 }
 
@@ -1292,6 +1674,18 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 	if ([action isEqualToString:@"defaultPermissions"]){
 		TGMemberRightsViewController *editor = [[TGMemberRightsViewController alloc]
 				initWithDefaultPermissionsOfChat:self.chatId];
+		[self.navigationController pushViewController:editor animated:YES];
+		return;
+	}
+	if ([action isEqualToString:@"publicLink"]){
+		TGGroupPublicLinkViewController *editor = [[TGGroupPublicLinkViewController alloc]
+				initWithChatId:self.chatId
+					  username:TGMembersString(self.groupInfo, @"username")
+					 isChannel:[[self.groupInfo objectForKey:@"isChannel"] boolValue]];
+		editor.onChanged = ^{
+			TGGroupMembersViewController *me = weakSelf;
+			[me loadGroupInfo];
+		};
 		[self.navigationController pushViewController:editor animated:YES];
 		return;
 	}

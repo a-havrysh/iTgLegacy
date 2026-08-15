@@ -2621,6 +2621,8 @@ static const NSInteger kClearRecentAlertTag  = 85;
 @property (nonatomic, strong) NSMutableArray *reactionMessageIds;
 @property (nonatomic, strong) UIButton *reactionButton;
 @property (nonatomic, assign) BOOL chatIsWithBot;
+@property (nonatomic, copy) NSString *pendingStickerSetLink;
+@property (nonatomic, strong) NSArray *tappedLinkTargets;
 
 - (void)clearComposeState;
 - (void)showComposeBanner:(NSString *)text;
@@ -4629,6 +4631,8 @@ static const NSInteger kBotPasswordAlertTag = 97;
 static const NSInteger kInlineQueryAlertTag = 98;
 static const NSInteger kBotStartAlertTag    = 99;
 static const NSInteger kAllowBotAlertTag    = 100;
+static const NSInteger kTextLinksSheetTag   = 101;
+static const NSInteger kStickerLinkAlertTag = 102;
 
 - (Class)videoCaptureClass {
 	if (![UIImagePickerController isSourceTypeAvailable:
@@ -4753,6 +4757,12 @@ static const NSInteger kAllowBotAlertTag    = 100;
 	if (index == sheet.cancelButtonIndex)
 		return;
 
+	if (sheet.tag == kTextLinksSheetTag){
+		if (index >= 0 && index < (NSInteger)self.tappedLinkTargets.count)
+			[self followTextTarget:[self.tappedLinkTargets objectAtIndex:index]];
+		self.tappedLinkTargets = nil;
+		return;
+	}
 	if (sheet.tag == kMessageSheetTag){
 		[self runMessageAction:[sheet buttonTitleAtIndex:index]];
 		return;
@@ -5104,6 +5114,7 @@ static const NSInteger kAllowBotAlertTag    = 100;
 	[sheet addButtonWithTitle:(self.markdownComposing ? @"Send as Plain Text"
 													  : @"Send as Markdown")];
 	[sheet addButtonWithTitle:@"Preview Formatting"];
+	[sheet addButtonWithTitle:@"Preview Link"];
 	[sheet addButtonWithTitle:@"Translate Draft"];
 	[sheet addButtonWithTitle:@"Save as Quick Reply"];
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
@@ -5141,6 +5152,38 @@ static const NSInteger kAllowBotAlertTag    = 100;
 			if (!me)
 				return;
 			[me showFormattingPreview:(plainText ?: text) markup:entities];
+		}];
+		return;
+	}
+
+	if ([chosen isEqualToString:@"Preview Link"]){
+		NSDictionary *options = [TGClient linkPreviewOptionsDisabled:NO
+																 url:@""
+													 forceSmallMedia:NO
+													 forceLargeMedia:YES
+													   showAboveText:NO];
+		[[TGClient shared] linkPreviewForText:text withOptions:options
+								   completion:^(NSDictionary *preview){
+			TGChatViewController *me = weakSelf;
+			if (!me)
+				return;
+			if (![preview[@"url"] length]){
+				[me showAlertTitle:@""
+						   message:@"There is no link in the message field."];
+				return;
+			}
+			NSMutableArray *lines = [NSMutableArray array];
+			for (NSString *key in @[@"siteName", @"title", @"description", @"displayUrl"]){
+				NSString *value = [preview[key] isKindOfClass:NSString.class]
+						? preview[key] : nil;
+				if (value.length)
+					[lines addObject:value];
+			}
+			if ([preview[@"hasInstantView"] boolValue])
+				[lines addObject:@"Instant View available"];
+			[me showAlertTitle:(preview[@"url"] ?: @"Link")
+					   message:(lines.count ? [lines componentsJoinedByString:@"\n"]
+											: @"Nothing is known about this link yet.")];
 		}];
 		return;
 	}
@@ -5234,6 +5277,80 @@ static const NSInteger kAllowBotAlertTag    = 100;
 											otherButtonTitles:@"Start", nil];
 		ask.tag = kBotStartAlertTag;
 		[ask show];
+	}];
+}
+
+- (void)openLinkInMessage:(NSDictionary *)m {
+	NSString *text = [self originalTextOf:m];
+	if (!text.length)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] entitiesInText:text completion:^(NSArray *entities){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		NSMutableArray *targets = [NSMutableArray array];
+		for (NSDictionary *entity in entities){
+			if (![entity isKindOfClass:NSDictionary.class])
+				continue;
+			NSString *kind = [([entity[@"kind"] isKindOfClass:NSString.class]
+					? entity[@"kind"] : @"") lowercaseString];
+			NSString *fragment = [me fragmentOf:text entity:entity];
+			if (!fragment.length)
+				continue;
+			if ([kind isEqualToString:@"url"]){
+				[targets addObject:@{ @"label" : fragment, @"url" : fragment }];
+			} else if ([kind isEqualToString:@"texturl"]){
+				NSString *href = [entity[@"url"] isKindOfClass:NSString.class]
+						? entity[@"url"] : nil;
+				if (href.length)
+					[targets addObject:@{ @"label" : fragment, @"url" : href }];
+			} else if ([kind isEqualToString:@"mention"] && fragment.length > 1){
+				[targets addObject:@{ @"label" : fragment,
+									  @"mention" : [fragment substringFromIndex:1] }];
+			}
+		}
+		if (!targets.count)
+			return;
+		if (targets.count == 1){
+			[me followTextTarget:[targets objectAtIndex:0]];
+			return;
+		}
+		me.tappedLinkTargets = targets;
+		UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Links"
+														   delegate:me
+												  cancelButtonTitle:nil
+											 destructiveButtonTitle:nil
+												  otherButtonTitles:nil];
+		NSUInteger shown = MIN((NSUInteger)8, targets.count);
+		for (NSUInteger i = 0; i < shown; i++)
+			[sheet addButtonWithTitle:[targets objectAtIndex:i][@"label"]];
+		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+		sheet.tag = kTextLinksSheetTag;
+		[sheet showInView:me.view];
+	}];
+}
+
+- (void)followTextTarget:(NSDictionary *)target {
+	NSString *url = target[@"url"];
+	if ([url isKindOfClass:NSString.class] && url.length){
+		[self openLink:url];
+		return;
+	}
+	NSString *mention = target[@"mention"];
+	if (![mention isKindOfClass:NSString.class] || !mention.length)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] publicLinkForUsername:mention completion:^(NSString *link){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (!link.length){
+			[me showAlertTitle:@""
+					   message:[NSString stringWithFormat:@"There is no @%@.", mention]];
+			return;
+		}
+		[me openLink:link];
 	}];
 }
 
@@ -5343,20 +5460,53 @@ static const NSInteger kAllowBotAlertTag    = 100;
 			}
 			int64_t setId = [set[@"id"] longLongValue];
 			if ([set[@"installed"] boolValue] || !setId){
-				[me showAlertTitle:(set[@"title"] ?: @"Stickers")
-						   message:@"This set is already in your stickers."];
+				[me offerStickerSetLink:name
+								  title:(set[@"title"] ?: @"Stickers")
+								message:@"This set is already in your stickers."];
 				return;
 			}
 			[[TGClient shared] installStickerSet:setId completion:^(BOOL ok){
-				[me showAlertTitle:(set[@"title"] ?: @"Stickers")
-						   message:(ok ? @"Added to your stickers."
-									   : @"This set could not be added.")];
+				TGChatViewController *inner = weakSelf;
+				if (!inner)
+					return;
+				if (!ok){
+					[inner showAlertTitle:(set[@"title"] ?: @"Stickers")
+								  message:@"This set could not be added."];
+					return;
+				}
+				[inner offerStickerSetLink:name
+									 title:(set[@"title"] ?: @"Stickers")
+								   message:@"Added to your stickers."];
 			}];
 		}];
 		return YES;
 	}
 
 	return NO;
+}
+
+- (void)offerStickerSetLink:(NSString *)name
+					  title:(NSString *)title
+					message:(NSString *)message {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] publicLinkForStickerSetName:name completion:^(NSString *url){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (!url.length){
+			[me showAlertTitle:title message:message];
+			return;
+		}
+		me.pendingStickerSetLink = url;
+		UIAlertView *ask = [[UIAlertView alloc] initWithTitle:title
+													  message:[NSString stringWithFormat:
+															   @"%@\n%@", message, url]
+													 delegate:me
+											cancelButtonTitle:@"Done"
+											otherButtonTitles:@"Copy Link", nil];
+		ask.tag = kStickerLinkAlertTag;
+		[ask show];
+	}];
 }
 
 - (void)explainUnsupportedLink:(NSString *)url {
@@ -5873,8 +6023,21 @@ static const NSInteger kAllowBotAlertTag    = 100;
 		return;
 
 	if ([action isEqualToString:@"Delete All From This User"]){
-		[[TGClient shared] deleteAllMessagesFromUser:userId inGroup:self.chatId];
-		[self reload];
+		__weak typeof(self) weakSelf = self;
+		NSString *name = self.moderationName ?: @"this user";
+		[[TGClient shared] deleteMessagesFromUser:userId inChat:self.chatId
+									   completion:^(BOOL ok){
+			TGChatViewController *me = weakSelf;
+			if (!me)
+				return;
+			if (!ok){
+				[me showAlertTitle:@""
+						   message:[NSString stringWithFormat:
+									@"The messages from %@ could not be deleted.", name]];
+				return;
+			}
+			[me reload];
+		}];
 		return;
 	}
 	if ([action isEqualToString:@"Ban From The Group"]){
@@ -6592,6 +6755,11 @@ static const NSInteger kAllowBotAlertTag    = 100;
 	if ([kind isEqualToString:@"messageVoiceNote"] ||
 		[kind isEqualToString:@"messageAudio"]){
 		[self playAudioMessage:m fromSeconds:0];
+		return;
+	}
+
+	if ([kind isEqualToString:@"messageText"]){
+		[self openLinkInMessage:m];
 		return;
 	}
 
@@ -9825,6 +9993,15 @@ static UIColor *TGSenderColour(int64_t userId) {
 			return;
 		}
 		[self sendPendingPastedImage];
+		return;
+	}
+	if (alertView.tag == kStickerLinkAlertTag){
+		NSString *link = self.pendingStickerSetLink;
+		self.pendingStickerSetLink = nil;
+		if (buttonIndex == alertView.cancelButtonIndex || !link.length)
+			return;
+		[UIPasteboard generalPasteboard].string = link;
+		[TGSnackbar showInView:self.view text:@"Link copied" seconds:3 onCommit:nil];
 		return;
 	}
 	if (alertView.tag == kBotPasswordAlertTag){
