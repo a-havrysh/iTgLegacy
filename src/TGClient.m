@@ -571,6 +571,8 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 	if ([obj[@"code"] intValue] == 404)
 		return;
 	NSLog(@"TGClient: error: %@", obj);
+	if (self.authState == TGAuthStateReady)
+		return;
 	if (self.onError)
 		self.onError(msg);
 }
@@ -804,6 +806,27 @@ static NSString *TGPhraseFromTypeName(NSString *ctype) {
 	return out;
 }
 
+static NSArray *TGPhotoSizeList(NSArray *sizes) {
+	NSMutableArray *out = [NSMutableArray arrayWithCapacity:sizes.count];
+	for (NSDictionary *size in sizes){
+		NSNumber *fileId = size[@"photo"][@"id"];
+		NSNumber *width  = size[@"width"];
+		NSNumber *height = size[@"height"];
+		if (![fileId isKindOfClass:NSNumber.class] || [fileId integerValue] == 0)
+			continue;
+		if ([width intValue] < 1 || [height intValue] < 1)
+			continue;
+		[out addObject:@{@"id" : fileId, @"w" : width, @"h" : height}];
+	}
+	[out sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b){
+		int wa = [a[@"w"] intValue], wb = [b[@"w"] intValue];
+		if (wa == wb)
+			return NSOrderedSame;
+		return wa < wb ? NSOrderedAscending : NSOrderedDescending;
+	}];
+	return out;
+}
+
 /// Flatten a TDLib message into what the UI needs.
 static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 	NSDictionary *content = m[@"content"];
@@ -817,17 +840,28 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 	NSData *waveform = nil;
 	BOOL isService = NO;
 	NSString *callState = nil;     // "missed" or "answered" on a call message
+	NSNumber *photoW = nil, *photoH = nil;
+	NSArray *photoSizes = nil;
+	NSDictionary *minithumb = nil;
 
 	if ([ctype isEqualToString:@"messagePhoto"]){
 		// sizes run small to large; take the largest present
 		NSArray *sizes = content[@"photo"][@"sizes"];
-		if (sizes.count)
+		if (sizes.count){
 			photoFileId = [sizes lastObject][@"photo"][@"id"];
+			photoW = [sizes lastObject][@"width"];
+			photoH = [sizes lastObject][@"height"];
+			photoSizes = TGPhotoSizeList(sizes);
+		}
+		minithumb = content[@"photo"][@"minithumbnail"];
 
 	} else if ([ctype isEqualToString:@"messageVideo"]){
 		photoFileId = content[@"video"][@"thumbnail"][@"file"][@"id"];
 		docFileId   = content[@"video"][@"video"][@"id"];
 		docName     = content[@"video"][@"file_name"];
+		photoW      = content[@"video"][@"width"];
+		photoH      = content[@"video"][@"height"];
+		minithumb   = content[@"video"][@"minithumbnail"];
 
 	} else if ([ctype isEqualToString:@"messageVideoNote"]){
 		photoFileId = content[@"video_note"][@"thumbnail"][@"file"][@"id"];
@@ -838,6 +872,9 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		photoFileId = content[@"animation"][@"thumbnail"][@"file"][@"id"];
 		docFileId   = content[@"animation"][@"animation"][@"id"];
 		docName     = content[@"animation"][@"file_name"];
+		photoW      = content[@"animation"][@"width"];
+		photoH      = content[@"animation"][@"height"];
+		minithumb   = content[@"animation"][@"minithumbnail"];
 
 	} else if ([ctype isEqualToString:@"messageSticker"] ||
 			   [ctype isEqualToString:@"messageAnimatedEmoji"]){
@@ -1133,6 +1170,11 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		@"date"      : m[@"date"] ?: @(0),
 		@"outgoing"  : m[@"is_outgoing"] ?: @NO,
 		@"photoId"   : photoFileId ?: [NSNull null],
+		@"photoWidth"  : photoW ?: [NSNull null],
+		@"photoHeight" : photoH ?: [NSNull null],
+		@"photoSizes"  : photoSizes ?: @[],
+		@"minithumbnail" : ([minithumb isKindOfClass:NSDictionary.class]
+							? minithumb : (id)[NSNull null]),
 		@"docId"     : docFileId   ?: [NSNull null],
 		@"docName"   : docName     ?: @"",
 		@"service"   : @(isService),

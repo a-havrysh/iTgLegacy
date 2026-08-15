@@ -7,6 +7,7 @@
 #import "TGProfileViewController.h"
 #import "TGThemeFile.h"
 #import "TGCapabilities.h"
+#import "TGMosaicLayout.h"
 #import <AddressBookUI/AddressBookUI.h>
 #import <CoreLocation/CoreLocation.h>
 #import <AssetsLibrary/AssetsLibrary.h>
@@ -136,7 +137,7 @@ static const CGFloat kFileDisc    = 37.0f;
 // A picture in a bubble is clipped to the same radius their media uses.
 static const CGFloat kMediaRadius = 6.0f;
 static const CGFloat kAlbumGap    = 2.0f;
-static const CGFloat kAlbumMinPhotoHeight = 60.0f;
+static const CGFloat kMosaicMinTileSide = 68.0f;
 // One option of a poll: a 16 circle, the text, the share, and the bar under it.
 static const CGFloat kPollRow     = 30.0f;
 // One row of reaction chips, the height the rulebook fixes them at.
@@ -1113,8 +1114,33 @@ static const CGFloat kPhotoPageGap = 20.0f;
 
 #pragma mark - bubble cell
 
+@interface TGMosaicTileView : UIImageView
+@property (nonatomic, assign) NSInteger tileIndex;
+@property (nonatomic, strong) UIImageView *disc;
+@end
+
+@implementation TGMosaicTileView
+
+- (id)initWithFrame:(CGRect)frame {
+	self = [super initWithFrame:frame];
+	if (!self)
+		return nil;
+	self.contentMode = UIViewContentModeScaleAspectFill;
+	self.clipsToBounds = YES;
+	self.userInteractionEnabled = YES;
+	_disc = [[UIImageView alloc] initWithFrame:CGRectZero];
+	_disc.hidden = YES;
+	_disc.userInteractionEnabled = NO;
+	[self addSubview:_disc];
+	return self;
+}
+
+@end
+
 @interface TGBubbleCell : UITableViewCell
 @property (nonatomic, strong) UIView *bubble;
+@property (nonatomic, strong) UIView *album;
+@property (nonatomic, strong) NSMutableArray *albumTiles;
 @property (nonatomic, strong) UILabel *body;
 @property (nonatomic, strong) UIImageView *picture;
 @property (nonatomic, strong) UILabel *time;
@@ -1178,6 +1204,14 @@ static const CGFloat kPhotoPageGap = 20.0f;
 	self.picture.contentMode = UIViewContentModeScaleAspectFill;
 	self.picture.clipsToBounds = YES;
 	[self.bubble addSubview:self.picture];
+
+	self.album = [[UIView alloc] init];
+	self.album.clipsToBounds = YES;
+	self.album.hidden = YES;
+	self.album.backgroundColor = [UIColor clearColor];
+	self.album.layer.cornerRadius = kMediaRadius;
+	self.albumTiles = [NSMutableArray array];
+	[self.bubble addSubview:self.album];
 
 	self.body = [[UILabel alloc] init];
 	self.body.numberOfLines = 0;
@@ -2618,10 +2652,17 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 - (BOOL)scrollToMessageId:(int64_t)messageId;
 - (void)loadDeeperHistoryAndScrollTo:(int64_t)messageId;
 @property (nonatomic, strong) UITableView *table;
+@property (nonatomic, assign) CGFloat laidOutWidth;
 @property (nonatomic, strong) UIView *inputBar;
 @property (nonatomic, strong) UITextField *input;
 @property (nonatomic, strong) UIButton *sendButton;
 @property (nonatomic, strong) NSArray *messages;          // flattened TDLib dicts
+@property (nonatomic, strong) NSArray *displayRows;
+@property (nonatomic, strong) NSDictionary *albumsByRow;
+@property (nonatomic, strong) NSDictionary *rowByMessageId;
+@property (nonatomic, strong) NSMutableDictionary *mosaics;
+@property (nonatomic, strong) NSMutableDictionary *tileSizes;
+@property (nonatomic, strong) NSMutableDictionary *tileBitmaps;
 @property (nonatomic, strong) NSMutableDictionary *images; // fileId -> UIImage
 @property (nonatomic, strong) NSMutableSet *imagesRequested;
 @property (nonatomic, strong) NSMutableSet *photoFilesInFlight;
@@ -2801,6 +2842,9 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
 	[self buildTitleView];
+	self.mosaics = [NSMutableDictionary dictionary];
+	self.tileSizes = [NSMutableDictionary dictionary];
+	self.tileBitmaps = [NSMutableDictionary dictionary];
 	self.messages = @[];
 	self.senderAvatars = [NSMutableDictionary dictionary];
 	self.senderAvatarsRequested = [NSMutableSet set];
@@ -2902,6 +2946,20 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 /// Another screen pushed on top of this one - the forward picker, a profile -
 /// may install a handler of its own on the shared client. Coming back has to
 /// take it over again or the chat stops updating live.
+- (void)viewDidLayoutSubviews {
+	[super viewDidLayoutSubviews];
+	CGRect frame = self.table.frame;
+	if (fabsf(frame.size.width - self.view.bounds.size.width) > 0.5f){
+		frame.size.width = self.view.bounds.size.width;
+		self.table.frame = frame;
+	}
+	CGFloat width = self.table.bounds.size.width;
+	if (width < 1 || fabsf(width - self.laidOutWidth) < 0.5f)
+		return;
+	self.laidOutWidth = width;
+	[self.table reloadData];
+}
+
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
 	[self installMessageHandler];
@@ -3443,11 +3501,14 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 
 - (void)relayoutForPaneWidth {
 	[self.chipsRowWidths removeAllObjects];
+	[self.mosaics removeAllObjects];
+	[self.tileSizes removeAllObjects];
+	[self.tileBitmaps removeAllObjects];
 
 	NSArray *visible = [self.table indexPathsForVisibleRows];
 	NSIndexPath *anchor = visible.count ? visible.lastObject : nil;
 	[self.table reloadData];
-	if (anchor && anchor.row < (NSInteger)self.messages.count)
+	if (anchor && anchor.row < [self displayRowCount])
 		[self.table scrollToRowAtIndexPath:anchor
 						  atScrollPosition:UITableViewScrollPositionBottom
 								  animated:NO];
@@ -3520,12 +3581,11 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 
 	NSMutableSet *keep = [NSMutableSet set];
 	for (NSIndexPath *path in [self.table indexPathsForVisibleRows]){
-		if (path.row < 0 || path.row >= (NSInteger)self.messages.count)
-			continue;
-		NSDictionary *m = self.messages[path.row];
-		if ([m[@"id"] isKindOfClass:NSNumber.class])
-			[keep addObject:m[@"id"]];
+		for (NSDictionary *m in [self messagesAtRow:path.row])
+			if ([m[@"id"] isKindOfClass:NSNumber.class])
+				[keep addObject:m[@"id"]];
 	}
+	[self.tileBitmaps removeAllObjects];
 	for (NSNumber *key in [self.maps allKeys])
 		if (![keep containsObject:key])
 			[self.maps removeObjectForKey:key];
@@ -3911,7 +3971,7 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 }
 
 - (NSRange)visiblePictureWindow {
-	NSInteger count = (NSInteger)self.messages.count;
+	NSInteger count = [self displayRowCount];
 	if (count <= 0)
 		return NSMakeRange(0, 0);
 
@@ -3937,7 +3997,7 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 }
 
 - (void)fetchVisiblePictures {
-	if (!self.messages.count)
+	if (![self displayRowCount])
 		return;
 	NSRange window = [self visiblePictureWindow];
 	if (window.location == self.photoWindow.location &&
@@ -3947,9 +4007,11 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 
 	NSMutableSet *wanted = [NSMutableSet set];
 	for (NSUInteger row = window.location; row < window.location + window.length; row++){
-		NSNumber *fileId = [self pictureFileIdFor:self.messages[row]];
-		if (fileId)
-			[wanted addObject:fileId];
+		for (NSDictionary *m in [self messagesAtRow:(NSInteger)row]){
+			NSNumber *fileId = [self pictureFileIdFor:m];
+			if (fileId)
+				[wanted addObject:fileId];
+		}
 	}
 	for (NSDictionary *quoted in [self.quotes allValues]){
 		NSNumber *fileId = [self pictureFileIdFor:quoted];
@@ -4038,10 +4100,18 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 - (void)refreshRowsShowingFile:(NSNumber *)fileId withImage:(UIImage *)img {
 	NSMutableArray *stale = [NSMutableArray array];
 	for (NSIndexPath *path in [self.table indexPathsForVisibleRows]){
-		if (path.row < 0 || path.row >= (NSInteger)self.messages.count)
+		if ([self albumAtRow:path.row]){
+			for (NSDictionary *member in [self messagesAtRow:path.row]){
+				NSNumber *tileId = [self pictureFileIdFor:member];
+				if (tileId && [tileId isEqualToNumber:fileId]){
+					[stale addObject:path];
+					break;
+				}
+			}
 			continue;
-		NSDictionary *m = self.messages[path.row];
-		NSNumber *pictureId = [self pictureFileIdFor:m];
+		}
+		NSDictionary *m = [self messageAtRow:path.row];
+		NSNumber *pictureId = m ? [self pictureFileIdFor:m] : nil;
 		if (!pictureId || ![pictureId isEqualToNumber:fileId])
 			continue;
 		UITableViewCell *raw = [self.table cellForRowAtIndexPath:path];
@@ -4063,9 +4133,10 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 }
 
 - (void)scrollToBottomAnimated:(BOOL)animated {
-	if (!self.messages.count)
+	if (![self displayRowCount])
 		return;
-	NSIndexPath *last = [NSIndexPath indexPathForRow:self.messages.count - 1 inSection:0];
+	NSIndexPath *last = [NSIndexPath indexPathForRow:[self displayRowCount] - 1
+										   inSection:0];
 	[self.table scrollToRowAtIndexPath:last
 					  atScrollPosition:UITableViewScrollPositionBottom animated:animated];
 	[self updateScrollDownButton];
@@ -4419,41 +4490,16 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	[self updateChannelActionTitle];
 }
 
-/// YES when this message continues the album the one before it started.
-- (BOOL)continuesAlbumAtRow:(NSInteger)row {
-	NSString *album = self.messages[row][@"albumId"];
-	if (!album.length || [album isEqualToString:@"0"] || row == 0)
-		return NO;
-	return [self.messages[row - 1][@"albumId"] isEqualToString:album];
-}
+#pragma mark - photo albums
 
-/// YES when the next message belongs to the same album, so this one should not
-/// carry the timestamp - only the last of a block does.
-- (BOOL)albumContinuesAfterRow:(NSInteger)row {
-	NSString *album = self.messages[row][@"albumId"];
-	if (!album.length || [album isEqualToString:@"0"] ||
-		row + 1 >= (NSInteger)self.messages.count)
+- (BOOL)messageCanTile:(NSDictionary *)m {
+	if ([m[@"service"] boolValue])
 		return NO;
-	return [self.messages[row + 1][@"albumId"] isEqualToString:album];
-}
-
-- (BOOL)rowBelongsToAlbum:(NSInteger)row {
-	if (row < 0 || row >= (NSInteger)self.messages.count)
+	NSString *album = m[@"albumId"];
+	if (![album isKindOfClass:NSString.class] || !album.length ||
+		[album isEqualToString:@"0"])
 		return NO;
-	return [self continuesAlbumAtRow:row] || [self albumContinuesAfterRow:row];
-}
-
-- (CGFloat)albumColumnWidthForRow:(NSInteger)row {
-	return [self maxBubbleWidthFor:self.messages[row]] - 2 * kPadH;
-}
-
-- (BOOL)rowIsBareAlbumPhoto:(NSInteger)row {
-	if (![self rowBelongsToAlbum:row])
-		return NO;
-	NSDictionary *m = self.messages[row];
-	if ([m[@"service"] boolValue] || [self imageSizeFor:m].height < 1)
-		return NO;
-	if ([self bodySizeFor:m].height > 0 || [self decorationHeightFor:m] > 0.5f)
+	if (![m[@"id"] isKindOfClass:NSNumber.class])
 		return NO;
 	NSString *kind = m[@"kind"];
 	return [kind isEqualToString:@"messagePhoto"] ||
@@ -4461,17 +4507,158 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 		   [kind isEqualToString:@"messageAnimation"];
 }
 
-- (CGSize)imageSizeForRow:(NSInteger)row {
-	NSDictionary *m = self.messages[row];
-	CGSize pic = [self imageSizeFor:m];
-	if (pic.width < 1 || pic.height < 1 || ![self rowBelongsToAlbum:row])
-		return pic;
+- (void)setMessages:(NSArray *)messages {
+	_messages = messages;
+	[self.mosaics removeAllObjects];
+	[self.tileSizes removeAllObjects];
 
-	CGFloat w = [self albumColumnWidthForRow:row];
-	CGFloat h = floorf(pic.height * (w / pic.width));
-	h = MIN(h, floorf(w * 1.25f));
-	h = MAX(h, kAlbumMinPhotoHeight);
-	return CGSizeMake(w, h);
+	NSMutableArray *rows = [NSMutableArray arrayWithCapacity:messages.count];
+	NSMutableDictionary *albums = [NSMutableDictionary dictionary];
+	NSMutableDictionary *rowById = [NSMutableDictionary dictionary];
+
+	NSUInteger index = 0;
+	while (index < messages.count){
+		NSDictionary *head = messages[index];
+		NSUInteger run = 1;
+		if ([self messageCanTile:head]){
+			NSString *album = head[@"albumId"];
+			while (index + run < messages.count && run < TGMosaicMaxItems){
+				NSDictionary *next = messages[index + run];
+				if (![self messageCanTile:next] ||
+					![next[@"albumId"] isEqualToString:album] ||
+					[next[@"outgoing"] boolValue] != [head[@"outgoing"] boolValue])
+					break;
+				run++;
+			}
+		}
+
+		NSNumber *row = @(rows.count);
+		[rows addObject:@(index)];
+		if (run > 1){
+			NSArray *members = [messages subarrayWithRange:NSMakeRange(index, run)];
+			albums[row] = members;
+			for (NSDictionary *member in members)
+				if ([member[@"id"] isKindOfClass:NSNumber.class])
+					rowById[member[@"id"]] = row;
+		} else if ([head[@"id"] isKindOfClass:NSNumber.class]){
+			rowById[head[@"id"]] = row;
+		}
+		index += run;
+	}
+
+	self.displayRows = rows;
+	self.albumsByRow = albums;
+	self.rowByMessageId = rowById;
+}
+
+- (NSInteger)displayRowCount {
+	return (NSInteger)self.displayRows.count;
+}
+
+- (NSDictionary *)messageAtRow:(NSInteger)row {
+	if (row < 0 || row >= (NSInteger)self.displayRows.count)
+		return nil;
+	NSUInteger index = [self.displayRows[row] unsignedIntegerValue];
+	return index < self.messages.count ? self.messages[index] : nil;
+}
+
+- (NSArray *)messagesAtRow:(NSInteger)row {
+	NSArray *album = [self albumAtRow:row];
+	if (album)
+		return album;
+	NSDictionary *m = [self messageAtRow:row];
+	return m ? @[m] : @[];
+}
+
+- (NSArray *)albumAtRow:(NSInteger)row {
+	if (row < 0 || row >= (NSInteger)self.displayRows.count)
+		return nil;
+	return self.albumsByRow[@(row)];
+}
+
+- (NSInteger)rowForMessageId:(int64_t)messageId {
+	NSNumber *row = self.rowByMessageId[@(messageId)];
+	return row ? [row integerValue] : NSNotFound;
+}
+
+- (CGSize)mosaicBoundsFor:(NSDictionary *)m {
+	CGSize maxDimensions = TGChatIsPad() ? CGSizeMake(440, 440)
+										 : CGSizeMake(300, 380);
+	CGFloat budget = [self maxBubbleWidthFor:m] - 2 * kPadH;
+	if (budget < kMosaicMinTileSide)
+		budget = kMosaicMinTileSide;
+	CGFloat scale = MIN(1.0f, budget / MAX(1.0f, maxDimensions.width));
+	return CGSizeMake(floorf(maxDimensions.width * scale),
+					  floorf(maxDimensions.height * scale));
+}
+
+- (NSDictionary *)mosaicForRow:(NSInteger)row {
+	NSArray *album = [self albumAtRow:row];
+	if (album.count < 2)
+		return nil;
+
+	NSNumber *key = album[0][@"id"];
+	if (![key isKindOfClass:NSNumber.class])
+		return nil;
+	NSDictionary *cached = self.mosaics[key];
+	if (cached)
+		return cached;
+
+	CGSize sizes[TGMosaicMaxItems];
+	NSUInteger count = MIN(album.count, (NSUInteger)TGMosaicMaxItems);
+	for (NSUInteger i = 0; i < count; i++){
+		CGSize declared = [self declaredPixelSizeFor:album[i]];
+		if (declared.width < 1 || declared.height < 1)
+			declared = CGSizeMake(256, 256);
+		sizes[i] = declared;
+	}
+
+	TGMosaicTile tiles[TGMosaicMaxItems];
+	CGSize total = CGSizeZero;
+	NSUInteger laid = TGMosaicLayoutTiles(sizes, count,
+										  [self mosaicBoundsFor:album[0]],
+										  kAlbumGap, NO,
+										  tiles, TGMosaicMaxItems, &total);
+	if (laid < 2)
+		return nil;
+
+	NSMutableArray *frames = [NSMutableArray arrayWithCapacity:laid];
+	for (NSUInteger i = 0; i < laid; i++){
+		[frames addObject:[NSValue valueWithCGRect:tiles[i].frame]];
+		NSNumber *memberId = album[i][@"id"];
+		if ([memberId isKindOfClass:NSNumber.class])
+			self.tileSizes[memberId] = [NSValue valueWithCGSize:tiles[i].frame.size];
+	}
+
+	NSDictionary *mosaic = @{@"size"   : [NSValue valueWithCGSize:total],
+							 @"frames" : frames};
+	self.mosaics[key] = mosaic;
+	return mosaic;
+}
+
+- (CGSize)tileSizeForMessage:(NSDictionary *)m {
+	NSNumber *messageId = [m[@"id"] isKindOfClass:NSNumber.class] ? m[@"id"] : nil;
+	if (!messageId)
+		return CGSizeZero;
+	NSValue *known = self.tileSizes[messageId];
+	if (known)
+		return [known CGSizeValue];
+	NSNumber *row = self.rowByMessageId[messageId];
+	if (!row || !self.albumsByRow[row])
+		return CGSizeZero;
+	[self mosaicForRow:[row integerValue]];
+	known = self.tileSizes[messageId];
+	return known ? [known CGSizeValue] : CGSizeZero;
+}
+
+- (CGFloat)mosaicHeightForRow:(NSInteger)row {
+	NSDictionary *mosaic = [self mosaicForRow:row];
+	return mosaic ? [mosaic[@"size"] CGSizeValue].height : 0;
+}
+
+- (CGSize)imageSizeForRow:(NSInteger)row {
+	NSDictionary *m = [self messageAtRow:row];
+	return m ? [self imageSizeFor:m] : CGSizeZero;
 }
 
 /// Copy the received file into Documents first: TDLib owns its cache and can
@@ -4507,10 +4694,8 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 /// Scroll to a message already loaded, and flash it so the eye finds it.
 /// NO when the message is not in the loaded window.
 - (BOOL)scrollToMessageId:(int64_t)messageId {
-	for (NSInteger row = 0; row < (NSInteger)self.messages.count; row++){
-		if ([self.messages[row][@"id"] longLongValue] != messageId)
-			continue;
-
+	NSInteger row = [self rowForMessageId:messageId];
+	if (row != NSNotFound){
 		NSIndexPath *path = [NSIndexPath indexPathForRow:row inSection:0];
 		[self.table scrollToRowAtIndexPath:path
 						  atScrollPosition:UITableViewScrollPositionMiddle
@@ -4894,10 +5079,8 @@ static UIImage *TGPinnedBadgeGlyph(void) {
 	if (!avatar)
 		return;
 	for (NSIndexPath *path in [self.table indexPathsForVisibleRows]){
-		if (path.row < 0 || path.row >= (NSInteger)self.messages.count)
-			continue;
-		NSDictionary *m = self.messages[path.row];
-		if ([m[@"senderId"] longLongValue] != [key longLongValue])
+		NSDictionary *m = [self messageAtRow:path.row];
+		if (!m || [m[@"senderId"] longLongValue] != [key longLongValue])
 			continue;
 		UITableViewCell *raw = [self.table cellForRowAtIndexPath:path];
 		if (![raw isKindOfClass:[TGBubbleCell class]])
@@ -5246,7 +5429,7 @@ static UIImage *TGPinnedBadgeGlyph(void) {
 	CGRect inView = [self.table convertRect:rect toView:self.view];
 	// The circle is the row minus the strip its timestamp sits in.
 	CGFloat side = MIN(inView.size.height - 20, inView.size.width);
-	NSDictionary *m = self.messages[row];
+	NSDictionary *m = [self messageAtRow:row];
 	CGFloat x = [m[@"outgoing"] boolValue]
 			? CGRectGetMaxX(inView) - side - 8 : 8;
 
@@ -6485,9 +6668,9 @@ static const NSInteger kStickerLinkAlertTag = 102;
 }
 
 - (BOOL)canReplyToRow:(NSInteger)row {
-	if (row < 0 || row >= (NSInteger)self.messages.count)
+	NSDictionary *m = [self messageAtRow:row];
+	if (!m)
 		return NO;
-	NSDictionary *m = self.messages[row];
 	if ([m[@"service"] boolValue] || ![m[@"id"] isKindOfClass:NSNumber.class])
 		return NO;
 	return ([m[@"id"] longLongValue] != 0);
@@ -6548,7 +6731,7 @@ static const NSInteger kStickerLinkAlertTag = 102;
 - (void)beginReplyToRow:(NSInteger)row {
 	if (![self canReplyToRow:row])
 		return;
-	NSDictionary *m = self.messages[row];
+	NSDictionary *m = [self messageAtRow:row];
 	[self setComposeMode:TGComposeModeReply messageId:[m[@"id"] longLongValue]];
 	[self.sendButton setTitle:@"Send" forState:UIControlStateNormal];
 	NSString *bodyText = [self textOf:m];
@@ -6591,10 +6774,8 @@ static const NSInteger kStickerLinkAlertTag = 102;
 	if ([chosen isEqualToString:@"React"]){
 		UIView *source = self.table;
 		for (NSIndexPath *path in [self.table indexPathsForVisibleRows]){
-			if (path.row >= (NSInteger)self.messages.count)
-				continue;
-			NSDictionary *m = self.messages[path.row];
-			if ([m[@"id"] isKindOfClass:NSNumber.class] &&
+			NSDictionary *m = [self messageAtRow:path.row];
+			if (m && [m[@"id"] isKindOfClass:NSNumber.class] &&
 				[m[@"id"] longLongValue] == messageId){
 				UITableViewCell *cell = [self.table cellForRowAtIndexPath:path];
 				if ([cell isKindOfClass:TGBubbleCell.class])
@@ -6652,10 +6833,9 @@ static const NSInteger kStickerLinkAlertTag = 102;
 /// Split out from the gesture so itglegacy://holdrow/N can reach it: a long
 /// press cannot be delivered through a URL.
 - (void)showActionsForRow:(NSInteger)row {
-	if (row < 0 || row >= (NSInteger)self.messages.count)
+	NSDictionary *m = [self messageAtRow:row];
+	if (!m)
 		return;
-
-	NSDictionary *m = self.messages[row];
 	if ([m[@"service"] boolValue])
 		return;
 	if (![m[@"id"] isKindOfClass:NSNumber.class])
@@ -6668,9 +6848,7 @@ static const NSInteger kStickerLinkAlertTag = 102;
 }
 
 - (void)showActionsSheetForRow:(NSInteger)row {
-	if (row < 0 || row >= (NSInteger)self.messages.count)
-		return;
-	NSDictionary *m = self.messages[row];
+	NSDictionary *m = [self messageAtRow:row];
 	if (![m[@"id"] isKindOfClass:NSNumber.class])
 		return;
 	self.actionMessage = m;
@@ -6704,9 +6882,9 @@ static const NSInteger kStickerLinkAlertTag = 102;
 /// A double tap is how a chat reacts to a message that carries no chips yet.
 - (void)messageDoubleTapped:(UITapGestureRecognizer *)tap {
 	NSIndexPath *path = [self.table indexPathForRowAtPoint:[tap locationInView:self.table]];
-	if (!path || path.row >= (NSInteger)self.messages.count)
+	NSDictionary *m = path ? [self messageAtRow:path.row] : nil;
+	if (!m)
 		return;
-	NSDictionary *m = self.messages[path.row];
 	if ([m[@"service"] boolValue] || ![m[@"id"] isKindOfClass:NSNumber.class])
 		return;
 	UITableViewCell *cell = [self.table cellForRowAtIndexPath:path];
@@ -7481,20 +7659,109 @@ static const NSInteger kStickerLinkAlertTag = 102;
 #pragma mark - taps
 
 - (void)simulateTapOnRow:(NSInteger)row {
-	if (row < 0 || row >= (NSInteger)self.messages.count){
-		NSLog(@"tap: row %ld out of range (%lu)",
-				(long)row, (unsigned long)self.messages.count);
+	NSDictionary *tapped = [self messageAtRow:row];
+	if (!tapped){
+		NSLog(@"tap: row %ld out of range (%ld)",
+				(long)row, (long)[self displayRowCount]);
 		return;
 	}
-	NSLog(@"tap: row %ld, kind %@", (long)row, self.messages[row][@"kind"]);
+	NSLog(@"tap: row %ld, kind %@", (long)row, tapped[@"kind"]);
 	[self tableView:self.table
 			didSelectRowAtIndexPath:[NSIndexPath indexPathForRow:row inSection:0]];
 }
 
 
+- (void)openPhotoMessage:(NSDictionary *)m {
+	NSNumber *fileId = [m[@"photoId"] isKindOfClass:NSNumber.class] ? m[@"photoId"] : nil;
+	UIImage *img = fileId ? self.images[fileId] : nil;
+	if (img){
+		[self showPhotoWithFileId:fileId image:img];
+		return;
+	}
+	if (!fileId)
+		return;
+	[self.photoFilesFailed removeObject:fileId];
+	[self.photoFilesCancelled removeObject:fileId];
+	[self beginDownloadHUDForFile:[fileId integerValue]];
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] downloadFile:[fileId integerValue] completion:^(NSString *path){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		[me endDownloadHUD];
+		UIImage *loaded = path.length ? [UIImage imageWithContentsOfFile:path] : nil;
+		if (!loaded && [path.pathExtension.lowercaseString isEqualToString:@"webp"])
+			loaded = [UIImage convertFromWebP:path compressedData:nil error:nil];
+		if (!loaded){
+			[me.imagesRequested removeObject:fileId];
+			[me.photoFilesFailed addObject:fileId];
+			[me refreshRowsShowingFile:fileId withImage:nil];
+			return;
+		}
+		me.images[fileId] = loaded;
+		[me applyArrivedImage:loaded forFile:fileId];
+		[me showPhotoWithFileId:fileId image:loaded];
+	}];
+}
+
+- (void)playMovieMessage:(NSDictionary *)m {
+	NSNumber *docId = m[@"docId"];
+	if (![docId isKindOfClass:NSNumber.class])
+		return;
+	[self beginDownloadHUDForFile:[docId integerValue]];
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] downloadFile:[docId integerValue] completion:^(NSString *path){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		[me endDownloadHUD];
+		if (!path)
+			return;
+		MPMoviePlayerViewController *player = [[MPMoviePlayerViewController alloc]
+				initWithContentURL:[NSURL fileURLWithPath:path]];
+		[me presentMoviePlayerViewControllerAnimated:player];
+	}];
+}
+
+- (void)albumTileTapped:(UITapGestureRecognizer *)tap {
+	if (![tap.view isKindOfClass:TGMosaicTileView.class])
+		return;
+	TGMosaicTileView *tile = (TGMosaicTileView *)tap.view;
+
+	UIView *walk = tile;
+	while (walk && ![walk isKindOfClass:TGBubbleCell.class])
+		walk = walk.superview;
+	NSIndexPath *path = walk
+			? [self.table indexPathForCell:(UITableViewCell *)walk] : nil;
+	if (!path)
+		return;
+
+	if (self.selecting){
+		[self toggleSelectionOfRow:path.row];
+		return;
+	}
+
+	NSArray *album = [self messagesAtRow:path.row];
+	if (tile.tileIndex < 0 || tile.tileIndex >= (NSInteger)album.count)
+		return;
+	NSDictionary *m = album[tile.tileIndex];
+	if ([m[@"id"] isKindOfClass:NSNumber.class])
+		[[TGClient shared] openContentOfMessage:[m[@"id"] longLongValue]
+										 inChat:self.chatId];
+
+	NSString *kind = m[@"kind"];
+	if ([kind isEqualToString:@"messageVideo"] ||
+		[kind isEqualToString:@"messageAnimation"])
+		[self playMovieMessage:m];
+	else
+		[self openPhotoMessage:m];
+}
+
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:NO];
-	NSDictionary *m = self.messages[indexPath.row];
+	NSDictionary *m = [self messageAtRow:indexPath.row];
+	if (!m)
+		return;
 	NSString *kind = m[@"kind"];
 
 	if (self.selecting){
@@ -7596,19 +7863,9 @@ static const NSInteger kStickerLinkAlertTag = 102;
 		return;
 	}
 
-	if ([kind isEqualToString:@"messageVideo"]){
-		NSNumber *docId = m[@"docId"];
-		if (![docId isKindOfClass:NSNumber.class])
-			return;
-		[self beginDownloadHUDForFile:[docId integerValue]];
-		[[TGClient shared] downloadFile:[docId integerValue] completion:^(NSString *path){
-			[self endDownloadHUD];
-			if (!path)
-				return;
-			MPMoviePlayerViewController *player = [[MPMoviePlayerViewController alloc]
-					initWithContentURL:[NSURL fileURLWithPath:path]];
-			[self presentMoviePlayerViewControllerAnimated:player];
-		}];
+	if ([kind isEqualToString:@"messageVideo"] ||
+		[kind isEqualToString:@"messageAnimation"]){
+		[self playMovieMessage:m];
 		return;
 	}
 
@@ -7625,36 +7882,7 @@ static const NSInteger kStickerLinkAlertTag = 102;
 	}
 
 	if ([kind isEqualToString:@"messagePhoto"]){
-		NSNumber *fileId = [m[@"photoId"] isKindOfClass:NSNumber.class] ? m[@"photoId"] : nil;
-		UIImage *img = fileId ? self.images[fileId] : nil;
-		if (img){
-			[self showPhotoWithFileId:fileId image:img];
-			return;
-		}
-		if (!fileId)
-			return;
-		[self.photoFilesFailed removeObject:fileId];
-		[self.photoFilesCancelled removeObject:fileId];
-		[self beginDownloadHUDForFile:[fileId integerValue]];
-		__weak typeof(self) weakSelf = self;
-		[[TGClient shared] downloadFile:[fileId integerValue] completion:^(NSString *path){
-			TGChatViewController *me = weakSelf;
-			if (!me)
-				return;
-			[me endDownloadHUD];
-			UIImage *loaded = path.length ? [UIImage imageWithContentsOfFile:path] : nil;
-			if (!loaded && [path.pathExtension.lowercaseString isEqualToString:@"webp"])
-				loaded = [UIImage convertFromWebP:path compressedData:nil error:nil];
-			if (!loaded){
-				[me.imagesRequested removeObject:fileId];
-				[me.photoFilesFailed addObject:fileId];
-				[me refreshRowsShowingFile:fileId withImage:nil];
-				return;
-			}
-			me.images[fileId] = loaded;
-			[me applyArrivedImage:loaded forFile:fileId];
-			[me showPhotoWithFileId:fileId image:loaded];
-		}];
+		[self openPhotoMessage:m];
 		return;
 	}
 
@@ -8308,8 +8536,8 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 - (UIImage *)imageFor:(NSDictionary *)m {
 	if ([self messageCarriesMapCard:m])
 		return [self mapCardFor:m];
-	NSNumber *fileId = m[@"photoId"];
-	return [fileId isKindOfClass:NSNumber.class] ? self.images[fileId] : nil;
+	NSNumber *fileId = [self pictureFileIdFor:m];
+	return fileId ? self.images[fileId] : nil;
 }
 
 - (NSString *)pictureKindOf:(NSDictionary *)m {
@@ -8320,6 +8548,22 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 	NSNumber *fileId = m[@"photoId"];
 	if (![fileId isKindOfClass:NSNumber.class] || [fileId integerValue] == 0)
 		return nil;
+
+	NSArray *sizes = m[@"photoSizes"];
+	if (![sizes isKindOfClass:NSArray.class] || sizes.count < 2)
+		return fileId;
+
+	CGSize tile = [self tileSizeForMessage:m];
+	if (tile.width < 1 || tile.height < 1)
+		return fileId;
+
+	CGFloat screen = [UIScreen mainScreen].scale;
+	CGFloat needW = tile.width * screen;
+	CGFloat needH = tile.height * screen;
+	for (NSDictionary *size in sizes){
+		if ([size[@"w"] floatValue] >= needW && [size[@"h"] floatValue] >= needH)
+			return size[@"id"];
+	}
 	return fileId;
 }
 
@@ -8438,8 +8682,53 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 	return [UIColor colorWithWhite:0 alpha:0.10f];
 }
 
+- (UIImage *)picture:(UIImage *)image forMessage:(NSDictionary *)m
+			  atSize:(CGSize)points {
+	if (!image || points.width < 1 || points.height < 1)
+		return image;
+
+	CGFloat screen = [UIScreen mainScreen].scale;
+	CGFloat sourceW = image.size.width * image.scale;
+	CGFloat sourceH = image.size.height * image.scale;
+	if (sourceW < 1 || sourceH < 1)
+		return image;
+
+	CGFloat cover = MAX(points.width * screen / sourceW,
+						points.height * screen / sourceH);
+	if (cover >= 1.0f)
+		return image;
+	CGSize target = CGSizeMake(MAX(1.0f, floorf(sourceW * cover / screen)),
+							   MAX(1.0f, floorf(sourceH * cover / screen)));
+
+	NSNumber *fileId = [self pictureFileIdFor:m];
+	if (!fileId)
+		return TGImageDrawnAtPointSize(image, target);
+
+	NSString *key = [NSString stringWithFormat:@"%@@%dx%d", fileId,
+			(int)roundf(points.width), (int)roundf(points.height)];
+	UIImage *cached = self.tileBitmaps[key];
+	if (cached)
+		return cached;
+
+	UIImage *drawn = TGImageDrawnAtPointSize(image, target);
+	if (drawn){
+		if (self.tileBitmaps.count > 80)
+			[self.tileBitmaps removeAllObjects];
+		self.tileBitmaps[key] = drawn;
+	}
+	return drawn;
+}
+
 - (void)applyPictureTo:(UIImageView *)view message:(NSDictionary *)m {
+	[self applyPictureTo:view message:m atSize:CGSizeZero];
+}
+
+- (void)applyPictureTo:(UIImageView *)view
+			   message:(NSDictionary *)m
+				atSize:(CGSize)points {
 	UIImage *shown = [self imageFor:m];
+	if (shown && points.width >= 1 && points.height >= 1)
+		shown = [self picture:shown forMessage:m atSize:points];
 	if (!shown)
 		shown = [self minithumbnailImageFor:m];
 	view.image = shown;
@@ -8461,14 +8750,12 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 }
 
 - (BOOL)rowOpensNewDay:(NSInteger)row {
-	if (row < 0 || row >= (NSInteger)self.messages.count)
-		return NO;
-	NSDictionary *m = self.messages[row];
-	if (![m[@"date"] doubleValue])
+	NSDictionary *m = [self messageAtRow:row];
+	if (!m || ![m[@"date"] doubleValue])
 		return NO;
 	if (row == 0)
 		return YES;
-	NSDictionary *prev = self.messages[row - 1];
+	NSDictionary *prev = [self messageAtRow:row - 1];
 	if (![prev[@"date"] doubleValue])
 		return NO;
 	return ![[self dayStringForMessage:prev] isEqualToString:[self dayStringForMessage:m]];
@@ -8481,12 +8768,13 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 		return self.cachedUnreadRow;
 	NSInteger remaining = self.unreadOnOpen;
 	NSInteger row = NSNotFound;
-	for (NSInteger i = (NSInteger)self.messages.count - 1; i >= 0; i--){
-		NSDictionary *m = self.messages[i];
+	for (NSInteger i = [self displayRowCount] - 1; i >= 0; i--){
+		NSDictionary *m = [self messageAtRow:i];
 		if ([m[@"outgoing"] boolValue] || [m[@"service"] boolValue])
 			continue;
 		row = i;
-		if (--remaining <= 0)
+		remaining -= (NSInteger)[self messagesAtRow:i].count;
+		if (remaining <= 0)
 			break;
 	}
 	if (row == NSNotFound || row == 0)
@@ -8511,11 +8799,12 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 }
 
 - (CGFloat)messageHeightForRowAtIndexPath:(NSIndexPath *)indexPath {
-	NSDictionary *m = self.messages[indexPath.row];
+	NSDictionary *m = [self messageAtRow:indexPath.row];
+	if (!m)
+		return 0;
 
-	if ([self rowIsBareAlbumPhoto:indexPath.row])
-		return [self imageSizeForRow:indexPath.row].height +
-				([self continuesAlbumAtRow:indexPath.row] ? kAlbumGap : 3);
+	if ([self albumAtRow:indexPath.row])
+		return [self albumRowHeight:indexPath.row];
 
 	CGSize body = [self bodySizeFor:m];
 	CGSize pic  = [self imageSizeForRow:indexPath.row];
@@ -8553,9 +8842,41 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 	if (pic.height > 0) h += pic.height + 4;
 	if (body.height > 0) h += body.height;
 	h = MAX(h, kBubbleMinH);
-	if ([self continuesAlbumAtRow:indexPath.row])
-		return h;
 	return h + 3;
+}
+
+- (NSDictionary *)albumCaptionMessageAtRow:(NSInteger)row {
+	for (NSDictionary *member in [self albumAtRow:row])
+		if ([[self textOf:member] length])
+			return member;
+	return nil;
+}
+
+- (BOOL)albumRowIsBare:(NSInteger)row {
+	NSDictionary *head = [self messageAtRow:row];
+	if (!head)
+		return NO;
+	return ![self albumCaptionMessageAtRow:row] &&
+		   [self decorationHeightFor:head] < 0.5f;
+}
+
+- (CGFloat)albumRowHeight:(NSInteger)row {
+	CGFloat mosaic = [self mosaicHeightForRow:row];
+	if (mosaic < 1)
+		return 0;
+	if ([self albumRowIsBare:row])
+		return mosaic + 3;
+
+	NSDictionary *head = [self messageAtRow:row];
+	NSDictionary *caption = [self albumCaptionMessageAtRow:row];
+	CGSize body = caption ? [self bodySizeFor:caption] : CGSizeZero;
+
+	CGFloat h = kPadV * 2 + [self decorationHeightFor:head] + mosaic + 4;
+	if (self.isGroup && ![head[@"outgoing"] boolValue] &&
+		[[TGClient shared] nameForUserId:[head[@"senderId"] longLongValue]])
+		h += 17;
+	h += body.height;
+	return MAX(h, kBubbleMinH) + 3;
 }
 
 /// Clients colour each participant's name; the same person keeps the same
@@ -8677,7 +8998,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-	return self.messages.count;
+	return [self displayRowCount];
 }
 
 - (void)configureServiceCell:(TGBubbleCell *)cell
@@ -9216,89 +9537,177 @@ static UIColor *TGSenderColour(int64_t userId) {
 	}
 }
 
-- (void)configureAlbumPhotoCell:(TGBubbleCell *)cell
-						message:(NSDictionary *)m
-					atIndexPath:(NSIndexPath *)indexPath
-						inTable:(UITableView *)tableView {
-	BOOL mine = [m[@"outgoing"] boolValue];
-	BOOL first = ![self continuesAlbumAtRow:indexPath.row];
-	BOOL last  = ![self albumContinuesAfterRow:indexPath.row];
-	CGSize pic = [self imageSizeForRow:indexPath.row];
-	CGFloat top = first ? 3 : kAlbumGap;
+- (TGMosaicTileView *)albumTile:(NSUInteger)index inCell:(TGBubbleCell *)cell {
+	while (cell.albumTiles.count <= index){
+		TGMosaicTileView *made = [[TGMosaicTileView alloc] initWithFrame:CGRectZero];
+		made.tileIndex = (NSInteger)cell.albumTiles.count;
+		[made addGestureRecognizer:[[UITapGestureRecognizer alloc]
+				initWithTarget:self action:@selector(albumTileTapped:)]];
+		[cell.album addSubview:made];
+		[cell.albumTiles addObject:made];
+	}
+	return cell.albumTiles[index];
+}
 
-	int64_t senderId = [m[@"senderId"] longLongValue];
+- (void)configureAlbumCell:(TGBubbleCell *)cell
+			   atIndexPath:(NSIndexPath *)indexPath
+				   inTable:(UITableView *)tableView {
+	NSDictionary *head = [self messageAtRow:indexPath.row];
+	NSDictionary *mosaic = [self mosaicForRow:indexPath.row];
+	NSArray *album = [self messagesAtRow:indexPath.row];
+	if (!head || !mosaic)
+		return;
+
+	NSArray *frames = mosaic[@"frames"];
+	CGSize groupSize = [mosaic[@"size"] CGSizeValue];
+	BOOL mine = [head[@"outgoing"] boolValue];
+	BOOL bare = [self albumRowIsBare:indexPath.row];
+	TGTheme *theme = [TGTheme shared];
+
+	NSDictionary *caption = [self albumCaptionMessageAtRow:indexPath.row];
+	CGSize body = caption ? [self bodySizeFor:caption] : CGSizeZero;
+
+	int64_t senderId = [head[@"senderId"] longLongValue];
 	NSString *senderName = (self.isGroup && !mine)
 			? [[TGClient shared] nameForUserId:senderId] : nil;
 
-	CGFloat x = mine ? (tableView.bounds.size.width - pic.width - 8) : 8;
+	cell.picture.hidden = YES;
+	cell.picture.image = nil;
+	cell.picture.backgroundColor = [UIColor clearColor];
+	cell.disc.hidden = YES;
+	cell.wave.hidden = YES;
+	cell.icon.hidden = YES;
+	cell.subtitle.hidden = YES;
+	cell.lottie.hidden = YES;
+	[cell.lottie stop];
+	cell.album.hidden = NO;
+	cell.album.layer.cornerRadius = kMediaRadius;
+
+	CGFloat senderH = (senderName.length && !bare) ? 17 : 0;
+	CGFloat bubbleW = bare ? groupSize.width
+						   : MAX(groupSize.width, body.width) + 2 * kPadH;
+	CGFloat x = mine ? (tableView.bounds.size.width - bubbleW - 8) : 8;
 	CGFloat avatarX = x - kBubbleTailOverhang + 4;
 	if (senderName.length)
 		x += kAvatarSide + 4;
+	CGFloat top = 0;
+	CGFloat bubbleH = bare ? groupSize.height
+						   : [self albumRowHeight:indexPath.row] - 3;
 
-	cell.bubble.frame = CGRectMake(x, top, pic.width, pic.height);
-	cell.bubble.backgroundColor = [UIColor clearColor];
-	cell.bubble.layer.borderWidth = 0.0f;
-	cell.bubble.layer.cornerRadius = kMediaRadius;
-	cell.bubbleBg.hidden = YES;
-	cell.tail.hidden = YES;
-	cell.body.hidden = YES;
-	cell.quote.hidden = YES;
-	cell.quoteBar.hidden = YES;
-	cell.forwardLabel.hidden = YES;
-	cell.subtitle.hidden = YES;
-	cell.icon.hidden = YES;
-	cell.wave.hidden = YES;
-	cell.lottie.hidden = YES;
-	[cell.lottie stop];
-	cell.sender.hidden = YES;
+	cell.bubble.frame = CGRectMake(x, top, bubbleW, bubbleH);
 
-	cell.picture.hidden = NO;
-	[self applyPictureTo:cell.picture message:m];
-	cell.picture.layer.cornerRadius = 0.0f;
-	cell.picture.frame = CGRectMake(0, 0, pic.width, pic.height);
+	if (bare){
+		cell.bubbleBg.hidden = YES;
+		cell.bubble.backgroundColor = [UIColor clearColor];
+		cell.bubble.layer.borderWidth = 0.0f;
+		cell.bubble.layer.cornerRadius = 0.0f;
+		cell.tail.hidden = YES;
+		cell.sender.hidden = YES;
+		cell.body.hidden = YES;
+		cell.forwardLabel.hidden = YES;
+		cell.quote.hidden = YES;
+		cell.quoteBar.hidden = YES;
+		cell.album.frame = CGRectMake(0, 0, groupSize.width, groupSize.height);
+	} else {
+		UIColor *fill = mine ? [theme bubbleMineColour] : [theme bubbleTheirsColour];
+		cell.bubble.backgroundColor = fill;
+		cell.bubble.layer.borderWidth = [theme bubbleBorderWidth];
+		cell.bubble.layer.borderColor = [theme bubbleBorderColour].CGColor;
+		cell.bubble.layer.cornerRadius = [theme bubbleCornerRadius];
+		cell.tail.hidden = NO;
+		cell.tail.image = [TGIcons bubbleTailForColour:fill outgoing:mine];
+		cell.tail.frame = mine
+				? CGRectMake(x + bubbleW - 1, top + bubbleH - 10, 6, 10)
+				: CGRectMake(x - 5, top + bubbleH - 10, 6, 10);
+		[self applyBubbleArtworkTo:cell outgoing:mine];
 
-	BOOL failedPicture = [self pictureFailedFor:m] && ![self imageFor:m];
-	BOOL playable = [m[@"kind"] isEqualToString:@"messageVideo"] ||
-					[m[@"kind"] isEqualToString:@"messageAnimation"];
-	cell.disc.hidden = !playable && !failedPicture;
-	if (!cell.disc.hidden){
-		CGFloat disc = 42;
-		cell.disc.image = failedPicture ? [self retryGlyphOfSide:disc]
-										: [TGIcons mediaDiscOfSide:disc playing:NO];
-		cell.disc.frame = CGRectMake((pic.width - disc) / 2,
-									 (pic.height - disc) / 2, disc, disc);
+		cell.sender.hidden = !senderName.length;
+		if (senderName.length){
+			cell.sender.text = senderName;
+			cell.sender.textColor = TGSenderColour(senderId);
+			cell.sender.frame = CGRectMake(kPadH, kPadV + 2, bubbleW - 2 * kPadH, 16);
+		}
+
+		CGFloat y = kPadV + senderH;
+		y += [self layoutForwardIn:cell message:head width:bubbleW];
+		y = [self layoutQuoteIn:cell message:head atY:y bubbleWidth:bubbleW];
+		cell.album.frame = CGRectMake(kPadH, y, groupSize.width, groupSize.height);
 	}
 
-	cell.senderAvatar.hidden = !(senderName.length && last);
+	for (NSUInteger i = 0; i < album.count && i < frames.count; i++){
+		NSDictionary *member = album[i];
+		CGRect tileFrame = [frames[i] CGRectValue];
+		TGMosaicTileView *tile = [self albumTile:i inCell:cell];
+		tile.hidden = NO;
+		tile.frame = tileFrame;
+		[self applyPictureTo:tile message:member atSize:tileFrame.size];
+
+		BOOL failed = [self pictureFailedFor:member] && ![self imageFor:member];
+		BOOL playable = [member[@"kind"] isEqualToString:@"messageVideo"] ||
+						[member[@"kind"] isEqualToString:@"messageAnimation"];
+		tile.disc.hidden = !playable && !failed;
+		if (!tile.disc.hidden){
+			CGFloat side = MIN(42.0f, floorf(MIN(tileFrame.size.width,
+												 tileFrame.size.height) * 0.5f));
+			tile.disc.image = failed ? [self retryGlyphOfSide:side]
+									 : [TGIcons mediaDiscOfSide:side playing:NO];
+			tile.disc.frame = CGRectMake(floorf((tileFrame.size.width - side) / 2),
+										 floorf((tileFrame.size.height - side) / 2),
+										 side, side);
+		}
+	}
+	for (NSUInteger i = album.count; i < cell.albumTiles.count; i++)
+		((UIView *)cell.albumTiles[i]).hidden = YES;
+
+	cell.senderAvatar.hidden = !senderName.length;
 	if (!cell.senderAvatar.hidden){
 		cell.senderAvatar.image = [self avatarForUser:senderId name:senderName];
 		cell.senderAvatar.frame = CGRectMake(avatarX,
-											 top + pic.height - kAvatarSide - 1,
+											 top + bubbleH - kAvatarSide - 1,
 											 kAvatarSide, kAvatarSide);
 	}
 
-	cell.mediaStamp.hidden = !last;
 	cell.ticks.hidden = YES;
-	if (last){
-		NSString *stamp = [self stampFor:m];
+	if (bare){
+		NSString *stamp = [self stampFor:head];
 		CGFloat plateW = [stamp sizeWithFont:cell.mediaStamp.font].width +
 				(mine ? 30 : 14);
-		cell.mediaStamp.backgroundColor = [[TGTheme shared] mediaStampColour];
+		cell.mediaStamp.hidden = NO;
+		cell.mediaStamp.backgroundColor = [theme mediaStampColour];
 		cell.mediaStamp.text = stamp;
-		cell.mediaStamp.frame = CGRectMake(pic.width - plateW - 5,
-										   pic.height - 21, plateW, 16);
+		cell.mediaStamp.frame = CGRectMake(groupSize.width - plateW - 5,
+										   groupSize.height - 21, plateW, 16);
 		if (mine){
 			cell.ticks.hidden = NO;
-			cell.ticks.image = [self statusGlyphForMessage:m white:YES];
+			cell.ticks.image = [self statusGlyphForMessage:head white:YES];
 			cell.ticks.frame = CGRectMake(
 					x + CGRectGetMaxX(cell.mediaStamp.frame) - 20,
 					top + CGRectGetMidY(cell.mediaStamp.frame) - 4, 15, 9);
 		}
+		cell.time.text = @"";
+		cell.time.hidden = YES;
+		cell.dateBadge.hidden = YES;
+		return;
 	}
 
-	cell.time.text = @"";
-	cell.time.hidden = YES;
-	cell.dateBadge.hidden = YES;
+	cell.mediaStamp.hidden = YES;
+	CGFloat afterAlbum = CGRectGetMaxY(cell.album.frame) + 4;
+	cell.body.hidden = (body.height == 0);
+	if (body.height > 0){
+		cell.body.numberOfLines = 0;
+		cell.body.font = [self bodyFontFor:caption];
+		cell.body.textColor = [theme isDark] ? [theme primaryTextColour]
+											 : TGMessageBodyColour();
+		cell.body.text = [self textOf:caption] ?: @"";
+		[self highlightTimestampInLabel:cell.body];
+		cell.body.frame = CGRectMake(kPadH, afterAlbum, body.width, body.height);
+		afterAlbum += body.height;
+	}
+
+	[self layoutReactionsIn:cell message:head atY:afterAlbum bubbleWidth:bubbleW];
+	cell.time.text = [self stampFor:head];
+	[self placeDateBesideBubbleFor:cell message:head outgoing:mine
+						tableWidth:tableView.bounds.size.width];
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -9310,11 +9719,14 @@ static UIColor *TGSenderColour(int64_t userId) {
 	if (indexPath.row != self.swipingRow)
 		cell.contentView.transform = CGAffineTransformIdentity;
 
-	NSDictionary *m = self.messages[indexPath.row];
+	NSDictionary *m = [self messageAtRow:indexPath.row];
+	if (!m)
+		return cell;
 	BOOL mine = [m[@"outgoing"] boolValue];
 	NSString *kind = m[@"kind"];
 
 	[self configureRowChromeIn:cell message:m atIndexPath:indexPath];
+	cell.album.hidden = YES;
 
 	// Stickers never sit in a bubble - they are drawn straight on the wallpaper.
 	BOOL isSticker = [kind isEqualToString:@"messageSticker"] ||
@@ -9333,6 +9745,11 @@ static UIColor *TGSenderColour(int64_t userId) {
 	cell.tail.hidden = YES;
 	cell.disc.hidden = YES;
 	cell.wave.hidden = YES;
+
+	if ([self albumAtRow:indexPath.row]){
+		[self configureAlbumCell:cell atIndexPath:indexPath inTable:tableView];
+		return cell;
+	}
 
 	// Service messages sit centred on the wallpaper, not in a bubble - joins,
 	// renames, pins. Groups are full of them.
@@ -9366,12 +9783,6 @@ static UIColor *TGSenderColour(int64_t userId) {
 	if ([kind isEqualToString:@"messageDocument"] ||
 		[kind isEqualToString:@"messageContact"]){
 		[self configureFileCell:cell message:m inTable:tableView];
-		return cell;
-	}
-
-	if ([self rowIsBareAlbumPhoto:indexPath.row]){
-		[self configureAlbumPhotoCell:cell message:m
-						  atIndexPath:indexPath inTable:tableView];
 		return cell;
 	}
 
@@ -9579,8 +9990,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 
 	// A stamp already on the picture must not be repeated under it.
 	BOOL onPicture = !cell.mediaStamp.hidden;
-	cell.time.text = (onPicture || [self albumContinuesAfterRow:indexPath.row])
-			? @"" : [self stampFor:m];
+	cell.time.text = onPicture ? @"" : [self stampFor:m];
 	[self placeDateBesideBubbleFor:cell message:m outgoing:mine
 						tableWidth:tableView.bounds.size.width];
 
@@ -9991,16 +10401,19 @@ static UIColor *TGSenderColour(int64_t userId) {
 }
 
 - (void)toggleSelectionOfRow:(NSInteger)row {
-	if (row < 0 || row >= (NSInteger)self.messages.count)
+	NSDictionary *m = [self messageAtRow:row];
+	if (!m || [m[@"service"] boolValue] || ![m[@"id"] isKindOfClass:NSNumber.class])
 		return;
-	NSDictionary *m = self.messages[row];
-	if ([m[@"service"] boolValue] || ![m[@"id"] isKindOfClass:NSNumber.class])
-		return;
-	NSNumber *messageId = m[@"id"];
-	if ([self.selectedIds containsObject:messageId])
-		[self.selectedIds removeObject:messageId];
-	else
-		[self.selectedIds addObject:messageId];
+	BOOL picked = [self.selectedIds containsObject:m[@"id"]];
+	for (NSDictionary *member in [self messagesAtRow:row]){
+		NSNumber *messageId = member[@"id"];
+		if (![messageId isKindOfClass:NSNumber.class])
+			continue;
+		if (picked)
+			[self.selectedIds removeObject:messageId];
+		else if (![self.selectedIds containsObject:messageId])
+			[self.selectedIds addObject:messageId];
+	}
 
 	if (!self.selectedIds.count){
 		[self endSelection];
@@ -11058,15 +11471,14 @@ static UIColor *TGSenderColour(int64_t userId) {
 		return;
 	NSMutableArray *fresh = [NSMutableArray array];
 	for (NSIndexPath *path in visible){
-		if (path.row >= (NSInteger)self.messages.count)
-			continue;
-		NSDictionary *m = self.messages[path.row];
-		if (![m[@"id"] isKindOfClass:NSNumber.class] || [m[@"outgoing"] boolValue])
-			continue;
-		if ([self.readMessageIds containsObject:m[@"id"]])
-			continue;
-		[self.readMessageIds addObject:m[@"id"]];
-		[fresh addObject:m[@"id"]];
+		for (NSDictionary *m in [self messagesAtRow:path.row]){
+			if (![m[@"id"] isKindOfClass:NSNumber.class] || [m[@"outgoing"] boolValue])
+				continue;
+			if ([self.readMessageIds containsObject:m[@"id"]])
+				continue;
+			[self.readMessageIds addObject:m[@"id"]];
+			[fresh addObject:m[@"id"]];
+		}
 	}
 	if (fresh.count)
 		[[TGClient shared] markRead:fresh inChat:self.chatId source:@"history"];
@@ -11142,7 +11554,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 }
 
 - (BOOL)openMediaTimestamp:(NSTimeInterval)seconds forRow:(NSInteger)row {
-	NSDictionary *m = self.messages[row];
+	NSDictionary *m = [self messageAtRow:row];
 	NSDictionary *target = nil;
 
 	NSNumber *replyTo = [m[@"replyId"] isKindOfClass:NSNumber.class] ? m[@"replyId"] : nil;

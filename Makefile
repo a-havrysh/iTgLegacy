@@ -149,6 +149,7 @@ APP_SRC_M := \
 	src/TGFolderModel.m \
 	src/TGMediaModel.m \
 	src/TGMemberModel.m \
+	src/TGMosaicLayout.m \
 	src/TGMessageModel.m \
 	src/TGNotificationSettingsModel.m \
 	src/TGPaymentModel.m \
