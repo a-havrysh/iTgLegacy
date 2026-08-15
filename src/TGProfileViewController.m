@@ -92,6 +92,7 @@
 @property (nonatomic, strong) NSArray *details;
 @property (nonatomic, strong) NSMutableDictionary *measuredRowHeights;
 @property (nonatomic, assign) CGFloat groupedInset;
+@property (nonatomic, strong) UIImageView *avatarOverlayView;
 @property (nonatomic, assign) NSInteger photoCount;
 @property (nonatomic, assign) NSInteger fileCount;
 @property (nonatomic, strong) NSArray *members;
@@ -757,6 +758,17 @@ static UIImage *TGProfileStretched(NSString *name) {
 								  colourId:self.userId ?: self.chatId];
 	[header addSubview:self.avatarView];
 
+	UIImage *overlayArt = [UIImage imageNamed:@"ProfileAvatarOverlay.png"];
+	if (overlayArt){
+		UIImageView *overlay = [[UIImageView alloc] initWithImage:
+				[overlayArt stretchableImageWithLeftCapWidth:(int)(overlayArt.size.width / 2)
+												topCapHeight:(int)(overlayArt.size.height / 2)]];
+		overlay.frame = self.avatarView.frame;
+		overlay.userInteractionEnabled = NO;
+		[header addSubview:overlay];
+		self.avatarOverlayView = overlay;
+	}
+
 	[self buildHeaderLabelsInto:header width:width];
 
 	[self refreshStatus];
@@ -781,7 +793,7 @@ static UIImage *TGProfileStretched(NSString *name) {
 	TGTheme *theme = [TGTheme shared];
 
 	CGFloat retinaPixel = TGProfileRetinaPixel();
-	CGFloat labelLeft = kProfileAvatarSide + kGroupedInset * 2 + 4;
+	CGFloat labelLeft = kGroupedInset + kProfileAvatarSide + 15;
 
 	UILabel *nameLabel = [[UILabel alloc] initWithFrame:
 			CGRectMake(labelLeft, 24, width - labelLeft - kGroupedInset, 24)];
@@ -3277,9 +3289,10 @@ static UIImage *TGProfileStretched(NSString *name) {
 	CGRect avatar = self.avatarView.frame;
 	avatar.origin.x = inset;
 	self.avatarView.frame = avatar;
+	self.avatarOverlayView.frame = avatar;
 
 	CGFloat width = self.tableView.bounds.size.width;
-	CGFloat labelLeft = kProfileAvatarSide + inset * 2 + 4;
+	CGFloat labelLeft = inset + kProfileAvatarSide + 15;
 	for (UILabel *label in @[self.nameLabel ?: (id)[NSNull null],
 							 self.statusLabel ?: (id)[NSNull null]]){
 		if (![label isKindOfClass:[UILabel class]])
