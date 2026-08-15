@@ -97,6 +97,14 @@ static __weak RootViewController *gSplitRoot = nil;
 
 	[self setViewControllers:@[contactsNC, chatsNC, settingsNC] animated:NO];
 	[self setSelectedIndex:1];
+	if ([RootViewController isPadIdiom]){
+		__weak RootViewController *weakSelf = self;
+		dispatch_async(dispatch_get_main_queue(), ^{
+			RootViewController *me = weakSelf;
+			[me setSelectedIndex:1];
+			me.customTabBar.selectedIndex = 1;
+		});
+	}
 
 	self.customTabBar = [[TGTabBar alloc] initWithFrame:
 			CGRectMake(0, self.view.bounds.size.height - TGTabBarHeight,
@@ -297,7 +305,8 @@ static __weak RootViewController *gSplitRoot = nil;
 
 - (void)viewDidAppear:(BOOL)animated {
 	[super viewDidAppear:animated];
-	[self applyTabBarInsetForIndex:self.selectedIndex];
+	for (NSUInteger i = 0; i < self.viewControllers.count; i++)
+		[self applyTabBarInsetForIndex:i];
 	[self updateUnreadBadge];
 }
 

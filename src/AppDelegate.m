@@ -343,7 +343,8 @@ static void TGWatchForIncomingCalls(void) {
 			vc.chatId = [c[@"id"] longLongValue];
 			vc.chatTitle = c[@"title"];
 			vc.isGroup = [c[@"isGroup"] boolValue];   // same as the list does
-			[nc pushViewController:vc animated:NO];
+			if (![RootViewController presentInDetail:vc])
+				[nc pushViewController:vc animated:NO];
 			NSLog(@"open chat index %ld", (long)idx);
 		});
 		return YES;

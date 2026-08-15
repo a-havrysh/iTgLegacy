@@ -34,12 +34,6 @@ static const CGFloat kSwipeEdgeDistance = 6.0f;
 static const CGFloat kSwipeButtonTop = 20.0f;
 static const CGFloat kSwipeButtonGap = 6.0f;
 
-@protocol TGChatListSplitHost <NSObject>
-@optional
-- (BOOL)isSplitLayoutActive;
-- (void)showDetailController:(UIViewController *)controller;
-@end
-
 static UIColor *TGChatListTitleColour(void) {
 	static UIColor *colour = nil;
 	if (!colour)
@@ -2431,12 +2425,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 }
 
 - (BOOL)splitLayoutActive {
-	id<TGChatListSplitHost> root = (id<TGChatListSplitHost>)self.tabBarController;
-	if (![root isKindOfClass:[RootViewController class]])
-		return NO;
-	if (![root respondsToSelector:@selector(isSplitLayoutActive)])
-		return NO;
-	return [root isSplitLayoutActive];
+	return [RootViewController isSplitLayoutActive];
 }
 
 - (void)presentChatController:(UIViewController *)controller {
@@ -2444,10 +2433,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 		[self.navigationController pushViewController:controller animated:YES];
 		return;
 	}
-	id<TGChatListSplitHost> root = (id<TGChatListSplitHost>)self.tabBarController;
-	if ([root respondsToSelector:@selector(showDetailController:)])
-		[root showDetailController:controller];
-	else
+	if (![RootViewController presentInDetail:controller])
 		[self.navigationController pushViewController:controller animated:YES];
 }
 
