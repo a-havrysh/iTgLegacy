@@ -90,6 +90,8 @@
 @property (nonatomic, assign) int64_t userId;
 @property (nonatomic, strong) NSString *name;
 @property (nonatomic, strong) NSArray *details;
+@property (nonatomic, strong) NSMutableDictionary *measuredRowHeights;
+@property (nonatomic, assign) CGFloat groupedInset;
 @property (nonatomic, assign) NSInteger photoCount;
 @property (nonatomic, assign) NSInteger fileCount;
 @property (nonatomic, strong) NSArray *members;
@@ -3147,7 +3149,7 @@ static UIImage *TGProfileStretched(NSString *name) {
 	if ([kind isEqualToString:@"actions"])
 		return 10;
 	if ([kind isEqualToString:@"media"])
-		return 28;
+		return 12;
 	return 12;
 }
 
@@ -3173,9 +3175,9 @@ static UIImage *TGProfileStretched(NSString *name) {
 	if ([kind isEqualToString:@"delete"]) return kActionButtonHeight;
 	if ([kind isEqualToString:@"details"] &&
 		indexPath.row < (NSInteger)self.details.count){
-		NSArray *pair = self.details[indexPath.row];
-		if ([pair[0] isEqualToString:@"about"])
-			return [self aboutRowHeightForValue:pair[1] inTable:tableView];
+		NSNumber *measured = self.measuredRowHeights[self.details[indexPath.row][0]];
+		if (measured)
+			return [measured floatValue];
 	}
 	return 44;
 }
@@ -3257,14 +3259,52 @@ static UIImage *TGProfileStretched(NSString *name) {
 	return cell;
 }
 
-- (CGFloat)aboutRowHeightForValue:(NSString *)value inTable:(UITableView *)tableView {
-	CGFloat width = tableView.bounds.size.width - 2 * kGroupedInset - 78 - 12;
-	if (width < 40)
-		width = 40;
-	CGSize size = [(value ?: @"") sizeWithFont:[UIFont boldSystemFontOfSize:15]
-							 constrainedToSize:CGSizeMake(width, 400)
-								 lineBreakMode:NSLineBreakByWordWrapping];
-	return MAX(44, size.height + 22);
+- (void)adoptGroupedInsetFromCell:(UITableViewCell *)cell inTable:(UITableView *)tableView {
+	CGFloat content = cell.contentView.bounds.size.width;
+	CGFloat width = tableView.bounds.size.width;
+	if (content < 1 || width < 1)
+		return;
+	CGFloat inset = floorf((width - content) / 2);
+	if (inset < 0 || fabsf(inset - self.groupedInset) < 0.5f)
+		return;
+	self.groupedInset = inset;
+	[self layoutHeaderForInset:inset];
+}
+
+- (void)layoutHeaderForInset:(CGFloat)inset {
+	if (!self.avatarView)
+		return;
+	CGRect avatar = self.avatarView.frame;
+	avatar.origin.x = inset;
+	self.avatarView.frame = avatar;
+
+	CGFloat width = self.tableView.bounds.size.width;
+	CGFloat labelLeft = kProfileAvatarSide + inset * 2 + 4;
+	for (UILabel *label in @[self.nameLabel ?: (id)[NSNull null],
+							 self.statusLabel ?: (id)[NSNull null]]){
+		if (![label isKindOfClass:[UILabel class]])
+			continue;
+		CGRect frame = label.frame;
+		frame.origin.x = labelLeft;
+		frame.size.width = MAX(40, width - labelLeft - inset);
+		label.frame = frame;
+	}
+	[self layoutNameBadge];
+}
+
+- (void)recordRowHeight:(CGFloat)height forLabel:(NSString *)label inTable:(UITableView *)tableView {
+	if (!label)
+		return;
+	if (!self.measuredRowHeights)
+		self.measuredRowHeights = [NSMutableDictionary dictionary];
+	NSNumber *known = self.measuredRowHeights[label];
+	if (known && fabsf([known floatValue] - height) < 0.5f)
+		return;
+	self.measuredRowHeights[label] = @(height);
+	__weak typeof(self) weakSelf = self;
+	dispatch_async(dispatch_get_main_queue(), ^{
+		[weakSelf.tableView reloadData];
+	});
 }
 
 - (UITableViewCell *)detailsRowCell:(UITableView *)tableView row:(NSInteger)row {
@@ -3618,7 +3658,10 @@ static UIImage *TGProfileStretched(NSString *name) {
 	CGSize valueSize = [(value ?: @"") sizeWithFont:valueView.font
 								  constrainedToSize:CGSizeMake(valueWidth, 400)
 									  lineBreakMode:NSLineBreakByWordWrapping];
-	valueView.frame = CGRectMake(78, 11, valueWidth, MAX(20, valueSize.height));
+	CGFloat valueHeight = MAX(20, valueSize.height);
+	valueView.frame = CGRectMake(78, 11, valueWidth, valueHeight);
+	[self recordRowHeight:MAX(44, valueHeight + 22) forLabel:label inTable:tableView];
+	[self adoptGroupedInsetFromCell:cell inTable:tableView];
 	if (hiddenPhone)
 		valueView.textColor = TGProfileColour(0xaaaaaa);
 	else if (isPhone)
