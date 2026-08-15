@@ -250,13 +250,30 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 	if (!self)
 		return nil;
 
+	[self buildAvatar];
+	[self buildTextLabels];
+	[self buildBadge];
+	[self buildRowIcons];
+	[self buildPlates];
+
+	_swipeButtons = [NSMutableArray array];
+	TGSwipeGestureRecognizer *swipe = [[TGSwipeGestureRecognizer alloc]
+			initWithTarget:self action:@selector(swipeRecognised:)];
+	[self addGestureRecognizer:swipe];
+
+	return self;
+}
+
+- (void)buildAvatar {
 	self.avatar = [[UIImageView alloc] initWithFrame:CGRectMake(kAvatarLeft, 8, kAvatar, kAvatar)];
 	self.avatar.layer.cornerRadius = 5.0f;
 	self.avatar.clipsToBounds = YES;
 	self.avatar.backgroundColor = [UIColor colorWithWhite:0.85f alpha:1.0f];
 	self.avatar.contentMode = UIViewContentModeScaleAspectFill;
 	[self.contentView addSubview:self.avatar];
+}
 
+- (void)buildTextLabels {
 	self.titleLabel = [[UILabel alloc] init];
 	self.titleLabel.font = [UIFont boldSystemFontOfSize:16];
 	self.titleLabel.textColor = TGChatListTitleColour();
@@ -298,7 +315,9 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 	self.dateLabel.backgroundColor = [UIColor clearColor];
 	self.dateLabel.highlightedTextColor = [UIColor whiteColor];
 	[self.contentView addSubview:self.dateLabel];
+}
 
+- (void)buildBadge {
 	self.badgeBackground = [[UIImageView alloc] initWithImage:TGDialogListBadgeImage(NO)
 											 highlightedImage:TGDialogListBadgeImage(YES)];
 	self.badgeBackground.hidden = YES;
@@ -315,9 +334,11 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 	self.badge.textAlignment = NSTextAlignmentCenter;
 	self.badge.hidden = YES;
 	[self.contentView addSubview:self.badge];
+}
 
-	// The dot sits half off the avatar, so it needs a ring of the row's own
-	// colour to stay legible against a photo.
+/// The dot sits half off the avatar, so it needs a ring of the row's own
+/// colour to stay legible against a photo.
+- (void)buildRowIcons {
 	self.onlineDot = [[UIView alloc] initWithFrame:
 			CGRectMake(kAvatarLeft + kAvatar - 14, 8 + kAvatar - 14, 14, 14)];
 	self.onlineDot.backgroundColor = [[TGTheme shared] onlineColour];
@@ -348,7 +369,9 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 	self.arrow = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"DialogListArrow.png"]
 								   highlightedImage:[UIImage imageNamed:@"DialogListArrow_Highlighted.png"]];
 	[self.contentView addSubview:self.arrow];
+}
 
+- (void)buildPlates {
 	UIImage *plate = [[UIImage imageNamed:@"DialogListCell.png"]
 			stretchableImageWithLeftCapWidth:1 topCapHeight:0];
 	UIImage *platePressed = [[UIImage imageNamed:@"DialogListCellHighlighted.png"]
@@ -358,13 +381,6 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 
 	self.accessoryType = UITableViewCellAccessoryNone;
 	self.selectionStyle = UITableViewCellSelectionStyleBlue;
-
-	_swipeButtons = [NSMutableArray array];
-	TGSwipeGestureRecognizer *swipe = [[TGSwipeGestureRecognizer alloc]
-			initWithTarget:self action:@selector(swipeRecognised:)];
-	[self addGestureRecognizer:swipe];
-
-	return self;
 }
 
 #pragma mark - swipe actions
@@ -1117,14 +1133,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	if (!self.showsArchive && TGStoriesTrayEnabled())
 		[[TGClient shared] loadActiveStoriesArchived:NO];
 
-	// Without this there is no way to start a conversation at all - you can
-	// only reply to chats that already exist.
-	UIButton *compose = [UIButton buttonWithType:UIButtonTypeCustom];
-	[TGIcons styleHeaderButton:compose];
-	[compose setImage:[UIImage imageNamed:@"ComposeMessageIcon"] forState:UIControlStateNormal];
-	compose.frame = CGRectMake(0, 0, 30, 30);
-	[compose addTarget:self action:@selector(composeTapped) forControlEvents:UIControlEventTouchUpInside];
-	self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:compose];
+	[self installComposeButton];
 	[self updateEditingChrome];
 
 	// Search sits above the list, the way every client puts it - pull down or
@@ -1147,13 +1156,37 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
 		self.edgesForExtendedLayout = UIRectEdgeNone;
 
-	__weak typeof(self) weakSelf = self;
 	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
 	self.tableView.separatorColor = [[TGTheme shared] separatorColour];
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
 	[[TGTheme shared] styleTabBar:self.tabBarController.tabBar];
 
-	// Restyle in place when the setting changes, rather than needing a restart.
+	[self installThemeObserver];
+
+	if ([self.tabBarController isKindOfClass:[RootViewController class]])
+		[(RootViewController *)self.tabBarController updateUnreadBadge];
+
+	[self buildEmptyContainer];
+
+	[self applyTitleView];
+	[self installClientHandlers];
+	[self reload];
+}
+
+/// Without this there is no way to start a conversation at all - you can only
+/// reply to chats that already exist.
+- (void)installComposeButton {
+	UIButton *compose = [UIButton buttonWithType:UIButtonTypeCustom];
+	[TGIcons styleHeaderButton:compose];
+	[compose setImage:[UIImage imageNamed:@"ComposeMessageIcon"] forState:UIControlStateNormal];
+	compose.frame = CGRectMake(0, 0, 30, 30);
+	[compose addTarget:self action:@selector(composeTapped) forControlEvents:UIControlEventTouchUpInside];
+	self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:compose];
+}
+
+/// Restyle in place when the setting changes, rather than needing a restart.
+- (void)installThemeObserver {
+	__weak typeof(self) weakSelf = self;
 	self.themeObserver = [[NSNotificationCenter defaultCenter] addObserverForName:TGThemeChangedNotification
 			object:nil queue:[NSOperationQueue mainQueue]
 		usingBlock:^(NSNotification *note){
@@ -1169,15 +1202,6 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 		[weakSelf rebuildTableHeader];
 		[weakSelf.tableView reloadData];
 	}];
-
-	if ([self.tabBarController isKindOfClass:[RootViewController class]])
-		[(RootViewController *)self.tabBarController updateUnreadBadge];
-
-	[self buildEmptyContainer];
-
-	[self applyTitleView];
-	[self installClientHandlers];
-	[self reload];
 }
 
 - (void)updateEditingChrome {
@@ -1471,31 +1495,8 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 													  + trayHeight]];
 
 	if (showArchive){
-		TGChatCell *row = [[TGChatCell alloc] initWithStyle:UITableViewCellStyleDefault
-											reuseIdentifier:nil];
-		row.frame = CGRectMake(0, rowsTop, width, kRowHeight);
-		row.titleLabel.text = @"Archived Chats";
-		row.titleLabel.textColor = [[TGTheme shared] primaryTextColour];
-		row.previewLabel.text = [NSString stringWithFormat:@"%lu chats",
-				(unsigned long)archivedCount];
-		row.previewLabel.textColor = [[TGTheme shared] secondaryTextColour];
-		NSInteger archiveUnread = [self.listUnread[@(TGChatListArchive)] integerValue];
-		if (archiveUnread > 0){
-			row.badge.text = archiveUnread < 1000
-					? [NSString stringWithFormat:@"%ld", (long)archiveUnread]
-					: [NSString stringWithFormat:@"%ldK", (long)(archiveUnread / 1000)];
-			row.badge.hidden = NO;
-			row.badgeBackground.hidden = NO;
-		}
-		row.avatar.image = [TGIcons archiveAvatarOfSide:kAvatar];
-		row.avatar.backgroundColor = [UIColor clearColor];
-		row.backgroundColor = [[TGTheme shared] listBackgroundColour];
-		row.userInteractionEnabled = YES;
-		[row addGestureRecognizer:[[UITapGestureRecognizer alloc]
-				initWithTarget:self action:@selector(openArchive)]];
-		[row setNeedsLayout];
-		[row layoutIfNeeded];
-		[header addSubview:row];
+		[header addSubview:[self archiveHeaderRowWithWidth:width top:rowsTop
+													 count:archivedCount]];
 
 		UIView *hair = [[UIView alloc] initWithFrame:
 				CGRectMake(0, height - 0.5f, width, 0.5f)];
@@ -1521,6 +1522,34 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	if (y > 0.5f && fabs(y - MIN(44.0f, previousHeight)) > 0.5f)
 		return;   // the user has scrolled somewhere of their own; leave it
 	self.tableView.contentOffset = CGPointMake(0, hidden);
+}
+
+- (UIView *)archiveHeaderRowWithWidth:(CGFloat)width top:(CGFloat)top count:(NSUInteger)archivedCount {
+	TGChatCell *row = [[TGChatCell alloc] initWithStyle:UITableViewCellStyleDefault
+										reuseIdentifier:nil];
+	row.frame = CGRectMake(0, top, width, kRowHeight);
+	row.titleLabel.text = @"Archived Chats";
+	row.titleLabel.textColor = [[TGTheme shared] primaryTextColour];
+	row.previewLabel.text = [NSString stringWithFormat:@"%lu chats",
+			(unsigned long)archivedCount];
+	row.previewLabel.textColor = [[TGTheme shared] secondaryTextColour];
+	NSInteger archiveUnread = [self.listUnread[@(TGChatListArchive)] integerValue];
+	if (archiveUnread > 0){
+		row.badge.text = archiveUnread < 1000
+				? [NSString stringWithFormat:@"%ld", (long)archiveUnread]
+				: [NSString stringWithFormat:@"%ldK", (long)(archiveUnread / 1000)];
+		row.badge.hidden = NO;
+		row.badgeBackground.hidden = NO;
+	}
+	row.avatar.image = [TGIcons archiveAvatarOfSide:kAvatar];
+	row.avatar.backgroundColor = [UIColor clearColor];
+	row.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	row.userInteractionEnabled = YES;
+	[row addGestureRecognizer:[[UITapGestureRecognizer alloc]
+			initWithTarget:self action:@selector(openArchive)]];
+	[row setNeedsLayout];
+	[row layoutIfNeeded];
+	return row;
 }
 
 - (UIView *)loginBannerWithWidth:(CGFloat)width top:(CGFloat)top {
@@ -1910,19 +1939,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 						  forState:UIControlStateNormal];
 		[button setTitle:caption forState:UIControlStateNormal];
 		button.titleLabel.font = font;
-		if (selected){
-			[button setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-			button.titleLabel.shadowColor = [UIColor colorWithRed:0x11 / 255.0f
-															green:0x2e / 255.0f
-															 blue:0x5c / 255.0f alpha:0.2f];
-			button.titleLabel.shadowOffset = CGSizeMake(0, -1);
-		} else {
-			[button setTitleColor:[UIColor colorWithRed:0x5c / 255.0f green:0x70 / 255.0f
-												   blue:0x8b / 255.0f alpha:1.0f]
-						 forState:UIControlStateNormal];
-			button.titleLabel.shadowColor = [UIColor colorWithWhite:1.0f alpha:0.25f];
-			button.titleLabel.shadowOffset = CGSizeMake(0, 1);
-		}
+		[self styleFolderStripButton:button selected:selected];
 		button.tag = listId;
 		[button addTarget:self action:@selector(folderButtonTapped:)
 		 forControlEvents:UIControlEventTouchUpInside];
@@ -1939,6 +1956,22 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 											blue:0xE5 / 255.0f alpha:1.0f];
 	[strip addSubview:hair];
 	return strip;
+}
+
+- (void)styleFolderStripButton:(UIButton *)button selected:(BOOL)selected {
+	if (selected){
+		[button setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+		button.titleLabel.shadowColor = [UIColor colorWithRed:0x11 / 255.0f
+														green:0x2e / 255.0f
+														 blue:0x5c / 255.0f alpha:0.2f];
+		button.titleLabel.shadowOffset = CGSizeMake(0, -1);
+	} else {
+		[button setTitleColor:[UIColor colorWithRed:0x5c / 255.0f green:0x70 / 255.0f
+											   blue:0x8b / 255.0f alpha:1.0f]
+					 forState:UIControlStateNormal];
+		button.titleLabel.shadowColor = [UIColor colorWithWhite:1.0f alpha:0.25f];
+		button.titleLabel.shadowOffset = CGSizeMake(0, 1);
+	}
 }
 
 - (void)folderButtonHeld:(UILongPressGestureRecognizer *)hold {
@@ -1998,51 +2031,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 
 	CGFloat x = 8;
 	for (NSUInteger i = 0; i < self.storyPosters.count; i++){
-		NSDictionary *poster = self.storyPosters[i];
-		BOOL unread = [poster[@"unread"] boolValue];
-
-		UIView *cell = [[UIView alloc] initWithFrame:CGRectMake(x, 0, kStoryCellWidth, kStoryTrayHeight)];
-		cell.backgroundColor = [UIColor clearColor];
-		cell.tag = (NSInteger)i;
-
-		UIView *ring = [[UIView alloc] initWithFrame:CGRectMake(4, 4, kStoryAvatar + 4, kStoryAvatar + 4)];
-		ring.backgroundColor = [UIColor clearColor];
-		ring.layer.cornerRadius = 7;
-		ring.layer.borderWidth = 2;
-		ring.layer.borderColor = unread
-				? [theme accentColour].CGColor
-				: [UIColor colorWithRed:0xC3 / 255.0f green:0xCB / 255.0f
-								   blue:0xD6 / 255.0f alpha:1.0f].CGColor;
-		[cell addSubview:ring];
-
-		UIImageView *avatar = [[UIImageView alloc] initWithFrame:
-				CGRectMake(6, 6, kStoryAvatar, kStoryAvatar)];
-		avatar.layer.cornerRadius = 5;
-		avatar.clipsToBounds = YES;
-		avatar.contentMode = UIViewContentModeScaleAspectFill;
-		NSNumber *fileId = poster[@"photoFileId"];
-		UIImage *photo = fileId ? self.avatars[fileId] : nil;
-		if (!photo){
-			NSString *title = TGReplyString(poster[@"title"]) ?: @"";
-			photo = [TGIcons avatarWithInitials:(title.length
-					? [title substringToIndex:1].uppercaseString : @"?")
-										   size:kStoryAvatar
-									   colourId:[poster[@"chatId"] longLongValue]];
-		}
-		avatar.image = photo;
-		[cell addSubview:avatar];
-
-		UILabel *name = [[UILabel alloc] initWithFrame:CGRectMake(0, 64, kStoryCellWidth, 13)];
-		name.backgroundColor = [UIColor clearColor];
-		name.font = [UIFont systemFontOfSize:11];
-		name.textAlignment = NSTextAlignmentCenter;
-		name.lineBreakMode = NSLineBreakByTruncatingTail;
-		name.textColor = unread ? [theme primaryTextColour] : [theme secondaryTextColour];
-		name.text = TGReplyString(poster[@"title"]) ?: @"";
-		[cell addSubview:name];
-
-		[cell addGestureRecognizer:[[UITapGestureRecognizer alloc]
-				initWithTarget:self action:@selector(storyCellTapped:)]];
+		UIView *cell = [self storyTrayCellForPoster:self.storyPosters[i] index:i left:x];
 		[tray addSubview:cell];
 		x += kStoryCellWidth;
 	}
@@ -2054,6 +2043,55 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 											blue:0xE5 / 255.0f alpha:1.0f];
 	[tray addSubview:hair];
 	return tray;
+}
+
+- (UIView *)storyTrayCellForPoster:(NSDictionary *)poster index:(NSUInteger)index left:(CGFloat)x {
+	TGTheme *theme = [TGTheme shared];
+	BOOL unread = [poster[@"unread"] boolValue];
+
+	UIView *cell = [[UIView alloc] initWithFrame:CGRectMake(x, 0, kStoryCellWidth, kStoryTrayHeight)];
+	cell.backgroundColor = [UIColor clearColor];
+	cell.tag = (NSInteger)index;
+
+	UIView *ring = [[UIView alloc] initWithFrame:CGRectMake(4, 4, kStoryAvatar + 4, kStoryAvatar + 4)];
+	ring.backgroundColor = [UIColor clearColor];
+	ring.layer.cornerRadius = 7;
+	ring.layer.borderWidth = 2;
+	ring.layer.borderColor = unread
+			? [theme accentColour].CGColor
+			: [UIColor colorWithRed:0xC3 / 255.0f green:0xCB / 255.0f
+							   blue:0xD6 / 255.0f alpha:1.0f].CGColor;
+	[cell addSubview:ring];
+
+	UIImageView *avatar = [[UIImageView alloc] initWithFrame:
+			CGRectMake(6, 6, kStoryAvatar, kStoryAvatar)];
+	avatar.layer.cornerRadius = 5;
+	avatar.clipsToBounds = YES;
+	avatar.contentMode = UIViewContentModeScaleAspectFill;
+	NSNumber *fileId = poster[@"photoFileId"];
+	UIImage *photo = fileId ? self.avatars[fileId] : nil;
+	if (!photo){
+		NSString *title = TGReplyString(poster[@"title"]) ?: @"";
+		photo = [TGIcons avatarWithInitials:(title.length
+				? [title substringToIndex:1].uppercaseString : @"?")
+									   size:kStoryAvatar
+								   colourId:[poster[@"chatId"] longLongValue]];
+	}
+	avatar.image = photo;
+	[cell addSubview:avatar];
+
+	UILabel *name = [[UILabel alloc] initWithFrame:CGRectMake(0, 64, kStoryCellWidth, 13)];
+	name.backgroundColor = [UIColor clearColor];
+	name.font = [UIFont systemFontOfSize:11];
+	name.textAlignment = NSTextAlignmentCenter;
+	name.lineBreakMode = NSLineBreakByTruncatingTail;
+	name.textColor = unread ? [theme primaryTextColour] : [theme secondaryTextColour];
+	name.text = TGReplyString(poster[@"title"]) ?: @"";
+	[cell addSubview:name];
+
+	[cell addGestureRecognizer:[[UITapGestureRecognizer alloc]
+			initWithTarget:self action:@selector(storyCellTapped:)]];
+	return cell;
 }
 
 - (void)storyCellTapped:(UITapGestureRecognizer *)tap {
@@ -2742,14 +2780,9 @@ static const NSInteger kChatActionsTag = 77;
 	if (self.searchResults)
 		return;
 
-	NSInteger index = row - [self headerRows].count;
-	if (index < 0)
+	NSDictionary *chat = [self chatForRow:row];
+	if (!chat)
 		return;
-
-	NSArray *rows = [self visibleChats];
-	if (index >= (NSInteger)rows.count)
-		return;
-	NSDictionary *chat = rows[index];
 	int64_t chatId = [chat[@"id"] longLongValue];
 
 	__weak typeof(self) weakSelf = self;
@@ -2759,11 +2792,10 @@ static const NSInteger kChatActionsTag = 77;
 }
 
 - (void)presentActionsForRow:(NSInteger)row markedUnread:(BOOL)markedUnread {
-	NSInteger index = row - [self headerRows].count;
-	NSArray *rows = [self visibleChats];
-	if (index < 0 || index >= (NSInteger)rows.count)
+	NSDictionary *held = [self chatForRow:row];
+	if (!held)
 		return;
-	self.actionChat = rows[index];
+	self.actionChat = held;
 
 	BOOL pinned = [self.actionChat[@"isPinned"] boolValue];
 	BOOL muted  = [self.actionChat[@"isMuted"] boolValue];
@@ -3346,6 +3378,14 @@ static const NSInteger kChatActionsTag = 77;
 	return rest;
 }
 
+- (NSDictionary *)chatForRow:(NSInteger)row {
+	NSArray *rows = [self visibleChats];
+	NSInteger index = row - (NSInteger)[self headerRows].count;
+	if (index < 0 || index >= (NSInteger)rows.count)
+		return nil;
+	return rows[index];
+}
+
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
 	[self updateEmptyState];
 	if (self.searchResults)
@@ -3353,17 +3393,9 @@ static const NSInteger kChatActionsTag = 77;
 	return [self visibleChats].count + [self headerRows].count;
 }
 
-- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-	static NSString *reuse = @"TGChatCell";
-	TGChatCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
-	if (!cell)
-		cell = [[TGChatCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:reuse];
-	if (cell == self.openSwipeCell)
-		self.openSwipeCell = nil;
-
+- (void)resetCell:(TGChatCell *)cell plain:(BOOL)plainPlate {
 	TGTheme *theme = [TGTheme shared];
 	cell.backgroundColor = [theme listBackgroundColour];
-	BOOL plainPlate = (!theme.isDark && theme.importedName == nil);
 	cell.backgroundView.hidden = !plainPlate;
 	cell.titleLabel.textColor = plainPlate ? TGChatListTitleColour() : [theme primaryTextColour];
 	cell.previewLabel.textColor = plainPlate ? TGChatListMessageColour()
@@ -3381,41 +3413,34 @@ static const NSInteger kChatActionsTag = 77;
 	cell.badge.text = @"";
 	cell.dateLabel.text = @"";
 	cell.previewLabel.text = @"";
+	cell.titleLabel.text = @"";
+	cell.authorLabel.text = @"";
+	cell.tick.image = nil;
+	cell.pin.image = nil;
 	cell.onlineDot.layer.borderColor = [theme listBackgroundColour].CGColor;
+}
 
-	NSArray *header = [self headerRows];
-	NSArray *rows = [self visibleChats];
-	if (indexPath.row >= (NSInteger)(header.count + rows.count))
-		return cell;
-	if (indexPath.row < (NSInteger)header.count){
-		BOOL isArchive = [header[indexPath.row] isEqualToString:@"archive"];
-		cell.titleLabel.text = isArchive ? @"Archived Chats" : @"Saved Messages";
-		cell.previewLabel.text = isArchive
-				? [NSString stringWithFormat:@"%lu chats",
-						(unsigned long)TGReplyArray([TGClient shared].archivedChats).count]
-				: @"Your own notes and forwards";
-		cell.dateLabel.text = @"";
-		cell.badge.hidden = YES;
-		cell.badgeBackground.hidden = YES;
-		cell.avatar.image = isArchive
-				? [TGIcons archiveAvatarOfSide:kAvatar]
-				: [TGIcons savedMessagesAvatarOfSide:kAvatar];
-		cell.avatar.backgroundColor = [UIColor clearColor];
-		[self describeCell:cell unread:0 muted:NO];
-		[cell setNeedsLayout];
-		return cell;
-	}
+- (void)configureHeaderCell:(TGChatCell *)cell kind:(NSString *)kind {
+	BOOL isArchive = [kind isEqualToString:@"archive"];
+	cell.titleLabel.text = isArchive ? @"Archived Chats" : @"Saved Messages";
+	cell.previewLabel.text = isArchive
+			? [NSString stringWithFormat:@"%lu chats",
+					(unsigned long)TGReplyArray([TGClient shared].archivedChats).count]
+			: @"Your own notes and forwards";
+	cell.dateLabel.text = @"";
+	cell.badge.hidden = YES;
+	cell.badgeBackground.hidden = YES;
+	cell.avatar.image = isArchive
+			? [TGIcons archiveAvatarOfSide:kAvatar]
+			: [TGIcons savedMessagesAvatarOfSide:kAvatar];
+	cell.avatar.backgroundColor = [UIColor clearColor];
+	[self describeCell:cell unread:0 muted:NO];
+}
 
-	NSDictionary *c = rows[indexPath.row - header.count];
-	cell.titleLabel.text = TGReplyString(c[@"title"]) ?: @"";
-	cell.dateLabel.text = [c[@"sponsored"] boolValue]
-			? @"Sponsored"
-			: TGChatDate([c[@"date"] doubleValue]);
-	cell.dateLabel.textColor = [c[@"sponsored"] boolValue]
-			? [theme secondaryTextColour] : [theme accentColour];
-
-	// Someone typing takes the preview over for as long as it lasts, in their
-	// blurple rather than the grey the preview uses.
+/// Someone typing takes the preview over for as long as it lasts, in their
+/// blurple rather than the grey the preview uses.
+- (void)configurePreviewInCell:(TGChatCell *)cell chat:(NSDictionary *)c plain:(BOOL)plainPlate {
+	TGTheme *theme = [TGTheme shared];
 	NSDictionary *detail = [c[@"id"] isKindOfClass:[NSNumber class]]
 			? TGReplyDictionary(self.rowDetails[c[@"id"]]) : nil;
 	NSString *action = TGReplyString(c[@"action"]);
@@ -3449,30 +3474,24 @@ static const NSInteger kChatActionsTag = 77;
 		}
 		cell.previewLabel.text = preview;
 	}
+}
 
-	cell.onlineDot.hidden = ![c[@"isOnline"] boolValue];
-	cell.tick.hidden = ![c[@"outgoing"] boolValue];
-	if (!cell.tick.hidden)
-		cell.tick.image = [UIImage imageNamed:([c[@"outgoingRead"] boolValue]
-				? @"DialogListRead" : @"DialogListSent")];
-
-	cell.muteIcon.hidden = ![c[@"isMuted"] boolValue];
-	cell.groupIcon.hidden = ![c[@"isGroup"] boolValue];
-
-	NSInteger unread = [c[@"unread"] integerValue];
+- (void)configureBadgeInCell:(TGChatCell *)cell chat:(NSDictionary *)c unread:(NSInteger)unread {
 	BOOL markedUnread = (unread <= 0) && ![c[@"sponsored"] boolValue] && [self chatIsUnread:c];
 	cell.badge.hidden = (unread <= 0 && !markedUnread);
 	cell.badgeBackground.hidden = cell.badge.hidden;
 	cell.pin.hidden = !([c[@"isPinned"] boolValue] && unread <= 0 && !markedUnread);
 	if (!cell.pin.hidden){
 		cell.pin.image = [TGIcons menuGlyphNamed:@"pin"];
-		[cell.pin tg_setTintColor:[theme secondaryTextColour]];
+		[cell.pin tg_setTintColor:[[TGTheme shared] secondaryTextColour]];
 	}
 	cell.badge.text = unread > 0
 			? (unread < 1000 ? [NSString stringWithFormat:@"%ld", (long)unread]
 							 : [NSString stringWithFormat:@"%ldK", (long)(unread / 1000)])
 			: @"";
+}
 
+- (void)configureAvatarInCell:(TGChatCell *)cell chat:(NSDictionary *)c {
 	NSNumber *fileId = c[@"photoFileId"];
 	UIImage *photo = fileId ? self.avatars[fileId] : nil;
 	if ([c[@"isSaved"] boolValue])
@@ -3486,6 +3505,52 @@ static const NSInteger kChatActionsTag = 77;
 	}
 	cell.avatar.image = photo;
 	cell.avatar.backgroundColor = [UIColor clearColor];
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	static NSString *reuse = @"TGChatCell";
+	TGChatCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
+	if (!cell)
+		cell = [[TGChatCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:reuse];
+	if (cell == self.openSwipeCell)
+		self.openSwipeCell = nil;
+
+	TGTheme *theme = [TGTheme shared];
+	BOOL plainPlate = (!theme.isDark && theme.importedName == nil);
+	[self resetCell:cell plain:plainPlate];
+
+	NSArray *header = [self headerRows];
+	NSArray *rows = [self visibleChats];
+	if (indexPath.row >= (NSInteger)(header.count + rows.count))
+		return cell;
+	if (indexPath.row < (NSInteger)header.count){
+		[self configureHeaderCell:cell kind:header[indexPath.row]];
+		[cell setNeedsLayout];
+		return cell;
+	}
+
+	NSDictionary *c = rows[indexPath.row - header.count];
+	cell.titleLabel.text = TGReplyString(c[@"title"]) ?: @"";
+	cell.dateLabel.text = [c[@"sponsored"] boolValue]
+			? @"Sponsored"
+			: TGChatDate([c[@"date"] doubleValue]);
+	cell.dateLabel.textColor = [c[@"sponsored"] boolValue]
+			? [theme secondaryTextColour] : [theme accentColour];
+
+	[self configurePreviewInCell:cell chat:c plain:plainPlate];
+
+	cell.onlineDot.hidden = ![c[@"isOnline"] boolValue];
+	cell.tick.hidden = ![c[@"outgoing"] boolValue];
+	if (!cell.tick.hidden)
+		cell.tick.image = [UIImage imageNamed:([c[@"outgoingRead"] boolValue]
+				? @"DialogListRead" : @"DialogListSent")];
+
+	cell.muteIcon.hidden = ![c[@"isMuted"] boolValue];
+	cell.groupIcon.hidden = ![c[@"isGroup"] boolValue];
+
+	NSInteger unread = [c[@"unread"] integerValue];
+	[self configureBadgeInCell:cell chat:c unread:unread];
+	[self configureAvatarInCell:cell chat:c];
 
 	cell.swipeActions = [self swipeActionsForChat:c];
 	__weak typeof(self) weakSelf = self;
@@ -3595,12 +3660,10 @@ static const NSInteger kChatActionsTag = 77;
 	NSIndexPath *path = [self.tableView indexPathForCell:cell];
 	if (!path)
 		return;
-	NSArray *rows = [self visibleChats];
-	NSInteger index = path.row - (NSInteger)[self headerRows].count;
-	if (index < 0 || index >= (NSInteger)rows.count)
+	NSDictionary *chat = [self chatForRow:path.row];
+	if (!chat)
 		return;
 
-	NSDictionary *chat = rows[index];
 	int64_t chatId = [chat[@"id"] longLongValue];
 	if (!chatId)
 		return;
@@ -3629,11 +3692,9 @@ static const NSInteger kChatActionsTag = 77;
 
 - (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell
 		forRowAtIndexPath:(NSIndexPath *)indexPath {
-	NSArray *rows = [self visibleChats];
-	NSInteger index = indexPath.row - (NSInteger)[self headerRows].count;
-	if (index < 0 || index >= (NSInteger)rows.count)
+	NSDictionary *c = [self chatForRow:indexPath.row];
+	if (!c)
 		return;
-	NSDictionary *c = rows[index];
 	[self fetchRowDetailForChat:c];
 	if (![c[@"sponsored"] boolValue])
 		return;
@@ -3724,9 +3785,7 @@ static const NSInteger kChatActionsTag = 77;
 
 - (NSString *)tableView:(UITableView *)tableView
 		titleForDeleteConfirmationButtonForRowAtIndexPath:(NSIndexPath *)indexPath {
-	NSArray *rows = [self visibleChats];
-	NSInteger index = indexPath.row - (NSInteger)[self headerRows].count;
-	if (index >= 0 && index < (NSInteger)rows.count && [rows[index][@"isGroup"] boolValue])
+	if ([[self chatForRow:indexPath.row][@"isGroup"] boolValue])
 		return @"Leave";
 	return @"Delete";
 }
@@ -3735,12 +3794,10 @@ static const NSInteger kChatActionsTag = 77;
 		forRowAtIndexPath:(NSIndexPath *)indexPath {
 	if (style != UITableViewCellEditingStyleDelete)
 		return;
-	NSArray *header = [self headerRows];
-	NSArray *rows = [self visibleChats];
-	NSInteger index = indexPath.row - (NSInteger)header.count;
-	if (index < 0 || index >= (NSInteger)rows.count)
+	NSDictionary *chat = [self chatForRow:indexPath.row];
+	if (!chat)
 		return;
-	int64_t chatId = [rows[index][@"id"] longLongValue];
+	int64_t chatId = [chat[@"id"] longLongValue];
 	[self confirmDeleteChat:chatId];
 }
 

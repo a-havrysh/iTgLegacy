@@ -699,6 +699,13 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	self.view.backgroundColor = [UIColor blackColor];
 	self.view.clipsToBounds = YES;
 
+	[self buildPagingView];
+	[self buildTopBar];
+	[self buildBottomBar];
+	[self buildOverlayAndGestures];
+}
+
+- (void)buildPagingView {
 	CGRect bounds = self.view.bounds;
 
 	_pagingView = [[UIScrollView alloc] initWithFrame:
@@ -714,6 +721,10 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	_pagingView.backgroundColor = [UIColor clearColor];
 	_pagingView.delegate = self;
 	[self.view addSubview:_pagingView];
+}
+
+- (void)buildTopBar {
+	CGRect bounds = self.view.bounds;
 
 	UIImage *topPanelImage = [UIImage imageNamed:@"GalleryTopPanel.png"];
 	CGFloat topPanelHeight = topPanelImage ? topPanelImage.size.height : 44.0f;
@@ -772,6 +783,10 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	_counterLabel.shadowOffset = CGSizeMake(0, -1);
 	_counterLabel.textAlignment = NSTextAlignmentCenter;
 	[_topBar addSubview:_counterLabel];
+}
+
+- (void)buildBottomBar {
+	CGRect bounds = self.view.bounds;
 
 	UIImage *bottomPanelImage = [UIImage imageNamed:@"GalleryBottomPanel.png"];
 	CGFloat bottomPanelHeight = bottomPanelImage ? bottomPanelImage.size.height : 44.0f;
@@ -818,6 +833,13 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	_dateLabel.shadowOffset = CGSizeMake(0, -1);
 	_dateLabel.textAlignment = NSTextAlignmentCenter;
 	[_controlsContainer addSubview:_dateLabel];
+
+	[self buildPlaybackControlsWithPanelHeight:bottomPanelHeight];
+	[self buildBottomBarButtons];
+}
+
+- (void)buildPlaybackControlsWithPanelHeight:(CGFloat)bottomPanelHeight {
+	CGRect bounds = self.view.bounds;
 
 	UIImage *playImage = [UIImage imageNamed:@"VideoPanelPlay.png"];
 	_playButton = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -868,6 +890,10 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	_progressSpinner.frame = CGRectMake(0, 3, 15, 15);
 	_progressSpinner.hidesWhenStopped = YES;
 	[_progressContainer addSubview:_progressSpinner];
+}
+
+- (void)buildBottomBarButtons {
+	CGRect bounds = self.view.bounds;
 
 	UIImage *actionIcon = [UIImage imageNamed:@"GalleryActionIcon.png"];
 	_actionButton = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -902,6 +928,10 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	[_deleteButton addTarget:self action:@selector(deleteTapped)
 			forControlEvents:UIControlEventTouchUpInside];
 	[_bottomBar addSubview:_deleteButton];
+}
+
+- (void)buildOverlayAndGestures {
+	CGRect bounds = self.view.bounds;
 
 	_spinner = [[UIActivityIndicatorView alloc]
 			initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhiteLarge];
@@ -1050,6 +1080,19 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	}
 }
 
+- (void)showMinithumbOnPage:(TGMediaPageView *)page forItem:(NSDictionary *)item {
+	if (page.imageView.image)
+		return;
+	NSData *tiny = [[TGClient shared] minithumbnailData:item[@"minithumb"]];
+	if (tiny.length == 0)
+		return;
+	UIImage *blurred = [UIImage imageWithData:tiny];
+	if (!blurred)
+		return;
+	[page setPageImage:blurred];
+	page.showingMinithumb = YES;
+}
+
 - (void)loadImageForPageAtIndex:(NSInteger)index {
 	if (index < 0 || index >= (NSInteger)_items.count)
 		return;
@@ -1071,26 +1114,17 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	[_failedPages removeObject:key];
 	[self updateLoadingChrome];
 
-	if (!page.imageView.image){
-		NSData *tiny = [[TGClient shared] minithumbnailData:item[@"minithumb"]];
-		if (tiny.length){
-			UIImage *blurred = [UIImage imageWithData:tiny];
-			if (blurred){
-				[page setPageImage:blurred];
-				page.showingMinithumb = YES;
-			}
-		}
-	}
+	[self showMinithumbOnPage:page forItem:item];
 
 	NSNumber *thumbId = item[@"thumbId"];
 	if ([thumbId isKindOfClass:NSNumber.class] && ![thumbId isEqual:fileId] &&
 		(!page.imageView.image || page.showingMinithumb))
 		[self loadThumbnailForPageAtIndex:index fileId:thumbId];
 
-	CGFloat maxSide = MAX(self.view.bounds.size.width, self.view.bounds.size.height)
+	CGFloat maxSidePixels = MAX(self.view.bounds.size.width, self.view.bounds.size.height)
 			* [UIScreen mainScreen].scale;
-	if (maxSide > 960.0f)
-		maxSide = 960.0f;
+	if (maxSidePixels > 960.0f)
+		maxSidePixels = 960.0f;
 
 	[[TGClient shared] startDownloadingFile:[fileId integerValue]
 								   priority:(index == _currentIndex ? 32 : 8)
@@ -1111,7 +1145,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 			return;
 		}
 		dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-			UIImage *image = TGDecodeThumbnail(path, maxSide);
+			UIImage *image = TGDecodeThumbnail(path, maxSidePixels);
 			dispatch_async(dispatch_get_main_queue(), ^{
 				typeof(self) strongMe = weakSelf;
 				if (!strongMe)
@@ -1151,14 +1185,14 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 
 - (void)loadThumbnailForPageAtIndex:(NSInteger)index fileId:(NSNumber *)thumbId {
 	NSNumber *key = @(index);
-	CGFloat side = TGMediaTileSide * 4.0f;
+	CGFloat sidePixels = TGMediaTileSide * 4.0f;
 
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] downloadFile:[thumbId integerValue] completion:^(NSString *path){
 		if (path.length == 0)
 			return;
 		dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-			UIImage *image = TGDecodeThumbnail(path, side);
+			UIImage *image = TGDecodeThumbnail(path, sidePixels);
 			if (!image)
 				return;
 			dispatch_async(dispatch_get_main_queue(), ^{
@@ -2174,6 +2208,14 @@ static const long long TGMediaExportLimit = 12 * 1024 * 1024;
 	_canLoadMore = YES;
 	_itemsPerRow = [self itemsPerRowForWidth:self.view.bounds.size.width];
 
+	[self buildMediaTableView];
+	[self buildScopeBar];
+	[self buildDownloadsBanner];
+	[self buildSpinnerAndEmptyView];
+	[self buildDateIndicator];
+}
+
+- (void)buildMediaTableView {
 	_tableView = [[UITableView alloc] initWithFrame:self.view.bounds
 											  style:UITableViewStylePlain];
 	_tableView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -2190,7 +2232,9 @@ static const long long TGMediaExportLimit = 12 * 1024 * 1024;
 			initWithTarget:self action:@selector(handleRowLongPress:)];
 	longPress.minimumPressDuration = 0.5;
 	[_tableView addGestureRecognizer:longPress];
+}
 
+- (void)buildScopeBar {
 	_scopeBar = [[UIView alloc] initWithFrame:
 			CGRectMake(0, 0, self.view.bounds.size.width, TGMediaScopeHeight)];
 	_scopeBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
@@ -2220,7 +2264,9 @@ static const long long TGMediaExportLimit = 12 * 1024 * 1024;
 	scopeLine.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	scopeLine.backgroundColor = [[TGTheme shared] separatorColour];
 	[_scopeBar addSubview:scopeLine];
+}
 
+- (void)buildDownloadsBanner {
 	_banner = [[UIControl alloc] initWithFrame:
 			CGRectMake(0, 0, self.view.bounds.size.width, TGMediaBannerHeight)];
 	_banner.autoresizingMask = UIViewAutoresizingFlexibleWidth;
@@ -2248,7 +2294,9 @@ static const long long TGMediaExportLimit = 12 * 1024 * 1024;
 	bannerLine.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	bannerLine.backgroundColor = [[TGTheme shared] separatorColour];
 	[_banner addSubview:bannerLine];
+}
 
+- (void)buildSpinnerAndEmptyView {
 	_spinner = [[UIActivityIndicatorView alloc]
 			initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleGray];
 	_spinner.center = CGPointMake(self.view.bounds.size.width / 2,
@@ -2282,7 +2330,9 @@ static const long long TGMediaExportLimit = 12 * 1024 * 1024;
 	_emptyView.alpha = 0.0f;
 	[self.view insertSubview:_emptyView belowSubview:_tableView];
 	[self layoutEmptyView];
+}
 
+- (void)buildDateIndicator {
 	_dateIndicator = [[UILabel alloc] initWithFrame:
 			CGRectMake(self.view.bounds.size.width - 140, TGMediaScopeHeight + 8, 128, 22)];
 	_dateIndicator.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
@@ -2587,64 +2637,72 @@ static const long long TGMediaExportLimit = 12 * 1024 * 1024;
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
 		 cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-	if (indexPath.row >= [self numberOfRowsForItems]){
-		static NSString *loadingIdentifier = @"TGMediaLoading";
-		UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:loadingIdentifier];
-		if (!cell){
-			cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
-										  reuseIdentifier:loadingIdentifier];
-			cell.selectionStyle = UITableViewCellSelectionStyleNone;
-			cell.backgroundColor = [UIColor clearColor];
-			UIActivityIndicatorView *spinner = [[UIActivityIndicatorView alloc]
-					initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleGray];
-			spinner.tag = 401;
-			spinner.frame = CGRectMake(
-					(CGFloat)(int)((tableView.bounds.size.width
-							- spinner.frame.size.width) / 2), 14,
-					spinner.frame.size.width, spinner.frame.size.height);
-			spinner.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin
-					| UIViewAutoresizingFlexibleRightMargin;
-			[cell.contentView addSubview:spinner];
-		}
-		UIActivityIndicatorView *spinner = (UIActivityIndicatorView *)[cell.contentView viewWithTag:401];
-		[spinner startAnimating];
-		return cell;
+	if (indexPath.row >= [self numberOfRowsForItems])
+		return [self loadingCellForTableView:tableView];
+	if (!TGMediaScopeIsGrid(_scope))
+		return [self listCellForTableView:tableView atRow:indexPath.row];
+	return [self gridCellForTableView:tableView atRow:indexPath.row];
+}
+
+- (UITableViewCell *)loadingCellForTableView:(UITableView *)tableView {
+	static NSString *loadingIdentifier = @"TGMediaLoading";
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:loadingIdentifier];
+	if (!cell){
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+									  reuseIdentifier:loadingIdentifier];
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		cell.backgroundColor = [UIColor clearColor];
+		UIActivityIndicatorView *spinner = [[UIActivityIndicatorView alloc]
+				initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleGray];
+		spinner.tag = 401;
+		spinner.frame = CGRectMake(
+				(CGFloat)(int)((tableView.bounds.size.width
+						- spinner.frame.size.width) / 2), 14,
+				spinner.frame.size.width, spinner.frame.size.height);
+		spinner.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin
+				| UIViewAutoresizingFlexibleRightMargin;
+		[cell.contentView addSubview:spinner];
 	}
+	UIActivityIndicatorView *spinner = (UIActivityIndicatorView *)[cell.contentView viewWithTag:401];
+	[spinner startAnimating];
+	return cell;
+}
 
-	if (!TGMediaScopeIsGrid(_scope)){
-		static NSString *listIdentifier = @"TGMediaList";
-		UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:listIdentifier];
-		if (!cell){
-			cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
-										  reuseIdentifier:listIdentifier];
-			cell.textLabel.font = [UIFont boldSystemFontOfSize:15];
-			cell.detailTextLabel.font = [UIFont systemFontOfSize:12];
-		}
-		[[TGTheme shared] styleCell:cell];
-		cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
-		cell.detailTextLabel.textColor = [[TGTheme shared] secondaryTextColour];
-		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
-		cell.accessoryType = UITableViewCellAccessoryNone;
-
-		if (indexPath.row < (NSInteger)_items.count){
-			NSDictionary *item = _items[indexPath.row];
-			cell.textLabel.text = item[@"title"];
-			NSString *detail = item[@"detail"];
-			NSString *mime = item[@"mime"];
-			if (_scope == TGMediaScopeFiles && [mime isKindOfClass:NSString.class]
-					&& mime.length){
-				NSString *known = _extensionCache[mime];
-				if (known.length)
-					detail = [NSString stringWithFormat:@"%@ · %@",
-							[known uppercaseString], detail];
-				else if (!known)
-					[self loadExtensionForMime:mime];
-			}
-			cell.detailTextLabel.text = detail;
-		}
-		return cell;
+- (UITableViewCell *)listCellForTableView:(UITableView *)tableView atRow:(NSInteger)row {
+	static NSString *listIdentifier = @"TGMediaList";
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:listIdentifier];
+	if (!cell){
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+									  reuseIdentifier:listIdentifier];
+		cell.textLabel.font = [UIFont boldSystemFontOfSize:15];
+		cell.detailTextLabel.font = [UIFont systemFontOfSize:12];
 	}
+	[[TGTheme shared] styleCell:cell];
+	cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
+	cell.detailTextLabel.textColor = [[TGTheme shared] secondaryTextColour];
+	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+	cell.accessoryType = UITableViewCellAccessoryNone;
 
+	if (row < (NSInteger)_items.count){
+		NSDictionary *item = _items[row];
+		cell.textLabel.text = item[@"title"];
+		NSString *detail = item[@"detail"];
+		NSString *mime = item[@"mime"];
+		if (_scope == TGMediaScopeFiles && [mime isKindOfClass:NSString.class]
+				&& mime.length){
+			NSString *known = _extensionCache[mime];
+			if (known.length)
+				detail = [NSString stringWithFormat:@"%@ · %@",
+						[known uppercaseString], detail];
+			else if (!known)
+				[self loadExtensionForMime:mime];
+		}
+		cell.detailTextLabel.text = detail;
+	}
+	return cell;
+}
+
+- (UITableViewCell *)gridCellForTableView:(UITableView *)tableView atRow:(NSInteger)row {
 	static NSString *gridIdentifier = @"TGMediaGrid";
 	TGMediaGridCell *cell = (TGMediaGridCell *)[tableView dequeueReusableCellWithIdentifier:gridIdentifier];
 	if (!cell){
@@ -2655,7 +2713,7 @@ static const long long TGMediaExportLimit = 12 * 1024 * 1024;
 	cell.gridDelegate = self;
 
 	NSInteger perRow = _itemsPerRow < 1 ? 1 : _itemsPerRow;
-	NSInteger base = indexPath.row * perRow;
+	NSInteger base = row * perRow;
 	NSInteger end = MIN(base + perRow, (NSInteger)_items.count);
 	NSArray *slice = base < end
 			? [_items subarrayWithRange:NSMakeRange(base, end - base)] : @[];

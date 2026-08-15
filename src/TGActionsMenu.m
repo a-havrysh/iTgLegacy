@@ -300,33 +300,7 @@ static TGActionsMenuView *sOpenMenu = nil;
 
 #pragma mark - building
 
-- (void)buildPage {
-	for (TGActionsMenuButton *button in _buttons){
-		button.delegate = nil;
-		[button removeFromSuperview];
-	}
-	[_buttons removeAllObjects];
-	for (UIView *separator in _separators)
-		[separator removeFromSuperview];
-	[_separators removeAllObjects];
-
-	_items = [self currentPageItems];
-
-	UIImage *rawLeftImage = [UIImage imageNamed:@"MenuButtonLeft.png"];
-	UIImage *leftImage = [rawLeftImage stretchableImageWithLeftCapWidth:(int)(rawLeftImage.size.width - 1) topCapHeight:0];
-	UIImage *rightImage = [[UIImage imageNamed:@"MenuButtonRight.png"] stretchableImageWithLeftCapWidth:0 topCapHeight:0];
-	UIImage *rawCenterImage = [UIImage imageNamed:@"MenuButtonCenter.png"];
-	UIImage *centerImage = [rawCenterImage stretchableImageWithLeftCapWidth:(int)(rawCenterImage.size.width / 2) topCapHeight:0];
-
-	UIImage *rawLeftHighlighted = [UIImage imageNamed:@"MenuButtonLeft_Highlighted.png"];
-	UIImage *leftHighlightedImage = [rawLeftHighlighted stretchableImageWithLeftCapWidth:(int)(rawLeftHighlighted.size.width - 1) topCapHeight:0];
-	UIImage *rightHighlightedImage = [[UIImage imageNamed:@"MenuButtonRight_Highlighted.png"] stretchableImageWithLeftCapWidth:0 topCapHeight:0];
-	UIImage *rawCenterHighlighted = [UIImage imageNamed:@"MenuButtonCenter_Highlighted.png"];
-	UIImage *centerHighlightedImage = [rawCenterHighlighted stretchableImageWithLeftCapWidth:(int)(rawCenterHighlighted.size.width / 2) topCapHeight:0];
-
-	UIImage *separatorImage = [UIImage imageNamed:@"MenuButtonSeparator.png"];
-
-	UIFont *titleFont = [UIFont boldSystemFontOfSize:14];
+- (NSArray *)buttonWidthsWithFont:(UIFont *)titleFont {
 	CGFloat maximumWidth = MAX(60.0f, self.bounds.size.width - kMenuEdgeMargin * 2.0f);
 
 	NSMutableArray *widths = [[NSMutableArray alloc] init];
@@ -354,6 +328,39 @@ static TGActionsMenuView *sOpenMenu = nil;
 			[widths replaceObjectAtIndex:i withObject:[NSNumber numberWithFloat:width]];
 		}
 	}
+
+	return widths;
+}
+
+- (void)buildPage {
+	for (TGActionsMenuButton *button in _buttons){
+		button.delegate = nil;
+		[button removeFromSuperview];
+	}
+	[_buttons removeAllObjects];
+	for (UIView *separator in _separators)
+		[separator removeFromSuperview];
+	[_separators removeAllObjects];
+
+	_items = [self currentPageItems];
+
+	UIImage *rawLeftImage = [UIImage imageNamed:@"MenuButtonLeft.png"];
+	UIImage *leftImage = [rawLeftImage stretchableImageWithLeftCapWidth:(int)(rawLeftImage.size.width - 1) topCapHeight:0];
+	UIImage *rightImage = [[UIImage imageNamed:@"MenuButtonRight.png"] stretchableImageWithLeftCapWidth:0 topCapHeight:0];
+	UIImage *rawCenterImage = [UIImage imageNamed:@"MenuButtonCenter.png"];
+	UIImage *centerImage = [rawCenterImage stretchableImageWithLeftCapWidth:(int)(rawCenterImage.size.width / 2) topCapHeight:0];
+
+	UIImage *rawLeftHighlighted = [UIImage imageNamed:@"MenuButtonLeft_Highlighted.png"];
+	UIImage *leftHighlightedImage = [rawLeftHighlighted stretchableImageWithLeftCapWidth:(int)(rawLeftHighlighted.size.width - 1) topCapHeight:0];
+	UIImage *rightHighlightedImage = [[UIImage imageNamed:@"MenuButtonRight_Highlighted.png"] stretchableImageWithLeftCapWidth:0 topCapHeight:0];
+	UIImage *rawCenterHighlighted = [UIImage imageNamed:@"MenuButtonCenter_Highlighted.png"];
+	UIImage *centerHighlightedImage = [rawCenterHighlighted stretchableImageWithLeftCapWidth:(int)(rawCenterHighlighted.size.width / 2) topCapHeight:0];
+
+	UIImage *separatorImage = [UIImage imageNamed:@"MenuButtonSeparator.png"];
+
+	UIFont *titleFont = [UIFont boldSystemFontOfSize:14];
+
+	NSArray *widths = [self buttonWidthsWithFont:titleFont];
 
 	UIColor *shadowNormal = [UIColor colorWithWhite:0.0f alpha:0.8f];
 	UIColor *shadowHighlighted = [UIColor colorWithRed:0x18 / 255.0f

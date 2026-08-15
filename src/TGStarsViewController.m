@@ -1109,7 +1109,7 @@ enum {
 
 #pragma mark - taps
 
-- (void)pushTransactionDetails:(NSDictionary *)transaction {
+- (NSArray *)pairsForTransaction:(NSDictionary *)transaction {
 	NSMutableArray *pairs = [NSMutableArray array];
 	long long stars = [transaction[@"stars"] longLongValue];
 	[pairs addObject:@[stars < 0 ? @"Spent" : @"Earned",
@@ -1132,25 +1132,19 @@ enum {
 	if (transactionId.length)
 		[pairs addObject:@[@"ID", transactionId]];
 
-	NSString *title = [self counterpartyForTransaction:transaction];
-	NSString *comment = transaction[@"description"];
-	if (![comment isKindOfClass:[NSString class]] || !comment.length)
-		comment = nil;
+	return pairs;
+}
 
-	TGStarsDetailViewController *controller =
-			[[TGStarsDetailViewController alloc] initWithTitle:title
-														 pairs:pairs
-													   comment:comment];
-
-	int64_t partnerId = [transaction[@"userId"] longLongValue];
-	if (stars > 0 && partnerId && transactionId.length &&
-		![self transactionIsRefund:transaction])
-	{
-		__weak typeof(self) weakSelf = self;
-		__weak TGStarsDetailViewController *weakController = controller;
-		NSString *partner = [[TGClient shared] nameForUserId:partnerId];
-		NSString *amount = [self starsText:stars signed:NO];
-		controller.actions = @[TGStarsAction(@"Refund This Payment", nil, YES, ^{
+- (NSDictionary *)refundActionForChargeId:(NSString *)transactionId
+								partnerId:(int64_t)partnerId
+									stars:(long long)stars
+							   controller:(TGStarsDetailViewController *)controller
+{
+	__weak typeof(self) weakSelf = self;
+	__weak TGStarsDetailViewController *weakController = controller;
+	NSString *partner = [[TGClient shared] nameForUserId:partnerId];
+	NSString *amount = [self starsText:stars signed:NO];
+	return TGStarsAction(@"Refund This Payment", nil, YES, ^{
 			typeof(self) strongSelf = weakSelf;
 			TGStarsDetailViewController *strongController = weakController;
 			if (!strongSelf || !strongController)
@@ -1176,7 +1170,34 @@ enum {
 									   failure:@"This payment could not be refunded."];
 				}];
 			}];
-		})];
+	});
+}
+
+- (void)pushTransactionDetails:(NSDictionary *)transaction {
+	long long stars = [transaction[@"stars"] longLongValue];
+
+	NSString *transactionId = transaction[@"id"];
+	if (![transactionId isKindOfClass:[NSString class]])
+		transactionId = nil;
+
+	NSString *title = [self counterpartyForTransaction:transaction];
+	NSString *comment = transaction[@"description"];
+	if (![comment isKindOfClass:[NSString class]] || !comment.length)
+		comment = nil;
+
+	TGStarsDetailViewController *controller =
+			[[TGStarsDetailViewController alloc] initWithTitle:title
+														 pairs:[self pairsForTransaction:transaction]
+													   comment:comment];
+
+	int64_t partnerId = [transaction[@"userId"] longLongValue];
+	if (stars > 0 && partnerId && transactionId.length &&
+		![self transactionIsRefund:transaction])
+	{
+		controller.actions = @[[self refundActionForChargeId:transactionId
+												   partnerId:partnerId
+													   stars:stars
+												  controller:controller]];
 		controller.actionsComment = @"Only a payment received by a bot of yours can be refunded.";
 	}
 
@@ -1220,32 +1241,31 @@ enum {
 	[alert show];
 }
 
-- (NSArray *)giftActionsFor:(NSDictionary *)gift
-				 controller:(TGStarsDetailViewController *)controller
+- (NSDictionary *)giftVisibilityActionForGift:(NSDictionary *)gift
+									   giftId:(NSString *)giftId
+								   controller:(TGStarsDetailViewController *)controller
 {
-	NSString *giftId = gift[@"giftId"];
-	if (![giftId isKindOfClass:[NSString class]] || !giftId.length)
-		return nil;
-
-	NSMutableArray *actions = [NSMutableArray array];
 	__weak typeof(self) weakSelf = self;
 	__weak TGStarsDetailViewController *weakController = controller;
-
-	if ([gift[@"tgChannelGift"] boolValue])
-		return actions;
-
 	BOOL saved = [gift[@"isSaved"] boolValue];
-	[actions addObject:TGStarsAction(@"On My Profile", saved ? @"Shown" : @"Hidden", NO, ^{
+	return TGStarsAction(@"On My Profile", saved ? @"Shown" : @"Hidden", NO, ^{
 		typeof(self) strongSelf = weakSelf;
 		TGStarsDetailViewController *strongController = weakController;
 		if (!strongSelf || !strongController)
 			return;
 		[[TGClient shared] setReceivedGift:giftId saved:!saved];
 		[strongSelf refreshGiftDetail:strongController giftId:giftId fallback:gift];
-	})];
+	});
+}
 
+- (NSDictionary *)giftPinActionForGift:(NSDictionary *)gift
+								giftId:(NSString *)giftId
+							controller:(TGStarsDetailViewController *)controller
+{
+	__weak typeof(self) weakSelf = self;
+	__weak TGStarsDetailViewController *weakController = controller;
 	BOOL pinned = [gift[@"isPinned"] boolValue];
-	[actions addObject:TGStarsAction(@"Pinned on Profile", pinned ? @"Yes" : @"No", NO, ^{
+	return TGStarsAction(@"Pinned on Profile", pinned ? @"Yes" : @"No", NO, ^{
 		typeof(self) strongSelf = weakSelf;
 		TGStarsDetailViewController *strongController = weakController;
 		if (!strongSelf || !strongController)
@@ -1253,18 +1273,26 @@ enum {
 		[[TGClient shared] setPinnedGiftIds:
 				[strongSelf pinnedGiftIdsTogglingGift:giftId pinned:!pinned]];
 		[strongSelf refreshGiftDetail:strongController giftId:giftId fallback:gift];
-	})];
+	});
+}
 
-	[actions addObject:TGStarsAction(@"Add to a Collection", nil, NO, ^{
+- (NSDictionary *)giftCollectionActionForGiftId:(NSString *)giftId {
+	__weak typeof(self) weakSelf = self;
+	return TGStarsAction(@"Add to a Collection", nil, NO, ^{
 		typeof(self) strongSelf = weakSelf;
 		if (strongSelf)
 			[strongSelf pushCollectionPickerForGift:giftId];
-	})];
+	});
+}
 
-	if ([gift[@"isUnique"] boolValue] && [gift[@"canTransfer"] boolValue]){
-		long long transferPrice = [gift[@"transferStarCount"] longLongValue];
-		[actions addObject:TGStarsAction(@"Transfer to a Contact",
-				transferPrice > 0 ? [self starsText:transferPrice signed:NO] : @"Free", NO, ^{
+- (NSDictionary *)giftTransferActionForGiftId:(NSString *)giftId
+										price:(long long)transferPrice
+								   controller:(TGStarsDetailViewController *)controller
+{
+	__weak typeof(self) weakSelf = self;
+	__weak TGStarsDetailViewController *weakController = controller;
+	return TGStarsAction(@"Transfer to a Contact",
+			transferPrice > 0 ? [self starsText:transferPrice signed:NO] : @"Free", NO, ^{
 			typeof(self) strongSelf = weakSelf;
 			TGStarsDetailViewController *strongController = weakController;
 			if (!strongSelf || !strongController)
@@ -1299,13 +1327,17 @@ enum {
 					}];
 				}];
 			}];
-		})];
-	}
+	});
+}
 
-	long long sell = [gift[@"sellStarCount"] longLongValue];
-	if (sell > 0 && ![gift[@"isUnique"] boolValue]){
-		NSString *value = [self starsText:sell signed:NO];
-		[actions addObject:TGStarsAction(@"Convert to Stars", value, YES, ^{
+- (NSDictionary *)giftConvertActionForGiftId:(NSString *)giftId
+									   price:(long long)sell
+								  controller:(TGStarsDetailViewController *)controller
+{
+	__weak typeof(self) weakSelf = self;
+	__weak TGStarsDetailViewController *weakController = controller;
+	NSString *value = [self starsText:sell signed:NO];
+	return TGStarsAction(@"Convert to Stars", value, YES, ^{
 			typeof(self) strongSelf = weakSelf;
 			TGStarsDetailViewController *strongController = weakController;
 			if (!strongSelf || !strongController)
@@ -1330,13 +1362,17 @@ enum {
 								   failure:@"This gift can no longer be converted."];
 				}];
 			}];
-		})];
-	}
+	});
+}
 
-	long long upgrade = [gift[@"upgradeStarCount"] longLongValue];
-	if ([gift[@"canUpgrade"] boolValue] && ![gift[@"isUnique"] boolValue]){
-		NSString *value = upgrade > 0 ? [self starsText:upgrade signed:NO] : @"Free";
-		[actions addObject:TGStarsAction(@"Upgrade to Unique", value, NO, ^{
+- (NSDictionary *)giftUpgradeActionForGiftId:(NSString *)giftId
+									   price:(long long)upgrade
+								  controller:(TGStarsDetailViewController *)controller
+{
+	__weak typeof(self) weakSelf = self;
+	__weak TGStarsDetailViewController *weakController = controller;
+	NSString *value = upgrade > 0 ? [self starsText:upgrade signed:NO] : @"Free";
+	return TGStarsAction(@"Upgrade to Unique", value, NO, ^{
 			typeof(self) strongSelf = weakSelf;
 			TGStarsDetailViewController *strongController = weakController;
 			if (!strongSelf || !strongController)
@@ -1363,21 +1399,31 @@ enum {
 									failure:@"The upgrade could not be completed."];
 				}];
 			}];
-		})];
-	}
+	});
+}
 
-	if ([gift[@"isUnique"] boolValue]){
-		long long resale = [gift[@"resaleStarCount"] longLongValue];
-		[actions addObject:TGStarsAction(resale > 0 ? @"Change Sale Price" : @"Sell This Gift",
-				resale > 0 ? [self starsText:resale signed:NO] : nil, NO, ^{
-			typeof(self) strongSelf = weakSelf;
-			TGStarsDetailViewController *strongController = weakController;
-			if (!strongSelf || !strongController)
-				return;
-			[strongSelf askResalePriceForGift:giftId controller:strongController];
-		})];
-		if (resale > 0){
-			[actions addObject:TGStarsAction(@"Remove From Sale", nil, YES, ^{
+- (NSDictionary *)giftResalePriceActionForGiftId:(NSString *)giftId
+										   price:(long long)resale
+									  controller:(TGStarsDetailViewController *)controller
+{
+	__weak typeof(self) weakSelf = self;
+	__weak TGStarsDetailViewController *weakController = controller;
+	return TGStarsAction(resale > 0 ? @"Change Sale Price" : @"Sell This Gift",
+			resale > 0 ? [self starsText:resale signed:NO] : nil, NO, ^{
+		typeof(self) strongSelf = weakSelf;
+		TGStarsDetailViewController *strongController = weakController;
+		if (!strongSelf || !strongController)
+			return;
+		[strongSelf askResalePriceForGift:giftId controller:strongController];
+	});
+}
+
+- (NSDictionary *)giftRemoveFromSaleActionForGiftId:(NSString *)giftId
+										 controller:(TGStarsDetailViewController *)controller
+{
+	__weak typeof(self) weakSelf = self;
+	__weak TGStarsDetailViewController *weakController = controller;
+	return TGStarsAction(@"Remove From Sale", nil, YES, ^{
 				typeof(self) strongSelf = weakSelf;
 				TGStarsDetailViewController *strongController = weakController;
 				if (!strongSelf || !strongController)
@@ -1395,7 +1441,57 @@ enum {
 									success:ok
 									failure:@"The listing could not be removed."];
 				}];
-			})];
+	});
+}
+
+- (NSArray *)giftActionsFor:(NSDictionary *)gift
+				 controller:(TGStarsDetailViewController *)controller
+{
+	NSString *giftId = gift[@"giftId"];
+	if (![giftId isKindOfClass:[NSString class]] || !giftId.length)
+		return nil;
+
+	NSMutableArray *actions = [NSMutableArray array];
+
+	if ([gift[@"tgChannelGift"] boolValue])
+		return actions;
+
+	[actions addObject:[self giftVisibilityActionForGift:gift
+												  giftId:giftId
+											  controller:controller]];
+	[actions addObject:[self giftPinActionForGift:gift
+										   giftId:giftId
+									   controller:controller]];
+	[actions addObject:[self giftCollectionActionForGiftId:giftId]];
+
+	if ([gift[@"isUnique"] boolValue] && [gift[@"canTransfer"] boolValue]){
+		[actions addObject:[self giftTransferActionForGiftId:giftId
+													   price:[gift[@"transferStarCount"] longLongValue]
+												  controller:controller]];
+	}
+
+	long long sell = [gift[@"sellStarCount"] longLongValue];
+	if (sell > 0 && ![gift[@"isUnique"] boolValue]){
+		[actions addObject:[self giftConvertActionForGiftId:giftId
+													  price:sell
+												 controller:controller]];
+	}
+
+	long long upgrade = [gift[@"upgradeStarCount"] longLongValue];
+	if ([gift[@"canUpgrade"] boolValue] && ![gift[@"isUnique"] boolValue]){
+		[actions addObject:[self giftUpgradeActionForGiftId:giftId
+													  price:upgrade
+												 controller:controller]];
+	}
+
+	if ([gift[@"isUnique"] boolValue]){
+		long long resale = [gift[@"resaleStarCount"] longLongValue];
+		[actions addObject:[self giftResalePriceActionForGiftId:giftId
+														  price:resale
+													 controller:controller]];
+		if (resale > 0){
+			[actions addObject:[self giftRemoveFromSaleActionForGiftId:giftId
+															controller:controller]];
 		}
 	}
 
@@ -1446,11 +1542,7 @@ enum {
 	[alert show];
 }
 
-- (void)pushSubscriptionDetails:(NSDictionary *)subscription {
-	NSString *subscriptionId = subscription[@"id"];
-	if (![subscriptionId isKindOfClass:[NSString class]])
-		subscriptionId = nil;
-
+- (NSArray *)pairsForSubscription:(NSDictionary *)subscription {
 	NSMutableArray *pairs = [NSMutableArray array];
 	long long stars = [subscription[@"stars"] longLongValue];
 	long long period = [subscription[@"period"] longLongValue];
@@ -1473,19 +1565,15 @@ enum {
 	[pairs addObject:@[@"Status", [subscription[@"isCanceled"] boolValue] ? @"Canceled"
 			: ([subscription[@"isExpiring"] boolValue] ? @"Expiring" : @"Active")]];
 
-	TGStarsDetailViewController *controller =
-			[[TGStarsDetailViewController alloc] initWithTitle:
-					[self titleForSubscription:subscription]
-														 pairs:pairs
-													   comment:nil];
+	return pairs;
+}
 
-	if (subscriptionId.length){
-		NSMutableArray *actions = [NSMutableArray array];
-		__weak typeof(self) weakSelf = self;
-		__weak TGStarsDetailViewController *weakController = controller;
-
-		if ([subscription[@"canReuse"] boolValue]){
-			[actions addObject:TGStarsAction(@"Rejoin Channel", nil, NO, ^{
+- (NSDictionary *)subscriptionRejoinActionForId:(NSString *)subscriptionId
+									 controller:(TGStarsDetailViewController *)controller
+{
+	__weak typeof(self) weakSelf = self;
+	__weak TGStarsDetailViewController *weakController = controller;
+	return TGStarsAction(@"Rejoin Channel", nil, NO, ^{
 				typeof(self) strongSelf = weakSelf;
 				TGStarsDetailViewController *strongController = weakController;
 				if (!strongSelf || !strongController)
@@ -1502,13 +1590,18 @@ enum {
 									success:ok
 									failure:@"The channel could not be rejoined."];
 				}];
-			})];
-		}
+	});
+}
 
-		BOOL canceled = [subscription[@"isCanceled"] boolValue];
-		[actions addObject:TGStarsAction(
-				canceled ? @"Renew Subscription" : @"Cancel Subscription",
-				nil, !canceled, ^{
+- (NSDictionary *)subscriptionToggleActionForId:(NSString *)subscriptionId
+									   canceled:(BOOL)canceled
+									 controller:(TGStarsDetailViewController *)controller
+{
+	__weak typeof(self) weakSelf = self;
+	__weak TGStarsDetailViewController *weakController = controller;
+	return TGStarsAction(
+			canceled ? @"Renew Subscription" : @"Cancel Subscription",
+			nil, !canceled, ^{
 			typeof(self) strongSelf = weakSelf;
 			TGStarsDetailViewController *strongController = weakController;
 			if (!strongSelf || !strongController)
@@ -1536,7 +1629,31 @@ enum {
 								 message:@"Stars will stop being charged. Access stays until the paid period ends."
 								  action:@"Cancel Subscription"
 								   block:apply];
-		})];
+	});
+}
+
+- (void)pushSubscriptionDetails:(NSDictionary *)subscription {
+	NSString *subscriptionId = subscription[@"id"];
+	if (![subscriptionId isKindOfClass:[NSString class]])
+		subscriptionId = nil;
+
+	TGStarsDetailViewController *controller =
+			[[TGStarsDetailViewController alloc] initWithTitle:
+					[self titleForSubscription:subscription]
+														 pairs:[self pairsForSubscription:subscription]
+													   comment:nil];
+
+	if (subscriptionId.length){
+		NSMutableArray *actions = [NSMutableArray array];
+
+		if ([subscription[@"canReuse"] boolValue]){
+			[actions addObject:[self subscriptionRejoinActionForId:subscriptionId
+													   controller:controller]];
+		}
+
+		[actions addObject:[self subscriptionToggleActionForId:subscriptionId
+													  canceled:[subscription[@"isCanceled"] boolValue]
+													controller:controller]];
 
 		controller.actions = actions;
 	}
@@ -2020,6 +2137,29 @@ enum {
 	[self loadResaleListingsInto:list giftId:giftId offset:@""];
 }
 
+- (void)confirmBuyResoldGiftNamed:(NSString *)name price:(long long)price {
+	__weak typeof(self) weakSelf = self;
+	[self confirmWithTitle:@"Buy Gift"
+				   message:[NSString stringWithFormat:
+						   @"Buy this gift for %@?",
+						   [self starsText:price signed:NO]]
+					action:@"Buy"
+					 block:^{
+		typeof(self) buySelf = weakSelf;
+		if (!buySelf)
+			return;
+		[[TGClient shared] buyResoldGiftNamed:name
+								 forStarCount:price
+								   completion:^(BOOL ok)
+		{
+			typeof(self) doneSelf = weakSelf;
+			if (doneSelf)
+				[doneSelf finishSimpleAction:ok
+									 failure:@"This gift could not be bought."];
+		}];
+	}];
+}
+
 - (void)loadResaleListingsInto:(TGStarsListViewController *)list
 						giftId:(long long)giftId
 						offset:(NSString *)offset
@@ -2052,25 +2192,7 @@ enum {
 					typeof(self) innerSelf = weakSelf;
 					if (!innerSelf)
 						return;
-					[innerSelf confirmWithTitle:@"Buy Gift"
-										message:[NSString stringWithFormat:
-												@"Buy this gift for %@?",
-												[innerSelf starsText:price signed:NO]]
-										 action:@"Buy"
-										  block:^{
-						typeof(self) buySelf = weakSelf;
-						if (!buySelf)
-							return;
-						[[TGClient shared] buyResoldGiftNamed:name
-												 forStarCount:price
-												   completion:^(BOOL ok)
-						{
-							typeof(self) doneSelf = weakSelf;
-							if (doneSelf)
-								[doneSelf finishSimpleAction:ok
-													 failure:@"This gift could not be bought."];
-						}];
-					}];
+					[innerSelf confirmBuyResoldGiftNamed:name price:price];
 				})];
 			}
 		}
@@ -2153,12 +2275,7 @@ enum {
 	}];
 }
 
-- (void)pushCatalogueGift:(NSDictionary *)gift {
-	NSString *title = gift[@"title"];
-	if (![title isKindOfClass:[NSString class]] || !title.length)
-		title = @"Gift";
-	long long giftId = [gift[@"id"] longLongValue];
-
+- (NSArray *)pairsForCatalogueGift:(NSDictionary *)gift {
 	NSMutableArray *pairs = [NSMutableArray array];
 	[pairs addObject:@[@"Price", [self starsText:
 			[gift[@"starCount"] longLongValue] signed:NO]]];
@@ -2175,14 +2292,12 @@ enum {
 			[pairs addObject:@[@"From", [self starsText:minResale signed:NO]]];
 	}
 
-	TGStarsDetailViewController *controller =
-			[[TGStarsDetailViewController alloc] initWithTitle:title
-														 pairs:pairs
-													   comment:nil];
-	NSMutableArray *actions = [NSMutableArray array];
-	__weak typeof(self) weakSelf = self;
+	return pairs;
+}
 
-	[actions addObject:TGStarsAction(@"Send to a Contact", nil, NO, ^{
+- (NSDictionary *)catalogueSendToContactActionForGift:(NSDictionary *)gift {
+	__weak typeof(self) weakSelf = self;
+	return TGStarsAction(@"Send to a Contact", nil, NO, ^{
 		typeof(self) strongSelf = weakSelf;
 		if (!strongSelf)
 			return;
@@ -2193,9 +2308,12 @@ enum {
 			if (innerSelf)
 				[innerSelf sendCatalogueGift:gift toUser:userId name:name];
 		}];
-	})];
+	});
+}
 
-	[actions addObject:TGStarsAction(@"Send to a Channel", nil, NO, ^{
+- (NSDictionary *)catalogueSendToChannelActionForGift:(NSDictionary *)gift {
+	__weak typeof(self) weakSelf = self;
+	return TGStarsAction(@"Send to a Channel", nil, NO, ^{
 		typeof(self) strongSelf = weakSelf;
 		if (!strongSelf)
 			return;
@@ -2204,23 +2322,57 @@ enum {
 			if (innerSelf)
 				[innerSelf sendCatalogueGift:gift toChat:chatId];
 		}];
-	})];
+	});
+}
 
-	if (upgrade > 0){
-		[actions addObject:TGStarsAction(@"Upgrade Preview", nil, NO, ^{
-			typeof(self) strongSelf = weakSelf;
-			if (strongSelf)
-				[strongSelf pushUpgradePreviewForGiftId:giftId title:title];
-		})];
-	}
+- (NSDictionary *)catalogueUpgradePreviewActionForGiftId:(long long)giftId
+												   title:(NSString *)title
+{
+	__weak typeof(self) weakSelf = self;
+	return TGStarsAction(@"Upgrade Preview", nil, NO, ^{
+		typeof(self) strongSelf = weakSelf;
+		if (strongSelf)
+			[strongSelf pushUpgradePreviewForGiftId:giftId title:title];
+	});
+}
+
+- (NSDictionary *)catalogueResaleActionForGiftId:(long long)giftId
+										   title:(NSString *)title
+										   count:(NSInteger)resaleCount
+{
+	__weak typeof(self) weakSelf = self;
+	return TGStarsAction(@"Buy From Resale",
+			[NSString stringWithFormat:@"%d", (int)resaleCount], NO, ^{
+		typeof(self) strongSelf = weakSelf;
+		if (strongSelf)
+			[strongSelf pushResaleListingsForGiftId:giftId title:title];
+	});
+}
+
+- (void)pushCatalogueGift:(NSDictionary *)gift {
+	NSString *title = gift[@"title"];
+	if (![title isKindOfClass:[NSString class]] || !title.length)
+		title = @"Gift";
+	long long giftId = [gift[@"id"] longLongValue];
+	long long upgrade = [gift[@"upgradeStarCount"] longLongValue];
+	NSInteger resaleCount = [gift[@"resaleCount"] integerValue];
+
+	TGStarsDetailViewController *controller =
+			[[TGStarsDetailViewController alloc] initWithTitle:title
+														 pairs:[self pairsForCatalogueGift:gift]
+													   comment:nil];
+	NSMutableArray *actions = [NSMutableArray array];
+
+	[actions addObject:[self catalogueSendToContactActionForGift:gift]];
+	[actions addObject:[self catalogueSendToChannelActionForGift:gift]];
+
+	if (upgrade > 0)
+		[actions addObject:[self catalogueUpgradePreviewActionForGiftId:giftId title:title]];
 
 	if (resaleCount > 0){
-		[actions addObject:TGStarsAction(@"Buy From Resale",
-				[NSString stringWithFormat:@"%d", (int)resaleCount], NO, ^{
-			typeof(self) strongSelf = weakSelf;
-			if (strongSelf)
-				[strongSelf pushResaleListingsForGiftId:giftId title:title];
-		})];
+		[actions addObject:[self catalogueResaleActionForGiftId:giftId
+														  title:title
+														  count:resaleCount]];
 	}
 
 	controller.actions = actions;
@@ -2381,35 +2533,30 @@ enum {
 	[self.navigationController pushViewController:list animated:YES];
 }
 
-- (void)pushCollection:(NSDictionary *)collection all:(NSArray *)allCollections {
-	int32_t collectionId = (int32_t)[collection[@"id"] intValue];
-	NSString *name = collection[@"name"];
-	if (![name isKindOfClass:[NSString class]] || !name.length)
-		name = @"Collection";
-	NSInteger count = [collection[@"giftCount"] integerValue];
-
-	TGStarsDetailViewController *controller =
-			[[TGStarsDetailViewController alloc] initWithTitle:name
-														 pairs:@[@[@"Gifts",
-																 [NSString stringWithFormat:@"%d", (int)count]]]
-													   comment:nil];
-	NSMutableArray *actions = [NSMutableArray array];
+- (NSDictionary *)collectionOpenActionForId:(int32_t)collectionId name:(NSString *)name {
 	__weak typeof(self) weakSelf = self;
-	__weak TGStarsDetailViewController *weakController = controller;
-
-	[actions addObject:TGStarsAction(@"Gifts in Collection", nil, NO, ^{
+	return TGStarsAction(@"Gifts in Collection", nil, NO, ^{
 		typeof(self) strongSelf = weakSelf;
 		if (strongSelf)
 			[strongSelf pushGiftsOfCollection:collectionId name:name];
-	})];
+	});
+}
 
-	[actions addObject:TGStarsAction(@"Add a Gift", nil, NO, ^{
+- (NSDictionary *)collectionAddGiftActionForId:(int32_t)collectionId {
+	__weak typeof(self) weakSelf = self;
+	return TGStarsAction(@"Add a Gift", nil, NO, ^{
 		typeof(self) strongSelf = weakSelf;
 		if (strongSelf)
 			[strongSelf pushGiftPickerForCollection:collectionId];
-	})];
+	});
+}
 
-	[actions addObject:TGStarsAction(@"Rename", nil, NO, ^{
+- (NSDictionary *)collectionRenameActionForId:(int32_t)collectionId
+								   controller:(TGStarsDetailViewController *)controller
+{
+	__weak typeof(self) weakSelf = self;
+	__weak TGStarsDetailViewController *weakController = controller;
+	return TGStarsAction(@"Rename", nil, NO, ^{
 		typeof(self) strongSelf = weakSelf;
 		if (!strongSelf)
 			return;
@@ -2437,12 +2584,14 @@ enum {
 								   failure:@"The collection could not be renamed."];
 			}];
 		}];
-	})];
+	});
+}
 
-	if (allCollections.count > 1 &&
-		![[allCollections objectAtIndex:0] isEqual:collection])
-	{
-		[actions addObject:TGStarsAction(@"Move to Top", nil, NO, ^{
+- (NSDictionary *)collectionMoveToTopActionForId:(int32_t)collectionId
+										     all:(NSArray *)allCollections
+{
+	__weak typeof(self) weakSelf = self;
+	return TGStarsAction(@"Move to Top", nil, NO, ^{
 			typeof(self) strongSelf = weakSelf;
 			if (!strongSelf)
 				return;
@@ -2454,10 +2603,12 @@ enum {
 			}
 			[[TGClient shared] reorderGiftCollections:ids];
 			[strongSelf finishSimpleAction:YES failure:nil];
-		})];
-	}
+	});
+}
 
-	[actions addObject:TGStarsAction(@"Delete Collection", nil, YES, ^{
+- (NSDictionary *)collectionDeleteActionForId:(int32_t)collectionId {
+	__weak typeof(self) weakSelf = self;
+	return TGStarsAction(@"Delete Collection", nil, YES, ^{
 		typeof(self) strongSelf = weakSelf;
 		if (!strongSelf)
 			return;
@@ -2471,7 +2622,35 @@ enum {
 			[[TGClient shared] deleteGiftCollection:collectionId];
 			[innerSelf finishSimpleAction:YES failure:nil];
 		}];
-	})];
+	});
+}
+
+- (void)pushCollection:(NSDictionary *)collection all:(NSArray *)allCollections {
+	int32_t collectionId = (int32_t)[collection[@"id"] intValue];
+	NSString *name = collection[@"name"];
+	if (![name isKindOfClass:[NSString class]] || !name.length)
+		name = @"Collection";
+	NSInteger count = [collection[@"giftCount"] integerValue];
+
+	TGStarsDetailViewController *controller =
+			[[TGStarsDetailViewController alloc] initWithTitle:name
+														 pairs:@[@[@"Gifts",
+																 [NSString stringWithFormat:@"%d", (int)count]]]
+													   comment:nil];
+	NSMutableArray *actions = [NSMutableArray array];
+
+	[actions addObject:[self collectionOpenActionForId:collectionId name:name]];
+	[actions addObject:[self collectionAddGiftActionForId:collectionId]];
+	[actions addObject:[self collectionRenameActionForId:collectionId controller:controller]];
+
+	if (allCollections.count > 1 &&
+		![[allCollections objectAtIndex:0] isEqual:collection])
+	{
+		[actions addObject:[self collectionMoveToTopActionForId:collectionId
+															all:allCollections]];
+	}
+
+	[actions addObject:[self collectionDeleteActionForId:collectionId]];
 
 	controller.actions = actions;
 	[self.navigationController pushViewController:controller animated:YES];
@@ -2723,10 +2902,7 @@ enum {
 
 #pragma mark - invoices
 
-- (void)pushPaymentForm:(NSDictionary *)form {
-	NSString *title = form[@"title"];
-	if (![title isKindOfClass:[NSString class]] || !title.length)
-		title = @"Invoice";
+- (NSArray *)pairsForPaymentForm:(NSDictionary *)form {
 	BOOL isStars = [form[@"isStars"] boolValue];
 
 	NSMutableArray *pairs = [NSMutableArray array];
@@ -2758,20 +2934,17 @@ enum {
 			[pairs addObject:@[@"Seller", seller]];
 	}
 
-	NSString *description = form[@"description"];
-	if (![description isKindOfClass:[NSString class]] || !description.length)
-		description = nil;
+	return pairs;
+}
 
-	TGStarsDetailViewController *controller =
-			[[TGStarsDetailViewController alloc] initWithTitle:title
-														 pairs:pairs
-													   comment:description];
+- (NSDictionary *)payWithStarsActionForForm:(NSDictionary *)form
+									  price:(long long)price
+								 controller:(TGStarsDetailViewController *)controller
+{
 	__weak typeof(self) weakSelf = self;
 	__weak TGStarsDetailViewController *weakController = controller;
-	if (isStars){
-		long long price = [form[@"starCount"] longLongValue];
-		[controller setActions:@[TGStarsAction(@"Pay With Stars",
-				[self starsText:price signed:NO], NO, ^{
+	return TGStarsAction(@"Pay With Stars",
+			[self starsText:price signed:NO], NO, ^{
 			typeof(self) strongSelf = weakSelf;
 			TGStarsDetailViewController *strongController = weakController;
 			if (!strongSelf || !strongController)
@@ -2795,7 +2968,28 @@ enum {
 									   failure:@"The payment was not accepted."];
 				}];
 			}];
-		})]];
+	});
+}
+
+- (void)pushPaymentForm:(NSDictionary *)form {
+	NSString *title = form[@"title"];
+	if (![title isKindOfClass:[NSString class]] || !title.length)
+		title = @"Invoice";
+	BOOL isStars = [form[@"isStars"] boolValue];
+
+	NSString *description = form[@"description"];
+	if (![description isKindOfClass:[NSString class]] || !description.length)
+		description = nil;
+
+	TGStarsDetailViewController *controller =
+			[[TGStarsDetailViewController alloc] initWithTitle:title
+														 pairs:[self pairsForPaymentForm:form]
+													   comment:description];
+	if (isStars){
+		long long price = [form[@"starCount"] longLongValue];
+		[controller setActions:@[[self payWithStarsActionForForm:form
+														   price:price
+													  controller:controller]]];
 		controller.actionsComment = @"The invoice expires, so pay it soon after opening it.";
 	} else {
 		controller.actionsComment = nil;

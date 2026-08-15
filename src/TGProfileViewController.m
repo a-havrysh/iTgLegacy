@@ -700,7 +700,6 @@ static UIImage *TGProfileStretched(NSString *name) {
 - (void)buildHeader {
 	CGFloat width = self.view.bounds.size.width;
 	CGFloat side = kProfileAvatarSide;
-	TGTheme *theme = [TGTheme shared];
 	CGFloat height = kTitleContainerHeight;
 
 	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, height)];
@@ -721,6 +720,27 @@ static UIImage *TGProfileStretched(NSString *name) {
 									  size:side
 								  colourId:self.userId ?: self.chatId];
 	[header addSubview:self.avatarView];
+
+	[self buildHeaderLabelsInto:header width:width];
+
+	[self refreshStatus];
+	[self layoutNameBadge];
+
+	self.tableView.tableHeaderView = header;
+	self.tableView.backgroundColor = TGProfileListBackground();
+
+	if (self.avatarImage)
+		return;
+	NSNumber *fileId = self.userId
+			? [[TGClient shared] photoFileIdForUserId:self.userId]
+			: [[TGClient shared] photoFileIdForChat:self.chatId];
+	if (![fileId isKindOfClass:[NSNumber class]])
+		return;
+	[self loadAvatarFile:fileId.integerValue];
+}
+
+- (void)buildHeaderLabelsInto:(UIView *)header width:(CGFloat)width {
+	TGTheme *theme = [TGTheme shared];
 
 	UILabel *nameLabel = [[UILabel alloc] initWithFrame:
 			CGRectMake(94, 24, width - 94 - 9, 24)];
@@ -765,21 +785,6 @@ static UIImage *TGProfileStretched(NSString *name) {
 			[[UITapGestureRecognizer alloc] initWithTarget:self
 													action:@selector(statusTapped)]];
 	[header addSubview:self.statusLabel];
-
-	[self refreshStatus];
-	[self layoutNameBadge];
-
-	self.tableView.tableHeaderView = header;
-	self.tableView.backgroundColor = TGProfileListBackground();
-
-	if (self.avatarImage)
-		return;
-	NSNumber *fileId = self.userId
-			? [[TGClient shared] photoFileIdForUserId:self.userId]
-			: [[TGClient shared] photoFileIdForChat:self.chatId];
-	if (![fileId isKindOfClass:[NSNumber class]])
-		return;
-	[self loadAvatarFile:fileId.integerValue];
 }
 
 - (void)loadAvatarFile:(NSInteger)fileId {
@@ -1102,12 +1107,7 @@ static UIImage *TGProfileStretched(NSString *name) {
 	if ([title isEqualToString:@"Add to contacts"]){
 		if (!self.userId)
 			return;
-		UIAlertView *ask = [[UIAlertView alloc] initWithTitle:@"Add Contact"
-				message:@"Share your phone number with them?"
-			   delegate:self cancelButtonTitle:@"Don't Share"
-			   otherButtonTitles:@"Share", nil];
-		ask.tag = 83;
-		[ask show];
+		[self promptToAddContact];
 		return;
 	}
 
@@ -1120,13 +1120,7 @@ static UIImage *TGProfileStretched(NSString *name) {
 	}
 
 	if ([title isEqualToString:@"Set photo for this contact"]){
-		UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
-				delegate:self cancelButtonTitle:nil destructiveButtonTitle:nil
-				otherButtonTitles:@"Choose Photo", @"Suggest Photo",
-								  @"Remove Photo", nil];
-		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
-		sheet.tag = 84;
-		[sheet showInView:self.view];
+		[self showContactPhotoActions];
 		return;
 	}
 
@@ -1141,57 +1135,96 @@ static UIImage *TGProfileStretched(NSString *name) {
 	}
 
 	if ([title isEqualToString:@"Leave group"]){
-		UIAlertView *confirm = [[UIAlertView alloc] initWithTitle:@"Leave group"
-				message:@"You will stop receiving messages from this group."
-			   delegate:self cancelButtonTitle:@"Cancel" otherButtonTitles:@"Leave", nil];
-		confirm.tag = 72;
-		[confirm show];
+		[self confirmLeaveGroup];
 		return;
 	}
 
 	if ([title isEqualToString:@"Share contact"]){
-		TGForwardPicker *picker = [[TGForwardPicker alloc] init];
-		NSString *name = self.name;
-		__weak typeof(self) weakSelf = self;
-		picker.onPicked = ^(int64_t targetChatId){
-			NSString *phone = weakSelf.phoneNumber;
-			if (!phone.length){
-				UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Share contact"
-						message:@"This account does not show its phone number."
-					   delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
-				[alert show];
-				return;
-			}
-			[[TGClient shared] sendContactNamed:name phone:phone toChat:targetChatId];
-		};
-		[self.navigationController pushViewController:picker animated:YES];
+		[self pushContactForwardPicker];
 		return;
 	}
 
 	if ([title isEqualToString:@"Auto-delete messages"]){
-		UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Delete messages after"
-														  delegate:self
-												 cancelButtonTitle:nil
-											destructiveButtonTitle:nil
-												 otherButtonTitles:@"Off", @"1 day",
-															   @"1 week", @"1 month", nil];
-		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
-		sheet.tag = 70;
-		[sheet showInView:self.view];
+		[self showAutoDeleteActions];
 		return;
 	}
 
 	if ([title isEqualToString:@"Clear history"]){
-		UIAlertView *confirm = [[UIAlertView alloc] initWithTitle:@"Clear history"
-				message:@"Every message in this chat will be removed for you."
-			   delegate:self cancelButtonTitle:@"Cancel" otherButtonTitles:@"Clear", nil];
-		confirm.tag = 71;
-		[confirm show];
+		[self confirmClearHistory];
 		return;
 	}
 
 	if (!self.userId)
 		return;
+	[self toggleBlockedState];
+}
+
+- (void)promptToAddContact {
+	UIAlertView *ask = [[UIAlertView alloc] initWithTitle:@"Add Contact"
+			message:@"Share your phone number with them?"
+		   delegate:self cancelButtonTitle:@"Don't Share"
+		   otherButtonTitles:@"Share", nil];
+	ask.tag = 83;
+	[ask show];
+}
+
+- (void)showContactPhotoActions {
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
+			delegate:self cancelButtonTitle:nil destructiveButtonTitle:nil
+			otherButtonTitles:@"Choose Photo", @"Suggest Photo",
+							  @"Remove Photo", nil];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = 84;
+	[sheet showInView:self.view];
+}
+
+- (void)confirmLeaveGroup {
+	UIAlertView *confirm = [[UIAlertView alloc] initWithTitle:@"Leave group"
+			message:@"You will stop receiving messages from this group."
+		   delegate:self cancelButtonTitle:@"Cancel" otherButtonTitles:@"Leave", nil];
+	confirm.tag = 72;
+	[confirm show];
+}
+
+- (void)pushContactForwardPicker {
+	TGForwardPicker *picker = [[TGForwardPicker alloc] init];
+	NSString *name = self.name;
+	__weak typeof(self) weakSelf = self;
+	picker.onPicked = ^(int64_t targetChatId){
+		NSString *phone = weakSelf.phoneNumber;
+		if (!phone.length){
+			UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Share contact"
+					message:@"This account does not show its phone number."
+				   delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+			[alert show];
+			return;
+		}
+		[[TGClient shared] sendContactNamed:name phone:phone toChat:targetChatId];
+	};
+	[self.navigationController pushViewController:picker animated:YES];
+}
+
+- (void)showAutoDeleteActions {
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Delete messages after"
+													  delegate:self
+											 cancelButtonTitle:nil
+										destructiveButtonTitle:nil
+											 otherButtonTitles:@"Off", @"1 day",
+														   @"1 week", @"1 month", nil];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = 70;
+	[sheet showInView:self.view];
+}
+
+- (void)confirmClearHistory {
+	UIAlertView *confirm = [[UIAlertView alloc] initWithTitle:@"Clear history"
+			message:@"Every message in this chat will be removed for you."
+		   delegate:self cancelButtonTitle:@"Cancel" otherButtonTitles:@"Clear", nil];
+	confirm.tag = 71;
+	[confirm show];
+}
+
+- (void)toggleBlockedState {
 	BOOL blocked = !self.blocked;
 	[[TGClient shared] setUser:self.userId blocked:blocked];
 	self.blocked = blocked;
@@ -1284,18 +1317,7 @@ static UIImage *TGProfileStretched(NSString *name) {
 	}
 
 	if (sheet.tag == 92){
-		NSString *pressed = [sheet buttonTitleAtIndex:index];
-		if ([pressed isEqualToString:@"Copy Link"]){
-			[UIPasteboard generalPasteboard].string = self.primaryInviteLink ?: @"";
-			[self showToast:@"Invite link copied"];
-			return;
-		}
-		if ([pressed isEqualToString:@"Who Joined"]){
-			[self openLinkJoins];
-			return;
-		}
-		if ([pressed isEqualToString:@"Revoke and Create New"] && self.isChatAdmin)
-			[self replacePrimaryInviteLink];
+		[self runInviteLinkAction:[sheet buttonTitleAtIndex:index]];
 		return;
 	}
 
@@ -1345,21 +1367,7 @@ static UIImage *TGProfileStretched(NSString *name) {
 	}
 
 	if (sheet.tag == 74){
-		NSArray *presets = [TGClient slowModePresets];
-		if (index < 0 || index >= (NSInteger)presets.count)
-			return;
-		id preset = presets[index];
-		NSInteger seconds = [preset isKindOfClass:[NSNumber class]]
-				? [preset integerValue] : 0;
-		__weak typeof(self) weakSelf = self;
-		[[TGClient shared] setSlowModeDelay:seconds forChat:self.chatId
-								 completion:^(BOOL ok){
-			if (ok){
-				weakSelf.slowModeDelay = seconds;
-				[weakSelf loadManagement];
-			}
-			[weakSelf showToast:(ok ? @"Slow mode updated" : @"Could not change slow mode")];
-		}];
+		[self applySlowModePresetAtIndex:index];
 		return;
 	}
 
@@ -1374,6 +1382,44 @@ static UIImage *TGProfileStretched(NSString *name) {
 	[self showToast:(index == 0 ? @"Auto-delete off" : @"Auto-delete on")];
 }
 
+- (void)runInviteLinkAction:(NSString *)pressed {
+	if ([pressed isEqualToString:@"Copy Link"]){
+		[UIPasteboard generalPasteboard].string = self.primaryInviteLink ?: @"";
+		[self showToast:@"Invite link copied"];
+		return;
+	}
+	if ([pressed isEqualToString:@"Who Joined"]){
+		[self openLinkJoins];
+		return;
+	}
+	if ([pressed isEqualToString:@"Revoke and Create New"] && self.isChatAdmin)
+		[self replacePrimaryInviteLink];
+}
+
+- (void)applySlowModePresetAtIndex:(NSInteger)index {
+	NSArray *presets = [TGClient slowModePresets];
+	if (index < 0 || index >= (NSInteger)presets.count)
+		return;
+	id preset = presets[index];
+	NSInteger seconds = [preset isKindOfClass:[NSNumber class]]
+			? [preset integerValue] : 0;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] setSlowModeDelay:seconds forChat:self.chatId
+							 completion:^(BOOL ok){
+		if (ok){
+			weakSelf.slowModeDelay = seconds;
+			[weakSelf loadManagement];
+		}
+		[weakSelf showToast:(ok ? @"Slow mode updated" : @"Could not change slow mode")];
+	}];
+}
+
+- (NSString *)textFromAlert:(UIAlertView *)alert {
+	if (![alert respondsToSelector:@selector(textFieldAtIndex:)])
+		return nil;
+	return TGProfileText([alert textFieldAtIndex:0].text);
+}
+
 - (void)alertView:(UIAlertView *)alert clickedButtonAtIndex:(NSInteger)index {
 	if (alert.tag == 83){
 		[self addContactSharingPhone:(index != alert.cancelButtonIndex)];
@@ -1382,9 +1428,7 @@ static UIImage *TGProfileStretched(NSString *name) {
 	if (index == alert.cancelButtonIndex)
 		return;
 	if (alert.tag == 86){
-		NSString *text = nil;
-		if ([alert respondsToSelector:@selector(textFieldAtIndex:)])
-			text = TGProfileText([alert textFieldAtIndex:0].text);
+		NSString *text = [self textFromAlert:alert];
 		[self reportGroupWithOption:self.reportOptionId text:(text ?: @"")];
 		return;
 	}
@@ -1397,24 +1441,16 @@ static UIImage *TGProfileStretched(NSString *name) {
 		return;
 	}
 	if (alert.tag == 90 && self.chatId){
-		NSString *name = nil;
-		if ([alert respondsToSelector:@selector(textFieldAtIndex:)])
-			name = TGProfileText([alert textFieldAtIndex:0].text);
-		[self setStickerSetNamed:name];
+		[self setStickerSetNamed:[self textFromAlert:alert]];
 		return;
 	}
 	if (alert.tag == 91 && self.chatId){
-		NSString *description = nil;
-		if ([alert respondsToSelector:@selector(textFieldAtIndex:)])
-			description = TGProfileText([alert textFieldAtIndex:0].text);
+		NSString *description = [self textFromAlert:alert];
 		[self saveChatDescription:(description ?: @"")];
 		return;
 	}
 	if (alert.tag == 79){
-		NSString *caption = nil;
-		if ([alert respondsToSelector:@selector(textFieldAtIndex:)])
-			caption = TGProfileText([alert textFieldAtIndex:0].text);
-		[self postStoryWithCaption:caption];
+		[self postStoryWithCaption:[self textFromAlert:alert]];
 		return;
 	}
 	if (alert.tag == 82){
@@ -1422,37 +1458,11 @@ static UIImage *TGProfileStretched(NSString *name) {
 		return;
 	}
 	if (alert.tag == 81 && self.userId){
-		NSString *note = nil;
-		if ([alert respondsToSelector:@selector(textFieldAtIndex:)])
-			note = TGProfileText([alert textFieldAtIndex:0].text);
-		__weak typeof(self) weakSelf = self;
-		[[TGClient shared] setNote:(note ?: @"") forUser:self.userId
-						completion:^(BOOL ok){
-			if (ok){
-				weakSelf.profileNote = note;
-				weakSelf.noteLoaded = YES;
-				[weakSelf rebuildDetailRows];
-			}
-			[weakSelf showToast:(ok ? @"Note saved" : @"Could not save the note")];
-		}];
+		[self saveContactNote:[self textFromAlert:alert]];
 		return;
 	}
 	if (alert.tag == 73 && self.chatId){
-		NSString *title = nil;
-		if ([alert respondsToSelector:@selector(textFieldAtIndex:)])
-			title = TGProfileText([alert textFieldAtIndex:0].text);
-		if (!title.length)
-			return;
-		__weak typeof(self) weakSelf = self;
-		[[TGClient shared] setTitle:title forChat:self.chatId completion:^(BOOL ok){
-			if (ok){
-				weakSelf.name = title;
-				weakSelf.nameLabel.text = title;
-				[weakSelf layoutNameBadge];
-				[weakSelf loadManagement];
-			}
-			[weakSelf showToast:(ok ? @"Name updated" : @"Could not rename")];
-		}];
+		[self renameChatTo:[self textFromAlert:alert]];
 		return;
 	}
 	if (alert.tag == 71 && self.chatId){
@@ -1465,6 +1475,34 @@ static UIImage *TGProfileStretched(NSString *name) {
 		[[TGClient shared] setChat:self.chatId joined:NO];
 		[self.navigationController popToRootViewControllerAnimated:YES];
 	}
+}
+
+- (void)saveContactNote:(NSString *)note {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] setNote:(note ?: @"") forUser:self.userId
+					completion:^(BOOL ok){
+		if (ok){
+			weakSelf.profileNote = note;
+			weakSelf.noteLoaded = YES;
+			[weakSelf rebuildDetailRows];
+		}
+		[weakSelf showToast:(ok ? @"Note saved" : @"Could not save the note")];
+	}];
+}
+
+- (void)renameChatTo:(NSString *)title {
+	if (!title.length)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] setTitle:title forChat:self.chatId completion:^(BOOL ok){
+		if (ok){
+			weakSelf.name = title;
+			weakSelf.nameLabel.text = title;
+			[weakSelf layoutNameBadge];
+			[weakSelf loadManagement];
+		}
+		[weakSelf showToast:(ok ? @"Name updated" : @"Could not rename")];
+	}];
 }
 
 - (void)rebuildSections {
@@ -2051,92 +2089,37 @@ static UIImage *TGProfileStretched(NSString *name) {
 	}
 
 	if ([key isEqualToString:@"title"]){
-		UIAlertView *rename = [[UIAlertView alloc] initWithTitle:nil
-				message:(self.isChannelChat ? @"Channel name" : @"Group name")
-			   delegate:self cancelButtonTitle:@"Cancel" otherButtonTitles:@"Done", nil];
-		rename.tag = 73;
-		if ([rename respondsToSelector:@selector(setAlertViewStyle:)]){
-			rename.alertViewStyle = UIAlertViewStylePlainTextInput;
-			[rename textFieldAtIndex:0].text = TGProfileText(self.name) ?: @"";
-		}
-		[rename show];
+		[self promptForChatTitle];
 		return;
 	}
 
 	if ([key isEqualToString:@"photo"]){
-		UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
-				delegate:self cancelButtonTitle:nil destructiveButtonTitle:nil
-				otherButtonTitles:@"Choose Photo", @"Remove Photo", nil];
-		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
-		sheet.tag = 87;
-		[sheet showInView:self.view];
+		[self showChatPhotoActions];
 		return;
 	}
 
 	if ([key isEqualToString:@"description"]){
-		UIAlertView *editor = [[UIAlertView alloc] initWithTitle:nil
-				message:@"Description" delegate:self cancelButtonTitle:@"Cancel"
-				otherButtonTitles:@"Done", nil];
-		editor.tag = 91;
-		if ([editor respondsToSelector:@selector(setAlertViewStyle:)]){
-			editor.alertViewStyle = UIAlertViewStylePlainTextInput;
-			[editor textFieldAtIndex:0].text = self.chatDescription ?: @"";
-		}
-		[editor show];
+		[self promptForChatDescription];
 		return;
 	}
 
 	if ([key isEqualToString:@"stickers"]){
-		UIAlertView *editor = [[UIAlertView alloc] initWithTitle:nil
-				message:@"Sticker set name" delegate:self cancelButtonTitle:@"Cancel"
-				otherButtonTitles:@"Done", nil];
-		editor.tag = 90;
-		if ([editor respondsToSelector:@selector(setAlertViewStyle:)])
-			editor.alertViewStyle = UIAlertViewStylePlainTextInput;
-		[editor show];
+		[self promptForStickerSet];
 		return;
 	}
 
 	if ([key isEqualToString:@"upgrade"]){
-		UIAlertView *confirm = [[UIAlertView alloc] initWithTitle:@"Upgrade to Supergroup"
-				message:@"Supergroups keep their history for new members and hold "
-						@"many more people. This cannot be undone."
-			   delegate:self cancelButtonTitle:@"Cancel" otherButtonTitles:@"Upgrade", nil];
-		confirm.tag = 88;
-		[confirm show];
+		[self confirmUpgradeToSupergroup];
 		return;
 	}
 
 	if ([key isEqualToString:@"broadcast"]){
-		UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:
-				@"Only administrators will be able to post. This cannot be undone."
-				delegate:self cancelButtonTitle:nil
-				destructiveButtonTitle:@"Convert to Broadcast Group"
-				otherButtonTitles:nil];
-		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
-		sheet.tag = 89;
-		[sheet showInView:self.view];
+		[self confirmConvertToBroadcast];
 		return;
 	}
 
 	if ([key isEqualToString:@"topics"]){
-		if (self.isForumChat){
-			UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:
-					@"Messages will go back to one list and the topics will be lost."
-					delegate:self cancelButtonTitle:nil
-					destructiveButtonTitle:@"Turn Off Topics"
-					otherButtonTitles:nil];
-			sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
-			sheet.tag = 94;
-			[sheet showInView:self.view];
-			return;
-		}
-		UIAlertView *confirm = [[UIAlertView alloc] initWithTitle:@"Topics"
-				message:@"Members will be able to open separate topics instead of "
-						@"one message list. Only the owner may change this."
-			   delegate:self cancelButtonTitle:@"Cancel" otherButtonTitles:@"Turn On", nil];
-		confirm.tag = 93;
-		[confirm show];
+		[self confirmForumModeChange];
 		return;
 	}
 
@@ -2146,12 +2129,7 @@ static UIImage *TGProfileStretched(NSString *name) {
 	}
 
 	if ([key isEqualToString:@"history"]){
-		UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Chat history for new members"
-				delegate:self cancelButtonTitle:nil destructiveButtonTitle:nil
-				otherButtonTitles:@"Visible", @"Hidden", nil];
-		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
-		sheet.tag = 79;
-		[sheet showInView:self.view];
+		[self showChatHistoryActions];
 		return;
 	}
 
@@ -2207,21 +2185,116 @@ static UIImage *TGProfileStretched(NSString *name) {
 		return;
 	}
 
-	if ([key isEqualToString:@"slowmode"]){
-		NSArray *presets = [TGClient slowModePresets];
-		UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Slow mode"
-				delegate:self cancelButtonTitle:nil destructiveButtonTitle:nil
-				otherButtonTitles:nil];
-		for (id preset in presets){
-			NSInteger seconds = [preset isKindOfClass:[NSNumber class]]
-					? [preset integerValue] : 0;
-			[sheet addButtonWithTitle:(seconds <= 0 ? @"Off"
-					: [self slowModeTitle:seconds])];
-		}
-		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
-		sheet.tag = 74;
-		[sheet showInView:self.view];
+	if ([key isEqualToString:@"slowmode"])
+		[self showSlowModeActions];
+}
+
+- (void)promptForChatTitle {
+	UIAlertView *rename = [[UIAlertView alloc] initWithTitle:nil
+			message:(self.isChannelChat ? @"Channel name" : @"Group name")
+		   delegate:self cancelButtonTitle:@"Cancel" otherButtonTitles:@"Done", nil];
+	rename.tag = 73;
+	if ([rename respondsToSelector:@selector(setAlertViewStyle:)]){
+		rename.alertViewStyle = UIAlertViewStylePlainTextInput;
+		[rename textFieldAtIndex:0].text = TGProfileText(self.name) ?: @"";
 	}
+	[rename show];
+}
+
+- (void)showChatPhotoActions {
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
+			delegate:self cancelButtonTitle:nil destructiveButtonTitle:nil
+			otherButtonTitles:@"Choose Photo", @"Remove Photo", nil];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = 87;
+	[sheet showInView:self.view];
+}
+
+- (void)promptForChatDescription {
+	UIAlertView *editor = [[UIAlertView alloc] initWithTitle:nil
+			message:@"Description" delegate:self cancelButtonTitle:@"Cancel"
+			otherButtonTitles:@"Done", nil];
+	editor.tag = 91;
+	if ([editor respondsToSelector:@selector(setAlertViewStyle:)]){
+		editor.alertViewStyle = UIAlertViewStylePlainTextInput;
+		[editor textFieldAtIndex:0].text = self.chatDescription ?: @"";
+	}
+	[editor show];
+}
+
+- (void)promptForStickerSet {
+	UIAlertView *editor = [[UIAlertView alloc] initWithTitle:nil
+			message:@"Sticker set name" delegate:self cancelButtonTitle:@"Cancel"
+			otherButtonTitles:@"Done", nil];
+	editor.tag = 90;
+	if ([editor respondsToSelector:@selector(setAlertViewStyle:)])
+		editor.alertViewStyle = UIAlertViewStylePlainTextInput;
+	[editor show];
+}
+
+- (void)confirmUpgradeToSupergroup {
+	UIAlertView *confirm = [[UIAlertView alloc] initWithTitle:@"Upgrade to Supergroup"
+			message:@"Supergroups keep their history for new members and hold "
+					@"many more people. This cannot be undone."
+		   delegate:self cancelButtonTitle:@"Cancel" otherButtonTitles:@"Upgrade", nil];
+	confirm.tag = 88;
+	[confirm show];
+}
+
+- (void)confirmConvertToBroadcast {
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:
+			@"Only administrators will be able to post. This cannot be undone."
+			delegate:self cancelButtonTitle:nil
+			destructiveButtonTitle:@"Convert to Broadcast Group"
+			otherButtonTitles:nil];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = 89;
+	[sheet showInView:self.view];
+}
+
+- (void)confirmForumModeChange {
+	if (self.isForumChat){
+		UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:
+				@"Messages will go back to one list and the topics will be lost."
+				delegate:self cancelButtonTitle:nil
+				destructiveButtonTitle:@"Turn Off Topics"
+				otherButtonTitles:nil];
+		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+		sheet.tag = 94;
+		[sheet showInView:self.view];
+		return;
+	}
+	UIAlertView *confirm = [[UIAlertView alloc] initWithTitle:@"Topics"
+			message:@"Members will be able to open separate topics instead of "
+					@"one message list. Only the owner may change this."
+		   delegate:self cancelButtonTitle:@"Cancel" otherButtonTitles:@"Turn On", nil];
+	confirm.tag = 93;
+	[confirm show];
+}
+
+- (void)showChatHistoryActions {
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Chat history for new members"
+			delegate:self cancelButtonTitle:nil destructiveButtonTitle:nil
+			otherButtonTitles:@"Visible", @"Hidden", nil];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = 79;
+	[sheet showInView:self.view];
+}
+
+- (void)showSlowModeActions {
+	NSArray *presets = [TGClient slowModePresets];
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Slow mode"
+			delegate:self cancelButtonTitle:nil destructiveButtonTitle:nil
+			otherButtonTitles:nil];
+	for (id preset in presets){
+		NSInteger seconds = [preset isKindOfClass:[NSNumber class]]
+				? [preset integerValue] : 0;
+		[sheet addButtonWithTitle:(seconds <= 0 ? @"Off"
+				: [self slowModeTitle:seconds])];
+	}
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = 74;
+	[sheet showInView:self.view];
 }
 
 - (void)pickChatPhoto {
@@ -2518,42 +2591,50 @@ static UIImage *TGProfileStretched(NSString *name) {
 	[self loadManagement];
 
 	if (!self.userId && self.chatId){
-		__weak typeof(self) weakSelf = self;
-		[[TGClient shared] membersOfChat:self.chatId completion:^(NSArray *members){
-			weakSelf.members = [members isKindOfClass:[NSArray class]] ? members : @[];
-			[weakSelf.tableView reloadData];
-		}];
-		// A group has a description, a size and a link, none of which this
-		// screen used to ask for.
-		[[TGClient shared] chatProfile:self.chatId completion:^(NSDictionary *info){
-			if (![info isKindOfClass:[NSDictionary class]])
-				return;
-			NSMutableArray *rows = [NSMutableArray array];
-			NSString *about = TGProfileText(info[@"description"]);
-			weakSelf.chatDescription = about;
-			if (about)
-				[rows addObject:@[@"about", about]];
-			NSString *members = TGProfileNumberText(info[@"members"]);
-			if (members.integerValue > 0)
-				[rows addObject:@[@"members", members]];
-			NSString *admins = TGProfileNumberText(info[@"admins"]);
-			if (admins.integerValue > 0)
-				[rows addObject:@[@"admins", admins]];
-			NSString *link = TGProfileText(info[@"inviteLink"]);
-			if (link){
-				weakSelf.primaryInviteLink = link;
-				[rows addObject:@[@"invite link", link]];
-			}
-			weakSelf.details = rows;
-			[weakSelf.tableView reloadData];
-			[weakSelf rebuildManageRows];
-		}];
+		[self loadGroupDetailRows];
 		return;
 	}
 
 	if (!self.userId)
 		return;
 
+	[self loadUserDetailRows];
+}
+
+- (void)loadGroupDetailRows {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] membersOfChat:self.chatId completion:^(NSArray *members){
+		weakSelf.members = [members isKindOfClass:[NSArray class]] ? members : @[];
+		[weakSelf.tableView reloadData];
+	}];
+	// A group has a description, a size and a link, none of which this
+	// screen used to ask for.
+	[[TGClient shared] chatProfile:self.chatId completion:^(NSDictionary *info){
+		if (![info isKindOfClass:[NSDictionary class]])
+			return;
+		NSMutableArray *rows = [NSMutableArray array];
+		NSString *about = TGProfileText(info[@"description"]);
+		weakSelf.chatDescription = about;
+		if (about)
+			[rows addObject:@[@"about", about]];
+		NSString *members = TGProfileNumberText(info[@"members"]);
+		if (members.integerValue > 0)
+			[rows addObject:@[@"members", members]];
+		NSString *admins = TGProfileNumberText(info[@"admins"]);
+		if (admins.integerValue > 0)
+			[rows addObject:@[@"admins", admins]];
+		NSString *link = TGProfileText(info[@"inviteLink"]);
+		if (link){
+			weakSelf.primaryInviteLink = link;
+			[rows addObject:@[@"invite link", link]];
+		}
+		weakSelf.details = rows;
+		[weakSelf.tableView reloadData];
+		[weakSelf rebuildManageRows];
+	}];
+}
+
+- (void)loadUserDetailRows {
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] userInfo:self.userId completion:^(NSDictionary *user){
 		if (![user isKindOfClass:[NSDictionary class]]) return;
@@ -2831,38 +2912,14 @@ static UIImage *TGProfileStretched(NSString *name) {
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
 	NSString *kind = [self kindForSection:indexPath.section];
 
-	if ([kind isEqualToString:@"story"]){
-		UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"story"];
-		if (!cell)
-			cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
-										  reuseIdentifier:@"story"];
-		[[TGTheme shared] styleCell:cell];
-		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
-		cell.accessoryType = UITableViewCellAccessoryNone;
-		cell.imageView.image = nil;
-		cell.textLabel.textAlignment = NSTextAlignmentCenter;
-		cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
-		cell.textLabel.textColor = TGProfileColour(0x316ea1);
-		cell.textLabel.text = @"Post a Story";
-		return cell;
-	}
+	if ([kind isEqualToString:@"story"])
+		return [self storyCell:tableView];
 
 	if ([kind isEqualToString:@"actions"])
 		return [self actionsCell:tableView row:indexPath.row];
 
-	if ([kind isEqualToString:@"delete"]){
-		TGProfileRedButtonCell *cell = (TGProfileRedButtonCell *)
-				[tableView dequeueReusableCellWithIdentifier:@"delete"];
-		if (![cell isKindOfClass:[TGProfileRedButtonCell class]])
-			cell = [[TGProfileRedButtonCell alloc]
-					initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"delete"];
-		[cell.button setTitle:@"Delete Contact" forState:UIControlStateNormal];
-		[cell.button removeTarget:self action:NULL
-				 forControlEvents:UIControlEventTouchUpInside];
-		[cell.button addTarget:self action:@selector(deleteContactTapped)
-			  forControlEvents:UIControlEventTouchUpInside];
-		return cell;
-	}
+	if ([kind isEqualToString:@"delete"])
+		return [self deleteContactCell:tableView];
 
 	if ([kind isEqualToString:@"media"])
 		return [self sharedMediaCell:tableView];
@@ -2870,45 +2927,87 @@ static UIImage *TGProfileStretched(NSString *name) {
 	if ([kind isEqualToString:@"manage"])
 		return [self manageCell:tableView row:indexPath.row];
 
-	if ([kind isEqualToString:@"personal"]){
-		UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"manage"];
-		if (!cell)
-			cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
-										  reuseIdentifier:@"manage"];
-		[[TGTheme shared] styleCell:cell];
-		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
-		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-		cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
-		cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
-		cell.textLabel.text = self.personalChatTitle ?: @"Channel";
-		cell.detailTextLabel.text = nil;
-		cell.imageView.image = nil;
-		return cell;
-	}
+	if ([kind isEqualToString:@"personal"])
+		return [self personalChatCell:tableView];
 
-	if ([kind isEqualToString:@"details"]){
-		NSString *label = nil;
-		NSString *value = nil;
-		if (indexPath.row < (NSInteger)self.details.count){
-			NSArray *pair = self.details[indexPath.row];
-			label = pair[0];
-			value = pair[1];
-		} else {
-			NSUInteger giftIndex = indexPath.row - self.details.count;
-			id gift = giftIndex < self.gifts.count ? self.gifts[giftIndex] : nil;
-			label = @"gift";
-			NSString *giftTitle = [gift isKindOfClass:[NSDictionary class]]
-					? TGProfileText(gift[@"title"]) : nil;
-			NSString *stars = [gift isKindOfClass:[NSDictionary class]]
-					? TGProfileNumberText(gift[@"starCount"]) : nil;
-			if (giftTitle && stars.integerValue > 0)
-				value = [NSString stringWithFormat:@"%@ - %@ stars", giftTitle, stars];
-			else
-				value = giftTitle ?: @"Gift";
-		}
-		return [self detailCell:tableView label:label value:value];
-	}
+	if ([kind isEqualToString:@"details"])
+		return [self detailsRowCell:tableView row:indexPath.row];
 
+	return [self plainRowCell:tableView kind:kind row:indexPath.row];
+}
+
+- (UITableViewCell *)storyCell:(UITableView *)tableView {
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"story"];
+	if (!cell)
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+									  reuseIdentifier:@"story"];
+	[[TGTheme shared] styleCell:cell];
+	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+	cell.accessoryType = UITableViewCellAccessoryNone;
+	cell.imageView.image = nil;
+	cell.textLabel.textAlignment = NSTextAlignmentCenter;
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+	cell.textLabel.textColor = TGProfileColour(0x316ea1);
+	cell.textLabel.text = @"Post a Story";
+	return cell;
+}
+
+- (UITableViewCell *)deleteContactCell:(UITableView *)tableView {
+	TGProfileRedButtonCell *cell = (TGProfileRedButtonCell *)
+			[tableView dequeueReusableCellWithIdentifier:@"delete"];
+	if (![cell isKindOfClass:[TGProfileRedButtonCell class]])
+		cell = [[TGProfileRedButtonCell alloc]
+				initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"delete"];
+	[cell.button setTitle:@"Delete Contact" forState:UIControlStateNormal];
+	[cell.button removeTarget:self action:NULL
+			 forControlEvents:UIControlEventTouchUpInside];
+	[cell.button addTarget:self action:@selector(deleteContactTapped)
+		  forControlEvents:UIControlEventTouchUpInside];
+	return cell;
+}
+
+- (UITableViewCell *)personalChatCell:(UITableView *)tableView {
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"manage"];
+	if (!cell)
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
+									  reuseIdentifier:@"manage"];
+	[[TGTheme shared] styleCell:cell];
+	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+	cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+	cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
+	cell.textLabel.text = self.personalChatTitle ?: @"Channel";
+	cell.detailTextLabel.text = nil;
+	cell.imageView.image = nil;
+	return cell;
+}
+
+- (UITableViewCell *)detailsRowCell:(UITableView *)tableView row:(NSInteger)row {
+	NSString *label = nil;
+	NSString *value = nil;
+	if (row < (NSInteger)self.details.count){
+		NSArray *pair = self.details[row];
+		label = pair[0];
+		value = pair[1];
+	} else {
+		NSUInteger giftIndex = row - self.details.count;
+		id gift = giftIndex < self.gifts.count ? self.gifts[giftIndex] : nil;
+		label = @"gift";
+		NSString *giftTitle = [gift isKindOfClass:[NSDictionary class]]
+				? TGProfileText(gift[@"title"]) : nil;
+		NSString *stars = [gift isKindOfClass:[NSDictionary class]]
+				? TGProfileNumberText(gift[@"starCount"]) : nil;
+		if (giftTitle && stars.integerValue > 0)
+			value = [NSString stringWithFormat:@"%@ - %@ stars", giftTitle, stars];
+		else
+			value = giftTitle ?: @"Gift";
+	}
+	return [self detailCell:tableView label:label value:value];
+}
+
+- (UITableViewCell *)plainRowCell:(UITableView *)tableView
+							 kind:(NSString *)kind
+							  row:(NSInteger)row {
 	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"row"];
 	if (!cell)
 		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
@@ -2930,8 +3029,8 @@ static UIImage *TGProfileStretched(NSString *name) {
 			? [[TGTheme shared] secondaryTextColour] : TGProfileColour(0x888888);
 
 	if (isMember){
-		id member = indexPath.row < (NSInteger)self.members.count
-				? self.members[indexPath.row] : nil;
+		id member = row < (NSInteger)self.members.count
+				? self.members[row] : nil;
 		if (![member isKindOfClass:[NSDictionary class]])
 			member = @{};
 		int64_t userId = TGProfileInt64(member[@"id"]);
@@ -3507,7 +3606,13 @@ static UIImage *TGStatsStretch(NSString *name, int leftCap) {
 	self.view.backgroundColor = [[TGTheme shared] listBackgroundColour];
 
 	CGRect bounds = self.view.bounds;
+	[self buildStatsModeBar:bounds];
+	[self buildStatsTable:bounds];
+	[self buildStatsEmptyLabel:bounds];
+	[self reload];
+}
 
+- (void)buildStatsModeBar:(CGRect)bounds {
 	_modeBar = [[UIView alloc] initWithFrame:
 			CGRectMake(0, 0, bounds.size.width, kStatsModeBarHeight)];
 	_modeBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
@@ -3525,7 +3630,9 @@ static UIImage *TGStatsStretch(NSString *name, int leftCap) {
 	[_modeBar addSubview:hairline];
 
 	[self buildModeButtons];
+}
 
+- (void)buildStatsTable:(CGRect)bounds {
 	self.tableView = [[UITableView alloc] initWithFrame:
 			CGRectMake(0, kStatsModeBarHeight, bounds.size.width,
 					   bounds.size.height - kStatsModeBarHeight)
@@ -3541,7 +3648,9 @@ static UIImage *TGStatsStretch(NSString *name, int leftCap) {
 	self.chartView = [[TGProfileChartView alloc] initWithFrame:
 			CGRectMake(0, 0, bounds.size.width, kStatsChartHeight)];
 	self.chartView.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+}
 
+- (void)buildStatsEmptyLabel:(CGRect)bounds {
 	_emptyLabel = [[UILabel alloc] initWithFrame:
 			CGRectMake(0, 60, bounds.size.width, 22)];
 	_emptyLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
@@ -3556,8 +3665,6 @@ static UIImage *TGStatsStretch(NSString *name, int leftCap) {
 	background.backgroundColor = [UIColor clearColor];
 	[background addSubview:_emptyLabel];
 	self.tableView.backgroundView = background;
-
-	[self reload];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -3971,51 +4078,55 @@ static UIImage *TGStatsStretch(NSString *name, int leftCap) {
 	return largest;
 }
 
+- (UITableViewCell *)makePosterCell:(UITableView *)tableView {
+	UITableViewCell *cell = [[UITableViewCell alloc]
+			initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"poster"];
+
+	UIImageView *avatar = [[UIImageView alloc] initWithFrame:
+			CGRectMake(5, 4, 40, 40)];
+	avatar.tag = 21;
+	avatar.layer.cornerRadius = 4;
+	avatar.clipsToBounds = YES;
+	[cell.contentView addSubview:avatar];
+
+	UILabel *name = [[UILabel alloc] initWithFrame:
+			CGRectMake(54, 4, tableView.bounds.size.width - 118, 20)];
+	name.tag = 22;
+	name.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	name.backgroundColor = [UIColor clearColor];
+	name.font = [UIFont systemFontOfSize:17];
+	[cell.contentView addSubview:name];
+
+	UIView *bar = [[UIView alloc] initWithFrame:CGRectMake(54, 25, 0, 4)];
+	bar.tag = 23;
+	bar.backgroundColor = TGProfileColour(0x337acc);
+	[cell.contentView addSubview:bar];
+
+	UILabel *subtitle = [[UILabel alloc] initWithFrame:
+			CGRectMake(54, 30, tableView.bounds.size.width - 118, 16)];
+	subtitle.tag = 24;
+	subtitle.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	subtitle.backgroundColor = [UIColor clearColor];
+	subtitle.font = [UIFont systemFontOfSize:13];
+	subtitle.textColor = TGProfileColour(0x888888);
+	[cell.contentView addSubview:subtitle];
+
+	UILabel *count = [[UILabel alloc] initWithFrame:
+			CGRectMake(tableView.bounds.size.width - 64, 15, 54, 18)];
+	count.tag = 25;
+	count.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+	count.backgroundColor = [UIColor clearColor];
+	count.textAlignment = NSTextAlignmentRight;
+	count.font = [UIFont boldSystemFontOfSize:13];
+	count.textColor = TGProfileColour(0x356596);
+	[cell.contentView addSubview:count];
+	return cell;
+}
+
 - (UITableViewCell *)posterCell:(UITableView *)tableView row:(NSInteger)row {
 	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"poster"];
-	if (!cell){
-		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
-									  reuseIdentifier:@"poster"];
-
-		UIImageView *avatar = [[UIImageView alloc] initWithFrame:
-				CGRectMake(5, 4, 40, 40)];
-		avatar.tag = 21;
-		avatar.layer.cornerRadius = 4;
-		avatar.clipsToBounds = YES;
-		[cell.contentView addSubview:avatar];
-
-		UILabel *name = [[UILabel alloc] initWithFrame:
-				CGRectMake(54, 4, tableView.bounds.size.width - 118, 20)];
-		name.tag = 22;
-		name.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-		name.backgroundColor = [UIColor clearColor];
-		name.font = [UIFont systemFontOfSize:17];
-		[cell.contentView addSubview:name];
-
-		UIView *bar = [[UIView alloc] initWithFrame:CGRectMake(54, 25, 0, 4)];
-		bar.tag = 23;
-		bar.backgroundColor = TGProfileColour(0x337acc);
-		[cell.contentView addSubview:bar];
-
-		UILabel *subtitle = [[UILabel alloc] initWithFrame:
-				CGRectMake(54, 30, tableView.bounds.size.width - 118, 16)];
-		subtitle.tag = 24;
-		subtitle.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-		subtitle.backgroundColor = [UIColor clearColor];
-		subtitle.font = [UIFont systemFontOfSize:13];
-		subtitle.textColor = TGProfileColour(0x888888);
-		[cell.contentView addSubview:subtitle];
-
-		UILabel *count = [[UILabel alloc] initWithFrame:
-				CGRectMake(tableView.bounds.size.width - 64, 15, 54, 18)];
-		count.tag = 25;
-		count.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
-		count.backgroundColor = [UIColor clearColor];
-		count.textAlignment = NSTextAlignmentRight;
-		count.font = [UIFont boldSystemFontOfSize:13];
-		count.textColor = TGProfileColour(0x356596);
-		[cell.contentView addSubview:count];
-	}
+	if (!cell)
+		cell = [self makePosterCell:tableView];
 	[[TGTheme shared] styleCell:cell];
 	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
 
@@ -4076,46 +4187,12 @@ static UIImage *TGStatsStretch(NSString *name, int leftCap) {
 			? [[TGTheme shared] secondaryTextColour] : TGProfileColour(0x356596);
 
 	if (self.mode == 1){
-		NSArray *people = [self peopleForSection:indexPath.section];
-		id raw = indexPath.row < (NSInteger)people.count ? people[indexPath.row] : nil;
-		NSDictionary *entry = [raw isKindOfClass:[NSDictionary class]] ? raw : @{};
-		int64_t userId = TGProfileInt64(entry[@"user_id"]);
-		NSString *name = TGProfileText(entry[@"name"])
-				?: TGProfileText([[TGClient shared] nameForUserId:userId]) ?: @"";
-		cell.selectionStyle = userId ? UITableViewCellSelectionStyleBlue
-									 : UITableViewCellSelectionStyleNone;
-		cell.textLabel.text = name;
-		cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
-		cell.detailTextLabel.font = [UIFont systemFontOfSize:13];
-		cell.detailTextLabel.text = [self peopleSummaryFor:entry
-												   section:indexPath.section];
+		[self fillPeopleCell:cell atIndexPath:indexPath];
 		return cell;
 	}
 
 	if (self.mode == 2){
-		if (indexPath.section == 0){
-			NSArray *rows = [self boostSummaryRows];
-			NSArray *pair = indexPath.row < (NSInteger)rows.count
-					? rows[indexPath.row] : nil;
-			cell.textLabel.text = pair.count ? pair[0] : @"";
-			cell.detailTextLabel.text = pair.count > 1 ? pair[1] : nil;
-			return cell;
-		}
-		id raw = indexPath.row < (NSInteger)self.boosters.count
-				? self.boosters[indexPath.row] : nil;
-		NSDictionary *entry = [raw isKindOfClass:[NSDictionary class]] ? raw : @{};
-		NSString *name = TGProfileText(entry[@"name"]);
-		if (!name){
-			int64_t userId = TGProfileInt64(entry[@"user_id"]);
-			name = userId ? TGProfileText([[TGClient shared] nameForUserId:userId]) : nil;
-		}
-		NSString *source = TGProfileText(entry[@"source"]);
-		cell.textLabel.text = name ?: ([source isEqualToString:@"giveaway"]
-				? @"Giveaway" : @"Unclaimed");
-		NSInteger count = [entry[@"count"] isKindOfClass:[NSNumber class]]
-				? [entry[@"count"] integerValue] : 0;
-		cell.detailTextLabel.text = count > 1
-				? [NSString stringWithFormat:@"%ld", (long)count] : nil;
+		[self fillBoostCell:cell atIndexPath:indexPath];
 		return cell;
 	}
 
@@ -4131,6 +4208,48 @@ static UIImage *TGStatsStretch(NSString *name, int leftCap) {
 	else
 		cell.detailTextLabel.text = [self valueTextFor:entry];
 	return cell;
+}
+
+- (void)fillPeopleCell:(UITableViewCell *)cell atIndexPath:(NSIndexPath *)indexPath {
+	NSArray *people = [self peopleForSection:indexPath.section];
+	id raw = indexPath.row < (NSInteger)people.count ? people[indexPath.row] : nil;
+	NSDictionary *entry = [raw isKindOfClass:[NSDictionary class]] ? raw : @{};
+	int64_t userId = TGProfileInt64(entry[@"user_id"]);
+	NSString *name = TGProfileText(entry[@"name"])
+			?: TGProfileText([[TGClient shared] nameForUserId:userId]) ?: @"";
+	cell.selectionStyle = userId ? UITableViewCellSelectionStyleBlue
+								 : UITableViewCellSelectionStyleNone;
+	cell.textLabel.text = name;
+	cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
+	cell.detailTextLabel.font = [UIFont systemFontOfSize:13];
+	cell.detailTextLabel.text = [self peopleSummaryFor:entry
+											   section:indexPath.section];
+}
+
+- (void)fillBoostCell:(UITableViewCell *)cell atIndexPath:(NSIndexPath *)indexPath {
+	if (indexPath.section == 0){
+		NSArray *rows = [self boostSummaryRows];
+		NSArray *pair = indexPath.row < (NSInteger)rows.count
+				? rows[indexPath.row] : nil;
+		cell.textLabel.text = pair.count ? pair[0] : @"";
+		cell.detailTextLabel.text = pair.count > 1 ? pair[1] : nil;
+		return;
+	}
+	id raw = indexPath.row < (NSInteger)self.boosters.count
+			? self.boosters[indexPath.row] : nil;
+	NSDictionary *entry = [raw isKindOfClass:[NSDictionary class]] ? raw : @{};
+	NSString *name = TGProfileText(entry[@"name"]);
+	if (!name){
+		int64_t userId = TGProfileInt64(entry[@"user_id"]);
+		name = userId ? TGProfileText([[TGClient shared] nameForUserId:userId]) : nil;
+	}
+	NSString *source = TGProfileText(entry[@"source"]);
+	cell.textLabel.text = name ?: ([source isEqualToString:@"giveaway"]
+			? @"Giveaway" : @"Unclaimed");
+	NSInteger count = [entry[@"count"] isKindOfClass:[NSNumber class]]
+			? [entry[@"count"] integerValue] : 0;
+	cell.detailTextLabel.text = count > 1
+			? [NSString stringWithFormat:@"%ld", (long)count] : nil;
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -4354,26 +4473,12 @@ static UIImage *TGStatsStretch(NSString *name, int leftCap) {
 	}
 
 	if (indexPath.section == 1){
-		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
-		cell.textLabel.textAlignment = NSTextAlignmentCenter;
-		cell.textLabel.textColor = TGProfileColour(0x316ea1);
-		BOOL boosted = TGProfileBool(self.status[@"is_boosted"]);
-		if (indexPath.row == 0)
-			cell.textLabel.text = boosted ? @"Boost Again" : @"Boost This Chat";
-		else
-			cell.textLabel.text = @"Copy Boost Link";
+		[self fillBoostActionCell:cell atRow:indexPath.row];
 		return cell;
 	}
 
 	if (indexPath.section == 3){
-		id level = indexPath.row < (NSInteger)self.featureTable.count
-				? self.featureTable[indexPath.row] : nil;
-		NSDictionary *features = [level isKindOfClass:[NSDictionary class]] ? level : @{};
-		NSInteger number = [features[@"level"] isKindOfClass:[NSNumber class]]
-				? [features[@"level"] integerValue] : (indexPath.row + 1);
-		cell.textLabel.text = [NSString stringWithFormat:@"Level %ld", (long)number];
-		cell.detailTextLabel.text =
-				[TGProfileBoostsController summaryOfFeatures:features];
+		[self fillLevelFeatureCell:cell atRow:indexPath.row];
 		return cell;
 	}
 
@@ -4395,6 +4500,28 @@ static UIImage *TGStatsStretch(NSString *name, int leftCap) {
 	if (TGProfileInt64(entry[@"user_id"]))
 		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
 	return cell;
+}
+
+- (void)fillBoostActionCell:(UITableViewCell *)cell atRow:(NSInteger)row {
+	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+	cell.textLabel.textAlignment = NSTextAlignmentCenter;
+	cell.textLabel.textColor = TGProfileColour(0x316ea1);
+	BOOL boosted = TGProfileBool(self.status[@"is_boosted"]);
+	if (row == 0)
+		cell.textLabel.text = boosted ? @"Boost Again" : @"Boost This Chat";
+	else
+		cell.textLabel.text = @"Copy Boost Link";
+}
+
+- (void)fillLevelFeatureCell:(UITableViewCell *)cell atRow:(NSInteger)row {
+	id level = row < (NSInteger)self.featureTable.count
+			? self.featureTable[row] : nil;
+	NSDictionary *features = [level isKindOfClass:[NSDictionary class]] ? level : @{};
+	NSInteger number = [features[@"level"] isKindOfClass:[NSNumber class]]
+			? [features[@"level"] integerValue] : (row + 1);
+	cell.textLabel.text = [NSString stringWithFormat:@"Level %ld", (long)number];
+	cell.detailTextLabel.text =
+			[TGProfileBoostsController summaryOfFeatures:features];
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {

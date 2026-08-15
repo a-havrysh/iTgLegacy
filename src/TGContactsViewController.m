@@ -220,6 +220,7 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 @property (nonatomic, strong) UIImageView *premiumView;
 @property (nonatomic, strong) UILabel *verifiedLabel;
 @property (nonatomic, strong) UILabel *closeFriendLabel;
+- (void)resetForConfiguration;
 @end
 
 @implementation TGContactRowCell
@@ -294,6 +295,23 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 	[self.contentView addSubview:self.closeFriendLabel];
 
 	return self;
+}
+
+- (void)resetForConfiguration {
+	self.avatarView.image = nil;
+	self.avatarView.layer.cornerRadius = kContactAvatarCorner;
+	self.titleLabel.font = [UIFont systemFontOfSize:19];
+	self.titleLabel.text = @"";
+	self.secondTitleLabel.text = @"";
+	self.secondTitleLabel.hidden = YES;
+	self.subtitleLabel.text = @"";
+	self.subtitleLabel.textColor = [UIColor colorWithWhite:0.0f alpha:0.53f];
+	self.premiumView.image = nil;
+	self.premiumView.hidden = YES;
+	self.verifiedLabel.hidden = YES;
+	self.closeFriendLabel.hidden = YES;
+	self.accessoryType = UITableViewCellAccessoryNone;
+	self.backgroundColor = [[TGTheme shared] listBackgroundColour];
 }
 
 - (CGFloat)badgeWidth {
@@ -3046,6 +3064,7 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 	if (!cell)
 		cell = [[TGContactRowCell alloc] initWithStyle:UITableViewCellStyleDefault
 									   reuseIdentifier:reuse];
+	[cell resetForConfiguration];
 
 	NSDictionary *u = [self userAtIndexPath:indexPath];
 	if (!u){

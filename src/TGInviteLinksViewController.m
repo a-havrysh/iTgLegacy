@@ -27,6 +27,16 @@ static CGFloat TGInviteRetinaPixel(void) {
 	return [UIScreen mainScreen].scale > 1.0f ? 0.5f : 0.0f;
 }
 
+static NSDateFormatter *TGInviteShortDateFormatter(void) {
+	static NSDateFormatter *formatter = nil;
+	if (!formatter){
+		formatter = [[NSDateFormatter alloc] init];
+		formatter.dateStyle = NSDateFormatterShortStyle;
+		formatter.timeStyle = NSDateFormatterNoStyle;
+	}
+	return formatter;
+}
+
 @interface TGInviteLinksViewController () <UIAlertViewDelegate>
 @property (nonatomic, strong) NSString *primaryLink;
 @property (nonatomic, strong) NSArray *links;
@@ -247,10 +257,7 @@ static CGFloat TGInviteRetinaPixel(void) {
 	if (stamp <= 0)
 		return @"";
 	NSDate *date = [NSDate dateWithTimeIntervalSince1970:(NSTimeInterval)stamp];
-	NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-	formatter.dateStyle = NSDateFormatterShortStyle;
-	formatter.timeStyle = NSDateFormatterNoStyle;
-	return [formatter stringFromDate:date];
+	return [TGInviteShortDateFormatter() stringFromDate:date];
 }
 
 - (NSString *)subtitleForLink:(NSDictionary *)link revoked:(BOOL)revoked {
@@ -514,27 +521,71 @@ static CGFloat TGInviteRetinaPixel(void) {
 	return cell;
 }
 
+- (UITableViewCell *)actionRowCellForTable:(UITableView *)tableView
+									  kind:(NSInteger)kind
+								 indexPath:(NSIndexPath *)indexPath {
+	if (kind == TGInviteSectionLinks)
+		return [self actionCellForTable:tableView title:@"Create a New Link"
+							destructive:NO];
+	if (kind == TGInviteSectionRevoked)
+		return [self actionCellForTable:tableView title:@"Delete All Revoked Links"
+							destructive:YES];
+	if (indexPath.row == [self moreRequestsRow])
+		return [self actionCellForTable:tableView
+								  title:self.loadingMoreRequests
+										  ? @"Loading..."
+										  : [NSString stringWithFormat:@"Show More (%d left)",
+												  (int)(self.requestTotal
+														  - (NSInteger)self.requests.count)]
+							destructive:NO];
+	return [self actionCellForTable:tableView title:@"Approve All Requests"
+						destructive:NO];
+}
+
+- (void)configurePrimaryCell:(UITableViewCell *)cell dark:(BOOL)dark {
+	cell.textLabel.text = [self shortLink:self.primaryLink];
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:16];
+	cell.textLabel.textColor = dark ? [[TGTheme shared] primaryTextColour]
+									: TGInviteRGB(0x0779d0);
+	cell.detailTextLabel.text = @"Tap to copy, share or revoke";
+}
+
+- (void)configureRequestCell:(UITableViewCell *)cell
+				 atIndexPath:(NSIndexPath *)indexPath
+						dark:(BOOL)dark {
+	NSDictionary *request = [self requestAtIndexPath:indexPath];
+	NSString *name = request[@"name"];
+	if (![name isKindOfClass:[NSString class]] || !name.length)
+		name = @"Unknown user";
+	cell.textLabel.text = name;
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+	cell.textLabel.textColor = dark ? [[TGTheme shared] primaryTextColour]
+									: TGInviteRGB(0x516691);
+	cell.detailTextLabel.text = [self subtitleForRequest:request];
+	if (!self.canManage)
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+	cell.imageView.image = [TGIcons avatarWithInitials:[self initialsForName:name]
+												  size:30
+											  colourId:[request[@"userId"] longLongValue]];
+}
+
+- (void)configureLinkCell:(UITableViewCell *)cell
+			  atIndexPath:(NSIndexPath *)indexPath
+				  revoked:(BOOL)revoked
+					 dark:(BOOL)dark {
+	NSDictionary *link = [self linkAtIndexPath:indexPath];
+	cell.textLabel.text = [self titleForLink:link];
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+	cell.textLabel.textColor = dark ? [[TGTheme shared] primaryTextColour]
+									: TGInviteRGB(0x516691);
+	cell.detailTextLabel.text = [self subtitleForLink:link revoked:revoked];
+}
+
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
 	NSInteger kind = [self kindOfSection:indexPath.section];
 
-	if ([self isActionRowAtIndexPath:indexPath]){
-		if (kind == TGInviteSectionLinks)
-			return [self actionCellForTable:tableView title:@"Create a New Link"
-								destructive:NO];
-		if (kind == TGInviteSectionRevoked)
-			return [self actionCellForTable:tableView title:@"Delete All Revoked Links"
-								destructive:YES];
-		if (indexPath.row == [self moreRequestsRow])
-			return [self actionCellForTable:tableView
-									  title:self.loadingMoreRequests
-											  ? @"Loading..."
-											  : [NSString stringWithFormat:@"Show More (%d left)",
-													  (int)(self.requestTotal
-															  - (NSInteger)self.requests.count)]
-								destructive:NO];
-		return [self actionCellForTable:tableView title:@"Approve All Requests"
-							destructive:NO];
-	}
+	if ([self isActionRowAtIndexPath:indexPath])
+		return [self actionRowCellForTable:tableView kind:kind indexPath:indexPath];
 
 	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"row"];
 	if (!cell){
@@ -558,36 +609,13 @@ static CGFloat TGInviteRetinaPixel(void) {
 										  : TGInviteRGB(0x888888);
 	cell.imageView.image = nil;
 
-	if (kind == TGInviteSectionPrimary){
-		cell.textLabel.text = [self shortLink:self.primaryLink];
-		cell.textLabel.font = [UIFont boldSystemFontOfSize:16];
-		cell.textLabel.textColor = dark ? [[TGTheme shared] primaryTextColour]
-										: TGInviteRGB(0x0779d0);
-		cell.detailTextLabel.text = @"Tap to copy, share or revoke";
-	} else if (kind == TGInviteSectionRequests){
-		NSDictionary *request = [self requestAtIndexPath:indexPath];
-		NSString *name = request[@"name"];
-		if (![name isKindOfClass:[NSString class]] || !name.length)
-			name = @"Unknown user";
-		cell.textLabel.text = name;
-		cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
-		cell.textLabel.textColor = dark ? [[TGTheme shared] primaryTextColour]
-										: TGInviteRGB(0x516691);
-		cell.detailTextLabel.text = [self subtitleForRequest:request];
-		if (!self.canManage)
-			cell.selectionStyle = UITableViewCellSelectionStyleNone;
-		cell.imageView.image = [TGIcons avatarWithInitials:[self initialsForName:name]
-													  size:30
-												  colourId:[request[@"userId"] longLongValue]];
-	} else {
-		BOOL revoked = kind == TGInviteSectionRevoked;
-		NSDictionary *link = [self linkAtIndexPath:indexPath];
-		cell.textLabel.text = [self titleForLink:link];
-		cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
-		cell.textLabel.textColor = dark ? [[TGTheme shared] primaryTextColour]
-										: TGInviteRGB(0x516691);
-		cell.detailTextLabel.text = [self subtitleForLink:link revoked:revoked];
-	}
+	if (kind == TGInviteSectionPrimary)
+		[self configurePrimaryCell:cell dark:dark];
+	else if (kind == TGInviteSectionRequests)
+		[self configureRequestCell:cell atIndexPath:indexPath dark:dark];
+	else
+		[self configureLinkCell:cell atIndexPath:indexPath
+						revoked:kind == TGInviteSectionRevoked dark:dark];
 
 	UIView *hairline = [cell.contentView viewWithTag:TGInviteHairlineTag];
 	NSInteger rows = [self tableView:tableView numberOfRowsInSection:indexPath.section];
@@ -950,12 +978,7 @@ static CGFloat TGInviteRetinaPixel(void) {
 
 #pragma mark - editing a link
 
-- (void)showEditSheetForLink:(NSDictionary *)link {
-	NSString *url = link[@"link"];
-	if (![url isKindOfClass:[NSString class]] || !url.length)
-		return;
-	self.editingLink = link;
-
+- (NSArray *)editSheetActions {
 	NSMutableArray *actions = [NSMutableArray array];
 	[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Change Name"
 														  action:@"name"]];
@@ -975,11 +998,44 @@ static CGFloat TGInviteRetinaPixel(void) {
 														  action:@"limit100"]];
 	[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Cancel" action:@"cancel"
 															type:TGActionSheetActionTypeCancel]];
+	return actions;
+}
+
+- (void)applyEditAction:(NSString *)action toLink:(NSDictionary *)editing {
+	NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+	NSInteger expires = [editing[@"expirationDate"] integerValue];
+	NSInteger limit = [editing[@"memberLimit"] integerValue];
+	if ([action isEqualToString:@"never"])
+		expires = 0;
+	else if ([action isEqualToString:@"hour"])
+		expires = (NSInteger)now + 60 * 60;
+	else if ([action isEqualToString:@"day"])
+		expires = (NSInteger)now + 60 * 60 * 24;
+	else if ([action isEqualToString:@"week"])
+		expires = (NSInteger)now + 60 * 60 * 24 * 7;
+	else if ([action isEqualToString:@"nolimit"])
+		limit = 0;
+	else if ([action isEqualToString:@"limit10"])
+		limit = 10;
+	else if ([action isEqualToString:@"limit100"])
+		limit = 100;
+
+	[self applyEditToLink:editing
+					 name:[self nameOfLink:editing]
+		   expirationDate:expires
+			  memberLimit:limit];
+}
+
+- (void)showEditSheetForLink:(NSDictionary *)link {
+	NSString *url = link[@"link"];
+	if (![url isKindOfClass:[NSString class]] || !url.length)
+		return;
+	self.editingLink = link;
 
 	__weak typeof(self) weakSelf = self;
 	TGActionSheet *sheet = [[TGActionSheet alloc]
 			initWithTitle:[self titleForLink:link]
-				  actions:actions
+				  actions:[self editSheetActions]
 			  actionBlock:^(__unused id target, NSString *action){
 				__strong typeof(weakSelf) strongSelf = weakSelf;
 				strongSelf.currentActionSheet = nil;
@@ -993,29 +1049,7 @@ static CGFloat TGInviteRetinaPixel(void) {
 					return;
 				}
 				strongSelf.editingLink = nil;
-
-				NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-				NSInteger expires = [editing[@"expirationDate"] integerValue];
-				NSInteger limit = [editing[@"memberLimit"] integerValue];
-				if ([action isEqualToString:@"never"])
-					expires = 0;
-				else if ([action isEqualToString:@"hour"])
-					expires = (NSInteger)now + 60 * 60;
-				else if ([action isEqualToString:@"day"])
-					expires = (NSInteger)now + 60 * 60 * 24;
-				else if ([action isEqualToString:@"week"])
-					expires = (NSInteger)now + 60 * 60 * 24 * 7;
-				else if ([action isEqualToString:@"nolimit"])
-					limit = 0;
-				else if ([action isEqualToString:@"limit10"])
-					limit = 10;
-				else if ([action isEqualToString:@"limit100"])
-					limit = 100;
-
-				[strongSelf applyEditToLink:editing
-									   name:[strongSelf nameOfLink:editing]
-							 expirationDate:expires
-								memberLimit:limit];
+				[strongSelf applyEditAction:action toLink:editing];
 			} target:self];
 
 	self.currentActionSheet = sheet;

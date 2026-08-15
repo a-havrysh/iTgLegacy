@@ -399,18 +399,51 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 	return cell;
 }
 
+- (UITableViewCell *)categoryCell:(NSDictionary *)category tableView:(UITableView *)tableView {
+	UITableViewCell *cell = [self cellWithIdentifier:@"check"
+											   style:UITableViewCellStyleDefault
+										   tableView:tableView];
+	cell.textLabel.text = category[@"title"];
+	[self mark:[self isCategorySelected:category] on:cell];
+	return cell;
+}
+
+- (UITableViewCell *)otherActionsCellForTableView:(UITableView *)tableView {
+	UITableViewCell *cell = [self cellWithIdentifier:@"variant"
+											   style:UITableViewCellStyleValue1
+										   tableView:tableView];
+	cell.textLabel.text = @"Other Actions";
+	cell.detailTextLabel.font = [UIFont systemFontOfSize:16];
+	cell.detailTextLabel.textColor = [[TGTheme shared] isDark]
+			? [[TGTheme shared] cellDetailColour] : TGEventsRGB(0x356596);
+	cell.detailTextLabel.text = [NSString stringWithFormat:@"%d / %d",
+			(int)[self selectedOtherCount], (int)TGEventsOtherCategories().count];
+	UIView *chevron = [self disclosureAccessory];
+	if (chevron)
+		cell.accessoryView = chevron;
+	else
+		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+	return cell;
+}
+
+- (UITableViewCell *)adminCellAtRow:(NSInteger)row tableView:(UITableView *)tableView {
+	UITableViewCell *cell = [self cellWithIdentifier:@"admin"
+											   style:UITableViewCellStyleSubtitle
+										   tableView:tableView];
+	cell.textLabel.text = [self adminNameAtRow:row];
+	cell.detailTextLabel.font = [UIFont systemFontOfSize:13];
+	cell.detailTextLabel.textColor = [[TGTheme shared] secondaryTextColour];
+	cell.detailTextLabel.text = [self adminStatusAtRow:row];
+	NSNumber *userId = [self userIdAtRow:row];
+	[self mark:userId != nil && [self.userSelection containsObject:userId] on:cell];
+	return cell;
+}
+
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
 	NSArray *categories = [self categories];
 
-	if (self.page == TGEventsFilterPageOther){
-		NSDictionary *category = categories[indexPath.row];
-		UITableViewCell *cell = [self cellWithIdentifier:@"check"
-												   style:UITableViewCellStyleDefault
-											   tableView:tableView];
-		cell.textLabel.text = category[@"title"];
-		[self mark:[self isCategorySelected:category] on:cell];
-		return cell;
-	}
+	if (self.page == TGEventsFilterPageOther)
+		return [self categoryCell:categories[indexPath.row] tableView:tableView];
 
 	if (indexPath.section == 0){
 		return [self switchCellWithTitle:@"All Actions" on:[self allActionsSelected]
@@ -418,30 +451,9 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 	}
 
 	if (indexPath.section == 1){
-		if (indexPath.row == (NSInteger)categories.count){
-			UITableViewCell *cell = [self cellWithIdentifier:@"variant"
-													   style:UITableViewCellStyleValue1
-												   tableView:tableView];
-			cell.textLabel.text = @"Other Actions";
-			cell.detailTextLabel.font = [UIFont systemFontOfSize:16];
-			cell.detailTextLabel.textColor = [[TGTheme shared] isDark]
-					? [[TGTheme shared] cellDetailColour] : TGEventsRGB(0x356596);
-			cell.detailTextLabel.text = [NSString stringWithFormat:@"%d / %d",
-					(int)[self selectedOtherCount], (int)TGEventsOtherCategories().count];
-			UIView *chevron = [self disclosureAccessory];
-			if (chevron)
-				cell.accessoryView = chevron;
-			else
-				cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-			return cell;
-		}
-		NSDictionary *category = categories[indexPath.row];
-		UITableViewCell *cell = [self cellWithIdentifier:@"check"
-												   style:UITableViewCellStyleDefault
-											   tableView:tableView];
-		cell.textLabel.text = category[@"title"];
-		[self mark:[self isCategorySelected:category] on:cell];
-		return cell;
+		if (indexPath.row == (NSInteger)categories.count)
+			return [self otherActionsCellForTableView:tableView];
+		return [self categoryCell:categories[indexPath.row] tableView:tableView];
 	}
 
 	if (indexPath.row == 0){
@@ -450,16 +462,7 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 								  action:@selector(allAdminsToggled:) tableView:tableView];
 	}
 
-	UITableViewCell *cell = [self cellWithIdentifier:@"admin"
-											   style:UITableViewCellStyleSubtitle
-										   tableView:tableView];
-	cell.textLabel.text = [self adminNameAtRow:indexPath.row];
-	cell.detailTextLabel.font = [UIFont systemFontOfSize:13];
-	cell.detailTextLabel.textColor = [[TGTheme shared] secondaryTextColour];
-	cell.detailTextLabel.text = [self adminStatusAtRow:indexPath.row];
-	NSNumber *userId = [self userIdAtRow:indexPath.row];
-	[self mark:userId != nil && [self.userSelection containsObject:userId] on:cell];
-	return cell;
+	return [self adminCellAtRow:indexPath.row tableView:tableView];
 }
 
 - (void)allActionsToggled:(UISwitch *)toggle {
@@ -848,6 +851,13 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 	self.view.backgroundColor = [[TGTheme shared] isDark]
 			? [[TGTheme shared] listBackgroundColour] : [UIColor whiteColor];
 
+	[self buildTable];
+	[self buildSpamBanner];
+	[self buildMessageView];
+	[self buildSpinner];
+}
+
+- (void)buildTable {
 	self.tableView = [[UITableView alloc] initWithFrame:self.view.bounds
 												  style:UITableViewStylePlain];
 	self.tableView.autoresizingMask = UIViewAutoresizingFlexibleWidth
@@ -857,7 +867,9 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 	self.tableView.dataSource = self;
 	self.tableView.delegate = self;
 	[self.view addSubview:self.tableView];
+}
 
+- (void)buildSpamBanner {
 	self.spamBanner = [UIButton buttonWithType:UIButtonTypeCustom];
 	self.spamBanner.frame = CGRectMake(0, 0, self.view.bounds.size.width, 40);
 	self.spamBanner.autoresizingMask = UIViewAutoresizingFlexibleWidth;
@@ -867,7 +879,9 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 	self.spamBanner.contentEdgeInsets = UIEdgeInsetsMake(0, 10, 0, 10);
 	[self.spamBanner addTarget:self action:@selector(spamBannerPressed)
 			  forControlEvents:UIControlEventTouchUpInside];
+}
 
+- (void)buildMessageView {
 	self.messageView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 250, 60)];
 	self.messageView.backgroundColor = [UIColor clearColor];
 	self.messageView.hidden = YES;
@@ -889,7 +903,9 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 	[self.messageView addSubview:self.messageBodyLabel];
 
 	[self.view insertSubview:self.messageView belowSubview:self.tableView];
+}
 
+- (void)buildSpinner {
 	self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:
 			UIActivityIndicatorViewStyleGray];
 	self.spinner.hidesWhenStopped = YES;

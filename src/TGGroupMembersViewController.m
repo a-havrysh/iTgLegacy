@@ -1138,8 +1138,11 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 								  cancelButtonTitle:@"Cancel"
 									  okButtonTitle:@"Remove"
 									completionBlock:^(bool okPressed){
+		TGGroupPublicLinkViewController *me = weakSelf;
+		if (!me)
+			return;
 		if (okPressed)
-			[weakSelf applyUsername:@""];
+			[me applyUsername:@""];
 	}];
 	[alert show];
 }
@@ -1684,6 +1687,8 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 					 isChannel:[[self.groupInfo objectForKey:@"isChannel"] boolValue]];
 		editor.onChanged = ^{
 			TGGroupMembersViewController *me = weakSelf;
+			if (!me)
+				return;
 			[me loadGroupInfo];
 		};
 		[self.navigationController pushViewController:editor animated:YES];
@@ -1693,7 +1698,10 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 		[self confirm:@"Upgrade this group to a supergroup? Members can then be "
 				@"restricted and banned. This cannot be undone."
 				   ok:@"Upgrade" destructive:YES run:^{
-			[weakSelf upgradeToSupergroupThen:nil];
+			TGGroupMembersViewController *me = weakSelf;
+			if (!me)
+				return;
+			[me upgradeToSupergroupThen:nil];
 		}];
 		return;
 	}
@@ -1739,7 +1747,10 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 
 		[me confirm:message ok:(approve ? @"Approve" : @"Dismiss")
 		destructive:!approve run:^{
-			[weakSelf runAllJoinRequests:approve];
+			TGGroupMembersViewController *inner = weakSelf;
+			if (!inner)
+				return;
+			[inner runAllJoinRequests:approve];
 		}];
 	}];
 }
@@ -2047,6 +2058,8 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 		[[TGClient shared] downloadFile:[fileId integerValue] completion:^(NSString *path){
 			if (!path.length){
 				TGGroupMembersViewController *me = weakSelf;
+				if (!me)
+					return;
 				[me.photosRequested removeObject:key];
 				return;
 			}
@@ -2379,6 +2392,8 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 	__weak typeof(self) weakSelf = self;
 	editor.onSaved = ^{
 		TGGroupMembersViewController *me = weakSelf;
+		if (!me)
+			return;
 		[me refreshRowForUser:userId];
 		[me loadGroupInfo];
 	};
@@ -2407,8 +2422,14 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 		[self confirm:@"Restricting and banning people needs a supergroup. Upgrade "
 				@"this group now? This cannot be undone."
 				   ok:@"Upgrade" destructive:YES run:^{
-			[weakSelf upgradeToSupergroupThen:^{
-				[weakSelf performAction:action onMember:member];
+			TGGroupMembersViewController *me = weakSelf;
+			if (!me)
+				return;
+			[me upgradeToSupergroupThen:^{
+				TGGroupMembersViewController *inner = weakSelf;
+				if (!inner)
+					return;
+				[inner performAction:action onMember:member];
 			}];
 		}];
 		return;
@@ -2425,7 +2446,10 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 	if ([action isEqualToString:@"dismiss"]){
 		[self confirm:[NSString stringWithFormat:@"Dismiss %@ as administrator?", name]
 				   ok:@"Dismiss" destructive:NO run:^{
-			[weakSelf runDismiss:userId];
+			TGGroupMembersViewController *me = weakSelf;
+			if (!me)
+				return;
+			[me runDismiss:userId];
 		}];
 		return;
 	}
@@ -2467,7 +2491,10 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 
 	[self confirm:[NSString stringWithFormat:@"Remove %@ from this group?", name]
 			   ok:@"Remove" destructive:YES run:^{
-		[weakSelf runRemove:userId];
+		TGGroupMembersViewController *me = weakSelf;
+		if (!me)
+			return;
+		[me runRemove:userId];
 	}];
 }
 
@@ -2585,9 +2612,12 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 - (void)runDismiss:(int64_t)userId {
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] dismissAdmin:userId inGroup:self.chatId completion:^(BOOL ok){
-		[weakSelf finishWithSuccess:ok
-						failureText:@"Could not dismiss this administrator."
-							 userId:userId];
+		TGGroupMembersViewController *me = weakSelf;
+		if (!me)
+			return;
+		[me finishWithSuccess:ok
+				  failureText:@"Could not dismiss this administrator."
+					   userId:userId];
 	}];
 }
 
@@ -2605,9 +2635,12 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 							  permissions:restore
 								untilDate:0
 							   completion:^(BOOL ok){
-			[weakSelf finishWithSuccess:ok
-							failureText:@"Could not lift the restrictions."
-								 userId:userId];
+			TGGroupMembersViewController *inner = weakSelf;
+			if (!inner)
+				return;
+			[inner finishWithSuccess:ok
+						 failureText:@"Could not lift the restrictions."
+							  userId:userId];
 		}];
 	}];
 }
@@ -2710,27 +2743,36 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 					   untilDate:untilDate
 				  revokeMessages:NO
 					  completion:^(BOOL ok){
-		[weakSelf finishWithSuccess:ok
-						failureText:@"Could not ban this member."
-							 userId:userId];
+		TGGroupMembersViewController *me = weakSelf;
+		if (!me)
+			return;
+		[me finishWithSuccess:ok
+				  failureText:@"Could not ban this member."
+					   userId:userId];
 	}];
 }
 
 - (void)runUnban:(int64_t)userId {
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] unbanMember:userId inGroup:self.chatId completion:^(BOOL ok){
-		[weakSelf finishWithSuccess:ok
-						failureText:@"Could not lift this ban."
-							 userId:userId];
+		TGGroupMembersViewController *me = weakSelf;
+		if (!me)
+			return;
+		[me finishWithSuccess:ok
+				  failureText:@"Could not lift this ban."
+					   userId:userId];
 	}];
 }
 
 - (void)runRemove:(int64_t)userId {
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] removeMember:userId fromGroup:self.chatId completion:^(BOOL ok){
-		[weakSelf finishWithSuccess:ok
-						failureText:@"Could not remove this member."
-							 userId:userId];
+		TGGroupMembersViewController *me = weakSelf;
+		if (!me)
+			return;
+		[me finishWithSuccess:ok
+				  failureText:@"Could not remove this member."
+					   userId:userId];
 	}];
 }
 

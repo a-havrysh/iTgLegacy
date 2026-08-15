@@ -429,57 +429,58 @@ static NSString *TGTopicMuteText(NSInteger seconds) {
 	return indexPath.section == 1 ? 52.0f : 44.0f;
 }
 
-- (UITableViewCell *)tableView:(UITableView *)tableView
-		 cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+- (UITableViewCell *)messageCellForTableView:(UITableView *)tableView
+								   indexPath:(NSIndexPath *)indexPath {
 	TGTheme *theme = [TGTheme shared];
+	static NSString *reuse = @"TGTopicInfoMessage";
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
+	if (!cell){
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+									  reuseIdentifier:reuse];
+		cell.detailTextLabel.font = [UIFont systemFontOfSize:12];
+		cell.textLabel.font = [UIFont systemFontOfSize:15];
+		cell.textLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+	}
+	cell.selectionStyle = UITableViewCellSelectionStyleNone;
+	cell.accessoryType = UITableViewCellAccessoryNone;
+	cell.textLabel.textColor = [theme primaryTextColour];
+	cell.detailTextLabel.textColor = [theme secondaryTextColour];
 
-	if (indexPath.section == 1){
-		static NSString *reuse = @"TGTopicInfoMessage";
-		UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
-		if (!cell){
-			cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
-										  reuseIdentifier:reuse];
-			cell.detailTextLabel.font = [UIFont systemFontOfSize:12];
-			cell.textLabel.font = [UIFont systemFontOfSize:15];
-			cell.textLabel.lineBreakMode = NSLineBreakByTruncatingTail;
-		}
-		cell.selectionStyle = UITableViewCellSelectionStyleNone;
-		cell.accessoryType = UITableViewCellAccessoryNone;
-		cell.textLabel.textColor = [theme primaryTextColour];
-		cell.detailTextLabel.textColor = [theme secondaryTextColour];
-
-		if (self.recent.count == 0){
-			cell.textLabel.text = @"No messages yet";
-			cell.textLabel.textColor = [theme secondaryTextColour];
-			cell.detailTextLabel.text = @"";
-			return cell;
-		}
-
-		NSDictionary *message = self.recent[self.recent.count - 1 - (NSUInteger)indexPath.row];
-		NSString *text = TGTopicString(message, @"text");
-		cell.textLabel.text = text.length ? text : @"Attachment";
-		NSString *when = TGTopicDate(TGTopicDouble(message, @"date"));
-		cell.detailTextLabel.text = TGTopicFlag(message, @"outgoing")
-				? [NSString stringWithFormat:@"You · %@", when]
-				: when;
+	if (self.recent.count == 0){
+		cell.textLabel.text = @"No messages yet";
+		cell.textLabel.textColor = [theme secondaryTextColour];
+		cell.detailTextLabel.text = @"";
 		return cell;
 	}
 
-	if (indexPath.section == 2){
-		static NSString *reuse = @"TGTopicInfoAction";
-		UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
-		if (!cell){
-			cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
-										  reuseIdentifier:reuse];
-			cell.textLabel.textAlignment = NSTextAlignmentCenter;
-			cell.textLabel.font = [UIFont boldSystemFontOfSize:16];
-		}
-		cell.textLabel.text = @"Unpin All Messages";
-		cell.textLabel.textColor = [UIColor colorWithRed:0.72f green:0.13f blue:0.13f alpha:1.0f];
-		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
-		return cell;
-	}
+	NSDictionary *message = self.recent[self.recent.count - 1 - (NSUInteger)indexPath.row];
+	NSString *text = TGTopicString(message, @"text");
+	cell.textLabel.text = text.length ? text : @"Attachment";
+	NSString *when = TGTopicDate(TGTopicDouble(message, @"date"));
+	cell.detailTextLabel.text = TGTopicFlag(message, @"outgoing")
+			? [NSString stringWithFormat:@"You · %@", when]
+			: when;
+	return cell;
+}
 
+- (UITableViewCell *)unpinAllCellForTableView:(UITableView *)tableView {
+	static NSString *reuse = @"TGTopicInfoAction";
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
+	if (!cell){
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+									  reuseIdentifier:reuse];
+		cell.textLabel.textAlignment = NSTextAlignmentCenter;
+		cell.textLabel.font = [UIFont boldSystemFontOfSize:16];
+	}
+	cell.textLabel.text = @"Unpin All Messages";
+	cell.textLabel.textColor = [UIColor colorWithRed:0.72f green:0.13f blue:0.13f alpha:1.0f];
+	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+	return cell;
+}
+
+- (UITableViewCell *)detailCellForTableView:(UITableView *)tableView
+								  indexPath:(NSIndexPath *)indexPath {
+	TGTheme *theme = [TGTheme shared];
 	static NSString *reuse = @"TGTopicInfoDetail";
 	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
 	if (!cell)
@@ -488,6 +489,8 @@ static NSString *TGTopicMuteText(NSInteger seconds) {
 	cell.selectionStyle = UITableViewCellSelectionStyleNone;
 	cell.textLabel.textColor = [theme primaryTextColour];
 	cell.detailTextLabel.textColor = [theme secondaryTextColour];
+	cell.textLabel.text = @"";
+	cell.detailTextLabel.text = @"";
 
 	if (indexPath.row < (NSInteger)self.details.count){
 		NSArray *pair = self.details[indexPath.row];
@@ -495,6 +498,15 @@ static NSString *TGTopicMuteText(NSInteger seconds) {
 		cell.detailTextLabel.text = pair[1];
 	}
 	return cell;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView
+		 cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	if (indexPath.section == 1)
+		return [self messageCellForTableView:tableView indexPath:indexPath];
+	if (indexPath.section == 2)
+		return [self unpinAllCellForTableView:tableView];
+	return [self detailCellForTableView:tableView indexPath:indexPath];
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -577,7 +589,16 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 		self.edgesForExtendedLayout = UIRectEdgeNone;
 
 	CGFloat width = self.view.bounds.size.width;
+	[self buildNameFieldWithWidth:width];
+	[self buildColourSectionWithWidth:width];
 
+	UIButton *create = [TGIcons headerButtonWithTitle:@"Create" bold:YES
+											   target:self action:@selector(createPressed)];
+	self.navigationItem.rightBarButtonItem =
+			[[UIBarButtonItem alloc] initWithCustomView:create];
+}
+
+- (void)buildNameFieldWithWidth:(CGFloat)width {
 	UIView *plate = [[UIView alloc] initWithFrame:CGRectMake(0, 12, width, 44)];
 	plate.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	plate.backgroundColor = [TGTheme shared].isDark
@@ -595,7 +616,9 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 	self.nameField.autocorrectionType = UITextAutocorrectionTypeNo;
 	self.nameField.clearButtonMode = UITextFieldViewModeWhileEditing;
 	[plate addSubview:self.nameField];
+}
 
+- (void)buildColourSectionWithWidth:(CGFloat)width {
 	UILabel *caption = [[UILabel alloc] initWithFrame:CGRectMake(16, 68, width - 32, 16)];
 	caption.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	caption.backgroundColor = [UIColor clearColor];
@@ -623,11 +646,6 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 		[self.swatches addObject:button];
 	}
 	[self refreshSwatches];
-
-	UIButton *create = [TGIcons headerButtonWithTitle:@"Create" bold:YES
-											   target:self action:@selector(createPressed)];
-	self.navigationItem.rightBarButtonItem =
-			[[UIBarButtonItem alloc] initWithCustomView:create];
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -727,6 +745,34 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 			? UITableViewCellSeparatorStyleNone
 			: UITableViewCellSeparatorStyleSingleLine;
 
+	[self buildBackgroundView];
+	[self buildRefreshControl];
+	[self buildSearchBar];
+
+	self.canCreateTopics = YES;
+	self.canManageTopics = YES;
+	self.canDeleteTopics = YES;
+	[self updateCreateButton];
+	[self loadRights];
+
+	UILongPressGestureRecognizer *hold = [[UILongPressGestureRecognizer alloc]
+			initWithTarget:self action:@selector(topicHeld:)];
+	[self.tableView addGestureRecognizer:hold];
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] forumTopicDefaultIconsWithCompletion:^(NSArray *icons){
+		weakSelf.iconChoices = [icons isKindOfClass:NSArray.class] ? icons : @[];
+	}];
+
+	[[NSNotificationCenter defaultCenter] addObserver:self
+											 selector:@selector(themeChanged)
+												 name:TGThemeChangedNotification
+											   object:nil];
+
+	[self reloadTopics];
+}
+
+- (void)buildBackgroundView {
 	UIView *background = [[UIView alloc] initWithFrame:self.tableView.bounds];
 	background.backgroundColor = [[TGTheme shared] listBackgroundColour];
 	background.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -764,7 +810,9 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 	[background addSubview:self.spinner];
 
 	self.tableView.backgroundView = background;
+}
 
+- (void)buildRefreshControl {
 	if ([self respondsToSelector:@selector(setRefreshControl:)]
 			&& NSClassFromString(@"UIRefreshControl")){
 		UIRefreshControl *refresh = [[NSClassFromString(@"UIRefreshControl") alloc] init];
@@ -772,7 +820,9 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 		  forControlEvents:UIControlEventValueChanged];
 		self.refreshControl = refresh;
 	}
+}
 
+- (void)buildSearchBar {
 	self.searchBar = [[UISearchBar alloc] initWithFrame:
 			CGRectMake(0, 0, self.tableView.bounds.size.width, 44)];
 	self.searchBar.delegate = self;
@@ -780,28 +830,6 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 	self.searchBar.autocorrectionType = UITextAutocorrectionTypeNo;
 	self.searchBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	self.tableView.tableHeaderView = self.searchBar;
-
-	self.canCreateTopics = YES;
-	self.canManageTopics = YES;
-	self.canDeleteTopics = YES;
-	[self updateCreateButton];
-	[self loadRights];
-
-	UILongPressGestureRecognizer *hold = [[UILongPressGestureRecognizer alloc]
-			initWithTarget:self action:@selector(topicHeld:)];
-	[self.tableView addGestureRecognizer:hold];
-
-	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] forumTopicDefaultIconsWithCompletion:^(NSArray *icons){
-		weakSelf.iconChoices = [icons isKindOfClass:NSArray.class] ? icons : @[];
-	}];
-
-	[[NSNotificationCenter defaultCenter] addObserver:self
-											 selector:@selector(themeChanged)
-												 name:TGThemeChangedNotification
-											   object:nil];
-
-	[self reloadTopics];
 }
 
 - (void)dealloc {
@@ -1173,18 +1201,7 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 
 	TGTheme *theme = [TGTheme shared];
 	BOOL plainPlate = (!theme.isDark && theme.importedName == nil);
-	cell.backgroundColor = [theme listBackgroundColour];
-	cell.backgroundView.hidden = !plainPlate;
-	cell.titleLabel.textColor = [theme primaryTextColour];
-	cell.previewLabel.textColor = [theme secondaryTextColour];
-	cell.dateLabel.textColor = [theme accentColour];
-	cell.dateLabel.text = @"";
-	cell.previewLabel.text = @"";
-	cell.badge.text = @"";
-	cell.badge.hidden = YES;
-	cell.badgeBackground.hidden = YES;
-	cell.pinIcon.hidden = YES;
-	cell.muteIcon.hidden = YES;
+	[self resetTopicCell:cell theme:theme plainPlate:plainPlate];
 
 	NSArray *rows = [self displayedTopics];
 	if (indexPath.row >= (NSInteger)rows.count)
@@ -1214,18 +1231,8 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 	cell.dateLabel.text = TGTopicDate(TGTopicDouble(t, @"date"));
 	cell.pinIcon.hidden = !TGTopicFlag(t, @"isPinned");
 
-	if (plainPlate){
-		UIImageView *plate = (UIImageView *)cell.backgroundView;
-		if (unread > 0){
-			plate.image = nil;
-			plate.backgroundColor = TGTopicRGB(0xebf0f5);
-			if (!closed)
-				cell.previewLabel.textColor = TGTopicRGB(0x5b646e);
-		} else {
-			plate.image = TGTopicPlateImage();
-			plate.backgroundColor = [UIColor clearColor];
-		}
-	}
+	if (plainPlate)
+		[self applyPlateToCell:cell unread:unread closed:closed];
 
 	NSString *initials = TGTopicInitial(title);
 	NSInteger rgb = TGTopicInteger(t, @"iconColor");
@@ -1236,7 +1243,41 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 
 	cell.muteIcon.hidden = ![self topicIsMuted:t];
 
-	NSInteger mentions = TGTopicInteger(t, @"unreadMentions");
+	[self applyBadgeToCell:cell unread:unread mentions:TGTopicInteger(t, @"unreadMentions")];
+
+	[cell setNeedsLayout];
+	return cell;
+}
+
+- (void)resetTopicCell:(TGTopicCell *)cell theme:(TGTheme *)theme plainPlate:(BOOL)plainPlate {
+	cell.backgroundColor = [theme listBackgroundColour];
+	cell.backgroundView.hidden = !plainPlate;
+	cell.titleLabel.textColor = [theme primaryTextColour];
+	cell.previewLabel.textColor = [theme secondaryTextColour];
+	cell.dateLabel.textColor = [theme accentColour];
+	cell.dateLabel.text = @"";
+	cell.previewLabel.text = @"";
+	cell.badge.text = @"";
+	cell.badge.hidden = YES;
+	cell.badgeBackground.hidden = YES;
+	cell.pinIcon.hidden = YES;
+	cell.muteIcon.hidden = YES;
+}
+
+- (void)applyPlateToCell:(TGTopicCell *)cell unread:(NSInteger)unread closed:(BOOL)closed {
+	UIImageView *plate = (UIImageView *)cell.backgroundView;
+	if (unread > 0){
+		plate.image = nil;
+		plate.backgroundColor = TGTopicRGB(0xebf0f5);
+		if (!closed)
+			cell.previewLabel.textColor = TGTopicRGB(0x5b646e);
+	} else {
+		plate.image = TGTopicPlateImage();
+		plate.backgroundColor = [UIColor clearColor];
+	}
+}
+
+- (void)applyBadgeToCell:(TGTopicCell *)cell unread:(NSInteger)unread mentions:(NSInteger)mentions {
 	if (unread > 0){
 		cell.badge.text = unread < 1000
 				? [NSString stringWithFormat:@"%ld", (long)unread]
@@ -1248,9 +1289,6 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 		cell.badge.hidden = NO;
 		cell.badgeBackground.hidden = NO;
 	}
-
-	[cell setNeedsLayout];
-	return cell;
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -1325,15 +1363,33 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 	NSDictionary *t = rows[path.row];
 	self.actionTopic = t;
 
+	NSMutableArray *items = [NSMutableArray array];
+	NSMutableArray *keys = [NSMutableArray array];
+	[self appendMenuItemsForTopic:t intoItems:items keys:keys];
+
+	CGRect rect = [self.tableView rectForRowAtIndexPath:path];
+	CGPoint where = [self.tableView convertPoint:
+			CGPointMake(120, CGRectGetMaxY(rect) - 10) toView:self.navigationController.view];
+	self.menuPoint = where;
+
+	__weak typeof(self) weakSelf = self;
+	[TGPopupMenu showItems:items atPoint:where inView:self.navigationController.view
+				  onChoice:^(NSInteger choice, NSString *title){
+		if (choice < 0 || choice >= (NSInteger)keys.count)
+			return;
+		[weakSelf runTopicAction:keys[choice]];
+	}];
+}
+
+- (void)appendMenuItemsForTopic:(NSDictionary *)t
+					  intoItems:(NSMutableArray *)items
+						   keys:(NSMutableArray *)keys {
 	BOOL general = TGTopicFlag(t, @"isGeneral");
 	BOOL closed = TGTopicFlag(t, @"isClosed");
 	BOOL pinned = TGTopicFlag(t, @"isPinned");
 	BOOL hidden = TGTopicFlag(t, @"isHidden");
 
 	BOOL canEdit = [self canEditTopic:t];
-
-	NSMutableArray *items = [NSMutableArray array];
-	NSMutableArray *keys = [NSMutableArray array];
 
 	if (!general && canEdit){
 		[items addObject:@{@"title" : @"Edit", @"icon" : @"edit"}];
@@ -1384,19 +1440,6 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 						   @"destructive" : @YES}];
 		[keys addObject:@"delete"];
 	}
-
-	CGRect rect = [self.tableView rectForRowAtIndexPath:path];
-	CGPoint where = [self.tableView convertPoint:
-			CGPointMake(120, CGRectGetMaxY(rect) - 10) toView:self.navigationController.view];
-	self.menuPoint = where;
-
-	__weak typeof(self) weakSelf = self;
-	[TGPopupMenu showItems:items atPoint:where inView:self.navigationController.view
-				  onChoice:^(NSInteger choice, NSString *title){
-		if (choice < 0 || choice >= (NSInteger)keys.count)
-			return;
-		[weakSelf runTopicAction:keys[choice]];
-	}];
 }
 
 - (void)runTopicAction:(NSString *)key {
@@ -1405,7 +1448,6 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 		return;
 
 	int32_t topicId = [self topicIdOf:t];
-	__weak typeof(self) weakSelf = self;
 
 	if ([key isEqualToString:@"edit"]){
 		[self askTopicNameForEdit:t];
@@ -1413,66 +1455,25 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 	}
 
 	if ([key isEqualToString:@"info"]){
-		self.actionTopic = nil;
-		if (topicId == 0){
-			[self showError:@"Could not load the topic."];
-			return;
-		}
-		TGTopicInfoController *info = [[TGTopicInfoController alloc]
-				initWithStyle:UITableViewStyleGrouped];
-		info.chatId = self.chatId;
-		info.topicId = topicId;
-		info.topicName = TGTopicString(t, @"name");
-		info.canManage = self.canManageTopics;
-		[self.navigationController pushViewController:info animated:YES];
+		[self openTopicInfoForTopic:t topicId:topicId];
 		return;
 	}
 
 	if ([key isEqualToString:@"pin"]){
-		BOOL pin = !TGTopicFlag(t, @"isPinned");
-		[[TGClient shared] setForumTopicInChat:self.chatId topic:topicId pinned:pin
-									completion:^(BOOL success){
-			if (!success)
-				[weakSelf showError:pin ? @"Could not pin the topic."
-									   : @"Could not unpin the topic."];
-			[weakSelf reloadTopics];
-		}];
+		[self setTopic:topicId pinned:!TGTopicFlag(t, @"isPinned")];
 	} else if ([key isEqualToString:@"close"]){
-		BOOL close = !TGTopicFlag(t, @"isClosed");
-		[[TGClient shared] setForumTopicInChat:self.chatId topic:topicId closed:close
-									completion:^(BOOL success){
-			if (!success)
-				[weakSelf showError:close ? @"Could not close the topic."
-										 : @"Could not reopen the topic."];
-			[weakSelf reloadTopics];
-		}];
+		[self setTopic:topicId closed:!TGTopicFlag(t, @"isClosed")];
 	} else if ([key isEqualToString:@"mute"]){
 		if ([self topicIsMuted:t]){
-			[[TGClient shared] setForumTopicInChat:self.chatId topic:topicId mutedFor:0
-										completion:^(BOOL success){
-				if (!success)
-					[weakSelf showError:@"Could not unmute the topic."];
-				[weakSelf reloadTopics];
-			}];
+			[self unmuteTopic:topicId];
 		} else {
 			[self showMuteDurationsForTopic:topicId];
 			return;
 		}
 	} else if ([key isEqualToString:@"read"]){
-		[[TGClient shared] markForumTopicReadInChat:self.chatId topic:topicId
-										 completion:^(BOOL success){
-			if (!success)
-				[weakSelf showError:@"Could not mark the topic as read."];
-			[weakSelf reloadTopics];
-		}];
+		[self markTopicRead:topicId];
 	} else if ([key isEqualToString:@"link"]){
-		[[TGClient shared] forumTopicLinkInChat:self.chatId topic:topicId
-									 completion:^(NSString *link){
-			if (link.length)
-				[UIPasteboard generalPasteboard].string = link;
-			else
-				[weakSelf showError:@"Could not get a link to the topic."];
-		}];
+		[self copyLinkForTopic:topicId];
 	} else if ([key isEqualToString:@"reorder"]){
 		[self beginReordering];
 		return;
@@ -1480,17 +1481,89 @@ static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
 		[self confirmDeleteTopic:t];
 		return;
 	} else if ([key isEqualToString:@"hide"]){
-		BOOL hide = !TGTopicFlag(t, @"isHidden");
-		[[TGClient shared] setGeneralForumTopicInChat:self.chatId hidden:hide
-										   completion:^(BOOL success){
-			if (!success)
-				[weakSelf showError:hide ? @"Could not hide the General topic."
-										: @"Could not show the General topic."];
-			[weakSelf reloadTopics];
-		}];
+		[self setGeneralTopicHidden:!TGTopicFlag(t, @"isHidden")];
 	}
 
 	self.actionTopic = nil;
+}
+
+- (void)openTopicInfoForTopic:(NSDictionary *)t topicId:(int32_t)topicId {
+	self.actionTopic = nil;
+	if (topicId == 0){
+		[self showError:@"Could not load the topic."];
+		return;
+	}
+	TGTopicInfoController *info = [[TGTopicInfoController alloc]
+			initWithStyle:UITableViewStyleGrouped];
+	info.chatId = self.chatId;
+	info.topicId = topicId;
+	info.topicName = TGTopicString(t, @"name");
+	info.canManage = self.canManageTopics;
+	[self.navigationController pushViewController:info animated:YES];
+}
+
+- (void)setTopic:(int32_t)topicId pinned:(BOOL)pin {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] setForumTopicInChat:self.chatId topic:topicId pinned:pin
+								completion:^(BOOL success){
+		if (!success)
+			[weakSelf showError:pin ? @"Could not pin the topic."
+								   : @"Could not unpin the topic."];
+		[weakSelf reloadTopics];
+	}];
+}
+
+- (void)setTopic:(int32_t)topicId closed:(BOOL)close {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] setForumTopicInChat:self.chatId topic:topicId closed:close
+								completion:^(BOOL success){
+		if (!success)
+			[weakSelf showError:close ? @"Could not close the topic."
+									 : @"Could not reopen the topic."];
+		[weakSelf reloadTopics];
+	}];
+}
+
+- (void)unmuteTopic:(int32_t)topicId {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] setForumTopicInChat:self.chatId topic:topicId mutedFor:0
+								completion:^(BOOL success){
+		if (!success)
+			[weakSelf showError:@"Could not unmute the topic."];
+		[weakSelf reloadTopics];
+	}];
+}
+
+- (void)markTopicRead:(int32_t)topicId {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] markForumTopicReadInChat:self.chatId topic:topicId
+									 completion:^(BOOL success){
+		if (!success)
+			[weakSelf showError:@"Could not mark the topic as read."];
+		[weakSelf reloadTopics];
+	}];
+}
+
+- (void)copyLinkForTopic:(int32_t)topicId {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] forumTopicLinkInChat:self.chatId topic:topicId
+								 completion:^(NSString *link){
+		if (link.length)
+			[UIPasteboard generalPasteboard].string = link;
+		else
+			[weakSelf showError:@"Could not get a link to the topic."];
+	}];
+}
+
+- (void)setGeneralTopicHidden:(BOOL)hide {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] setGeneralForumTopicInChat:self.chatId hidden:hide
+									   completion:^(BOOL success){
+		if (!success)
+			[weakSelf showError:hide ? @"Could not hide the General topic."
+									: @"Could not show the General topic."];
+		[weakSelf reloadTopics];
+	}];
 }
 
 - (void)showMuteDurationsForTopic:(int32_t)topicId {

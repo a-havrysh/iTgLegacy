@@ -127,6 +127,28 @@ static NSString *TGSavedTopicTitle(NSDictionary *topic) {
 	self.title = self.topicTitle.length ? self.topicTitle : @"Saved Messages";
 	self.messages = [NSMutableArray array];
 
+	[self buildTableBackground];
+
+	UIButton *chat = [TGIcons headerButtonWithTitle:@"More" bold:NO
+											 target:self action:@selector(showTopicMenu)];
+	self.navigationItem.rightBarButtonItem =
+			[[UIBarButtonItem alloc] initWithCustomView:chat];
+
+	[self buildPinnedBanner];
+	[self buildCountFooter];
+
+	UILongPressGestureRecognizer *hold = [[UILongPressGestureRecognizer alloc]
+			initWithTarget:self action:@selector(messageHeld:)];
+	[self.tableView addGestureRecognizer:hold];
+
+	[self loadOlder];
+	[self reloadPinnedBanner];
+	[self reloadPositions];
+}
+
+- (void)buildTableBackground {
+	TGTheme *theme = [TGTheme shared];
+
 	self.tableView.rowHeight = kSavedMessageRowHeight;
 	self.tableView.backgroundColor = [theme listBackgroundColour];
 	self.tableView.separatorColor = [theme separatorColour];
@@ -154,22 +176,6 @@ static NSString *TGSavedTopicTitle(NSDictionary *topic) {
 	[background addSubview:self.spinner];
 
 	self.tableView.backgroundView = background;
-
-	UIButton *chat = [TGIcons headerButtonWithTitle:@"More" bold:NO
-											 target:self action:@selector(showTopicMenu)];
-	self.navigationItem.rightBarButtonItem =
-			[[UIBarButtonItem alloc] initWithCustomView:chat];
-
-	[self buildPinnedBanner];
-	[self buildCountFooter];
-
-	UILongPressGestureRecognizer *hold = [[UILongPressGestureRecognizer alloc]
-			initWithTarget:self action:@selector(messageHeld:)];
-	[self.tableView addGestureRecognizer:hold];
-
-	[self loadOlder];
-	[self reloadPinnedBanner];
-	[self reloadPositions];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -599,6 +605,8 @@ static NSString *TGSavedTopicTitle(NSDictionary *topic) {
 	[theme styleCell:cell];
 	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
 	cell.accessoryType = UITableViewCellAccessoryNone;
+	cell.textLabel.text = @"";
+	cell.detailTextLabel.text = @"";
 
 	if (indexPath.row >= (NSInteger)self.messages.count)
 		return cell;
@@ -784,6 +792,28 @@ static NSString *TGSavedTopicTitle(NSDictionary *topic) {
 	self.avatars = [NSMutableDictionary dictionary];
 	self.avatarsRequested = [NSMutableSet set];
 
+	[self buildTableBackground];
+
+	[self showListButtons];
+
+	UILongPressGestureRecognizer *hold = [[UILongPressGestureRecognizer alloc]
+			initWithTarget:self action:@selector(topicHeld:)];
+	[self.tableView addGestureRecognizer:hold];
+
+	[[NSNotificationCenter defaultCenter] addObserver:self
+											 selector:@selector(themeChanged)
+												 name:TGThemeChangedNotification
+											   object:nil];
+
+	[self buildReminderBanner];
+
+	[TGSavedMessagesViewController setShowsTopics:YES];
+	[self reloadTopics];
+}
+
+- (void)buildTableBackground {
+	TGTheme *theme = [TGTheme shared];
+
 	self.tableView.rowHeight = kSavedRowHeight;
 	self.tableView.backgroundColor = [theme listBackgroundColour];
 	self.tableView.separatorColor = [theme separatorColour];
@@ -807,22 +837,6 @@ static NSString *TGSavedTopicTitle(NSDictionary *topic) {
 	[background addSubview:self.spinner];
 
 	self.tableView.backgroundView = background;
-
-	[self showListButtons];
-
-	UILongPressGestureRecognizer *hold = [[UILongPressGestureRecognizer alloc]
-			initWithTarget:self action:@selector(topicHeld:)];
-	[self.tableView addGestureRecognizer:hold];
-
-	[[NSNotificationCenter defaultCenter] addObserver:self
-											 selector:@selector(themeChanged)
-												 name:TGThemeChangedNotification
-											   object:nil];
-
-	[self buildReminderBanner];
-
-	[TGSavedMessagesViewController setShowsTopics:YES];
-	[self reloadTopics];
 }
 
 - (void)buildReminderBanner {
@@ -893,11 +907,7 @@ static NSString *TGSavedTopicTitle(NSDictionary *topic) {
 }
 
 - (NSString *)titleForReminder:(NSDictionary *)reminder {
-	NSString *text = reminder[@"text"];
-	if (![text isKindOfClass:NSString.class] || !text.length)
-		text = @"Media";
-	if (text.length > 24)
-		text = [[text substringToIndex:24] stringByAppendingString:@"…"];
+	NSString *text = TGSavedShortText(reminder, 24);
 
 	NSTimeInterval when = [reminder[@"sendDate"] doubleValue];
 	if (when <= 0)
@@ -1190,6 +1200,8 @@ static NSString *TGSavedTopicTitle(NSDictionary *topic) {
 	cell.dateLabel.textColor = [theme accentColour];
 	cell.dateLabel.text = @"";
 	cell.previewLabel.text = @"";
+	cell.titleLabel.text = @"";
+	cell.avatar.image = nil;
 	cell.pinIcon.hidden = YES;
 
 	if (indexPath.row >= (NSInteger)self.topics.count)
