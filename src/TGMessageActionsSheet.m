@@ -18,6 +18,8 @@ NSString *const TGMessageActionDeleteForMe = @"deleteForMe";
 NSString *const TGMessageActionDeleteForEveryone = @"deleteForEveryone";
 NSString *const TGMessageActionReport = @"report";
 
+static NSString *const TGMessageActionDeleteRow = @"deleteRow";
+
 @interface TGMessageActionsSheet ()
 @property (nonatomic, strong) NSArray *actionIds;
 @property (nonatomic, strong) TGActionSheet *currentActionSheet;
@@ -27,6 +29,9 @@ NSString *const TGMessageActionReport = @"report";
 @property (nonatomic, assign) BOOL finished;
 @property (nonatomic, assign) BOOL canDeleteForMe;
 @property (nonatomic, assign) BOOL canDeleteForEveryone;
+@property (nonatomic, assign) BOOL confirming;
+@property (nonatomic, assign) BOOL resolvedPinned;
+@property (nonatomic, weak) UIView *menuView;
 @end
 
 @implementation TGMessageActionsSheet

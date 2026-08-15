@@ -1,0 +1,966 @@
+{
+ "missingApi": [
+  {
+   "screen": "TGMessageActionsSheet",
+   "need": "no pin/unpin of a message in a chat anywhere in TGClient+* (only chat-list pinning, saved-messages pinning and Forums unpinAllMessagesInForumTopicInChat:), so the Pin/Unpin row can only report the intent - the caller has no API to execute it"
+  },
+  {
+   "screen": "TGMessageActionsSheet",
+   "need": "no 'is this message the chat's pinned one' query, hence the settable `pinned` property the caller must supply"
+  },
+  {
+   "screen": "TGMessageActionsSheet",
+   "need": "propertiesOfMessage: exposes no canTranslate/canSelect flag, so Translate is gated on message text and Select on a caller-set flag"
+  },
+  {
+   "screen": "TGPremiumViewController",
+   "need": "-starBalanceWithCompletion: is documented in TGClient+Premium.h/TGClient+Payments.h as living in Payments but is not declared anywhere; I read the balance from premiumOptionsWithCompletion:'s \"starCount\" instead"
+  },
+  {
+   "screen": "TGPremiumViewController",
+   "need": "no API to list this account's own gift codes or the giveaways it entered (-giveawayInfoForMessage:inChat: needs a concrete giveaway message, and -boostersInChat: needs a chat id), so the screen offers redeeming a code but cannot list existing codes/giveaways"
+  },
+  {
+   "screen": "TGInviteLinksViewController",
+   "need": "no method to fetch the members who joined via the primary link plus a per-link 'edit' UI is present but unused — editInviteLink: exists, I simply did not surface an edit form (only create/revoke/delete)"
+  },
+  {
+   "screen": "TGInviteLinksViewController",
+   "need": "no way to know whether the signed-in user may actually manage invite links; managementInfoForChat: gives counts but no canInviteUsers/canManageInviteLinks flag, so the screen relies on the API answering nil/NO and shows an alert instead of hiding actions"
+  },
+  {
+   "screen": "TGChatEventsViewController",
+   "need": "no per-event 'jump to message' entry point — events carry a messageId but there is no TGClient method to open a chat at a message id from here, so rows are inert on tap"
+  },
+  {
+   "screen": "TGChatEventsViewController",
+   "need": "no method to list a chat's administrators, so the filter form cannot offer the 'by admin' (userIds:) narrowing that the API parameter supports"
+  },
+  {
+   "screen": "TGChatEventsViewController",
+   "need": "no reportSupergroupAntiSpamFalsePositive-style call, so the 'canReportNotSpam' flag on deletion events cannot be acted on"
+  },
+  {
+   "screen": "TGGroupMembersViewController",
+   "need": "No API to read a single member's current chatAdministratorRights / chatPermissions dictionary — memberStatusOfUser:inGroup: returns the flattened entry (status, customTitle, untilDate, canBeEdited) but not the individual right/permission booleans, so a per-right editor sheet cannot be pre-populated. Promote therefore grants a fixed standard admin set and Restrict applies a full mute rather than a per-permission editor."
+  },
+  {
+   "screen": "TGGroupMembersViewController",
+   "need": "No callback/notification for member-list changes, so the screen reloads the whole page after every action instead of patching one row."
+  },
+  {
+   "screen": "TGGroupMembersViewController",
+   "need": "TGClient+Groups exposes no 'can I administer this chat' flag beyond the per-member canBeEdited and groupInfo's myStatus string; the action menu relies on canBeEdited alone."
+  },
+  {
+   "screen": "TGProxyViewController",
+   "need": "no TGClient method exposes the currently-enabled proxy without re-listing all proxies (I derive it from the \"isEnabled\" key of -proxiesWithCompletion:)"
+  },
+  {
+   "screen": "TGProxyViewController",
+   "need": "connection state is only available as a single-assign block property (onConnectionState) plus the -connectionStateTitle poll; a notification would let several screens observe it without stealing the block"
+  },
+  {
+   "screen": "TGFoldersViewController",
+   "need": "a folders-changed callback on TGClient (there is onChatsChanged / onArchiveChanged but nothing for folders), so after a create/delete the list refreshes on viewWillAppear plus one 0.6 s delayed reload rather than on a real update"
+  },
+  {
+   "screen": "TGFoldersViewController",
+   "need": "a synchronous chat-title lookup by chat id; -titleForChatId: scans TGClient.chats and .archivedChats and falls back to \"Chat\" for a folder member that is not in either list"
+  },
+  {
+   "screen": "TGFoldersViewController",
+   "need": "any way to render a folder icon as an image - -folderIconNames gives strings only, so the icon picker shows names, not glyphs"
+  },
+  {
+   "screen": "TGReactionPickerView",
+   "need": "no update route for message reactions, so the chip row can only be refreshed by polling -reactionChipsForMessage:inChat:completion: after a toggle; a push of new counts when someone else reacts is not available"
+  },
+  {
+   "screen": "TGReactionPickerView",
+   "need": "-availableReactionsInChat:completion: reports maxCount but there is no per-message API telling us how many reactions we have already used, so the strip cannot grey out emoji once the message is at its limit"
+  },
+  {
+   "screen": "TGReactionPickerView",
+   "need": "-emojiReactionInfo:completion: exposes only a static_icon file id; there is no way to render the official reaction artwork at chip size without a separate download, so both views draw the plain emoji character"
+  },
+  {
+   "screen": "TGStickerPanelView",
+   "need": "no call returns whether one sticker file id is currently a favourite (must diff against favoriteStickersWithCompletion:)"
+  },
+  {
+   "screen": "TGStickerPanelView",
+   "need": "no paged accessor for a single set's stickers - stickerSetWithId: returns the whole set at once"
+  },
+  {
+   "screen": "TGStickerPanelView",
+   "need": "no notification/callback when installed sets or favourites change server-side, so the panel can only be refreshed by an explicit -reload"
+  },
+  {
+   "screen": "TGStickersViewController",
+   "need": "TGClient+Stickers has no way to LIST recently used stickers — only addRecentStickerWithFileId:, removeRecentStickerWithFileId: and clearRecentStickers. A 'Recent Stickers' page is therefore impossible; I degraded it to a 'Clear Recent Stickers' action row on the root page. A recentStickersWithCompletion: (TDLib getRecentStickers) would let the recents grid exist."
+  },
+  {
+   "screen": "TGStickersViewController",
+   "need": "No way to reorder favourite stickers (TDLib reorderInstalledStickerSets has no favourites equivalent exposed)."
+  },
+  {
+   "screen": "TGStickersViewController",
+   "need": "No mask-sticker set accessors (TWELVE's masksMode), so the mask section of the original settings screen is not offered."
+  },
+  {
+   "screen": "TGStickersViewController",
+   "need": "No 'archived sets summary / unread trending count' call; the root page's Archived and Trending counts are derived by fetching one page of each, which costs two extra round trips on every appearance."
+  },
+  {
+   "screen": "TGStarsViewController",
+   "need": "-starBalanceWithCompletion: — both TGClient+Payments.h and TGClient+Premium.h document it as living in the other file, but it is declared nowhere in src/. Worked around by reading the \"balance\" key out of -starTransactionsWithOffset:limit:completion: (TGClient+Premium.h), which means the balance only refreshes when the first history page is refetched."
+  },
+  {
+   "screen": "TGStarsViewController",
+   "need": "No synchronous or async accessor for a chat's title by chat id (there is -nameForUserId: for users only), so a transaction whose counterparty is a chatId falls back to the transaction's own \"title\" string."
+  },
+  {
+   "screen": "TGSavedMessagesTagsViewController",
+   "need": "-savedMessagesTagsForTopic:completion: — referenced in the doc comments of both TGClient+SavedMessages.h (line 145) and TGClient+Search.h (line 116) but declared and implemented nowhere in the repo. This is the actual tag list with its labels and counts (TDLib getSavedMessagesTags); without it there is no way to read a tag's server-side label, so a rename is only reflected locally until the screen is rebuilt."
+  },
+  {
+   "screen": "TGSavedMessagesTagsViewController",
+   "need": "-searchSavedMessagesWithQuery:tagEmoji:topicId:fromMessageId:limit:completion: — also only referenced in comments, never declared. This is the real 'filter Saved Messages by tag' call; the screen substitutes a local filter over the messages it scanned."
+  },
+  {
+   "screen": "TGStarsViewController",
+   "need": "-starBalanceWithCompletion: is documented in both TGClient+Payments.h and TGClient+Premium.h as living in the other file and is declared in neither; the balance is therefore read from the \"balance\" key of -starTransactionsWithOffset:limit:completion: and only refreshes with the first history page."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGChatListViewController.m",
+   "need": "Per-chat mark-as-read: no TGClient method clears a chat's unread count (no viewMessages / markChatAsRead / readChatHistory in any category). 'Mark as Read' therefore only calls -setChat:markedAsUnread:NO plus -readAllMentionsInChat: / -readAllReactionsInChat:, so a chat with real unread messages keeps its badge until it is opened."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGChatListViewController.m",
+   "need": "No accessor for a chat's markedAsUnread flag in the cached chat rows: -rowDetailForChat:completion: has it but the list rows do not, so the menu infers unread from the 'unread' count and an optional 'markedUnread' key that may be absent."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGCallViewController.m",
+   "need": "TGCall does not expose the callStateDiscarded need_rating / need_debug_information / need_log flags, nor the libtgvoip debug string or log file path. The screen therefore heuristically offers the rating for any call that actually connected, and -sendDebugInformationForCallId:information: / -sendLogForCallId:filePath: are left unwired because there is no way to obtain their payload from this file."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGCallViewController.m",
+   "need": "TGCall exposes no 'is_received' / ringing signal, so the outgoing 'Ringing...' state the original client showed cannot be distinguished from 'Calling...'."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGCallViewController.m",
+   "need": "TGCall exposes no busy/declined discrimination beyond the free-text endReason string."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSettingsViewController.m",
+   "need": "No public declaration of -autoDownloadPresetsWithCompletion: in any TGClient+*.h (it is referenced by Files/Storage/Network doc comments but only exists as a private method in TGClient+Network.m), so a per-network auto-download preset picker could not be built; only the Data Saver master switch was surfaced."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSettingsViewController.m",
+   "need": "No getter for the auto-download settings currently in force (TDLib limitation, noted in TGClient+Storage.h), so a settings screen cannot show real state - the Data Saver switch mirrors NSUserDefaults."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGProfileViewController.m",
+   "need": "a chat-title/photo edit form screen equivalent (had to build rename as a UIAlertView plain-text-input alert, which is not the 2013 modal form)"
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGProfileViewController.m",
+   "need": "TGClient+ChatManagement has no read-back of the current member permissions after -setPermissions: other than re-calling -permissionsForChat:, so the switch screen pops on success without confirming server state"
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGProfileViewController.m",
+   "need": "no method exposing per-user admin rights (canChangeInfo / canInviteUsers / canRestrictMembers) separately - only the coarse myStatus/canBeEdited from -groupInfoForChat:, so admins with partial rights may see rows TDLib will refuse"
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGChatListViewController.m",
+   "need": "Per-chat mark-as-read: no TGClient method clears a chat's unread count (confirmed - no viewMessages/markChatAsRead/readChatHistory in any category header), so 'Mark as Read' only sets markedAsUnread:NO and clears mentions/reactions."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGChatListViewController.m",
+   "need": "No accessor for a chat row's markedAsUnread flag in the cached list rows; the menu infers unread from the 'unread' count plus an optional 'markedUnread' key that the documented row shape in TGClient+ChatList.h does not list, so it will usually be absent (compiles fine, reads as NO)."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGContactsViewController.m",
+   "need": "a bulk badges/flags call for many users at once - badgesForUser: and contactFlagsForUser: are per-user, so a large contact list costs one request per visible row; a getUsers-style batched variant would be much kinder to the 4S"
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGContactsViewController.m",
+   "need": "close-friend state is not carried on the flattened user records returned by -contactsWithCompletion:, so it needs a second full round trip through -contactCloseFriendsWithCompletion:"
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGContactsViewController.m",
+   "need": "no update notification for close-friends changes made elsewhere (only a manual re-read after a local toggle)"
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSearchViewController.m",
+   "need": "searchPublicChats / searchPublicChat — no TGClient wrapper exists; the file's pre-existing raw -request: call for public chat lookup was left in place rather than removed (I did not add new TDLib calls)"
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSearchViewController.m",
+   "need": "no API to open a chat at a specific message id (TGChatViewController has no messageId property), so a message result opens the chat at the bottom instead of jumping to the hit"
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSearchViewController.m",
+   "need": "searchMessagesWithQuery:filter:chatType:minDate:maxDate:offset:limit:completion: exists but there is no UI affordance in this screen for date range / chat type; only the short form is used"
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGChatViewController.m",
+   "need": "pinMessage / unpinMessage for a single message - no TGClient category exposes it (only chat pinning, setChat:pinned:), so the sheet's Pin/Unpin row answers with an explanatory alert instead of a TDLib call"
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGChatViewController.m",
+   "need": "a flattened-message form that carries the reaction chips inline - +reactionChipsFromMessage: needs the raw TDLib dictionary, which the chat's flattened history does not keep, so every chip row costs an extra async read"
+  }
+ ],
+ "risks": [
+  {
+   "screen": "TGMessageActionsSheet",
+   "risk": "TGPopupMenu's tap-outside dismissal does not invoke its onChoice block, so a cancelled menu leaves the completion unfired until the presenter calls -dismiss; presenters must call -dismiss in viewWillDisappear (documented in the header)."
+  },
+  {
+   "screen": "TGMessageActionsSheet",
+   "risk": "The object must be retained by the caller across the async properties query; a fire-and-forget temporary would be deallocated and nothing would appear."
+  },
+  {
+   "screen": "TGMessageActionsSheet",
+   "risk": "Row titles are hardcoded English - the repo has no TGLocalized equivalent in use in src/."
+  },
+  {
+   "screen": "TGMessageActionsSheet",
+   "risk": "Delete rows are collapsed into one 'Delete' entry plus a confirmation sheet rather than two menu rows, to keep exactly one red row per surface as the rulebook demands; if the parent expects two distinct menu rows it will still receive the two distinct action constants."
+  },
+  {
+   "screen": "TGPremiumViewController",
+   "risk": "Feature rows use UITableViewCellStyleSubtitle at a fixed 44pt; a long server subtitle truncates to one line rather than wrapping"
+  },
+  {
+   "screen": "TGPremiumViewController",
+   "risk": "The gift-code prompt relies on UIAlertViewStylePlainTextInput (iOS 5+, guarded by respondsToSelector:); on a build where it is unavailable the alert shows with no field and the redeem does nothing"
+  },
+  {
+   "screen": "TGPremiumViewController",
+   "risk": "TDLib limit titles come straight from the server and may be long enough to squeeze the free → premium value on a 320pt screen"
+  },
+  {
+   "screen": "TGPremiumViewController",
+   "risk": "The star '★' glyph is rendered through +[TGIcons avatarWithInitials:size:colourId:]; if that helper only handles Latin initials the badge may draw blank (colour disc still shows)"
+  },
+  {
+   "screen": "TGInviteLinksViewController",
+   "risk": "Rows are read-only for editing: an existing link's name/expiry/limit cannot be changed from this screen, only revoked. editInviteLink: is unused."
+  },
+  {
+   "screen": "TGInviteLinksViewController",
+   "risk": "The join-request list is a single page of 50 (joinRequestsForChat: limit); the header shows the true total but there is no paging control."
+  },
+  {
+   "screen": "TGInviteLinksViewController",
+   "risk": "TGForwardPicker's onPicked is assumed to fire once and to be the only dismissal path; if it can fire with chatId 0 for cancel the screen simply dismisses without sending, which is the intended behaviour but untested."
+  },
+  {
+   "screen": "TGInviteLinksViewController",
+   "risk": "Approve/decline updates the table optimistically and only reloads from the server on failure, so a concurrent approval from another device is not reflected until the screen is reopened."
+  },
+  {
+   "screen": "TGInviteLinksViewController",
+   "risk": "Not compiled — no build command was run per the task rules. The Makefile needs the two new files added centrally."
+  },
+  {
+   "screen": "TGChatEventsViewController",
+   "risk": "Row height is measured with -sizeWithFont:constrainedToSize:lineBreakMode: (deprecated on iOS 7 but present, and the correct API for 6.1.3); very long summaries make tall rows — measured twice per row (height + layout), which is the usual cost on a 4S but noticeable if TDLib returns paragraph-length summaries."
+  },
+  {
+   "screen": "TGChatEventsViewController",
+   "risk": "The screen has no pull-to-refresh: UIRefreshControl is unsafe on 6.1.3 and re-entering the screen re-fetches, so there is no manual refresh affordance other than changing the filter."
+  },
+  {
+   "screen": "TGChatEventsViewController",
+   "risk": "Paging exhaustion relies on the returned page being shorter than 50 or the eventId not advancing; if the API pages differently the list may stop early or refetch once."
+  },
+  {
+   "screen": "TGChatEventsViewController",
+   "risk": "TGChatEventsFilterController is defined inside the .m and is not visible to other agents — if another screen needs the same filter form it must be lifted out later."
+  },
+  {
+   "screen": "TGChatEventsViewController",
+   "risk": "Cells use no plate art (Cell102 is fixed at 51pt and the rows are variable height); they draw a flat white/theme ground plus their own hairline, which is the plain-list convention but not a plate."
+  },
+  {
+   "screen": "TGGroupMembersViewController",
+   "risk": "src/TGGroupMembersViewController.m must be added to APP_SRC_M in the Makefile by the central session — I did not touch the Makefile."
+  },
+  {
+   "screen": "TGGroupMembersViewController",
+   "risk": "The four-segment button group is tighter than the rulebook's nominal 80pt segment width (about 78pt each at 320pt screen width, less in the 8pt inset); 'Restricted' at boldSystemFontOfSize:12 fits but is close to the edge. If it truncates on device, shorten the title to 'Limited'."
+  },
+  {
+   "screen": "TGGroupMembersViewController",
+   "risk": "Tapping a row pushes TGProfileViewController with the private-chat id from privateChatWithUser:; if that resolution fails the id is 0 and the profile screen may show an empty shared-media list. Name and userId are still correct."
+  },
+  {
+   "screen": "TGGroupMembersViewController",
+   "risk": "Basic groups have no server-side paging or filters — per the header only 'administrators' and 'bots' are honoured — so the Banned and Restricted tabs will legitimately come back empty for a basic group. They are shown anyway rather than hidden, since groupInfo's isSupergroup arrives asynchronously."
+  },
+  {
+   "screen": "TGGroupMembersViewController",
+   "risk": "Restrict applies an empty permissions dictionary (everything denied) forever; Lift Restrictions restores a hardcoded ordinary-member set rather than the group's actual defaults, since defaultPermissionsInGroup: is a separate async call I chose not to chain."
+  },
+  {
+   "screen": "TGProxyViewController",
+   "risk": "Ping columns depend on -pingAllProxiesWithCompletion: keying by NSNumber proxy id; if it ever keys by NSString the rows fall back to no ping text rather than crashing (I type-check the value and guard nil keys)."
+  },
+  {
+   "screen": "TGProxyViewController",
+   "risk": "The status line polls -connectionStateTitle on a 2s NSTimer (invalidated in viewWillDisappear) because the onConnectionState block is a single-assign property owned elsewhere; hijacking it would break other screens."
+  },
+  {
+   "screen": "TGProxyViewController",
+   "risk": "Editing an existing proxy always re-enables it, since -editProxy:to:enable:completion: has no \"leave as it was\" option and the modern client behaves the same way."
+  },
+  {
+   "screen": "TGProxyViewController",
+   "risk": "ListCheck.png / ListCheck_Highlighted.png are already in images/; if missing the code falls back to UITableViewCellAccessoryCheckmark."
+  },
+  {
+   "screen": "TGFoldersViewController",
+   "risk": "-reorderFolders:mainListPosition: is always sent with position 0; the API exposes the main-list slot but the 2013 idiom has no UI for a row that represents \"All Chats\", so the main list is pinned first."
+  },
+  {
+   "screen": "TGFoldersViewController",
+   "risk": "Folder chat counts cost two round trips per folder (folderWithId: then chatCountForFolder:) on first appearance; cached per folder id and only refetched after a delete, but a user with many folders sees the counts fill in progressively."
+  },
+  {
+   "screen": "TGFoldersViewController",
+   "risk": "Reorder is committed on every moveRowAtIndexPath: as well as on Done, so a long drag sends several reorder calls."
+  },
+  {
+   "screen": "TGFoldersViewController",
+   "risk": "The editor keeps a single UITextField instance reparented into the reused name cell; if UITableView ever recycles that cell into another slot the field would move with it. Section 0 has fixed rows so this cannot happen in practice."
+  },
+  {
+   "screen": "TGFoldersViewController",
+   "risk": "TGClient's folders property is read synchronously; if it is empty because the client has not connected yet, the screen shows the not-connected message and only recovers on the next viewWillAppear."
+  },
+  {
+   "screen": "TGReactionPickerView",
+   "risk": "Msg_In_Selected / Msg_Out_Selected are 40x31pt bubble plates scaled down to the 20pt chip height (leftCap 18, topCapHeight 0). Horizontal stretch is correct; vertically the art is squashed by about a third. It is the fill the rulebook mandates, but if it reads badly on device the fix is a purpose-drawn 20pt plate, not a different asset."
+  },
+  {
+   "screen": "TGReactionPickerView",
+   "risk": "The end-cap plates (MenuButtonLeft/Right) live on the first and last emoji buttons inside the scroll view, so while the strip is scrolled the visible left edge is a centre slice rather than a rounded cap. Only visible on messages that allow more than six reactions."
+  },
+  {
+   "screen": "TGReactionPickerView",
+   "risk": "The 0.4s reopen suppression and the single-open-picker static are separate from TGPopupMenu's, so opening the strip straight out of the popup menu is not blocked by the menu's own window - intended, but it means two cards could briefly coexist if a caller forgets to let the menu dismiss first."
+  },
+  {
+   "screen": "TGReactionPickerView",
+   "risk": "TGReactionChipsView wraps to multiple rows; a bubble that sizes itself with +heightForChips:width: must pass the same width it later gives the view or the row count will disagree."
+  },
+  {
+   "screen": "TGMessageActionsSheet",
+   "risk": "TGPopupMenu.m currently ignores the \"icon\" and \"destructive\" dictionary keys that TGPopupMenu.h documents (grep for icon/destructive in that .m returns nothing). The extra keys are harmless and compile fine, but the Delete row will not draw red and no glyphs will appear until TGPopupMenu implements them. That file belongs to another agent this run."
+  },
+  {
+   "screen": "TGMessageActionsSheet",
+   "risk": "TGActionSheet stores its `target` weakly and returns early from clickedButtonAtIndex: when the target is nil, so the delete-confirmation choice is silently dropped if the presenter is deallocated - this reinforces the header's 'caller must retain the sheet' contract rather than contradicting it."
+  },
+  {
+   "screen": "TGMessageActionsSheet",
+   "risk": "TGPopupMenu drops items whose \"title\" is missing or empty, which would desync the parallel actionIds array; all titles here are non-empty literals so the indices stay aligned, but any future dynamic title must stay non-empty."
+  },
+  {
+   "screen": "TGPremiumViewController",
+   "risk": "Makefile still needs TGPremiumViewController.m added centrally, and nothing pushes this controller yet - no other screen references TGPremiumViewController, so it is dead code until a settings row pushes it"
+  },
+  {
+   "screen": "TGPremiumViewController",
+   "risk": "Feature rows are 44pt UITableViewCellStyleSubtitle, so a long server subtitle truncates to one line"
+  },
+  {
+   "screen": "TGPremiumViewController",
+   "risk": "Boost/limit values come straight from the server and can be squeezed on a 320pt Value1 row"
+  },
+  {
+   "screen": "TGPremiumViewController",
+   "risk": "The '★' badge depends on +[TGIcons avatarWithInitials:size:colourId:] handling a non-Latin glyph; worst case the disc draws with no glyph"
+  },
+  {
+   "screen": "TGInviteLinksViewController",
+   "risk": "Not compiled (no build allowed); verification was by reading headers only."
+  },
+  {
+   "screen": "TGInviteLinksViewController",
+   "risk": "The Makefile still needs TGInviteLinksViewController.m added centrally — the two files are new but I may not touch the Makefile."
+  },
+  {
+   "screen": "TGInviteLinksViewController",
+   "risk": "sizeWithFont:constrainedToSize:lineBreakMode: is deprecated on newer SDKs and will emit warnings, but it is the correct pre-iOS-7 API here and matches TGSessionsViewController."
+  },
+  {
+   "screen": "TGInviteLinksViewController",
+   "risk": "-init returns [super initWithStyle:UITableViewStyleGrouped] directly, so an external caller using initWithStyle: with a different style bypasses the grouped assumption; harmless for the intended push-with-chatId usage."
+  },
+  {
+   "screen": "TGStickerPanelView",
+   "risk": "Sticker thumbnails may be WebP or PNG; convertFromWebP: is tried first with imageWithContentsOfFile: as fallback - a set whose thumbs are neither will show only its emoji."
+  },
+  {
+   "screen": "TGStickerPanelView",
+   "risk": "Animated (.tgs) and video (.webm) stickers are never rendered in the grid; if a set has no thumbIds, that section shows emoji placeholders only."
+  },
+  {
+   "screen": "TGStickerPanelView",
+   "risk": "Section geometry initially comes from the set's declared \"count\"; if the fetched sticker array differs, the panel relayouts once, which can nudge scroll position."
+  },
+  {
+   "screen": "TGStickerPanelView",
+   "risk": "Tab strip segment art assumes the ButtonGroup* PNGs exist in images/ (they do); if a theme changes them, tab heights stay 30pt by design."
+  },
+  {
+   "screen": "TGStickersViewController",
+   "risk": "Cover and tile thumbnails go through [UIImage convertFromWebP:] on the main thread inside the download completion. One 512px WebP decode per set is acceptable on a 4S, but a set page with ~120 stickers will decode lazily as you scroll and may stutter; decoding is limited to visible tiles and the results are downscaled immediately, but a background decode queue would be better if it proves slow on device."
+  },
+  {
+   "screen": "TGStickersViewController",
+   "risk": "Swipe-to-delete plus a table in setEditing reorder mode share one table; editingStyleForRowAtIndexPath: returns None while reordering to suppress the red minus circles. Worth eyeballing on device — I could not build or run."
+  },
+  {
+   "screen": "TGStickersViewController",
+   "risk": "reorderInstalledStickerSets: is fire-and-forget (no completion in the API), so a failed reorder is silent; the next appearance re-reads the server order and would quietly snap back."
+  },
+  {
+   "screen": "TGStickersViewController",
+   "risk": "Install/uninstall/archive update the local array optimistically and ignore the completion's ok flag, so a server-side failure leaves the list briefly wrong until the next viewWillAppear reload."
+  },
+  {
+   "screen": "TGStickersViewController",
+   "risk": "The class is a plain UIViewController with its own table/scroll view rather than a UITableViewController, unlike most repo screens, because the grid pages cannot live inside a UITableViewController's view."
+  },
+  {
+   "screen": "TGStickersViewController",
+   "risk": "I did not run any build; selectors were verified by grepping TGClient+Stickers.h, TGClient.h, TGIcons.h, TGTheme.h, TGActionSheet.h and UIImage+WebP.h, but nothing was compiled."
+  },
+  {
+   "screen": "TGChatEventsViewController",
+   "risk": "TGChatEventCell and TGChatEventsFilterController live inside the .m with no header, which is fine for the build but means the Makefile must list only TGChatEventsViewController.m; no other translation unit can see them."
+  },
+  {
+   "screen": "TGChatEventsViewController",
+   "risk": "The divider and check assets exist only as @2x files, so imageNamed: resolves them on the retina 4S target but would find nothing on a 1x device — same exposure the four existing screens already carry."
+  },
+  {
+   "screen": "TGChatEventsViewController",
+   "risk": "Row height uses -sizeWithFont:constrainedToSize:lineBreakMode:, measured once in heightForRowAtIndexPath: and again in layoutSubviews; correct for 6.1.3 but doubled work per row on the A5."
+  },
+  {
+   "screen": "TGChatEventsViewController",
+   "risk": "Paging exhaustion is inferred from a short page, an empty page, or a non-advancing eventId; if TDLib pages differently the list may stop early."
+  },
+  {
+   "screen": "TGChatEventsViewController",
+   "risk": "TGEventsRightInset is 10 while the date label uses a hard-coded 9pt right inset — cosmetic inconsistency only, not a build issue."
+  },
+  {
+   "screen": "TGStarsViewController",
+   "risk": "Balance is derived from the transactions page, so if that call fails the header shows 'balance unavailable' even though the account may have stars."
+  },
+  {
+   "screen": "TGStarsViewController",
+   "risk": "cell.imageView on a grouped UITableViewCell indents the text automatically; the 40pt avatar therefore lands at UIKit's default inset rather than the rulebook's exact x=5/text-at-49, a small deviation accepted to avoid a custom cell class."
+  },
+  {
+   "screen": "TGStarsViewController",
+   "risk": "-sizeWithFont: is deprecated in later SDKs but is the correct call for the iOS 6.1.3 target; it will warn if the project is ever built against a modern SDK."
+  },
+  {
+   "screen": "TGStarsViewController",
+   "risk": "The star glyph is drawn as the character ★ (in the avatar and in amount labels) rather than an asset; no PNG for stars exists in the 2013 resources."
+  },
+  {
+   "screen": "TGProxyViewController",
+   "risk": "TGProxyEditViewController is declared privately inside TGProxyViewController.m rather than in its own header, which technically differs from the one-class-per-header rule; I left it because splitting it would mean creating files outside my writable target, and as written it compiles and links cleanly (file-local statics, no symbol collisions elsewhere in src/)."
+  },
+  {
+   "screen": "TGProxyViewController",
+   "risk": "imageNamed:@\"ListCheck.png\" resolves only via the @2x asset (there is no 1x file in images/); fine on the retina 4S target, and nil-guarded anyway."
+  },
+  {
+   "screen": "TGProxyViewController",
+   "risk": "viewWillDisappear dismisses the action sheet programmatically, which can fire TGActionSheet's action block during teardown; the block is weak-captured and re-looks-up the proxy by id, so it is safe but the sheet's cancel path runs on pop."
+  },
+  {
+   "screen": "TGFoldersViewController",
+   "risk": "TGFoldersViewController.m must be added to the Makefile source list by the central session; I am not allowed to edit the Makefile."
+  },
+  {
+   "screen": "TGFoldersViewController",
+   "risk": "Runtime-only, not a compile break: the editor's name UITextField is created with a frame derived from the full table width rather than the grouped cell's inset content width, so its right edge may sit slightly wider than the cell inset. It has FlexibleWidth autoresizing so it still lays out acceptably."
+  },
+  {
+   "screen": "TGFoldersViewController",
+   "risk": "Runtime-only: the delete confirmation stashes the row in pendingDeleteIndex across the alert; if the folder list reloads while the alert is up the index is re-bounds-checked before use, so the worst case is a no-op rather than a wrong deletion."
+  },
+  {
+   "screen": "TGReactionPickerView",
+   "risk": "src/TGReactionPickerView.m is not yet listed in the Makefile source list; the central session must add it or the classes will not link."
+  },
+  {
+   "screen": "TGReactionPickerView",
+   "risk": "The end-cap plates live on the first and last buttons inside the scroll view, so a scrolled strip shows a centre slice at its visible edge (cosmetic only, and only when a message allows more than six reactions)."
+  },
+  {
+   "screen": "TGReactionPickerView",
+   "risk": "_bottomLineView and _arrowBottomView are both placed at kStripHeight - 4, matching TGPopupMenu's metric; if the arrow art reads as overlapping the hairline on device this is the line to adjust."
+  },
+  {
+   "screen": "TGReactionPickerView",
+   "risk": "Msg_In/Out_Selected are 40x31pt bubble plates stretched into a 20pt chip, so the art is vertically squashed; correct per the rulebook but may want a purpose-drawn plate later."
+  },
+  {
+   "screen": "TGSavedMessagesTagsViewController",
+   "risk": "Counts are approximations: they cover at most the newest 50 messages of each of at most 12 topics, so a heavily tagged archive will under-report. Once -savedMessagesTagsForTopic: exists, the whole scan path (reload/scanTopics:/absorbMessages:) should be replaced by one call."
+  },
+  {
+   "screen": "TGSavedMessagesTagsViewController",
+   "risk": "Whole-chat mode issues up to 13 sequential TDLib requests on first open; on an A5 that is a visible spinner for a second or two. Capped deliberately (TGTagsMaxTopics = 12, TGTagsMaxMessagesPerTag = 200) to bound memory and time."
+  },
+  {
+   "screen": "TGSavedMessagesTagsViewController",
+   "risk": "Tag labels set via -setSavedMessagesTagLabel: are cached in an in-memory dictionary on the controller only, because nothing reads labels back. They are lost when the screen is deallocated."
+  },
+  {
+   "screen": "TGSavedMessagesTagsViewController",
+   "risk": "-setSavedMessagesTagsChangedHandler: is a single global handler; this screen installs its own on viewDidLoad and nils it in dealloc, which will clobber another screen's handler if both are alive at once."
+  },
+  {
+   "screen": "TGGroupMembersViewController",
+   "risk": "src/TGGroupMembersViewController.m still needs adding to APP_SRC_M in the Makefile by the central session — I am not permitted to touch the Makefile, and without that entry the class never links."
+  },
+  {
+   "screen": "TGGroupMembersViewController",
+   "risk": "The confirm:ok:destructive:run: callback blocks in -performAction:onMember: capture self strongly rather than via __weak. Not a leak (the controller does not retain the alert) and not a build break, so I left it; the alert holds the controller alive only until it is dismissed."
+  },
+  {
+   "screen": "TGGroupMembersViewController",
+   "risk": "-confirm:ok:destructive:run: ignores its `destructive` argument (TGAlertView has no destructive style), which will produce an unused-parameter note at most, never an error."
+  },
+  {
+   "screen": "TGGroupMembersViewController",
+   "risk": "The deleteMessages action calls deleteAllMessagesFromUser:inGroup: — the only fire-and-forget API in the set, with no completion — so that path shows no failure alert and does not reload, unlike every other action."
+  },
+  {
+   "screen": "TGGroupMembersViewController",
+   "risk": "Pre-existing behavioural risks flagged by the author (four-segment button width at 320pt, empty Banned/Restricted tabs for basic groups, hardcoded permission sets) are cosmetic/product concerns, not compile concerns, and I did not alter them."
+  },
+  {
+   "screen": "TGStickerPanelView",
+   "risk": "APP_SRC_M in the Makefile is an explicit file list, not a wildcard, and src/TGStickerPanelView.m is not in it yet - the central session must add it or the class will never be compiled or linked."
+  },
+  {
+   "screen": "TGStickerPanelView",
+   "risk": "imageForFileId:side:completion: returns early without calling the completion when the same file id is already in pendingImages, so a second tile showing the same sticker keeps its emoji placeholder until the next scroll pass reconfigures it."
+  },
+  {
+   "screen": "TGStickerPanelView",
+   "risk": "decodeQueue is a dispatch_queue_t held in a strong property; this is correct only because the SDK defines OS_OBJECT_USE_OBJC (iOS 6+ SDK with ARC), which this build uses. It is the only dispatch object stored in a property anywhere in src."
+  },
+  {
+   "screen": "TGStickerPanelView",
+   "risk": "UIGraphicsBeginImageContextWithOptions plus drawInRect: run on decodeQueue rather than the main thread; safe on iOS 6 for bitmap contexts but it is the only off-main UIKit drawing in the file."
+  },
+  {
+   "screen": "TGStickersViewController",
+   "risk": "Cannot compile here; this was a reading review only. Everything reachable by grep checked out, so the residual risk is a typo class the eye misses (e.g. an argument-type mismatch that only warns)."
+  },
+  {
+   "screen": "TGStickersViewController",
+   "risk": "src/TGStickersViewController.m is not in the Makefile's source list. The Makefile is read-only for me, so the central session must add it or the class never links."
+  },
+  {
+   "screen": "TGStickersViewController",
+   "risk": "viewDidLayoutSubviews guards its super call with [super respondsToSelector:], which always answers YES (it queries self). Harmless — the method exists since iOS 5 — but the guard is meaningless."
+  },
+  {
+   "screen": "TGStickersViewController",
+   "risk": "Behavioural, not a build break: didReceiveMemoryWarning empties self.covers while downloads keyed into coversInFlight are still pending; those completions will simply repopulate. Fine, but it means a memory warning during a scroll causes a re-decode."
+  },
+  {
+   "screen": "TGStickersViewController",
+   "risk": "totalRemote is stored on the archived/trending pages and never read; dead but legal."
+  },
+  {
+   "screen": "TGStarsViewController",
+   "risk": "TGStarsViewController.m is not in the Makefile yet - the central session must add it or the class will not link."
+  },
+  {
+   "screen": "TGStarsViewController",
+   "risk": "Balance is derived from the transactions page, so a failed history call shows 'balance unavailable' even when the account holds stars."
+  },
+  {
+   "screen": "TGStarsViewController",
+   "risk": "-sizeWithFont: in -amountLabelWithStars: is correct for the iOS 6.1.3 SDK but warns on modern SDKs."
+  },
+  {
+   "screen": "TGStarsViewController",
+   "risk": "cell.imageView on a grouped cell auto-indents the text, so the 40pt avatar sits at UIKit's default inset rather than an exact x=5; accepted to avoid a custom cell class."
+  },
+  {
+   "screen": "TGStarsViewController",
+   "risk": "The star glyph is the literal character U+2605 in the header badge, cell avatars and amount labels; no star PNG exists in the 2013 resource set."
+  },
+  {
+   "screen": "TGStarsViewController",
+   "risk": "Transaction rows now show only the humanized type title plus date/refund, since the API returns no counterparty id; the avatar colour is a hash of the type tag, so all transactions of one type share a colour."
+  },
+  {
+   "screen": "TGSavedMessagesTagsViewController",
+   "risk": "Not a compile break, but a runtime one: -tableView:didSelectRowAtIndexPath: and -cellForRowAtIndexPath: pass the result of -emojiAtIndex: into self.counts[emoji] / self.messagesByTag[emoji]. -emojiAtIndex: returns nil for an out-of-range row, and -objectForKeyedSubscript: raises on a nil key. Only reachable if the tags array is mutated between reloadData and the callback, so it was left alone."
+  },
+  {
+   "screen": "TGSavedMessagesTagsViewController",
+   "risk": "images/ only contains DialogListUnreadBadge@2x.png, no 1x. Correct for the iPhone 4S target, but the badge would be missing on a non-retina device."
+  },
+  {
+   "screen": "TGSavedMessagesTagsViewController",
+   "risk": "The previously reported behavioural risks stand and are outside compile safety: approximate counts from the capped scan, up to 13 sequential requests on first open, in-memory-only tag labels, and the single global -setSavedMessagesTagsChangedHandler: being clobbered if another screen installs one while this is alive."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGStorageViewController.m",
+   "risk": "storageUsageByFileType/ByChat walk every cached file and are documented as slow on a 4S; they run on entry and after each clear, so a large cache means the two detail sections sit on 'Calculating…' for a while (90s timeout then falls back to whatever arrived)."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGStorageViewController.m",
+   "risk": "Per-chat rows come from TDLib's own titles; chatId 0 is shown as 'Other files' and clearing it clears the un-attributed bucket."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGStorageViewController.m",
+   "risk": "Optimise uses a hardcoded 30-day TTL rather than a persisted user preference; there is no settings UI for cache policy on this screen."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGStorageViewController.m",
+   "risk": "Section indices changed (5 sections now); anything outside this file that deep-linked to a specific indexPath here would be stale, though nothing appeared to."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSessionsViewController.m",
+   "risk": "I could not compile or run anything (build/deploy commands are forbidden for this task), so the change is verified by header-grep only."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSessionsViewController.m",
+   "risk": "activeSessionsWithCompletion: is assumed to return the documented keys; if the underlying implementation omits appName/deviceModel/location the rows degrade to fewer detail parts but still render (title falls back to the old \"name\" key, then \"Unknown application\")."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSessionsViewController.m",
+   "risk": "Row height for sessions grew from 44 to 58 to fit the second detail line; if TGTheme's styleCell: assumes 44pt anywhere it is not visible from the header."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSessionsViewController.m",
+   "risk": "ttlDays defaults to 0 before load; the TTL section is hidden until self.loaded is YES, but if the API reports 0 the row will read \"1 week\" rather than the true value."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSessionsViewController.m",
+   "risk": "Unconfirmed sessions (-unconfirmedSessionsWithCompletion:, -confirmSession:) and the per-session calls/secret-chats switches (-setSession:canAcceptCalls:canAcceptSecrets:) were deliberately NOT wired - they were outside the task scope and would need a detail screen or banner."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSessionsViewController.m",
+   "risk": "Only @2x variants of MenuRedButton exist in images/; on a non-retina device imageNamed: returns nil and the button falls back to the flat red backgroundColor (pre-existing behaviour, not introduced here)."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSessionsViewController.m",
+   "risk": "-lastActiveTextForSession: allocates an NSDateFormatter before the \"just now\" early return; harmless but a wasted alloc on a hot path."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSessionsViewController.m",
+   "risk": "ttlDays is 0 until the first load completes, so a server value of 0 would display as \"1 week\" (the section is hidden until loaded, so only an API reporting 0 is affected)."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSessionsViewController.m",
+   "risk": "Section 3 row height is 44 while session rows are 58; no compile impact."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGTopicsViewController.m",
+   "risk": "The topic icon is still the initials circle: a real custom-emoji glyph would need downloading the sticker thumbFileId through the file plumbing, which I did not wire — the picked emoji id is sent to the server but the row shows a colour circle locally until the next reload from the server (which also returns only iconEmojiId, not a rendered glyph)."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGTopicsViewController.m",
+   "risk": "iconColor from the server is fed to TGIcons avatarWithInitials:size:colourId: as a colour id, not as a literal RGB, so the row colour is derived from it rather than exactly equal to it."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGTopicsViewController.m",
+   "risk": "Delete topic, per-topic mute, topic link copy and forum-mode toggles exist in TGClient+Forums but were left out to keep the menu close to the 2013 idiom and to the task scope."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGTopicsViewController.m",
+   "risk": "Not compiled — running make/xcodebuild was forbidden, so the file has only been checked by reading."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGChatListViewController.m",
+   "risk": "The archive-settings sheet re-presents itself from inside actionSheet:clickedButtonAtIndex: (via an async completion). If TDLib answers synchronously on some path, UIKit could be asked to show a sheet while the previous one is still dismissing."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGChatListViewController.m",
+   "risk": "Folder lists come from -chatsInList: with a fixed limit of 200; a bigger folder is truncated and there is no paging call wired to -loadMoreChatsInList:."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGChatListViewController.m",
+   "risk": "Archive/unarchive switched from -setChat:archived: to -addChat:toList:; if the ChatList category's implementation differs in side effects (e.g. does not clear a folder membership) behaviour could differ slightly from before."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGChatListViewController.m",
+   "risk": "Unverified by compilation - no build was run per the task rules."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGStorageViewController.m",
+   "risk": "Requires ARC (uses __weak and unqualified strong statics); consistent with the rest of src/, but if this file were ever compiled with -fno-objc-arc it would fail."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGStorageViewController.m",
+   "risk": "storageUsageByFileType/ByChat run on entry and after each clear and are documented as slow on a 4S; the two detail sections sit on 'Calculating…' until the 90s timeout fires."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGStorageViewController.m",
+   "risk": "-refresh only cancels the 20s statsTimedOut perform inside the storageStats completion, so a stray timeout can still fire while the overview call is outstanding; harmless (it only clears flags and reloads) but it can briefly drop the spinner before data lands."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGStorageViewController.m",
+   "risk": "Section count changed to 5; any external deep link to a fixed indexPath on this screen would be stale (none found in the repo)."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGCallViewController.m",
+   "risk": "TGClient+Calls.m -tgcalls_rate: sends the sendCallRating request with \"call_id\" set to the whole inputCall dictionary ({\"@type\":\"inputCallDiscarded\",\"call_id\":N}) rather than the plain int32 TDLib's sendCallRating expects. If that is wrong, the rating request will error out and the UI will simply say \"Could not send rating\". I could not fix it - TGClient files are read-only for me."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGCallViewController.m",
+   "risk": "Rating panel layout was hand-computed for a 3.5\" screen (320x460 usable) and scales up on 4\"; I could not build or run it, so vertical spacing is unverified on device."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGCallViewController.m",
+   "risk": "The panel hides the avatar and moves the name/status labels; if a further state change arrived after finish it would be ignored (onStateChanged is already nil'd at that point, same as before)."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSettingsViewController.m",
+   "risk": "TGStickerPanelView, TGReactionPickerView and TGMessageActionsSheet were deliberately NOT wired here: they are chat-composer/bubble views, not pushable controllers, and belong to TGChatViewController. The sticker feature is surfaced via the Stickers row instead."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSettingsViewController.m",
+   "risk": "Root section indices changed (help 2->4, logout 3->5). Every in-file reference was updated, but any other file that reaches into this table by index would break; I found none."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSettingsViewController.m",
+   "risk": "The group picker is a UIActionSheet capped at ten chats taken from the already-loaded main chat list, so a group not yet loaded cannot be reached from settings."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSettingsViewController.m",
+   "risk": "-setDataSaverEnabled: rewrites auto-download settings for wifi/mobile/roaming at once; toggling it discards any per-network tuning the account had."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSettingsViewController.m",
+   "risk": "Autosave-to-camera-roll settings (TGClient+Storage -autosaveSettingsWithCompletion:) were left unwired to keep the Data page short."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGTopicsViewController.m",
+   "risk": "Cosmetic, not a build risk: the server's iconColor is an 0xRRGGBB value but is passed to TGIcons avatarWithInitials:size:colourId: as a palette id, so the row circle colour is derived from it, not equal to it."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGTopicsViewController.m",
+   "risk": "The file uses NSArray.class / NSDictionary.class dot-on-class syntax where the rest of the repo writes [NSArray class]. Clang accepts both, so I left it alone."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGTopicsViewController.m",
+   "risk": "Still not compiled - running the build was forbidden, so this is a reading-level verification only."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGCallViewController.m",
+   "risk": "The UIView animation blocks in -presentRating and -closeRating capture self strongly. There is no retain cycle (the blocks are not stored on self) and the controller outlives a 0.2s animation in practice, so this is stylistic rather than a leak; I left it alone since it is not a build or correctness break."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGCallViewController.m",
+   "risk": "-closeRating schedules -dismissNow 0.8s later while the fade-out completion nils self.ratingPanel; harmless, but it means the panel is gone slightly before the dismiss."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGCallViewController.m",
+   "risk": "Unverified at runtime (no compiler available here): the rating panel's hand-computed vertical spacing on a 3.5\" screen, and the agent's own reported concern that TGClient+Calls.m may send call_id as a dictionary. Both are outside this file and outside my write scope."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGProfileViewController.m",
+   "risk": "Secret chats are dead until TGClient.m passes use_secret_chats:YES (documented in TGClient+SecretChats.h); the menu item will show \"Could not start secret chat\" on real hardware until that flag is flipped - I could not change it, TGClient is read-only."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGProfileViewController.m",
+   "risk": "Section indices are now dynamic. Any other code that assumed profile section 1 == members would break, but nothing outside this file indexes it."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGProfileViewController.m",
+   "risk": "The rename alert uses UIAlertViewStylePlainTextInput (iOS 5+), guarded with respondsToSelector:; it is not the original 2013 modal-form look, which the design rulebook prefers for value editing."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGProfileViewController.m",
+   "risk": "UIImagePickerController on a 512MB iPhone 4S: the picked image is downscaled to 640px before JPEG encoding, but the original UIImage is still held briefly by the picker callback."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGProfileViewController.m",
+   "risk": "Rows are gated on groupInfoForChat: results; for a basic group with a nil answer no manage section appears at all (safe fallback, but silently)."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGChatListViewController.m",
+   "risk": "-showArchiveSettings re-presents an action sheet from inside -actionSheet:clickedButtonAtIndex: via the archiveSettingsWithCompletion: callback; if that callback ever fires synchronously, UIKit is asked to show a sheet while the previous one is dismissing (runtime only, not a compile issue)."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGChatListViewController.m",
+   "risk": "Folder lists use -chatsInList: with a fixed limit of 200 and no paging via -loadMoreChatsInList:limit:."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGChatListViewController.m",
+   "risk": "UITabBarController.class dot-syntax is used in -presentSheet:; matches existing usage in AppDelegate.m so the toolchain accepts it, but it is not classic iOS 6-era syntax."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGChatListViewController.m",
+   "risk": "No compilation was run per task rules; verification is by reading headers only."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGContactsViewController.m",
+   "risk": "Badges are fetched lazily inside cellForRowAtIndexPath: and each reply schedules a coalesced reloadTableSoon; it converges (one request per user id) but on a very large contact list it means one TDLib request per contact during the first scroll."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGContactsViewController.m",
+   "risk": "The birthday lookup on long press adds one request per long press; result is cached only for the sheet currently open."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGContactsViewController.m",
+   "risk": "tgpremiumicon.png is a 64x64 non-@2x asset already in images/; it is downscaled to 14pt once and cached, but it was previously unused, so verify it actually ships in the bundle."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGContactsViewController.m",
+   "risk": "Verified/close-friend marks use text glyphs (checkmark, star) rather than original 2013 artwork, since no period asset for either exists - the 2013 app had no such concept."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGContactsViewController.m",
+   "risk": "New tableFooterView adds 58pt of empty space below the last contact row in non-picker mode."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSettingsViewController.m",
+   "risk": "Pre-existing, untouched: action-sheet tag 89 is set at line 1230 but no branch in -actionSheet:clickedButtonAtIndex: handles it (89 < 91 so it falls past the privacy branch). Not caused by this change and outside the review's repair scope, but it looks like a dead sheet."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSettingsViewController.m",
+   "risk": "The group picker reads [TGClient shared].chats on the main queue only; the file already assumes main-queue table callbacks, so this is safe, but a group not yet in the loaded chat list is unreachable from settings, as the editing agent noted."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSettingsViewController.m",
+   "risk": "-setArchiveSettings: is fire-and-forget with no completion, so a failed write leaves the switch showing the optimistic value until the page is reloaded."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSearchViewController.m",
+   "risk": "The scope bar lives in tableHeaderView, so it scrolls away with the results rather than staying pinned under the navigation bar; acceptable on a UITableViewController but not identical to a real UISearchBar scope bar."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSearchViewController.m",
+   "risk": "Paging is driven by willDisplayCell on the last section only; if a future section is appended after the messages section, paging stops firing."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSearchViewController.m",
+   "risk": "attributedPlaceholder colouring is applied once in viewWillAppear, so the placeholder text swapped in for chat scope reverts to the system placeholder colour."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSearchViewController.m",
+   "risk": "Hashtag rows draw with no avatar, leaving the 54pt text inset with empty space at the left."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSearchViewController.m",
+   "risk": "recentlyFoundChatsWithQuery: rows are assumed non-group (isGroup NO) since the documented dictionary has no type field."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGChatViewController.m",
+   "risk": "Chip rows are only drawn on the generic text/photo bubble path. Poll, call, document/contact and voice bubbles return early from cellForRow and so show no chips even if the message has reactions."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGChatViewController.m",
+   "risk": "Chip row height is measured at a fixed 170pt width while the view is laid out at the real bubble width. Wider bubbles therefore get a little slack under the chips rather than clipping, but a very long chip row on a narrow bubble was the case this floor was added to avoid - worth a look on device."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGChatViewController.m",
+   "risk": "The new double-tap-to-react gesture coexists with single-tap row selection; double-tapping a photo or a voice note will first run the single-tap action (open / play) and then open the reaction strip."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGChatViewController.m",
+   "risk": "Reaction chips are refetched from scratch on every -reload, which is one extra TDLib call per reacted message in the visible window. On a 4S with a busy group this is the main new cost."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGChatViewController.m",
+   "risk": "Report is implemented for the option-list step only; a free-text step ('needText') is answered with an empty string, which TDLib may refuse when the text is not optional."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGChatViewController.m",
+   "risk": "TGMessageActionsSheet queries message properties asynchronously before showing, so the menu appears a beat after the finger lifts rather than instantly as the old TGPopupMenu did."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGProfileViewController.m",
+   "risk": "Not a compile break, but -tableView:titleForHeaderInSection: now re-derives a legacy numeric index from the kind string and falls through to 0 for both \"details\" and any unknown kind; it happens to be correct today because section 0 never had a header, but the mapping is fragile if a new section kind is added later."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGProfileViewController.m",
+   "risk": "The secret-chat menu item is inert until TGClient.m is started with use_secret_chats:YES (TGClient is read-only for this run), so \"Start secret chat\" will always toast \"Could not start secret chat\" on hardware."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGProfileViewController.m",
+   "risk": "-pickChatPhoto does not set picker.allowsEditing, yet the callback prefers UIImagePickerControllerEditedImage; it correctly falls back to the original image, so this is only a behavioural nit."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGProfileViewController.m",
+   "risk": "Section indices are dynamic now; nothing outside this file indexes profile sections, but any future code that does would need to go through -kindForSection:."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGContactsViewController.m",
+   "risk": "Not a compile break, but tgpremiumicon.png is a plain (non-@2x) 64x64 asset; on the 4S it is downscaled to 14pt via TGContactsScaledImage, which draws at device scale, so it will look soft rather than crisp."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGContactsViewController.m",
+   "risk": "badgesForUser: is issued lazily from cellForRowAtIndexPath: — one TDLib round trip per contact on first scroll. Correct but heavy on a large list; a batched call would be better if one is ever added."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGContactsViewController.m",
+   "risk": "The long-press action sheet is shown by whichever of the birthdate reply or the 0.4s timer fires first; if the reply lands after the timer the birthday line is simply absent from the already-open sheet. Behaviourally fine, just noting it."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGContactsViewController.m",
+   "risk": "tableFooterView adds 58pt below the last row in non-picker mode, and importFooterTapped silently does nothing until the imported count has arrived."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSearchViewController.m",
+   "risk": "Scope bar lives in tableHeaderView so it scrolls with the results; layoutScopeBar reassigns tableView.tableHeaderView from viewDidLayoutSubviews but only when the width actually changed, so it converges rather than looping."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSearchViewController.m",
+   "risk": "Paging fires only from the last section (willDisplayCell checks section == sections.count-1 and the 'paged' flag); adding a section after Messages would silently stop paging."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSearchViewController.m",
+   "risk": "The long-press recognizer is attached to the table view and coexists with row selection; on a slow tap the sheet may appear alongside the selection highlight."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSearchViewController.m",
+   "risk": "attributedPlaceholder colour is applied once in viewWillAppear, so the chat-scope placeholder text uses the system placeholder colour."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGSearchViewController.m",
+   "risk": "Hashtag rows have no avatar, leaving the 54pt text inset visually empty on the left."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGChatViewController.m",
+   "risk": "TGChatViewController does not declare UIActionSheetDelegate in its class extension, so `delegate:self` on the new Forward and Report sheets produces an incompatible-pointer warning - but this is pre-existing (the attach sheet already did it) and is a warning, not an error, so I left it rather than touching a declaration outside the new work."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGChatViewController.m",
+   "risk": "The new blocks take unused parameters (emoji/nowChosen in the picker completion, emoji/wasChosen in onChipTapped); harmless unused-parameter warnings only."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGChatViewController.m",
+   "risk": "-fetchMissingReactionChips calls [m[@\"reactions\"] length] on a flattened value that can be NSNull; this mirrors the pre-existing decorationHeightFor: line exactly, so the crash exposure is unchanged, not new."
+  },
+  {
+   "screen": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/src/TGChatViewController.m",
+   "risk": "Behavioural risks reported by the editing agent (chips only on the generic bubble path, fixed 170pt chip measurement, double-tap coexisting with single-tap selection, per-row refetch cost, empty report text) are all runtime concerns and none of them affect compilation."
+  }
+ ]
+}

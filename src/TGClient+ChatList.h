@@ -6,6 +6,10 @@
 //
 #import "TGClient.h"
 
+/// Posted on the main queue whenever TDLib sends a new folder list. Any number
+/// of screens may observe it; the folder tab bar and the folder editor both do.
+extern NSString *const TGChatFoldersDidChangeNotification;
+
 /// Which chat list a call applies to. The main list and the archive are fixed;
 /// any other value is a chat folder id as it appears in TGClient's `folders`
 /// (TDLib hands out folder ids starting at 2, so there is no collision).
@@ -44,6 +48,25 @@ enum {
 /// The blue-dot "unread" flag a user can set by hand, independent of whether
 /// there are actually unread messages.
 - (void)setChat:(int64_t)chatId markedAsUnread:(BOOL)marked;
+
+/// Clear one chat's unread badge, the swipe/long-press "Mark as Read" action.
+/// Reads the chat's newest message with force_read and drops the blue dot, so
+/// the row's badge goes away without opening the chat. The cached row is
+/// patched to unread 0 straight away; `completion` may be nil and gets NO only
+/// when TDLib could not even describe the chat.
+- (void)markChatAsRead:(int64_t)chatId completion:(void (^)(BOOL ok))completion;
+- (void)markChatAsRead:(int64_t)chatId;
+
+/// The blue dot as this process last saw it - no round trip, safe to call while
+/// building a cell or an action sheet. Backed by the cached chat row when it
+/// carries "markedUnread", otherwise by a file-static set this category keeps
+/// in step with -setChat:markedAsUnread:, -markChatAsRead: and every list read.
+/// Categories cannot add ivars, hence the static.
+- (BOOL)isChatMarkedAsUnread:(int64_t)chatId;
+
+/// The authoritative answer, straight from TDLib; also refreshes the cache the
+/// synchronous accessor reads.
+- (void)chatMarkedAsUnread:(int64_t)chatId completion:(void (^)(BOOL marked))completion;
 
 #pragma mark - pinning
 
@@ -101,6 +124,23 @@ enum {
 
 /// The icon names a folder may use, for the picker grid.
 - (NSArray *)folderIconNames;
+
+/// A drawable glyph for one of those names, so the picker can show a symbol
+/// rather than the raw string. Always returns something - a folder glyph for a
+/// name this build does not know. Draw it with the label font at the cell size;
+/// there is no bitmap to load and nothing to downscale.
+- (NSString *)symbolForFolderIconName:(NSString *)iconName;
+
+/// Start watching TDLib's folder list. Call once (it is idempotent) before
+/// relying on TGChatFoldersDidChangeNotification or -onFoldersChanged; the
+/// -setOnFoldersChanged: setter starts it for you.
+- (void)beginObservingFolderChanges;
+
+/// Main-queue callback for folder changes, the folder equivalent of
+/// `onChatsChanged`. Only one block can be installed at a time - prefer
+/// TGChatFoldersDidChangeNotification when more than one screen is listening.
+/// Kept in a file-static because categories cannot add ivars.
+@property (nonatomic, copy) void (^onFoldersChanged)(void);
 
 /// Reorder folders. `folderIds` are NSNumbers, in the order the tabs should
 /// appear; `position` is where the main list sits among them (0 = first).
@@ -204,6 +244,25 @@ enum {
 /// (which also fills "sourceText") or "proxy" for an MTProto proxy sponsor.
 /// Rows with a source sit at the top of the list and must not be reordered.
 - (void)rowDetailForChat:(int64_t)chatId completion:(void (^)(NSDictionary *detail))completion;
+
+#pragma mark - chat titles
+
+/// Title of a chat id without a round trip, for a folder member row or any
+/// other place that holds ids and needs a name now. Looks in the cached chat
+/// records, the main list, the archive and finally a file-static memo this
+/// category fills as titles go past. Nil when nothing has ever named it - show
+/// a placeholder and follow up with -titleForChatId:completion:.
+- (NSString *)cachedTitleForChatId:(int64_t)chatId;
+
+/// The same, asking TDLib when the caches are empty. Completion gets "" rather
+/// than nil on failure, and runs synchronously when the title is already known.
+- (void)titleForChatId:(int64_t)chatId completion:(void (^)(NSString *title))completion;
+
+/// Titles for many ids at once, for a folder's chat section. `chatIds` are
+/// NSNumbers; the completion gets a dictionary keyed by those same NSNumbers,
+/// with ids TDLib could not name simply missing. One round trip per unknown id
+/// only - anything already cached costs nothing.
+- (void)titlesForChatIds:(NSArray *)chatIds completion:(void (^)(NSDictionary *titles))completion;
 
 @end
 

@@ -723,9 +723,10 @@ static NSString *TGChatDate(NSTimeInterval unix) {
 
 	static NSDateFormatter *time = nil, *weekday = nil, *full = nil;
 	if (!time){
-		time = [[NSDateFormatter alloc] init];    [time setDateFormat:@"HH:mm"];
-		weekday = [[NSDateFormatter alloc] init]; [weekday setDateFormat:@"EEE"];
-		full = [[NSDateFormatter alloc] init];    [full setDateFormat:@"dd.MM.yy"];
+		NSLocale *fixed = [[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"];
+		time = [[NSDateFormatter alloc] init];    [time setLocale:fixed];    [time setDateFormat:@"HH:mm"];
+		weekday = [[NSDateFormatter alloc] init]; [weekday setLocale:fixed]; [weekday setDateFormat:@"EEE"];
+		full = [[NSDateFormatter alloc] init];    [full setLocale:fixed];    [full setDateFormat:@"dd.MM.yy"];
 	}
 
 	if (age < 24 * 3600)     return [time stringFromDate:date];

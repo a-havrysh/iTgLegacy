@@ -90,9 +90,59 @@
                   completion:(void (^)(NSArray *members))completion;
 
 /// One member's record, same shape as an entry of -membersInGroup:, or nil.
+/// The record also carries "rights" (the chatAdministratorRights booleans, an
+/// empty dictionary when the member is not an administrator) and
+/// "permissions" (the chatPermissions booleans, empty unless the member is
+/// individually restricted). For a pre-populated per-right editor prefer the
+/// two accessors below, which fill in the implied values as well.
 - (void)memberStatusOfUser:(int64_t)userId
                    inGroup:(int64_t)chatId
                 completion:(void (^)(NSDictionary *member))completion;
+
+/// One member's current administrator rights, ready to drive a switch list.
+/// `rights` has every key of -administratorRightKeys as an NSNumber: all NO
+/// for an ordinary member, all YES for the creator (except "is_anonymous",
+/// which is whatever the creator actually set), and the real per-right values
+/// for an administrator. `status` is the same string -membersInGroup: uses
+/// ("creator", "administrator", "member", "restricted", "banned", "left"),
+/// and `canBeEdited` says whether this account may change those rights - when
+/// it is NO the editor must be read-only. `rights` is nil only when the
+/// member could not be read at all.
+- (void)administratorRightsOfUser:(int64_t)userId
+                          inGroup:(int64_t)chatId
+                       completion:(void (^)(NSDictionary *rights, NSString *status, BOOL canBeEdited))completion;
+
+/// What one member may actually do, ready to drive a switch list. `permissions`
+/// has every key of -memberPermissionKeys as an NSNumber. When the member is
+/// individually restricted these are their own restrictions and `isRestricted`
+/// is YES; otherwise they are the group's default permissions, which is what a
+/// restriction editor should start from. `untilDate` is the unix time the
+/// restriction lifts, 0 for forever or when there is none. `permissions` is nil
+/// only when the member could not be read at all.
+- (void)permissionsOfUser:(int64_t)userId
+                  inGroup:(int64_t)chatId
+               completion:(void (^)(NSDictionary *permissions, BOOL isRestricted, NSInteger untilDate))completion;
+
+/// This account's own administrator rights in the group, same shape as
+/// -administratorRightsOfUser:. Use it to hide actions the server would
+/// refuse instead of showing an error afterwards; `canBeEdited` is NO for
+/// ourselves and should be ignored here.
+- (void)myAdministratorRightsInGroup:(int64_t)chatId
+                          completion:(void (^)(NSDictionary *rights, NSString *status))completion;
+
+/// The chatAdministratorRights key names, in the order the original settings
+/// screen lists them. Safe to use as table rows.
+- (NSArray *)administratorRightKeys;
+
+/// The chatPermissions key names, in the order the original screen lists them.
+- (NSArray *)memberPermissionKeys;
+
+/// Row label for a key of -administratorRightKeys, e.g. "Delete Messages".
+/// Returns the key itself for anything unknown.
+- (NSString *)titleForAdministratorRightKey:(NSString *)key;
+
+/// Row label for a key of -memberPermissionKeys, e.g. "Send Media".
+- (NSString *)titleForMemberPermissionKey:(NSString *)key;
 
 /// Number of members in a group; 0 for anything else.
 - (void)groupMemberCount:(int64_t)chatId

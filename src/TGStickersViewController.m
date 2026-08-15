@@ -17,12 +17,23 @@ static const CGFloat kTileSide = 64.0f;
 static const NSInteger kArchivedPageSize = 20;
 static const NSInteger kTrendingPageSize = 20;
 
+static const CGFloat kBottomBarHeight = 48.0f;
+
 static CGFloat TGStickersRetinaPixel(void) {
 	return [UIScreen mainScreen].scale > 1.0f ? 0.5f : 0.0f;
 }
 
+static dispatch_queue_t TGStickersDecodeQueue(void) {
+	static dispatch_queue_t queue = NULL;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		queue = dispatch_queue_create("org.itglegacy.stickers.decode", NULL);
+	});
+	return queue;
+}
+
 @interface TGStickersViewController () <UITableViewDataSource, UITableViewDelegate,
-		UIScrollViewDelegate>
+		UIScrollViewDelegate, UISearchBarDelegate>
 
 @property (nonatomic, strong) UITableView *table;
 @property (nonatomic, strong) UIScrollView *grid;

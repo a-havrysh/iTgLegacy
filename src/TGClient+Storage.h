@@ -135,6 +135,11 @@
                 completion:(void (^)(NSArray *files, NSDictionary *counts,
                                      NSString *nextOffset))completion;
 
+/// Just the download-list counts, for a "Downloads (N)" badge, without paging
+/// the list itself. Keys "active", "paused", "completed" (NSNumber); zeroes on
+/// failure, never nil.
+- (void)downloadTotalsWithCompletion:(void (^)(NSDictionary *counts))completion;
+
 #pragma mark - network usage
 
 /// NOTE: telling TDLib which connection we are on is TGClient+Files's
@@ -163,8 +168,9 @@
 
 #pragma mark - auto-download
 
-/// NOTE: the three suggested presets are TGClient+Files's
-/// -autoDownloadPresetsWithCompletion:.
+/// NOTE: the full three-preset payload is TGClient+Network's
+/// -autoDownloadPresetsWithCompletion:; -autoDownloadPresetNamed:completion:
+/// below returns a single preset in this category's key vocabulary.
 
 /// Apply auto-download settings for one network type. `settings` keys are
 /// "enabled" (NSNumber BOOL), "maxPhoto", "maxVideo", "maxOther" (bytes,
@@ -175,6 +181,52 @@
 /// NOTE: TDLib has no getter for the settings currently in force, so the UI
 /// has to mirror whatever it last set in NSUserDefaults.
 - (void)setAutoDownloadSettings:(NSDictionary *)settings forNetworkType:(NSString *)type;
+
+/// The settings this client last applied to `type` through the setter above,
+/// with every key present and normalised, or nil when we never set any for
+/// that network type. TDLib has no getter, so this is a mirror kept by this
+/// category in NSUserDefaults (key "TGStorageAutoDownloadMirror", a file-static
+/// key - categories cannot add ivars); it survives relaunches but not a
+/// change made by another client. Synchronous, safe on the main thread.
+- (NSDictionary *)autoDownloadSettingsForNetworkType:(NSString *)type;
+
+/// Drop the mirror above, e.g. on logout.
+- (void)forgetAutoDownloadSettingsMirror;
+
+/// One of the three server presets - `name` is @"low", @"medium" or @"high"
+/// (anything else is treated as @"medium") - already translated into the key
+/// vocabulary -setAutoDownloadSettings:forNetworkType: expects, so a preset
+/// can be handed straight back to it. Nil on failure.
+- (void)autoDownloadPresetNamed:(NSString *)name
+                     completion:(void (^)(NSDictionary *settings))completion;
+
+/// Fetch a preset and apply it to several network types at once. `types` is an
+/// array of network-type names; pass nil for wifi, mobile, roaming and other.
+/// `ok` is NO only when the preset could not be fetched.
+- (void)applyAutoDownloadPresetNamed:(NSString *)name
+                      toNetworkTypes:(NSArray *)types
+                          completion:(void (^)(BOOL ok))completion;
+
+#pragma mark - cache policy
+
+/// The persisted "keep media for" / "maximum cache size" preference, so a
+/// storage screen can show real state instead of hardcoding a TTL. Keys:
+/// "maxBytes" (NSNumber long long, -1 for no limit), "ttlSeconds" (NSNumber,
+/// -1 for no limit) and "excludedChatIds" (array of NSNumber, possibly empty).
+/// Never nil - an unset policy reads as -1/-1/empty. Stored in NSUserDefaults
+/// under the file-static key "TGStorageCachePolicy"; categories cannot add
+/// ivars. Synchronous.
+- (NSDictionary *)cachePolicy;
+
+/// Persist the policy above. This only records the choice; call
+/// -applyPersistedCachePolicyWithCompletion: to act on it.
+- (void)setCachePolicyMaxBytes:(long long)maxBytes
+                    ttlSeconds:(NSInteger)ttlSeconds
+               excludedChatIds:(NSArray *)excludedChatIds;
+
+/// Run -applyCachePolicyMaxBytes:ttlSeconds:excludedChatIds: with whatever
+/// -cachePolicy currently holds. This is the launch-time / low-disk trim.
+- (void)applyPersistedCachePolicyWithCompletion:(void (^)(long long freed))completion;
 
 #pragma mark - autosave
 
@@ -190,6 +242,17 @@
                    videos:(BOOL)videos
             maxVideoBytes:(long long)maxVideoBytes
                  forScope:(NSString *)scope;
+
+/// Every per-chat autosave override currently on the account, for an
+/// "Exceptions" list. Each entry has "chatId" (NSNumber), "photos", "videos"
+/// (NSNumber BOOL) and "maxVideoBytes" (NSNumber). Empty array on failure.
+- (void)autosaveExceptionsWithCompletion:(void (^)(NSArray *exceptions))completion;
+
+/// Add or replace the autosave override for one chat.
+- (void)setAutosavePhotos:(BOOL)photos
+                   videos:(BOOL)videos
+            maxVideoBytes:(long long)maxVideoBytes
+                  forChat:(int64_t)chatId;
 
 /// Forget every per-chat autosave override.
 - (void)clearAutosaveExceptions;

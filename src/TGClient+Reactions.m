@@ -1,6 +1,11 @@
 #import "TGClient+Private.h"
 #import "TGClient+Reactions.h"
 
+@interface TGClient (ReactionsWatchInternal)
+- (void)tgStartReactionWatchTimer;
+- (void)tgReactionWatchTick:(NSTimer *)timer;
+@end
+
 static NSString *const TGReactionPlaceholder = @"\U00002B50";
 static NSString *TGQuickReaction = nil;
 
@@ -65,6 +70,32 @@ static void TGAppendReactionEmoji(NSArray *list, NSMutableArray *out) {
 		if (emoji.length && ![emoji isEqualToString:TGReactionPlaceholder])
 			[out addObject:emoji];
 	}
+}
+
+static NSMutableDictionary *TGReactionIconPaths = nil;
+static NSMutableDictionary *TGReactionWatches = nil;
+static NSTimer *TGReactionWatchTimer = nil;
+static NSTimeInterval TGReactionWatchInterval = 5.0;
+
+static NSString *TGReactionWatchKey(int64_t chatId, int64_t messageId) {
+	return [NSString stringWithFormat:@"%lld:%lld", chatId, messageId];
+}
+
+static NSString *TGReactionChipSignature(NSArray *chips) {
+	if (![chips isKindOfClass:NSArray.class])
+		return @"";
+	NSMutableString *sig = [NSMutableString string];
+	for (NSDictionary *chip in chips){
+		if (![chip isKindOfClass:NSDictionary.class])
+			continue;
+		NSString *emoji = chip[@"emoji"];
+		if (![emoji isKindOfClass:NSString.class])
+			emoji = @"";
+		[sig appendFormat:@"%@|%d|%d;", emoji,
+		                  (int)[chip[@"count"] integerValue],
+		                  [chip[@"chosen"] boolValue] ? 1 : 0];
+	}
+	return sig;
 }
 
 static NSString *TGReactionSenderName(TGClient *client, int64_t senderId) {
@@ -390,6 +421,157 @@ static NSString *TGReactionSenderName(TGClient *client, int64_t senderId) {
 		}];
 	}
 	return out;
+}
+
+- (void)reactionUsageForMessage:(int64_t)messageId
+                         inChat:(int64_t)chatId
+                     completion:(void (^)(NSArray *chosenEmoji,
+                                          NSInteger usedCount,
+                                          NSInteger maxCount,
+                                          BOOL canAddMore))completion {
+	if (!completion)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[self reactionChipsForMessage:messageId inChat:chatId completion:^(NSArray *chips){
+		TGClient *me = weakSelf;
+		if (!me){
+			completion(@[], 0, 1, YES);
+			return;
+		}
+		NSMutableArray *chosen = [NSMutableArray array];
+		for (NSDictionary *chip in chips){
+			if (![chip isKindOfClass:NSDictionary.class])
+				continue;
+			if (![chip[@"chosen"] boolValue])
+				continue;
+			NSString *emoji = chip[@"emoji"];
+			if ([emoji isKindOfClass:NSString.class] && emoji.length)
+				[chosen addObject:emoji];
+		}
+		[me availableReactionsInChat:chatId
+		                  completion:^(NSArray *emojis, BOOL allowsAll, NSInteger maxCount){
+			NSInteger max = maxCount > 0 ? maxCount : 1;
+			NSInteger used = (NSInteger)chosen.count;
+			completion(chosen, used, max, used < max);
+		}];
+	}];
+}
+
+- (void)reactionIconPathForEmoji:(NSString *)emoji
+                      completion:(void (^)(NSString *path))completion {
+	if (!completion)
+		return;
+	if (!emoji.length){
+		completion(nil);
+		return;
+	}
+	if (!TGReactionIconPaths)
+		TGReactionIconPaths = [[NSMutableDictionary alloc] init];
+	NSString *cached = TGReactionIconPaths[emoji];
+	if ([cached isKindOfClass:NSString.class] && cached.length){
+		completion(cached);
+		return;
+	}
+	__weak typeof(self) weakSelf = self;
+	[self emojiReactionInfo:emoji completion:^(NSDictionary *info){
+		TGClient *me = weakSelf;
+		NSNumber *fileId = nil;
+		if ([info isKindOfClass:NSDictionary.class] &&
+		    [info[@"iconFileId"] isKindOfClass:NSNumber.class])
+			fileId = info[@"iconFileId"];
+		if (!me || !fileId){
+			completion(nil);
+			return;
+		}
+		[me downloadFile:[fileId integerValue] completion:^(NSString *path){
+			if ([path isKindOfClass:NSString.class] && path.length)
+				[TGReactionIconPaths setObject:path forKey:emoji];
+			completion([path isKindOfClass:NSString.class] && path.length ? path : nil);
+		}];
+	}];
+}
+
+#pragma mark - live chip updates
+
+- (void)watchReactionsForMessage:(int64_t)messageId
+                          inChat:(int64_t)chatId
+                        onChange:(void (^)(NSArray *chips))onChange {
+	if (!onChange)
+		return;
+	if (!TGReactionWatches)
+		TGReactionWatches = [[NSMutableDictionary alloc] init];
+
+	NSString *key = TGReactionWatchKey(chatId, messageId);
+	NSMutableDictionary *entry = [NSMutableDictionary dictionaryWithObjectsAndKeys:
+	                              @(chatId), @"chatId",
+	                              @(messageId), @"messageId",
+	                              [onChange copy], @"block",
+	                              @"", @"signature", nil];
+	[TGReactionWatches setObject:entry forKey:key];
+
+	[self reactionChipsForMessage:messageId inChat:chatId completion:^(NSArray *chips){
+		NSMutableDictionary *live = [TGReactionWatches objectForKey:key];
+		if ([live isKindOfClass:NSDictionary.class])
+			[live setObject:TGReactionChipSignature(chips) forKey:@"signature"];
+	}];
+
+	[self tgStartReactionWatchTimer];
+}
+
+- (void)unwatchReactionsForMessage:(int64_t)messageId inChat:(int64_t)chatId {
+	if (!TGReactionWatches)
+		return;
+	[TGReactionWatches removeObjectForKey:TGReactionWatchKey(chatId, messageId)];
+	if (TGReactionWatches.count == 0)
+		[self unwatchAllReactions];
+}
+
+- (void)unwatchAllReactions {
+	[TGReactionWatches removeAllObjects];
+	[TGReactionWatchTimer invalidate];
+	TGReactionWatchTimer = nil;
+}
+
+- (void)setReactionWatchInterval:(NSTimeInterval)seconds {
+	TGReactionWatchInterval = seconds < 2.0 ? 2.0 : seconds;
+}
+
+- (void)tgStartReactionWatchTimer {
+	if (TGReactionWatchTimer)
+		return;
+	TGReactionWatchTimer = [NSTimer scheduledTimerWithTimeInterval:TGReactionWatchInterval
+	                                                        target:self
+	                                                      selector:@selector(tgReactionWatchTick:)
+	                                                      userInfo:nil
+	                                                       repeats:YES];
+}
+
+- (void)tgReactionWatchTick:(NSTimer *)timer {
+	if (TGReactionWatches.count == 0){
+		[self unwatchAllReactions];
+		return;
+	}
+	for (NSString *key in [TGReactionWatches allKeys]){
+		NSMutableDictionary *entry = [TGReactionWatches objectForKey:key];
+		if (![entry isKindOfClass:NSDictionary.class])
+			continue;
+		int64_t chatId = [entry[@"chatId"] longLongValue];
+		int64_t messageId = [entry[@"messageId"] longLongValue];
+		[self reactionChipsForMessage:messageId inChat:chatId completion:^(NSArray *chips){
+			NSMutableDictionary *live = [TGReactionWatches objectForKey:key];
+			if (![live isKindOfClass:NSDictionary.class])
+				return;
+			NSString *signature = TGReactionChipSignature(chips);
+			NSString *previous = live[@"signature"];
+			if ([previous isKindOfClass:NSString.class] &&
+			    [previous isEqualToString:signature])
+				return;
+			[live setObject:signature forKey:@"signature"];
+			void (^block)(NSArray *) = live[@"block"];
+			if (block)
+				block(chips);
+		}];
+	}
 }
 
 #pragma mark - unread reactions

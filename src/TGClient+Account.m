@@ -898,6 +898,201 @@ static NSDictionary *TGAccountSessionDict(NSDictionary *session) {
 	}];
 }
 
+static NSDictionary *TGAccountFlattenUser(NSDictionary *user) {
+	if (!user)
+		return nil;
+	NSString *first = TGAccountString(user[@"first_name"]);
+	NSString *last = TGAccountString(user[@"last_name"]);
+	NSString *name = last.length
+		? [NSString stringWithFormat:@"%@ %@", first, last]
+		: first;
+	NSDictionary *usernames = TGAccountDict(user[@"usernames"]);
+	NSDictionary *verification = TGAccountDict(user[@"verification_status"]);
+	NSDictionary *photo = TGAccountDict(user[@"profile_photo"]);
+	NSDictionary *small = TGAccountDict(photo[@"small"]);
+	NSDictionary *big = TGAccountDict(photo[@"big"]);
+	return @{
+		@"id"          : TGAccountNumber(user[@"id"]),
+		@"firstName"   : first,
+		@"lastName"    : last,
+		@"name"        : name,
+		@"username"    : TGAccountString(usernames[@"editable_username"]),
+		@"phoneNumber" : TGAccountString(user[@"phone_number"]),
+		@"isPremium"   : TGAccountBool(user[@"is_premium"]),
+		@"isVerified"  : TGAccountBool(verification[@"is_verified"]),
+		@"smallFileId" : TGAccountNumber(small[@"id"]),
+		@"bigFileId"   : TGAccountNumber(big[@"id"]),
+	};
+}
+
+static NSString *TGAccountSessionDeviceType(id value) {
+	NSString *name = TGAccountString(value);
+	if ([name hasPrefix:@"sessionDeviceType"])
+		return [name substringFromIndex:[@"sessionDeviceType" length]];
+	return @"Unknown";
+}
+
+static NSDictionary *TGAccountFlattenSession(NSDictionary *session) {
+	if (!session)
+		return nil;
+	return @{
+		@"id"                    : TGAccountNumber(session[@"id"]),
+		@"isCurrent"             : TGAccountBool(session[@"is_current"]),
+		@"isPasswordPending"     : TGAccountBool(session[@"is_password_pending"]),
+		@"isUnconfirmed"         : TGAccountBool(session[@"is_unconfirmed"]),
+		@"isOfficialApplication" : TGAccountBool(session[@"is_official_application"]),
+		@"canAcceptCalls"        : TGAccountBool(session[@"can_accept_calls"]),
+		@"canAcceptSecretChats"  : TGAccountBool(session[@"can_accept_secret_chats"]),
+		@"appName"               : TGAccountString(session[@"application_name"]),
+		@"appVersion"            : TGAccountString(session[@"application_version"]),
+		@"deviceModel"           : TGAccountString(session[@"device_model"]),
+		@"deviceType"            : TGAccountSessionDeviceType(TGAccountDict(session[@"device_type"])[@"@type"]),
+		@"platform"              : TGAccountString(session[@"platform"]),
+		@"systemVersion"         : TGAccountString(session[@"system_version"]),
+		@"ipAddress"             : TGAccountString(session[@"ip_address"]),
+		@"location"              : TGAccountString(session[@"location"]),
+		@"loginDate"             : TGAccountNumber(session[@"log_in_date"]),
+		@"lastActiveDate"        : TGAccountNumber(session[@"last_active_date"]),
+		@"apiId"                 : TGAccountNumber(session[@"api_id"]),
+	};
+}
+
+- (void)accountInfoWithCompletion:(void (^)(NSDictionary *))completion {
+	[self request:@{@"@type" : @"getMe"} completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		if (TGAccountIsError(result)){
+			completion(nil);
+			return;
+		}
+		completion(TGAccountFlattenUser(result));
+	}];
+}
+
+- (void)profileInfoWithCompletion:(void (^)(NSDictionary *))completion {
+	__weak TGClient *weakSelf = self;
+	[self request:@{@"@type" : @"getMe"} completion:^(NSDictionary *me){
+		if (TGAccountIsError(me)){
+			if (completion)
+				completion(nil);
+			return;
+		}
+		NSDictionary *base = TGAccountFlattenUser(me);
+		[weakSelf request:@{
+			@"@type"   : @"getUserFullInfo",
+			@"user_id" : TGAccountNumber(me[@"id"]),
+		} completion:^(NSDictionary *full){
+			if (!completion)
+				return;
+			NSMutableDictionary *out = [NSMutableDictionary dictionaryWithDictionary:base];
+			NSDictionary *bio = TGAccountDict(full[@"bio"]);
+			NSDictionary *birthdate = TGAccountDict(full[@"birthdate"]);
+			[out setObject:TGAccountString(bio[@"text"]) forKey:@"bio"];
+			[out setObject:TGAccountNumber(birthdate[@"day"]) forKey:@"birthdayDay"];
+			[out setObject:TGAccountNumber(birthdate[@"month"]) forKey:@"birthdayMonth"];
+			[out setObject:TGAccountNumber(birthdate[@"year"]) forKey:@"birthdayYear"];
+			[out setObject:TGAccountNumber(full[@"personal_chat_id"]) forKey:@"personalChatId"];
+			completion(out);
+		}];
+	}];
+}
+
+- (void)setFirstName:(NSString *)firstName
+            lastName:(NSString *)lastName
+          completion:(void (^)(BOOL))completion {
+	if (![firstName isKindOfClass:[NSString class]] || firstName.length == 0){
+		if (completion)
+			completion(NO);
+		return;
+	}
+	[self request:@{
+		@"@type"      : @"setName",
+		@"first_name" : firstName,
+		@"last_name"  : [lastName isKindOfClass:[NSString class]] ? lastName : @"",
+	} completion:^(NSDictionary *result){
+		if (completion)
+			completion(!TGAccountIsError(result));
+	}];
+}
+
+- (void)setBio:(NSString *)bio completion:(void (^)(BOOL))completion {
+	[self request:@{
+		@"@type" : @"setBio",
+		@"bio"   : [bio isKindOfClass:[NSString class]] ? bio : @"",
+	} completion:^(NSDictionary *result){
+		if (completion)
+			completion(!TGAccountIsError(result));
+	}];
+}
+
+- (void)setAccountTtlDays:(NSInteger)days completion:(void (^)(BOOL))completion {
+	if (days <= 0){
+		if (completion)
+			completion(NO);
+		return;
+	}
+	[self request:@{
+		@"@type" : @"setAccountTtl",
+		@"ttl"   : @{
+			@"@type" : @"accountTtl",
+			@"days"  : @(days),
+		},
+	} completion:^(NSDictionary *result){
+		if (completion)
+			completion(!TGAccountIsError(result));
+	}];
+}
+
+- (void)currentSessionWithCompletion:(void (^)(NSDictionary *))completion {
+	[self request:@{@"@type" : @"getActiveSessions"} completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		if (TGAccountIsError(result)){
+			completion(nil);
+			return;
+		}
+		for (id entry in TGAccountArray(result[@"sessions"])){
+			NSDictionary *session = TGAccountDict(entry);
+			if (!session)
+				continue;
+			if ([TGAccountBool(session[@"is_current"]) boolValue]){
+				completion(TGAccountFlattenSession(session));
+				return;
+			}
+		}
+		completion(nil);
+	}];
+}
+
+- (void)sessionInfoForId:(long long)sessionId
+              completion:(void (^)(NSDictionary *))completion {
+	[self request:@{@"@type" : @"getActiveSessions"} completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		if (TGAccountIsError(result)){
+			completion(nil);
+			return;
+		}
+		for (id entry in TGAccountArray(result[@"sessions"])){
+			NSDictionary *session = TGAccountDict(entry);
+			if (!session)
+				continue;
+			if ([TGAccountNumber(session[@"id"]) longLongValue] == sessionId){
+				completion(TGAccountFlattenSession(session));
+				return;
+			}
+		}
+		completion(nil);
+	}];
+}
+
+- (void)logOutWithCompletion:(void (^)(BOOL))completion {
+	[self request:@{@"@type" : @"logOut"} completion:^(NSDictionary *result){
+		if (completion)
+			completion(!TGAccountIsError(result));
+	}];
+}
+
 @end
 
 // vim:ft=objc

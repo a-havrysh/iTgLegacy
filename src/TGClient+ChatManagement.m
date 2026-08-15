@@ -49,6 +49,50 @@ static NSDictionary *TGCMPermissionFields(void) {
 	return fields;
 }
 
+// TDLib's chatAdministratorRights field name for each key the header
+// documents, in the order a rights screen should show them.
+static NSDictionary *TGCMRightFields(void) {
+	static NSDictionary *fields = nil;
+	if (!fields)
+		fields = @{
+			@"canManageChat"       : @"can_manage_chat",
+			@"canChangeInfo"       : @"can_change_info",
+			@"canPostMessages"     : @"can_post_messages",
+			@"canEditMessages"     : @"can_edit_messages",
+			@"canDeleteMessages"   : @"can_delete_messages",
+			@"canInviteUsers"      : @"can_invite_users",
+			@"canRestrictMembers"  : @"can_restrict_members",
+			@"canPinMessages"      : @"can_pin_messages",
+			@"canManageTopics"     : @"can_manage_topics",
+			@"canPromoteMembers"   : @"can_promote_members",
+			@"canManageVideoChats" : @"can_manage_video_chats",
+			@"canPostStories"      : @"can_post_stories",
+			@"canEditStories"      : @"can_edit_stories",
+			@"canDeleteStories"    : @"can_delete_stories",
+			@"isAnonymous"         : @"is_anonymous",
+		};
+	return fields;
+}
+
+static NSDictionary *TGCMFlatRights(NSDictionary *rights, BOOL isOwner,
+									BOOL isAdministrator, NSString *customTitle) {
+	NSDictionary *fields = TGCMRightFields();
+	NSMutableDictionary *out = [NSMutableDictionary dictionaryWithCapacity:fields.count + 4];
+	for (NSString *key in fields){
+		BOOL value = isOwner;
+		if (!isOwner && [rights isKindOfClass:NSDictionary.class])
+			value = [TGCMNumber(rights[fields[key]]) boolValue];
+		if (isOwner && [key isEqualToString:@"isAnonymous"])
+			value = [TGCMNumber(rights[fields[key]]) boolValue];
+		out[key] = [NSNumber numberWithBool:value];
+	}
+	out[@"isOwner"] = [NSNumber numberWithBool:isOwner];
+	out[@"isAdministrator"] = [NSNumber numberWithBool:isOwner || isAdministrator];
+	out[@"isMember"] = [NSNumber numberWithBool:isOwner || isAdministrator];
+	out[@"customTitle"] = [customTitle isKindOfClass:NSString.class] ? customTitle : @"";
+	return out;
+}
+
 static NSDictionary *TGCMEventFilterFields(void) {
 	static NSDictionary *fields = nil;
 	if (!fields)
@@ -421,6 +465,102 @@ static NSDictionary *TGCMEventFilterFields(void) {
 				   completion:completion];
 }
 
+- (void)reportAntiSpamFalsePositiveForMessage:(int64_t)messageId
+                                       inChat:(int64_t)chatId
+                                   completion:(void (^)(BOOL ok))completion {
+	[self cm_toggleSupergroup:@"reportSupergroupAntiSpamFalsePositive"
+						 chat:chatId
+					   fields:@{@"message_id" : [NSNumber numberWithLongLong:messageId]}
+				   completion:completion];
+}
+
+#pragma mark - administrators and own rights
+
+- (void)administratorsForChat:(int64_t)chatId
+                   completion:(void (^)(NSArray *administrators))completion {
+	__weak typeof(self) weakSelf = self;
+	[self request:@{@"@type" : @"getChatAdministrators",
+					@"chat_id" : [NSNumber numberWithLongLong:chatId]}
+	   completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		if (TGCMFailed(result)){
+			completion(@[]);
+			return;
+		}
+		NSMutableArray *owners = [NSMutableArray array];
+		NSMutableArray *others = [NSMutableArray array];
+		for (id raw in TGCMArray(result[@"administrators"])){
+			NSDictionary *entry = TGCMDict(raw);
+			if (!entry)
+				continue;
+			NSNumber *userId = TGCMNumber(entry[@"user_id"]);
+			BOOL isOwner = [TGCMNumber(entry[@"is_owner"]) boolValue];
+			NSDictionary *flat = @{
+				@"userId"      : userId,
+				@"name"        : [weakSelf nameForUserId:[userId longLongValue]] ?: @"",
+				@"customTitle" : TGCMString(entry[@"custom_title"]),
+				@"isOwner"     : @(isOwner),
+				@"canBeEdited" : @([TGCMNumber(entry[@"can_be_edited"]) boolValue]),
+			};
+			[(isOwner ? owners : others) addObject:flat];
+		}
+		[owners addObjectsFromArray:others];
+		completion(owners);
+	}];
+}
+
+- (void)myRightsInChat:(int64_t)chatId
+            completion:(void (^)(NSDictionary *rights))completion {
+	int64_t myId = [TGCMNumber(self.me[@"id"]) longLongValue];
+	if (!myId){
+		if (completion)
+			completion(TGCMFlatRights(nil, NO, NO, @""));
+		return;
+	}
+	[self request:@{
+		@"@type" : @"getChatMember",
+		@"chat_id" : [NSNumber numberWithLongLong:chatId],
+		@"member_id" : @{@"@type" : @"messageSenderUser",
+						 @"user_id" : [NSNumber numberWithLongLong:myId]},
+	} completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		if (TGCMFailed(result)){
+			completion(TGCMFlatRights(nil, NO, NO, @""));
+			return;
+		}
+		NSDictionary *status = TGCMDict(result[@"status"]);
+		NSString *type = TGCMString(status[@"@type"]);
+		NSString *title = TGCMString(status[@"custom_title"]);
+		if ([type isEqualToString:@"chatMemberStatusCreator"]){
+			completion(TGCMFlatRights(status, YES, YES, title));
+			return;
+		}
+		if ([type isEqualToString:@"chatMemberStatusAdministrator"]){
+			completion(TGCMFlatRights(TGCMDict(status[@"rights"]), NO, YES, title));
+			return;
+		}
+		BOOL isMember = [type isEqualToString:@"chatMemberStatusMember"] ||
+						[type isEqualToString:@"chatMemberStatusRestricted"];
+		NSMutableDictionary *out =
+			[NSMutableDictionary dictionaryWithDictionary:TGCMFlatRights(nil, NO, NO, title)];
+		out[@"isMember"] = @(isMember);
+		completion(out);
+	}];
+}
+
+- (void)canManageInviteLinksInChat:(int64_t)chatId
+                        completion:(void (^)(BOOL canManage))completion {
+	[self myRightsInChat:chatId completion:^(NSDictionary *rights){
+		if (!completion)
+			return;
+		BOOL owner = [TGCMNumber(rights[@"isOwner"]) boolValue];
+		BOOL invite = [TGCMNumber(rights[@"canInviteUsers"]) boolValue];
+		completion(owner || invite);
+	}];
+}
+
 - (void)convertChatToBroadcastGroup:(int64_t)chatId
                          completion:(void (^)(BOOL ok))completion {
 	[self cm_toggleSupergroup:@"toggleSupergroupIsBroadcastGroup"
@@ -574,6 +714,19 @@ static NSDictionary *TGCMFlatInviteLink(id value) {
 	} completion:completion];
 }
 
+- (void)inviteLink:(NSString *)link inChat:(int64_t)chatId
+        completion:(void (^)(NSDictionary *info))completion {
+	if (!link.length){
+		if (completion)
+			completion(nil);
+		return;
+	}
+	[self cm_requestLink:@{@"@type" : @"getChatInviteLink",
+						   @"chat_id" : [NSNumber numberWithLongLong:chatId],
+						   @"invite_link" : link}
+			  completion:completion];
+}
+
 - (void)revokeInviteLink:(NSString *)link inChat:(int64_t)chatId
               completion:(void (^)(BOOL ok))completion {
 	if (!link.length){
@@ -645,6 +798,20 @@ static NSDictionary *TGCMFlatInviteLink(id value) {
 			}];
 		}
 		completion(out, [TGCMNumber(result[@"total_count"]) integerValue]);
+	}];
+}
+
+- (void)membersJoinedViaPrimaryInviteLinkInChat:(int64_t)chatId
+                                          limit:(NSInteger)limit
+                                     completion:(void (^)(NSArray *members, NSInteger total))completion {
+	__weak typeof(self) weakSelf = self;
+	[self primaryInviteLinkForChat:chatId completion:^(NSString *link){
+		if (!link.length){
+			if (completion)
+				completion(@[], 0);
+			return;
+		}
+		[weakSelf membersJoinedViaInviteLink:link inChat:chatId limit:limit completion:completion];
 	}];
 }
 

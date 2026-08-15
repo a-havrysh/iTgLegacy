@@ -5,7 +5,23 @@
 - (void)tgNetworkAutoDownloadPresetsWithCompletion:(void (^)(NSDictionary *presets))completion;
 - (void)tgNetworkApplyAutoDownloadSettings:(NSDictionary *)settings
                         toEveryNetworkKind:(void (^)(BOOL ok))completion;
+- (void)tgNetworkConnectionStateTick:(NSTimer *)timer;
 @end
+
+NSString *const TGProxyListDidChangeNotification = @"TGProxyListDidChangeNotification";
+NSString *const TGConnectionStateDidChangeNotification = @"TGConnectionStateDidChangeNotification";
+NSString *const TGConnectionStateKey = @"state";
+NSString *const TGConnectionStateTitleKey = @"title";
+
+static NSInteger TGNetStateObservers = 0;
+static NSTimer *TGNetStateTimer = nil;
+static TGConnectionState TGNetLastState = TGConnectionStateUnknown;
+static BOOL TGNetHasLastState = NO;
+
+static void TGNetPostProxyListChanged(id client) {
+	[[NSNotificationCenter defaultCenter] postNotificationName:TGProxyListDidChangeNotification
+														object:client];
+}
 
 static BOOL TGNetIsError(NSDictionary *result) {
 	if (![result isKindOfClass:[NSDictionary class]])
@@ -190,6 +206,8 @@ static NSDictionary *TGNetSettingsObject(NSDictionary *settings) {
 					@"enable"  : enable ? @YES : @NO,
 					@"comment" : TGNetString(proxy[@"comment"])}
 	   completion:^(NSDictionary *result){
+		if (!TGNetIsError(result))
+			TGNetPostProxyListChanged(self);
 		if (!completion)
 			return;
 		if (TGNetIsError(result)){
@@ -216,6 +234,8 @@ static NSDictionary *TGNetSettingsObject(NSDictionary *settings) {
 					@"enable"   : enable ? @YES : @NO,
 					@"comment"  : TGNetString(proxy[@"comment"])}
 	   completion:^(NSDictionary *result){
+		if (!TGNetIsError(result))
+			TGNetPostProxyListChanged(self);
 		if (!completion)
 			return;
 		if (TGNetIsError(result)){
@@ -229,24 +249,69 @@ static NSDictionary *TGNetSettingsObject(NSDictionary *settings) {
 - (void)enableProxy:(NSInteger)proxyId completion:(void (^)(BOOL))completion {
 	[self request:@{@"@type" : @"enableProxy", @"proxy_id" : @(proxyId)}
 	   completion:^(NSDictionary *result){
+		BOOL ok = !TGNetIsError(result);
+		if (ok)
+			TGNetPostProxyListChanged(self);
 		if (completion)
-			completion(!TGNetIsError(result));
+			completion(ok);
 	}];
 }
 
 - (void)disableProxyWithCompletion:(void (^)(BOOL))completion {
 	[self request:@{@"@type" : @"disableProxy"} completion:^(NSDictionary *result){
+		BOOL ok = !TGNetIsError(result);
+		if (ok)
+			TGNetPostProxyListChanged(self);
 		if (completion)
-			completion(!TGNetIsError(result));
+			completion(ok);
 	}];
 }
 
 - (void)removeProxy:(NSInteger)proxyId completion:(void (^)(BOOL))completion {
 	[self request:@{@"@type" : @"removeProxy", @"proxy_id" : @(proxyId)}
 	   completion:^(NSDictionary *result){
+		BOOL ok = !TGNetIsError(result);
+		if (ok)
+			TGNetPostProxyListChanged(self);
 		if (completion)
-			completion(!TGNetIsError(result));
+			completion(ok);
 	}];
+}
+
+- (void)activeProxyWithCompletion:(void (^)(NSDictionary *))completion {
+	[self proxiesWithCompletion:^(NSArray *proxies){
+		if (!completion)
+			return;
+		for (id item in proxies){
+			NSDictionary *proxy = TGNetDict(item);
+			if (proxy && [TGNetBool(proxy[@"isEnabled"]) boolValue]){
+				completion(proxy);
+				return;
+			}
+		}
+		completion(nil);
+	}];
+}
+
+- (void)activeProxyIdWithCompletion:(void (^)(NSInteger))completion {
+	[self activeProxyWithCompletion:^(NSDictionary *proxy){
+		if (!completion)
+			return;
+		if (!proxy){
+			completion(-1);
+			return;
+		}
+		completion([TGNetNumber(proxy[@"id"]) integerValue]);
+	}];
+}
+
+- (void)setProxy:(NSInteger)proxyId
+         enabled:(BOOL)enabled
+      completion:(void (^)(BOOL))completion {
+	if (enabled)
+		[self enableProxy:proxyId completion:completion];
+	else
+		[self disableProxyWithCompletion:completion];
 }
 
 #pragma mark - proxy checks
@@ -441,6 +506,10 @@ static NSDictionary *TGNetSettingsObject(NSDictionary *settings) {
 	}];
 }
 
+- (void)autoDownloadPresetsWithCompletion:(void (^)(NSDictionary *))completion {
+	[self tgNetworkAutoDownloadPresetsWithCompletion:completion];
+}
+
 - (void)setAutoDownloadSettings:(NSDictionary *)settings
                     networkKind:(NSString *)kind
                      completion:(void (^)(BOOL))completion {
@@ -555,6 +624,58 @@ static NSDictionary *TGNetSettingsObject(NSDictionary *settings) {
 		default:
 			return nil;
 	}
+}
+
+- (NSString *)connectionStateTitleForState:(TGConnectionState)state {
+	switch (state){
+		case TGConnectionStateWaitingForNetwork:
+			return @"Waiting for network";
+		case TGConnectionStateConnecting:
+			return @"Connecting...";
+		case TGConnectionStateUpdating:
+			return @"Updating...";
+		default:
+			return nil;
+	}
+}
+
+- (void)tgNetworkConnectionStateTick:(NSTimer *)timer {
+	TGConnectionState state = self.connectionState;
+	if (TGNetHasLastState && state == TGNetLastState)
+		return;
+	TGNetHasLastState = YES;
+	TGNetLastState = state;
+	NSMutableDictionary *info = [NSMutableDictionary dictionary];
+	[info setObject:[NSNumber numberWithInteger:(NSInteger)state] forKey:TGConnectionStateKey];
+	NSString *title = [self connectionStateTitleForState:state];
+	if (title)
+		[info setObject:title forKey:TGConnectionStateTitleKey];
+	[[NSNotificationCenter defaultCenter] postNotificationName:TGConnectionStateDidChangeNotification
+														object:self
+													  userInfo:info];
+}
+
+- (void)beginBroadcastingConnectionState {
+	TGNetStateObservers++;
+	if (TGNetStateTimer)
+		return;
+	TGNetHasLastState = NO;
+	TGNetStateTimer = [NSTimer scheduledTimerWithTimeInterval:0.5
+													   target:self
+													 selector:@selector(tgNetworkConnectionStateTick:)
+													 userInfo:nil
+													  repeats:YES];
+	[self tgNetworkConnectionStateTick:nil];
+}
+
+- (void)endBroadcastingConnectionState {
+	if (TGNetStateObservers > 0)
+		TGNetStateObservers--;
+	if (TGNetStateObservers > 0)
+		return;
+	[TGNetStateTimer invalidate];
+	TGNetStateTimer = nil;
+	TGNetHasLastState = NO;
 }
 
 @end

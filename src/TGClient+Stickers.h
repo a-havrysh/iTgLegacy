@@ -168,6 +168,79 @@
                    forSupergroup:(int64_t)supergroupId
                       completion:(void (^)(BOOL ok))completion;
 
+/// Recently used stickers, most recent first, in the full sticker shape
+/// documented at the top of this file. Pass NO for `attached` to get the
+/// recently sent list (what the sticker panel's Recent tab shows), YES for the
+/// list recently attached to photos and videos.
+/// TGClient.h already has recentStickersWithCompletion:, but it yields a
+/// reduced dictionary (fileId/emoji/isAnimated/thumbId only); use this one when
+/// setId, size or customEmojiId is needed.
+- (void)recentStickersAttached:(BOOL)attached
+                    completion:(void (^)(NSArray *stickers))completion;
+
+/// Installed mask sets, for the Masks section of the sticker settings screen.
+/// Same shape as installedStickerSetsWithCompletion:.
+- (void)installedMaskStickerSetsWithCompletion:(void (^)(NSArray *sets))completion;
+
+/// Archived custom-emoji sets. Pass 0 for `offsetSetId` for the first page.
+- (void)archivedEmojiStickerSetsFromSetId:(int64_t)offsetSetId
+                                    limit:(NSInteger)limit
+                               completion:(void (^)(NSArray *sets, NSInteger totalCount))completion;
+
+/// Archived mask sets. Pass 0 for `offsetSetId` for the first page.
+- (void)archivedMaskStickerSetsFromSetId:(int64_t)offsetSetId
+                                   limit:(NSInteger)limit
+                              completion:(void (^)(NSArray *sets, NSInteger totalCount))completion;
+
+/// Trending custom-emoji sets. Completion gets (sets, totalCount).
+- (void)trendingEmojiStickerSetsWithOffset:(NSInteger)offset
+                                     limit:(NSInteger)limit
+                                completion:(void (^)(NSArray *sets, NSInteger totalCount))completion;
+
+/// Search installed mask sets by title or short name.
+- (void)searchInstalledMaskStickerSets:(NSString *)query
+                                 limit:(NSInteger)limit
+                            completion:(void (^)(NSArray *sets))completion;
+
+/// Search public custom-emoji sets by title or short name.
+- (void)searchEmojiStickerSets:(NSString *)query
+                    completion:(void (^)(NSArray *sets))completion;
+
+/// Same as reorderInstalledStickerSets: but reports whether the server took the
+/// new order, so a failed drag can be rolled back instead of silently snapping.
+- (void)reorderInstalledStickerSets:(NSArray *)setIds
+                         completion:(void (^)(BOOL ok))completion;
+
+/// New order of the installed custom-emoji sets. Must list every installed set.
+- (void)reorderInstalledEmojiStickerSets:(NSArray *)setIds
+                              completion:(void (^)(BOOL ok))completion;
+
+/// New order of the installed mask sets. Must list every installed set.
+- (void)reorderInstalledMaskStickerSets:(NSArray *)setIds
+                             completion:(void (^)(BOOL ok))completion;
+
+/// YES when the sticker file id is currently in the favourites list. Reads the
+/// whole favourites list, so call it once per screen and cache the answer.
+- (void)isStickerFavoriteWithFileId:(NSInteger)fileId
+                         completion:(void (^)(BOOL favorite))completion;
+
+/// Short name of a set, for building a t.me/addstickers/<name> share link when
+/// only the id is at hand. Completion gets the name or nil.
+- (void)stickerSetNameForId:(int64_t)setId completion:(void (^)(NSString *name))completion;
+
+/// Premium stickers from regular sets, for the promo strip.
+- (void)premiumStickersWithLimit:(NSInteger)limit
+                      completion:(void (^)(NSArray *stickers))completion;
+
+/// One page of a set's stickers. The set is fetched whole and sliced locally -
+/// TDLib has no paged accessor - so this only saves the caller the slicing and
+/// keeps a huge set from being laid out in one go. Completion gets
+/// (stickers, totalCount); `stickers` is empty past the end.
+- (void)stickersFromSetId:(int64_t)setId
+                   offset:(NSInteger)offset
+                    limit:(NSInteger)limit
+               completion:(void (^)(NSArray *stickers, NSInteger totalCount))completion;
+
 /// Vector silhouette of a sticker, to draw while its file downloads.
 /// Completion gets an array of closed paths; each path is an array of
 /// { "type" : @"line" | @"curve", "x", "y" } and, for curves,

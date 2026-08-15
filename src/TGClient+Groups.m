@@ -520,6 +520,147 @@ static NSDictionary *TGFlattenInviteLink(NSDictionary *link) {
 	}];
 }
 
+- (NSArray *)administratorRightKeys {
+	return TGAdminRightKeys();
+}
+
+- (NSArray *)memberPermissionKeys {
+	return TGPermissionKeys();
+}
+
+- (NSString *)titleForAdministratorRightKey:(NSString *)key {
+	static NSDictionary *titles = nil;
+	if (!titles)
+		titles = @{
+			@"can_manage_chat"        : @"Manage Group",
+			@"can_change_info"        : @"Change Info",
+			@"can_post_messages"      : @"Post Messages",
+			@"can_edit_messages"      : @"Edit Messages",
+			@"can_delete_messages"    : @"Delete Messages",
+			@"can_invite_users"       : @"Add Users",
+			@"can_restrict_members"   : @"Ban Users",
+			@"can_pin_messages"       : @"Pin Messages",
+			@"can_manage_topics"      : @"Manage Topics",
+			@"can_promote_members"    : @"Add New Admins",
+			@"can_manage_video_chats" : @"Manage Voice Chats",
+			@"can_post_stories"       : @"Post Stories",
+			@"can_edit_stories"       : @"Edit Stories",
+			@"can_delete_stories"     : @"Delete Stories",
+			@"is_anonymous"           : @"Remain Anonymous",
+		};
+	NSString *title = TGString(key).length ? titles[key] : nil;
+	return title ?: (TGString(key).length ? key : @"");
+}
+
+- (NSString *)titleForMemberPermissionKey:(NSString *)key {
+	static NSDictionary *titles = nil;
+	if (!titles)
+		titles = @{
+			@"can_send_basic_messages" : @"Send Messages",
+			@"can_send_audios"         : @"Send Music",
+			@"can_send_documents"      : @"Send Files",
+			@"can_send_photos"         : @"Send Photos",
+			@"can_send_videos"         : @"Send Videos",
+			@"can_send_video_notes"    : @"Send Video Messages",
+			@"can_send_voice_notes"    : @"Send Voice Messages",
+			@"can_send_polls"          : @"Send Polls",
+			@"can_send_other_messages" : @"Send Stickers & GIFs",
+			@"can_add_link_previews"   : @"Embed Links",
+			@"can_react_to_messages"   : @"Add Reactions",
+			@"can_edit_tag"            : @"Edit Tags",
+			@"can_change_info"         : @"Change Info",
+			@"can_invite_users"        : @"Add Users",
+			@"can_pin_messages"        : @"Pin Messages",
+			@"can_create_topics"       : @"Create Topics",
+		};
+	NSString *title = TGString(key).length ? titles[key] : nil;
+	return title ?: (TGString(key).length ? key : @"");
+}
+
+- (void)administratorRightsOfUser:(int64_t)userId
+                          inGroup:(int64_t)chatId
+                       completion:(void (^)(NSDictionary *, NSString *, BOOL))completion {
+	[self request:@{@"@type" : @"getChatMember",
+					@"chat_id" : @(chatId),
+					@"member_id" : TGUserSender(userId)}
+	   completion:^(NSDictionary *member){
+		if (!completion)
+			return;
+		if (TGIsError(member)) {
+			completion(nil, nil, NO);
+			return;
+		}
+		NSDictionary *status = TGDict(member[@"status"]) ?: @{};
+		NSString *type = TGString(status[@"@type"]);
+		NSString *name = TGStatusName(type);
+		BOOL canBeEdited = [status[@"can_be_edited"] boolValue];
+		NSArray *keys = TGAdminRightKeys();
+		NSMutableDictionary *rights = [NSMutableDictionary dictionaryWithCapacity:keys.count];
+		if ([type isEqualToString:@"chatMemberStatusCreator"]) {
+			for (NSString *key in keys)
+				rights[key] = @YES;
+			rights[@"is_anonymous"] = @([status[@"is_anonymous"] boolValue]);
+		} else if ([type isEqualToString:@"chatMemberStatusAdministrator"]) {
+			NSDictionary *raw = TGDict(status[@"rights"]) ?: @{};
+			for (NSString *key in keys)
+				rights[key] = @([raw[key] boolValue]);
+		} else {
+			for (NSString *key in keys)
+				rights[key] = @NO;
+		}
+		completion(rights, name, canBeEdited);
+	}];
+}
+
+- (void)permissionsOfUser:(int64_t)userId
+                  inGroup:(int64_t)chatId
+               completion:(void (^)(NSDictionary *, BOOL, NSInteger))completion {
+	__weak typeof(self) weakSelf = self;
+	[self request:@{@"@type" : @"getChatMember",
+					@"chat_id" : @(chatId),
+					@"member_id" : TGUserSender(userId)}
+	   completion:^(NSDictionary *member){
+		if (!completion)
+			return;
+		TGClient *me = weakSelf;
+		if (!me || TGIsError(member)) {
+			completion(nil, NO, 0);
+			return;
+		}
+		NSDictionary *status = TGDict(member[@"status"]) ?: @{};
+		NSString *type = TGString(status[@"@type"]);
+		if ([type isEqualToString:@"chatMemberStatusRestricted"]) {
+			NSDictionary *raw = TGDict(status[@"permissions"]) ?: @{};
+			completion(TGReadFlags(raw, TGPermissionKeys()), YES,
+					   [status[@"restricted_until_date"] integerValue]);
+			return;
+		}
+		[me defaultPermissionsInGroup:chatId completion:^(NSDictionary *permissions){
+			completion(permissions ?: TGReadFlags(@{}, TGPermissionKeys()), NO, 0);
+		}];
+	}];
+}
+
+- (void)myAdministratorRightsInGroup:(int64_t)chatId
+                          completion:(void (^)(NSDictionary *, NSString *))completion {
+	__weak typeof(self) weakSelf = self;
+	[self request:@{@"@type" : @"getMe"} completion:^(NSDictionary *user){
+		if (!completion)
+			return;
+		TGClient *me = weakSelf;
+		int64_t myId = TGIsError(user) ? 0 : [user[@"id"] longLongValue];
+		if (!me || !myId) {
+			completion(nil, nil);
+			return;
+		}
+		[me administratorRightsOfUser:myId
+							  inGroup:chatId
+						   completion:^(NSDictionary *rights, NSString *status, BOOL canBeEdited){
+			completion(rights, status);
+		}];
+	}];
+}
+
 - (void)groupMemberCount:(int64_t)chatId completion:(void (^)(NSInteger))completion {
 	[self groupInfoForChat:chatId completion:^(NSDictionary *info){
 		if (completion)

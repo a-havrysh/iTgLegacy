@@ -49,6 +49,58 @@ static NSString *TGPlainText(id formatted){
 	return @"";
 }
 
+NSString *const TGChatFoldersDidChangeNotification = @"TGChatFoldersDidChangeNotification";
+
+static NSMutableSet *TGMarkedUnreadChatIds(void){
+	static NSMutableSet *set = nil;
+	if (!set)
+		set = [[NSMutableSet alloc] init];
+	return set;
+}
+
+static NSMutableDictionary *TGChatTitleCache(void){
+	static NSMutableDictionary *titles = nil;
+	if (!titles)
+		titles = [[NSMutableDictionary alloc] init];
+	return titles;
+}
+
+static void (^TGFoldersChangedBlock)(void) = nil;
+
+@interface TGChatListFolderWatcher : NSObject
++ (instancetype)shared;
+@end
+
+@implementation TGChatListFolderWatcher
+
++ (instancetype)shared {
+	static TGChatListFolderWatcher *watcher = nil;
+	if (!watcher){
+		watcher = [[TGChatListFolderWatcher alloc] init];
+		[[TGClient shared] addObserver:watcher
+							forKeyPath:@"folders"
+							   options:0
+							   context:NULL];
+	}
+	return watcher;
+}
+
+- (void)observeValueForKeyPath:(NSString *)keyPath
+					  ofObject:(id)object
+						change:(NSDictionary *)change
+					   context:(void *)context {
+	if (![keyPath isEqualToString:@"folders"])
+		return;
+	dispatch_async(dispatch_get_main_queue(), ^{
+		[[NSNotificationCenter defaultCenter]
+			postNotificationName:TGChatFoldersDidChangeNotification object:nil];
+		if (TGFoldersChangedBlock)
+			TGFoldersChangedBlock();
+	});
+}
+
+@end
+
 @implementation TGClient (ChatList)
 
 #pragma mark - shared helpers
@@ -58,7 +110,13 @@ static NSString *TGPlainText(id formatted){
 	for (NSNumber *chatId in TGNumberArray(chatIds)){
 		NSDictionary *info = self.chatsById[chatId];
 		if (info){
-			[out addObject:[info copy]];
+			NSMutableDictionary *row = [info mutableCopy];
+			if (![row[@"markedUnread"] isKindOfClass:NSNumber.class])
+				row[@"markedUnread"] = @([TGMarkedUnreadChatIds() containsObject:chatId]);
+			if ([row[@"title"] isKindOfClass:NSString.class] &&
+				[row[@"title"] length] > 0)
+				TGChatTitleCache()[chatId] = row[@"title"];
+			[out addObject:row];
 		} else {
 			[out addObject:@{@"id" : chatId, @"title" : @"", @"unread" : @(0)}];
 		}
@@ -203,6 +261,10 @@ static NSString *TGPlainText(id formatted){
 }
 
 - (void)setChat:(int64_t)chatId markedAsUnread:(BOOL)marked {
+	if (marked)
+		[TGMarkedUnreadChatIds() addObject:@(chatId)];
+	else
+		[TGMarkedUnreadChatIds() removeObject:@(chatId)];
 	[self send:@{@"@type" : @"toggleChatIsMarkedAsUnread",
 				 @"chat_id" : @(chatId),
 				 @"is_marked_as_unread" : @(marked)}];
@@ -716,6 +778,187 @@ static NSString *TGPlainText(id formatted){
 					 @"source" : source,
 					 @"sourceText" : sourceText});
 	}];
+}
+
+#pragma mark - per-chat read state
+
+- (void)markChatAsRead:(int64_t)chatId completion:(void (^)(BOOL ok))completion {
+	__weak typeof(self) weakSelf = self;
+	[self request:@{@"@type" : @"getChat", @"chat_id" : @(chatId)}
+	   completion:^(NSDictionary *chat){
+		TGClient *client = weakSelf;
+		if (!client || TGIsError(chat)){
+			if (completion)
+				completion(NO);
+			return;
+		}
+		NSNumber *lastMessageId = nil;
+		id lastMessage = chat[@"last_message"];
+		if ([lastMessage isKindOfClass:NSDictionary.class] &&
+			[lastMessage[@"id"] isKindOfClass:NSNumber.class])
+			lastMessageId = lastMessage[@"id"];
+		if (!lastMessageId &&
+			[chat[@"last_read_inbox_message_id"] isKindOfClass:NSNumber.class])
+			lastMessageId = chat[@"last_read_inbox_message_id"];
+
+		if (lastMessageId && [lastMessageId longLongValue] != 0){
+			[client send:@{@"@type" : @"viewMessages",
+						   @"chat_id" : @(chatId),
+						   @"message_ids" : @[lastMessageId],
+						   @"source" : @{@"@type" : @"messageSourceChatList"},
+						   @"force_read" : @YES}];
+		}
+		if ([chat[@"is_marked_as_unread"] boolValue])
+			[client setChat:chatId markedAsUnread:NO];
+		else
+			[TGMarkedUnreadChatIds() removeObject:@(chatId)];
+
+		NSMutableDictionary *info = client.chatsById[@(chatId)];
+		if ([info isKindOfClass:NSMutableDictionary.class]){
+			info[@"unread"] = @(0);
+			info[@"markedUnread"] = @(NO);
+		}
+		if (completion)
+			completion(YES);
+	}];
+}
+
+- (void)markChatAsRead:(int64_t)chatId {
+	[self markChatAsRead:chatId completion:nil];
+}
+
+- (BOOL)isChatMarkedAsUnread:(int64_t)chatId {
+	NSDictionary *info = self.chatsById[@(chatId)];
+	if ([info[@"markedUnread"] isKindOfClass:NSNumber.class])
+		return [info[@"markedUnread"] boolValue];
+	return [TGMarkedUnreadChatIds() containsObject:@(chatId)];
+}
+
+- (void)chatMarkedAsUnread:(int64_t)chatId completion:(void (^)(BOOL marked))completion {
+	[self request:@{@"@type" : @"getChat", @"chat_id" : @(chatId)}
+	   completion:^(NSDictionary *chat){
+		BOOL marked = NO;
+		if (!TGIsError(chat))
+			marked = [chat[@"is_marked_as_unread"] boolValue];
+		if (marked)
+			[TGMarkedUnreadChatIds() addObject:@(chatId)];
+		else
+			[TGMarkedUnreadChatIds() removeObject:@(chatId)];
+		if (completion)
+			completion(marked);
+	}];
+}
+
+#pragma mark - chat titles
+
+- (NSString *)cachedTitleForChatId:(int64_t)chatId {
+	NSNumber *key = @(chatId);
+	NSDictionary *info = self.chatsById[key];
+	if ([info[@"title"] isKindOfClass:NSString.class] && [info[@"title"] length] > 0){
+		TGChatTitleCache()[key] = info[@"title"];
+		return info[@"title"];
+	}
+	for (NSDictionary *row in self.chats){
+		if ([row isKindOfClass:NSDictionary.class] &&
+			[row[@"id"] longLongValue] == chatId &&
+			[row[@"title"] isKindOfClass:NSString.class])
+			return row[@"title"];
+	}
+	for (NSDictionary *row in self.archivedChats){
+		if ([row isKindOfClass:NSDictionary.class] &&
+			[row[@"id"] longLongValue] == chatId &&
+			[row[@"title"] isKindOfClass:NSString.class])
+			return row[@"title"];
+	}
+	NSString *remembered = TGChatTitleCache()[key];
+	return [remembered isKindOfClass:NSString.class] ? remembered : nil;
+}
+
+- (void)titleForChatId:(int64_t)chatId completion:(void (^)(NSString *title))completion {
+	NSString *known = [self cachedTitleForChatId:chatId];
+	if (known.length > 0){
+		if (completion)
+			completion(known);
+		return;
+	}
+	[self request:@{@"@type" : @"getChat", @"chat_id" : @(chatId)}
+	   completion:^(NSDictionary *chat){
+		NSString *title = @"";
+		if (!TGIsError(chat) && [chat[@"title"] isKindOfClass:NSString.class])
+			title = chat[@"title"];
+		if (title.length > 0)
+			TGChatTitleCache()[@(chatId)] = title;
+		if (completion)
+			completion(title);
+	}];
+}
+
+- (void)titlesForChatIds:(NSArray *)chatIds completion:(void (^)(NSDictionary *titles))completion {
+	NSArray *ids = TGNumberArray(chatIds);
+	NSMutableDictionary *out = [NSMutableDictionary dictionary];
+	NSMutableArray *pending = [NSMutableArray array];
+	for (NSNumber *chatId in ids){
+		NSString *known = [self cachedTitleForChatId:[chatId longLongValue]];
+		if (known.length > 0)
+			out[chatId] = known;
+		else
+			[pending addObject:chatId];
+	}
+	if (!pending.count){
+		if (completion)
+			completion(out);
+		return;
+	}
+	__block NSInteger remaining = (NSInteger)pending.count;
+	for (NSNumber *chatId in pending){
+		[self titleForChatId:[chatId longLongValue] completion:^(NSString *title){
+			if (title.length > 0)
+				out[chatId] = title;
+			remaining--;
+			if (remaining <= 0 && completion)
+				completion(out);
+		}];
+	}
+}
+
+#pragma mark - folder change notification
+
+- (void)beginObservingFolderChanges {
+	[TGChatListFolderWatcher shared];
+}
+
+- (void)setOnFoldersChanged:(void (^)(void))block {
+	[TGChatListFolderWatcher shared];
+	TGFoldersChangedBlock = [block copy];
+}
+
+- (void (^)(void))onFoldersChanged {
+	return TGFoldersChangedBlock;
+}
+
+- (NSString *)symbolForFolderIconName:(NSString *)iconName {
+	static NSDictionary *symbols = nil;
+	if (!symbols){
+		symbols = @{@"All" : @"\U0001F4AC", @"Unread" : @"\U0001F535",
+					@"Unmuted" : @"\U0001F514", @"Bots" : @"\U0001F916",
+					@"Channels" : @"\U0001F4E2", @"Groups" : @"\U0001F465",
+					@"Private" : @"\U0001F464", @"Custom" : @"⚙",
+					@"Setup" : @"⚙", @"Cat" : @"\U0001F431",
+					@"Crown" : @"\U0001F451", @"Favorite" : @"⭐",
+					@"Flower" : @"\U0001F337", @"Game" : @"\U0001F3AE",
+					@"Home" : @"\U0001F3E0", @"Love" : @"❤",
+					@"Mask" : @"\U0001F3AD", @"Party" : @"\U0001F389",
+					@"Sport" : @"⚽", @"Study" : @"\U0001F393",
+					@"Trade" : @"\U0001F4C8", @"Travel" : @"✈",
+					@"Work" : @"\U0001F4BC", @"Airplane" : @"✈",
+					@"Book" : @"\U0001F4D6", @"Light" : @"\U0001F4A1",
+					@"Like" : @"\U0001F44D", @"Money" : @"\U0001F4B0",
+					@"Note" : @"\U0001F4DD", @"Palette" : @"\U0001F3A8"};
+	}
+	NSString *symbol = nil;
+	if ([iconName isKindOfClass:NSString.class])
+		symbol = symbols[iconName];
+	return symbol ?: @"\U0001F4C1";
 }
 
 @end

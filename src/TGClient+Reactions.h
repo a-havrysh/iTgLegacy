@@ -112,6 +112,60 @@
 /// (NSNumber BOOL). Empty when the post has none.
 + (NSArray *)paidReactorsFromMessage:(NSDictionary *)message;
 
+/// How much of a message's reaction budget the signed-in user has spent, so
+/// the picker can grey out the strip once the limit is reached. `completion`
+/// runs on the main queue with the emoji the user has already chosen on this
+/// message (array of NSString), how many that is, the chat's maximum per
+/// message and whether one more may still be added. On failure: empty array,
+/// 0 used, 1 max, canAddMore YES.
+- (void)reactionUsageForMessage:(int64_t)messageId
+                         inChat:(int64_t)chatId
+                     completion:(void (^)(NSArray *chosenEmoji,
+                                          NSInteger usedCount,
+                                          NSInteger maxCount,
+                                          BOOL canAddMore))completion;
+
+/// Local file path of the official static artwork for one reaction emoji,
+/// downloading it if needed. This is the `static_icon` sticker of
+/// getEmojiReaction - a WEBP that UIImage on iOS 6 cannot decode directly, so
+/// callers that cannot decode it should keep drawing the plain character.
+/// `completion` runs on the main queue with the path, or nil when the
+/// reaction has no icon or the download failed. Resolved paths are cached in
+/// a file-static dictionary for the process lifetime (categories cannot add
+/// ivars), so repeat calls for the same emoji are free.
+- (void)reactionIconPathForEmoji:(NSString *)emoji
+                      completion:(void (^)(NSString *path))completion;
+
+#pragma mark - live chip updates
+
+/// Watch one message's reaction chips and get a callback whenever they
+/// change - somebody else reacting, or our own toggle landing on the server.
+/// TDLib delivers this as updateMessageInteractionInfo, which this client
+/// does not route yet, so the watcher polls -reactionChipsForMessage: on a
+/// shared timer (one request per watched message every few seconds) and only
+/// invokes `onChange` when the emoji, counts or chosen flags actually differ
+/// from the previous read. `onChange` runs on the main queue with the chips
+/// in the -reactionChipsForMessage: shape.
+///
+/// The watch table and its timer are file statics inside the category, since
+/// a category cannot add ivars. Registering the same message twice replaces
+/// the previous block. ALWAYS unwatch in -viewWillDisappear or -dealloc: the
+/// block is retained until then, and so is anything it captures.
+- (void)watchReactionsForMessage:(int64_t)messageId
+                          inChat:(int64_t)chatId
+                        onChange:(void (^)(NSArray *chips))onChange;
+
+/// Stop watching one message. Safe to call for a message never watched.
+- (void)unwatchReactionsForMessage:(int64_t)messageId inChat:(int64_t)chatId;
+
+/// Stop every reaction watch and shut the shared timer down.
+- (void)unwatchAllReactions;
+
+/// Poll interval of the shared watch timer, in seconds. Defaults to 5, which
+/// is what the 4S can carry with a couple of visible messages watched. Values
+/// below 2 are clamped to 2. Applies from the next timer restart.
+- (void)setReactionWatchInterval:(NSTimeInterval)seconds;
+
 #pragma mark - unread reactions
 
 /// Messages in a chat that carry a reaction the user has not seen yet, oldest

@@ -27,6 +27,22 @@
 //
 #import "TGClient.h"
 
+/// Posted on the main thread whenever the proxy list is changed through this
+/// category (add, edit, enable, disable, remove). The object is the TGClient.
+/// No userInfo - re-read with -proxiesWithCompletion: or -activeProxyWithCompletion:.
+extern NSString *const TGProxyListDidChangeNotification;
+
+/// Posted on the main thread when the connection state changes, but only while
+/// -beginBroadcastingConnectionState is in force. The object is the TGClient.
+/// userInfo carries:
+///   TGConnectionStateKey       NSNumber wrapping a TGConnectionState
+///   TGConnectionStateTitleKey  NSString title, absent when the state is ready
+/// It exists so several screens can watch the connection without fighting over
+/// the single-assign `onConnectionState` block property.
+extern NSString *const TGConnectionStateDidChangeNotification;
+extern NSString *const TGConnectionStateKey;
+extern NSString *const TGConnectionStateTitleKey;
+
 @interface TGClient (Network)
 
 #pragma mark - proxy list
@@ -59,6 +75,23 @@
 
 /// Forget a proxy entirely. Removing the enabled one also disables it.
 - (void)removeProxy:(NSInteger)proxyId completion:(void (^)(BOOL ok))completion;
+
+/// The proxy traffic is currently routed through, or nil when the connection is
+/// direct. Same dictionary shape as -proxiesWithCompletion: entries, so a screen
+/// can read "id", "server" and "type" straight off it. TDLib has no dedicated
+/// getter, so this reads the list once and picks the entry whose "isEnabled" is
+/// true; it saves every caller from writing that filter itself.
+- (void)activeProxyWithCompletion:(void (^)(NSDictionary *proxy))completion;
+
+/// The id of the proxy in use, or a negative number when the connection is
+/// direct. Cheaper to compare against a row than the whole dictionary.
+- (void)activeProxyIdWithCompletion:(void (^)(NSInteger proxyId))completion;
+
+/// Enable `proxyId` when `enabled` is YES, otherwise go direct. Exactly what a
+/// per-row switch needs, without the caller branching over two selectors.
+- (void)setProxy:(NSInteger)proxyId
+         enabled:(BOOL)enabled
+      completion:(void (^)(BOOL ok))completion;
 
 #pragma mark - proxy checks
 
@@ -126,10 +159,15 @@
 
 #pragma mark - auto-download
 
-/// The server presets are read through TGClient+Files
-/// (-autoDownloadPresetsWithCompletion:); this category keeps its own private
-/// copy of that call rather than declaring the selector twice.
-///
+/// The three server presets, as a dictionary with the keys "low", "medium" and
+/// "high", each holding a settings dictionary with the keys "enabled",
+/// "maxPhotoSize", "maxVideoSize", "maxOtherSize", "videoUploadBitrate",
+/// "preloadLargeVideos", "preloadNextAudio", "preloadStories" and
+/// "useLessDataForCalls". Nil when the call failed. This is the selector the
+/// doc comments in TGClient+Files.h and TGClient+Storage.h point at; it is
+/// declared here and nowhere else.
+- (void)autoDownloadPresetsWithCompletion:(void (^)(NSDictionary *presets))completion;
+
 /// Apply one settings dictionary - same keys as a preset, missing keys default
 /// to off / zero - to one network type. `kind` is a network-type name as in
 /// -setNetworkTypeKind:.
@@ -167,6 +205,22 @@
 /// "Waiting for network", "Connecting...", "Updating..." or nil when the
 /// connection is ready and the real title should show instead.
 - (NSString *)connectionStateTitle;
+
+/// Wording for an arbitrary state, for a notification observer that gets the
+/// state in userInfo. Nil when `state` is ready.
+- (NSString *)connectionStateTitleForState:(TGConnectionState)state;
+
+/// Start posting TGConnectionStateDidChangeNotification. TGClient exposes the
+/// state only as the single-assign `onConnectionState` block plus the
+/// -connectionStateTitle poll, so this category keeps a file-static repeating
+/// timer (0.5 s) and a file-static "last seen state", and posts when the value
+/// moves. Nesting is counted: a second call only bumps the count. Safe to call
+/// from any number of screens; each one must balance it with -endBroadcasting.
+- (void)beginBroadcastingConnectionState;
+
+/// Balance one -beginBroadcastingConnectionState. The timer stops when the last
+/// observer leaves.
+- (void)endBroadcastingConnectionState;
 
 @end
 

@@ -88,6 +88,9 @@ static NSString *TGPayHumanType(NSString *shortType)
 	return out;
 }
 
+/// Categories cannot add ivars, so the last seen star balance lives here.
+static long long TGPayCachedStarBalance = 0;
+
 @implementation TGClient (Payments)
 
 #pragma mark - senders
@@ -113,6 +116,154 @@ static NSString *TGPayHumanType(NSString *shortType)
 		if (completion)
 			completion(!TGPayIsError(result));
 	}];
+}
+
+#pragma mark - star balance
+
+- (long long)cachedStarBalance
+{
+	return TGPayCachedStarBalance;
+}
+
+- (void)starBalanceWithCompletion:(void (^)(long long))completion
+{
+	[self request:@{
+		@"@type"    : @"getStarTransactions",
+		@"owner_id" : [self tg_ownSender],
+		@"offset"   : @"",
+		@"limit"    : @1,
+	} completion:^(NSDictionary *result){
+		long long stars = 0;
+		if (!TGPayIsError(result)){
+			stars = TGPayStars(result[@"star_amount"]);
+			TGPayCachedStarBalance = stars;
+		}
+		if (completion)
+			completion(stars);
+	}];
+}
+
+- (NSArray *)tg_starPaymentOptions:(id)options
+{
+	NSMutableArray *out = [NSMutableArray array];
+	for (id entry in TGPayArray(options)){
+		NSDictionary *option = TGPayDict(entry);
+		if (!option)
+			continue;
+		[out addObject:@{
+			@"stars"          : option[@"star_count"] ?: @0,
+			@"currency"       : TGPayString(option[@"currency"]),
+			@"amount"         : option[@"amount"] ?: @0,
+			@"storeProductId" : TGPayString(option[@"store_product_id"]),
+			@"isAdditional"   : @([option[@"is_additional"] boolValue]),
+		}];
+	}
+	return out;
+}
+
+- (void)tg_starPaymentOptionsRequest:(NSDictionary *)request
+                          completion:(void (^)(NSArray *))completion
+{
+	[self request:request completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		if (TGPayIsError(result)){
+			completion([NSArray array]);
+			return;
+		}
+		completion([self tg_starPaymentOptions:result[@"options"]]);
+	}];
+}
+
+- (void)starPaymentOptionsWithCompletion:(void (^)(NSArray *))completion
+{
+	[self tg_starPaymentOptionsRequest:@{@"@type" : @"getStarPaymentOptions"}
+							completion:completion];
+}
+
+- (void)starGiftPaymentOptionsForUser:(int64_t)userId
+                           completion:(void (^)(NSArray *))completion
+{
+	[self tg_starPaymentOptionsRequest:@{
+		@"@type"   : @"getStarGiftPaymentOptions",
+		@"user_id" : @(userId),
+	} completion:completion];
+}
+
+#pragma mark - star subscriptions
+
+- (NSDictionary *)tg_flattenStarSubscription:(NSDictionary *)subscription
+{
+	NSDictionary *pricing = TGPayDict(subscription[@"pricing"]);
+	NSDictionary *type = TGPayDict(subscription[@"type"]);
+	NSString *typeName = TGPayString(type[@"@type"]);
+	BOOL isBot = [typeName isEqualToString:@"starSubscriptionTypeBot"];
+
+	return @{
+		@"id"             : TGPayString(subscription[@"id"]),
+		@"chatId"         : subscription[@"chat_id"] ?: @0,
+		@"expirationDate" : subscription[@"expiration_date"] ?: @0,
+		@"isCanceled"     : @([subscription[@"is_canceled"] boolValue]),
+		@"isExpiring"     : @([subscription[@"is_expiring"] boolValue]),
+		@"canReuse"       : @([type[@"can_reuse"] boolValue]),
+		@"period"         : pricing[@"period"] ?: @0,
+		@"stars"          : pricing[@"star_count"] ?: @0,
+		@"kind"           : isBot ? @"bot" : @"channel",
+		@"title"          : TGPayString(type[@"title"]),
+		@"inviteLink"     : TGPayString(type[@"invite_link"]),
+	};
+}
+
+- (void)starSubscriptionsOnlyExpiring:(BOOL)onlyExpiring
+                               offset:(NSString *)offset
+                           completion:(void (^)(NSDictionary *))completion
+{
+	[self request:@{
+		@"@type"         : @"getStarSubscriptions",
+		@"only_expiring" : @(onlyExpiring),
+		@"offset"        : offset ?: @"",
+	} completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		if (TGPayIsError(result)){
+			completion(nil);
+			return;
+		}
+		NSMutableArray *subscriptions = [NSMutableArray array];
+		for (id entry in TGPayArray(result[@"subscriptions"])){
+			NSDictionary *subscription = TGPayDict(entry);
+			if (subscription)
+				[subscriptions addObject:[self tg_flattenStarSubscription:subscription]];
+		}
+		long long balance = TGPayStars(result[@"star_amount"]);
+		TGPayCachedStarBalance = balance;
+		completion(@{
+			@"balance"       : @(balance),
+			@"requiredStars" : result[@"required_star_count"] ?: @0,
+			@"nextOffset"    : TGPayString(result[@"next_offset"]),
+			@"subscriptions" : subscriptions,
+		});
+	}];
+}
+
+- (void)setStarSubscription:(NSString *)subscriptionId
+                   canceled:(BOOL)canceled
+                 completion:(void (^)(BOOL))completion
+{
+	[self tg_request:@{
+		@"@type"           : @"editStarSubscription",
+		@"subscription_id" : subscriptionId ?: @"",
+		@"is_canceled"     : @(canceled),
+	} ok:completion];
+}
+
+- (void)reuseStarSubscription:(NSString *)subscriptionId
+                   completion:(void (^)(BOOL))completion
+{
+	[self tg_request:@{
+		@"@type"           : @"reuseStarSubscription",
+		@"subscription_id" : subscriptionId ?: @"",
+	} ok:completion];
 }
 
 #pragma mark - star transactions
@@ -185,6 +336,7 @@ static NSString *TGPayHumanType(NSString *shortType)
 			completion([NSArray array], @"");
 			return;
 		}
+		TGPayCachedStarBalance = TGPayStars(result[@"star_amount"]);
 		NSMutableArray *out = [NSMutableArray array];
 		for (id entry in TGPayArray(result[@"transactions"])){
 			NSDictionary *transaction = TGPayDict(entry);

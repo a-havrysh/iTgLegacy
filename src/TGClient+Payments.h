@@ -14,10 +14,62 @@
 
 @interface TGClient (Payments)
 
-// The star balance and the star subscription list live in TGClient+Premium.h
-// (-starBalanceWithCompletion:, -starSubscriptionsOnlyExpiring:offset:completion:,
-// -setStarSubscription:canceled:completion:, -reuseStarSubscription:completion:).
-// Re-call -starBalanceWithCompletion: after anything here spends stars.
+#pragma mark - star balance
+
+/// This account's star balance. TDLib has no dedicated balance call: the
+/// balance rides along on the first page of the transaction history, so this
+/// asks for a single transaction and reports the balance it comes with.
+/// `stars` is 0 on failure. The answer is also kept in a file-static cache
+/// (categories cannot add ivars) readable synchronously with
+/// -cachedStarBalance, so a screen can paint a number before the round trip
+/// finishes. Re-call this after anything that spends or earns stars.
+- (void)starBalanceWithCompletion:(void (^)(long long stars))completion;
+
+/// The last balance -starBalanceWithCompletion: saw, or 0 if it has never
+/// answered in this process. Synchronous, never hits the network.
+- (long long)cachedStarBalance;
+
+/// The star packs this account may buy, cheapest first. Each option:
+/// "stars" (NSNumber), "currency" (NSString, ISO code), "amount" (NSNumber,
+/// the price in the currency's smallest unit), "storeProductId" (NSString,
+/// may be empty) and "isAdditional" (NSNumber BOOL - a pack the UI hides
+/// behind a "show more" row). Buying itself needs the App Store, which this
+/// client has no route to, so the list is informational.
+- (void)starPaymentOptionsWithCompletion:(void (^)(NSArray *options))completion;
+
+/// The same list, but for buying stars as a gift for `userId`. Same shape.
+- (void)starGiftPaymentOptionsForUser:(int64_t)userId
+                           completion:(void (^)(NSArray *options))completion;
+
+#pragma mark - star subscriptions
+
+/// The recurring star subscriptions of this account. Pass YES for
+/// `onlyExpiring` to get just the ones about to renew without enough balance.
+/// `offset` is @"" for the first page, otherwise the previous page's
+/// "nextOffset".
+///
+/// `page` is nil on failure, otherwise: "balance" (NSNumber, the star
+/// balance the server reported alongside), "requiredStars" (NSNumber, stars
+/// still needed to keep every expiring subscription alive), "nextOffset"
+/// (NSString, empty at the end) and "subscriptions", an array of:
+///   "id" NSString, "chatId" NSNumber, "expirationDate" NSNumber unix date,
+///   "isCanceled" / "isExpiring" / "canReuse" NSNumber BOOL,
+///   "period" NSNumber seconds, "stars" NSNumber per period,
+///   "kind" NSString (@"channel" or @"bot"), "title" NSString (empty for a
+///   channel - use the chat title), "inviteLink" NSString (may be empty).
+- (void)starSubscriptionsOnlyExpiring:(BOOL)onlyExpiring
+                               offset:(NSString *)offset
+                           completion:(void (^)(NSDictionary *page))completion;
+
+/// Cancel (or un-cancel) a star subscription by its "id".
+- (void)setStarSubscription:(NSString *)subscriptionId
+                   canceled:(BOOL)canceled
+                 completion:(void (^)(BOOL ok))completion;
+
+/// Rejoin the channel of a subscription that is still paid for but was left.
+/// Only valid when the subscription reported "canReuse".
+- (void)reuseStarSubscription:(NSString *)subscriptionId
+                   completion:(void (^)(BOOL ok))completion;
 
 #pragma mark - star transactions
 

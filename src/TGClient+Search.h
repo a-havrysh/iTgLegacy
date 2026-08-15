@@ -116,6 +116,47 @@
 // -savedMessagesTagsForTopic:completion: and
 // -setSavedMessagesTagLabel:forEmoji:completion:.
 
+#pragma mark - public chats
+
+/// A chat summary row, as handed back by the two calls below:
+///
+///   "id"           NSNumber, chat id
+///   "title"        NSString
+///   "username"     NSString, the public @name without its '@', or ""
+///   "photoFileId"  NSNumber file id of the small chat photo, or NSNull
+///   "memberCount"  NSNumber, 0 when unknown
+///   "isChannel"    NSNumber BOOL
+///   "isGroup"      NSNumber BOOL, YES for a basic group or a supergroup
+///   "isPrivate"    NSNumber BOOL
+///   "isVerified"   NSNumber BOOL
+///
+/// Global public-chat search by username or title, for the "Global search"
+/// section of the search screen. `type` narrows the result to one kind and is
+/// "channel" or "bot" - the only two narrowings TDLib's SearchChatTypeFilter
+/// offers; pass nil (or anything else) for everything.
+/// `completion` gets an NSArray of chat summary rows, empty on failure.
+- (void)searchPublicChatsWithQuery:(NSString *)query
+                              type:(NSString *)type
+                        completion:(void (^)(NSArray *chats))completion;
+
+/// Short form of the above with no type narrowing.
+- (void)searchPublicChatsWithQuery:(NSString *)query
+                        completion:(void (^)(NSArray *chats))completion;
+
+/// Resolve one public @username to a chat and put it in the local database, so
+/// the chat can be opened straight away. `username` may be given with or
+/// without its leading '@'. `completion` gets a chat summary row, or nil when
+/// no such public chat exists.
+- (void)publicChatWithUsername:(NSString *)username
+                    completion:(void (^)(NSDictionary *chat))completion;
+
+/// Chat summary for a chat id that may not be in the cached chat lists, so a
+/// search hit in a chat the user has never opened can still show a real title
+/// and photo instead of the "" that the `chatTitle` key falls back to.
+/// `completion` gets nil when the chat is unknown to the server.
+- (void)chatSummaryForChatId:(int64_t)chatId
+                  completion:(void (^)(NSDictionary *chat))completion;
+
 #pragma mark - recents
 
 /// Chats the user picked out of search results before, newest first. Pass

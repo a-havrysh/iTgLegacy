@@ -10,11 +10,14 @@
 static const CGFloat TGStickerPanelTabHeight = 30.0f;
 static const CGFloat TGStickerPanelHeaderHeight = 25.0f;
 static const CGFloat TGStickerPanelTileSide = 64.0f;
-static const NSInteger TGStickerPanelImageCacheLimit = 180;
+static const CGFloat TGStickerPanelSearchHeight = 44.0f;
+static const NSInteger TGStickerPanelImageCacheLimit = 96;
+static const CGFloat TGStickerPanelPurgeDistance = 900.0f;
 
 static const NSInteger TGStickerSectionRecent = 0;
 static const NSInteger TGStickerSectionFavourite = 1;
 static const NSInteger TGStickerSectionSet = 2;
+static const NSInteger TGStickerSectionEmojiSet = 3;
 
 @interface TGStickerTile : UIControl <TGReusableView>
 

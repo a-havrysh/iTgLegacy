@@ -126,6 +126,10 @@ static NSDictionary *TGStickerTypeCustomEmoji(void){
 	return @{@"@type" : @"stickerTypeCustomEmoji"};
 }
 
+static NSDictionary *TGStickerTypeMask(void){
+	return @{@"@type" : @"stickerTypeMask"};
+}
+
 static NSDictionary *TGInputFileWithId(NSInteger fileId){
 	return @{@"@type" : @"inputFileId", @"id" : @(fileId)};
 }
@@ -625,6 +629,244 @@ static NSDictionary *TGInputFileWithId(NSInteger fileId){
 				[paths addObject:commands];
 		}
 		completion(paths);
+	}];
+}
+
+- (void)recentStickersAttached:(BOOL)attached
+                    completion:(void (^)(NSArray *))completion {
+	[self request:@{@"@type" : @"getRecentStickers", @"is_attached" : @(attached)}
+	   completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		completion(TGIsError(result) ? nil : TGFlattenStickers(result[@"stickers"]));
+	}];
+}
+
+- (void)installedMaskStickerSetsWithCompletion:(void (^)(NSArray *))completion {
+	[self request:@{@"@type"        : @"getInstalledStickerSets",
+					@"sticker_type" : TGStickerTypeMask()}
+	   completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		completion(TGIsError(result) ? nil : TGFlattenStickerSets(result[@"sets"]));
+	}];
+}
+
+- (void)archivedStickerSetsOfType:(NSDictionary *)type
+                        fromSetId:(int64_t)offsetSetId
+                            limit:(NSInteger)limit
+                       completion:(void (^)(NSArray *, NSInteger))completion {
+	if (limit <= 0)
+		limit = 100;
+
+	[self request:@{
+		@"@type"                 : @"getArchivedStickerSets",
+		@"sticker_type"          : type,
+		@"offset_sticker_set_id" : [NSString stringWithFormat:@"%lld", offsetSetId],
+		@"limit"                 : @(limit),
+	} completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		if (TGIsError(result)){
+			completion(nil, 0);
+			return;
+		}
+		completion(TGFlattenStickerSets(result[@"sets"]),
+				   (NSInteger)[result[@"total_count"] integerValue]);
+	}];
+}
+
+- (void)archivedEmojiStickerSetsFromSetId:(int64_t)offsetSetId
+                                    limit:(NSInteger)limit
+                               completion:(void (^)(NSArray *, NSInteger))completion {
+	[self archivedStickerSetsOfType:TGStickerTypeCustomEmoji()
+						  fromSetId:offsetSetId
+							  limit:limit
+						 completion:completion];
+}
+
+- (void)archivedMaskStickerSetsFromSetId:(int64_t)offsetSetId
+                                   limit:(NSInteger)limit
+                              completion:(void (^)(NSArray *, NSInteger))completion {
+	[self archivedStickerSetsOfType:TGStickerTypeMask()
+						  fromSetId:offsetSetId
+							  limit:limit
+						 completion:completion];
+}
+
+- (void)trendingEmojiStickerSetsWithOffset:(NSInteger)offset
+                                     limit:(NSInteger)limit
+                                completion:(void (^)(NSArray *, NSInteger))completion {
+	if (limit <= 0)
+		limit = 20;
+
+	[self request:@{
+		@"@type"        : @"getTrendingStickerSets",
+		@"sticker_type" : TGStickerTypeCustomEmoji(),
+		@"offset"       : @(offset),
+		@"limit"        : @(limit),
+	} completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		if (TGIsError(result)){
+			completion(nil, 0);
+			return;
+		}
+		completion(TGFlattenStickerSets(result[@"sets"]),
+				   (NSInteger)[result[@"total_count"] integerValue]);
+	}];
+}
+
+- (void)searchInstalledMaskStickerSets:(NSString *)query
+                                 limit:(NSInteger)limit
+                            completion:(void (^)(NSArray *))completion {
+	if (limit <= 0)
+		limit = 50;
+
+	[self request:@{
+		@"@type"        : @"searchInstalledStickerSets",
+		@"sticker_type" : TGStickerTypeMask(),
+		@"query"        : query ?: @"",
+		@"limit"        : @(limit),
+	} completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		completion(TGIsError(result) ? nil : TGFlattenStickerSets(result[@"sets"]));
+	}];
+}
+
+- (void)searchEmojiStickerSets:(NSString *)query
+                    completion:(void (^)(NSArray *))completion {
+	[self request:@{
+		@"@type"        : @"searchStickerSets",
+		@"sticker_type" : TGStickerTypeCustomEmoji(),
+		@"query"        : query ?: @"",
+	} completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		completion(TGIsError(result) ? nil : TGFlattenStickerSets(result[@"sets"]));
+	}];
+}
+
+- (void)reorderStickerSetsOfType:(NSDictionary *)type
+                             ids:(NSArray *)setIds
+                      completion:(void (^)(BOOL))completion {
+	NSMutableArray *ids = [NSMutableArray array];
+	for (id item in TGArray(setIds))
+		[ids addObject:[NSString stringWithFormat:@"%lld", TGInt64(item)]];
+	if (!ids.count){
+		if (completion)
+			completion(NO);
+		return;
+	}
+
+	[self request:@{
+		@"@type"           : @"reorderInstalledStickerSets",
+		@"sticker_type"    : type,
+		@"sticker_set_ids" : ids,
+	} completion:^(NSDictionary *result){
+		if (completion)
+			completion(!TGIsError(result));
+	}];
+}
+
+- (void)reorderInstalledStickerSets:(NSArray *)setIds
+                         completion:(void (^)(BOOL))completion {
+	[self reorderStickerSetsOfType:TGStickerTypeRegular() ids:setIds completion:completion];
+}
+
+- (void)reorderInstalledEmojiStickerSets:(NSArray *)setIds
+                              completion:(void (^)(BOOL))completion {
+	[self reorderStickerSetsOfType:TGStickerTypeCustomEmoji() ids:setIds completion:completion];
+}
+
+- (void)reorderInstalledMaskStickerSets:(NSArray *)setIds
+                             completion:(void (^)(BOOL))completion {
+	[self reorderStickerSetsOfType:TGStickerTypeMask() ids:setIds completion:completion];
+}
+
+- (void)isStickerFavoriteWithFileId:(NSInteger)fileId
+                         completion:(void (^)(BOOL))completion {
+	[self request:@{@"@type" : @"getFavoriteStickers"}
+	   completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		if (TGIsError(result)){
+			completion(NO);
+			return;
+		}
+		BOOL found = NO;
+		for (NSDictionary *sticker in TGFlattenStickers(result[@"stickers"])){
+			if ([sticker[@"fileId"] integerValue] == fileId){
+				found = YES;
+				break;
+			}
+		}
+		completion(found);
+	}];
+}
+
+- (void)stickerSetNameForId:(int64_t)setId completion:(void (^)(NSString *))completion {
+	[self request:@{
+		@"@type"  : @"getStickerSetName",
+		@"set_id" : [NSString stringWithFormat:@"%lld", setId],
+	} completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		if (TGIsError(result)){
+			completion(nil);
+			return;
+		}
+		NSString *name = TGString(result[@"text"]);
+		completion(name.length ? name : nil);
+	}];
+}
+
+- (void)premiumStickersWithLimit:(NSInteger)limit
+                      completion:(void (^)(NSArray *))completion {
+	if (limit <= 0)
+		limit = 50;
+	if (limit > 100)
+		limit = 100;
+
+	[self request:@{@"@type" : @"getPremiumStickers", @"limit" : @(limit)}
+	   completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		completion(TGIsError(result) ? nil : TGFlattenStickers(result[@"stickers"]));
+	}];
+}
+
+- (void)stickersFromSetId:(int64_t)setId
+                   offset:(NSInteger)offset
+                    limit:(NSInteger)limit
+               completion:(void (^)(NSArray *, NSInteger))completion {
+	if (limit <= 0)
+		limit = 40;
+	if (offset < 0)
+		offset = 0;
+
+	[self request:@{
+		@"@type"  : @"getStickerSet",
+		@"set_id" : [NSString stringWithFormat:@"%lld", setId],
+	} completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		if (TGIsError(result)){
+			completion(nil, 0);
+			return;
+		}
+		NSDictionary *set = TGFlattenStickerSet(result);
+		NSArray *stickers = TGArray(set[@"stickers"]) ?: [NSArray array];
+		NSInteger total = (NSInteger)stickers.count;
+		if (offset >= total){
+			completion([NSArray array], total);
+			return;
+		}
+		NSInteger length = total - offset;
+		if (length > limit)
+			length = limit;
+		completion([stickers subarrayWithRange:NSMakeRange(offset, length)], total);
 	}];
 }
 

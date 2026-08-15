@@ -60,6 +60,39 @@
 - (void)managementInfoForChat:(int64_t)chatId
                    completion:(void (^)(NSDictionary *info))completion;
 
+#pragma mark - administrators and own rights
+
+/// The administrators of a group or channel, owner first. Each entry:
+///   "userId" (NSNumber), "name" (NSString, the display name),
+///   "customTitle" (NSString, "" when there is none),
+///   "isOwner", "canBeEdited" (NSNumber BOOL).
+/// Answers an empty array for a private chat or when the user may not see
+/// the list. Useful as the "by admin" narrowing of -eventLogForChat:,
+/// whose `userIds` takes the "userId" values straight from here.
+- (void)administratorsForChat:(int64_t)chatId
+                   completion:(void (^)(NSArray *administrators))completion;
+
+/// The signed-in user's own rights in a chat. Keys, all always present:
+///   "isOwner", "isAdministrator", "isMember" (NSNumber BOOL),
+///   "customTitle" (NSString),
+///   plus one NSNumber BOOL per TDLib chatAdministratorRights field, in
+///   the camel-cased spelling: "canManageChat", "canChangeInfo",
+///   "canPostMessages", "canEditMessages", "canDeleteMessages",
+///   "canInviteUsers", "canRestrictMembers", "canPinMessages",
+///   "canManageTopics", "canPromoteMembers", "canManageVideoChats",
+///   "canPostStories", "canEditStories", "canDeleteStories",
+///   "isAnonymous".
+/// An owner answers YES for every right. Never nil: a chat the call fails
+/// on answers all NO.
+- (void)myRightsInChat:(int64_t)chatId
+            completion:(void (^)(NSDictionary *rights))completion;
+
+/// Whether the signed-in user may create, edit and revoke invite links
+/// here - owner, or an administrator with can_invite_users. A links screen
+/// should hide its actions rather than let TDLib refuse them.
+- (void)canManageInviteLinksInChat:(int64_t)chatId
+                        completion:(void (^)(BOOL canManage))completion;
+
 #pragma mark - permissions
 
 /// Keys used by both permission methods. Each value is an NSNumber BOOL:
@@ -128,6 +161,13 @@
 - (void)reportNotSpamMessages:(NSArray *)messageIds inChat:(int64_t)chatId
                    completion:(void (^)(BOOL ok))completion;
 
+/// Report one aggressive-anti-spam deletion as a false positive. Only
+/// meaningful for an event log row whose "canReportNotSpam" is YES; pass
+/// that row's "messageId". Answers NO for a chat that is not a supergroup.
+- (void)reportAntiSpamFalsePositiveForMessage:(int64_t)messageId
+                                       inChat:(int64_t)chatId
+                                   completion:(void (^)(BOOL ok))completion;
+
 /// Turn a channel's discussion group into a broadcast group. Irreversible;
 /// the caller must confirm with the user first.
 - (void)convertChatToBroadcastGroup:(int64_t)chatId
@@ -183,6 +223,12 @@
       requiresApproval:(BOOL)requiresApproval
             completion:(void (^)(NSDictionary *link))completion;
 
+/// One link on its own, in the flattened shape above, or nil when it is
+/// gone. Use it to prefill an edit form with the link's current name,
+/// expiry, member limit and approval flag.
+- (void)inviteLink:(NSString *)link inChat:(int64_t)chatId
+        completion:(void (^)(NSDictionary *info))completion;
+
 /// Revoke a link. It stops working and moves to the revoked section.
 - (void)revokeInviteLink:(NSString *)link inChat:(int64_t)chatId
               completion:(void (^)(BOOL ok))completion;
@@ -200,6 +246,12 @@
                             inChat:(int64_t)chatId
                              limit:(NSInteger)limit
                         completion:(void (^)(NSArray *members, NSInteger total))completion;
+
+/// The same, for whichever link is the chat's primary one. Answers an
+/// empty array when the chat has no primary link.
+- (void)membersJoinedViaPrimaryInviteLinkInChat:(int64_t)chatId
+                                          limit:(NSInteger)limit
+                                     completion:(void (^)(NSArray *members, NSInteger total))completion;
 
 #pragma mark - joining by link
 

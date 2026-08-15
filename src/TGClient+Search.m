@@ -357,6 +357,187 @@ static NSNumber *TGSearchPhotoIdForContent(NSDictionary *content) {
 			[NSNumber numberWithBool:cashtags], @"clear_cashtags", nil]];
 }
 
+#pragma mark - public chats
+
+- (NSMutableDictionary *)tgs_summaryForChat:(NSDictionary *)chat {
+	if (![chat isKindOfClass:NSDictionary.class] ||
+		![chat[@"@type"] isEqualToString:@"chat"])
+		return nil;
+
+	NSDictionary *type = chat[@"type"];
+	NSString *typeName = [type isKindOfClass:NSDictionary.class] &&
+			[type[@"@type"] isKindOfClass:NSString.class] ? type[@"@type"] : @"";
+	BOOL isSupergroup = [typeName isEqualToString:@"chatTypeSupergroup"];
+	BOOL isChannel = isSupergroup && [type[@"is_channel"] boolValue];
+	BOOL isGroup = [typeName isEqualToString:@"chatTypeBasicGroup"] ||
+			(isSupergroup && !isChannel);
+	BOOL isPrivate = [typeName isEqualToString:@"chatTypePrivate"];
+
+	NSNumber *photoId = nil;
+	NSDictionary *photo = chat[@"photo"];
+	if ([photo isKindOfClass:NSDictionary.class]){
+		NSDictionary *small = photo[@"small"];
+		if ([small isKindOfClass:NSDictionary.class] &&
+			[small[@"id"] isKindOfClass:NSNumber.class])
+			photoId = small[@"id"];
+	}
+
+	NSString *title = [chat[@"title"] isKindOfClass:NSString.class] ? chat[@"title"] : @"";
+
+	NSMutableDictionary *row = [NSMutableDictionary dictionary];
+	[row setObject:(chat[@"id"] ?: [NSNumber numberWithInt:0]) forKey:@"id"];
+	[row setObject:title forKey:@"title"];
+	[row setObject:@"" forKey:@"username"];
+	[row setObject:(photoId ?: (id)[NSNull null]) forKey:@"photoFileId"];
+	[row setObject:[NSNumber numberWithInt:0] forKey:@"memberCount"];
+	[row setObject:[NSNumber numberWithBool:isChannel] forKey:@"isChannel"];
+	[row setObject:[NSNumber numberWithBool:isGroup] forKey:@"isGroup"];
+	[row setObject:[NSNumber numberWithBool:isPrivate] forKey:@"isPrivate"];
+	[row setObject:[NSNumber numberWithBool:NO] forKey:@"isVerified"];
+	if (isSupergroup && [type[@"supergroup_id"] isKindOfClass:NSNumber.class])
+		[row setObject:type[@"supergroup_id"] forKey:@"tgsSupergroupId"];
+	return row;
+}
+
+- (void)tgs_fillSupergroupDetails:(NSMutableDictionary *)row
+                       completion:(void (^)(NSDictionary *chat))completion {
+	NSNumber *supergroupId = [row objectForKey:@"tgsSupergroupId"];
+	if (![supergroupId isKindOfClass:NSNumber.class]){
+		if (completion)
+			completion(row);
+		return;
+	}
+	[row removeObjectForKey:@"tgsSupergroupId"];
+
+	[self request:[NSDictionary dictionaryWithObjectsAndKeys:
+			@"getSupergroup", @"@type", supergroupId, @"supergroup_id", nil]
+	   completion:^(NSDictionary *group){
+		if ([group isKindOfClass:NSDictionary.class] &&
+			[group[@"@type"] isEqualToString:@"supergroup"]){
+			NSDictionary *usernames = group[@"usernames"];
+			if ([usernames isKindOfClass:NSDictionary.class]){
+				NSString *editable = usernames[@"editable_username"];
+				NSArray *active = usernames[@"active_usernames"];
+				NSString *name = nil;
+				if ([active isKindOfClass:NSArray.class] && active.count &&
+					[[active objectAtIndex:0] isKindOfClass:NSString.class])
+					name = [active objectAtIndex:0];
+				else if ([editable isKindOfClass:NSString.class] && editable.length)
+					name = editable;
+				if (name)
+					[row setObject:name forKey:@"username"];
+			}
+			if ([group[@"member_count"] isKindOfClass:NSNumber.class])
+				[row setObject:group[@"member_count"] forKey:@"memberCount"];
+			NSDictionary *verification = group[@"verification_status"];
+			if ([verification isKindOfClass:NSDictionary.class])
+				[row setObject:[NSNumber numberWithBool:
+						[verification[@"is_verified"] boolValue]] forKey:@"isVerified"];
+		}
+		if (completion)
+			completion(row);
+	}];
+}
+
+- (void)chatSummaryForChatId:(int64_t)chatId
+                  completion:(void (^)(NSDictionary *))completion {
+	[self request:[NSDictionary dictionaryWithObjectsAndKeys:
+			@"getChat", @"@type",
+			[NSNumber numberWithLongLong:chatId], @"chat_id", nil]
+	   completion:^(NSDictionary *result){
+		NSMutableDictionary *row = [self tgs_summaryForChat:result];
+		if (!row){
+			if (completion)
+				completion(nil);
+			return;
+		}
+		[self tgs_fillSupergroupDetails:row completion:completion];
+	}];
+}
+
+- (void)publicChatWithUsername:(NSString *)username
+                    completion:(void (^)(NSDictionary *))completion {
+	NSString *name = [self tgs_string:username];
+	while ([name hasPrefix:@"@"])
+		name = [name substringFromIndex:1];
+	if (!name.length){
+		if (completion)
+			completion(nil);
+		return;
+	}
+
+	[self request:[NSDictionary dictionaryWithObjectsAndKeys:
+			@"searchPublicChat", @"@type", name, @"username", nil]
+	   completion:^(NSDictionary *result){
+		NSMutableDictionary *row = [self tgs_summaryForChat:result];
+		if (!row){
+			if (completion)
+				completion(nil);
+			return;
+		}
+		[self tgs_fillSupergroupDetails:row completion:completion];
+	}];
+}
+
+- (void)searchPublicChatsWithQuery:(NSString *)query
+                              type:(NSString *)type
+                        completion:(void (^)(NSArray *))completion {
+	NSMutableDictionary *request = [NSMutableDictionary dictionary];
+	[request setObject:@"searchPublicChats" forKey:@"@type"];
+	[request setObject:[self tgs_string:query] forKey:@"query"];
+
+	if ([type isKindOfClass:NSString.class] && type.length){
+		NSString *filter = nil;
+		if ([type isEqualToString:@"channel"])  filter = @"searchChatTypeFilterChannel";
+		else if ([type isEqualToString:@"bot"]) filter = @"searchChatTypeFilterBot";
+		if (filter)
+			[request setObject:[NSDictionary dictionaryWithObject:filter forKey:@"@type"]
+						forKey:@"type_filter"];
+	}
+
+	[self request:request completion:^(NSDictionary *result){
+		NSArray *ids = [result isKindOfClass:NSDictionary.class] ? result[@"chat_ids"] : nil;
+		NSMutableArray *clean = [NSMutableArray array];
+		if ([ids isKindOfClass:NSArray.class])
+			for (id chatId in ids)
+				if ([chatId isKindOfClass:NSNumber.class])
+					[clean addObject:chatId];
+
+		if (!clean.count){
+			if (completion)
+				completion([NSArray array]);
+			return;
+		}
+
+		NSMutableArray *rows = [NSMutableArray array];
+		for (NSUInteger i = 0; i < clean.count; i++)
+			[rows addObject:[NSNull null]];
+
+		__block NSInteger pending = (NSInteger)clean.count;
+		for (NSUInteger i = 0; i < clean.count; i++){
+			NSUInteger slot = i;
+			[self chatSummaryForChatId:[[clean objectAtIndex:i] longLongValue]
+							completion:^(NSDictionary *chat){
+				if (chat)
+					[rows replaceObjectAtIndex:slot withObject:chat];
+				pending--;
+				if (pending > 0 || !completion)
+					return;
+				NSMutableArray *out = [NSMutableArray array];
+				for (id row in rows)
+					if ([row isKindOfClass:NSDictionary.class])
+						[out addObject:row];
+				completion(out);
+			}];
+		}
+	}];
+}
+
+- (void)searchPublicChatsWithQuery:(NSString *)query
+                        completion:(void (^)(NSArray *))completion {
+	[self searchPublicChatsWithQuery:query type:nil completion:completion];
+}
+
 #pragma mark - recents
 
 - (void)recentlyFoundChatsWithQuery:(NSString *)query

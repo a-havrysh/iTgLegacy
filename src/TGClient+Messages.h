@@ -100,11 +100,48 @@
 /// "canDeleteForMe", "canDeleteForEveryone", "canForward", "canCopy",
 /// "canPin", "canReply", "canReplyInAnotherChat", "canGetLink",
 /// "canGetEmbeddingCode", "canGetViewers", "canGetReadDate", "canGetThread",
-/// "canEditSchedulingState", "canReport", "canSave". `completion` gets an
-/// empty dictionary when the message is gone.
+/// "canEditSchedulingState", "canReport", "canSave", "canDeleteReactions",
+/// "canReportReactions", "canReportSpam", "canRecognizeSpeech",
+/// "canGetStatistics", plus two the action sheet needs that TDLib does not
+/// carry on messageProperties: "canSelect" (the message can take part in a
+/// multi-selection, i.e. it can be copied, forwarded or deleted) and
+/// "canTranslate" (the message has text or a caption to translate).
+/// Working out "canTranslate" costs a second, local getMessage read.
+/// `completion` gets an empty dictionary when the message is gone.
 - (void)propertiesOfMessage:(int64_t)messageId
                      inChat:(int64_t)chatId
                  completion:(void (^)(NSDictionary *properties))completion;
+
+#pragma mark - pinning a message
+
+/// Pin a message at the top of a chat. `silently` YES skips the "pinned a
+/// message" notification for everyone else; `onlyForMe` YES pins it for this
+/// account alone, which is only allowed in private chats. Check "canPin" from
+/// -propertiesOfMessage:inChat:completion: before offering the row.
+- (void)pinMessage:(int64_t)messageId
+            inChat:(int64_t)chatId
+          silently:(BOOL)silently
+         onlyForMe:(BOOL)onlyForMe
+        completion:(void (^)(BOOL ok))completion;
+
+/// Unpin one message.
+- (void)unpinMessage:(int64_t)messageId
+              inChat:(int64_t)chatId
+          completion:(void (^)(BOOL ok))completion;
+
+/// Unpin every pinned message in a chat - the "Unpin all" confirmation.
+- (void)unpinAllMessagesInChat:(int64_t)chatId
+                    completion:(void (^)(BOOL ok))completion;
+
+/// The id of the chat's currently pinned message, 0 when there is none.
+- (void)pinnedMessageIdInChat:(int64_t)chatId
+                   completion:(void (^)(int64_t messageId))completion;
+
+/// Whether this message is the chat's pinned one, so the action sheet can draw
+/// Pin or Unpin without the caller tracking the state itself.
+- (void)isMessagePinned:(int64_t)messageId
+                 inChat:(int64_t)chatId
+             completion:(void (^)(BOOL pinned))completion;
 
 #pragma mark - deleting
 

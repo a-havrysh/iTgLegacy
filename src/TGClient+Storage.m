@@ -70,6 +70,52 @@ static long long TGStorageFreedBytes(NSDictionary *stats) {
 	return freed;
 }
 
+static NSString *const TGStorageAutoDownloadDefaultsKey = @"TGStorageAutoDownloadMirror";
+static NSString *const TGStorageCachePolicyDefaultsKey = @"TGStorageCachePolicy";
+
+static NSString *TGStorageNetworkKey(NSString *type) {
+	return TGStorageNetworkShortName(TGStorageNetworkTypeName(type));
+}
+
+static NSDictionary *TGStorageNormalizedAutoDownload(NSDictionary *values) {
+	NSDictionary *source = TGStorageDictionary(values) ?: [NSDictionary dictionary];
+	return @{
+		@"enabled"             : source[@"enabled"] ?: @NO,
+		@"maxPhoto"            : source[@"maxPhoto"] ?: @(1024 * 1024),
+		@"maxVideo"            : source[@"maxVideo"] ?: @0,
+		@"maxOther"            : source[@"maxOther"] ?: @0,
+		@"videoUploadBitrate"  : source[@"videoUploadBitrate"] ?: @0,
+		@"preloadLargeVideos"  : source[@"preloadLargeVideos"] ?: @NO,
+		@"preloadNextAudio"    : source[@"preloadNextAudio"] ?: @NO,
+		@"useLessDataForCalls" : source[@"useLessDataForCalls"] ?: @YES,
+	};
+}
+
+static void TGStorageRememberAutoDownload(NSDictionary *values, NSString *type) {
+	NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+	id stored = [defaults objectForKey:TGStorageAutoDownloadDefaultsKey];
+	NSMutableDictionary *mirror = [TGStorageDictionary(stored) mutableCopy];
+	if (!mirror)
+		mirror = [NSMutableDictionary dictionary];
+	mirror[TGStorageNetworkKey(type)] = TGStorageNormalizedAutoDownload(values);
+	[defaults setObject:mirror forKey:TGStorageAutoDownloadDefaultsKey];
+	[defaults synchronize];
+}
+
+static NSDictionary *TGStorageAutoDownloadFromPreset(NSDictionary *preset) {
+	NSDictionary *source = TGStorageDictionary(preset) ?: [NSDictionary dictionary];
+	return @{
+		@"enabled"             : source[@"is_auto_download_enabled"] ?: @NO,
+		@"maxPhoto"            : source[@"max_photo_file_size"] ?: @0,
+		@"maxVideo"            : source[@"max_video_file_size"] ?: @0,
+		@"maxOther"            : source[@"max_other_file_size"] ?: @0,
+		@"videoUploadBitrate"  : source[@"video_upload_bitrate"] ?: @0,
+		@"preloadLargeVideos"  : source[@"preload_large_videos"] ?: @NO,
+		@"preloadNextAudio"    : source[@"preload_next_audio"] ?: @NO,
+		@"useLessDataForCalls" : source[@"use_less_data_for_calls"] ?: @YES,
+	};
+}
+
 @interface TGClient (StorageInternal)
 - (void)optimizeStorageToSize:(long long)maxBytes
 				   ttlSeconds:(NSInteger)ttlSeconds
@@ -524,6 +570,7 @@ static long long TGStorageFreedBytes(NSDictionary *stats) {
 
 - (void)setAutoDownloadSettings:(NSDictionary *)settings forNetworkType:(NSString *)type {
 	NSDictionary *values = TGStorageDictionary(settings) ?: [NSDictionary dictionary];
+	TGStorageRememberAutoDownload(values, type);
 	[self send:@{
 		@"@type"    : @"setAutoDownloadSettings",
 		@"settings" : @{
@@ -610,6 +657,163 @@ static long long TGStorageFreedBytes(NSDictionary *stats) {
 			return;
 		NSString *text = TGStorageFailed(result) ? nil : result[@"text"];
 		completion([text isKindOfClass:[NSString class]] ? text : nil);
+	}];
+}
+
+#pragma mark - auto-download mirror and presets
+
+- (NSDictionary *)autoDownloadSettingsForNetworkType:(NSString *)type {
+	id stored = [[NSUserDefaults standardUserDefaults]
+			objectForKey:TGStorageAutoDownloadDefaultsKey];
+	NSDictionary *mirror = TGStorageDictionary(stored);
+	return TGStorageDictionary(mirror[TGStorageNetworkKey(type)]);
+}
+
+- (void)forgetAutoDownloadSettingsMirror {
+	NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+	[defaults removeObjectForKey:TGStorageAutoDownloadDefaultsKey];
+	[defaults synchronize];
+}
+
+- (void)autoDownloadPresetNamed:(NSString *)name
+					 completion:(void (^)(NSDictionary *))completion {
+	NSString *wanted = [(name ?: @"medium") lowercaseString];
+	if (![wanted isEqualToString:@"low"] && ![wanted isEqualToString:@"high"])
+		wanted = @"medium";
+	[self request:@{@"@type" : @"getAutoDownloadSettingsPresets"}
+	   completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		if (TGStorageFailed(result)) {
+			completion(nil);
+			return;
+		}
+		NSDictionary *preset = TGStorageDictionary(result[wanted]);
+		completion(preset ? TGStorageAutoDownloadFromPreset(preset) : nil);
+	}];
+}
+
+- (void)applyAutoDownloadPresetNamed:(NSString *)name
+					  toNetworkTypes:(NSArray *)types
+						  completion:(void (^)(BOOL))completion {
+	NSArray *targets = [types isKindOfClass:[NSArray class]] && types.count ? types :
+			[NSArray arrayWithObjects:@"wifi", @"mobile", @"roaming", @"other", nil];
+	[self autoDownloadPresetNamed:name completion:^(NSDictionary *settings){
+		if (settings) {
+			for (id target in targets) {
+				if ([target isKindOfClass:[NSString class]])
+					[self setAutoDownloadSettings:settings forNetworkType:target];
+			}
+		}
+		if (completion)
+			completion(settings != nil);
+	}];
+}
+
+#pragma mark - cache policy
+
+- (NSDictionary *)cachePolicy {
+	id stored = [[NSUserDefaults standardUserDefaults]
+			objectForKey:TGStorageCachePolicyDefaultsKey];
+	NSDictionary *policy = TGStorageDictionary(stored);
+	NSArray *excluded = [policy[@"excludedChatIds"] isKindOfClass:[NSArray class]] ?
+			policy[@"excludedChatIds"] : [NSArray array];
+	return @{
+		@"maxBytes"        : policy[@"maxBytes"] ?: @(-1),
+		@"ttlSeconds"      : policy[@"ttlSeconds"] ?: @(-1),
+		@"excludedChatIds" : excluded,
+	};
+}
+
+- (void)setCachePolicyMaxBytes:(long long)maxBytes
+					ttlSeconds:(NSInteger)ttlSeconds
+			   excludedChatIds:(NSArray *)excludedChatIds {
+	NSMutableArray *chats = [NSMutableArray array];
+	for (id chatId in TGStorageArray(excludedChatIds)) {
+		if ([chatId isKindOfClass:[NSNumber class]])
+			[chats addObject:chatId];
+	}
+	NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+	[defaults setObject:@{
+		@"maxBytes"        : @(maxBytes),
+		@"ttlSeconds"      : @(ttlSeconds),
+		@"excludedChatIds" : chats,
+	} forKey:TGStorageCachePolicyDefaultsKey];
+	[defaults synchronize];
+}
+
+- (void)applyPersistedCachePolicyWithCompletion:(void (^)(long long))completion {
+	NSDictionary *policy = [self cachePolicy];
+	[self applyCachePolicyMaxBytes:[policy[@"maxBytes"] longLongValue]
+						ttlSeconds:[policy[@"ttlSeconds"] integerValue]
+				   excludedChatIds:policy[@"excludedChatIds"]
+						completion:completion];
+}
+
+#pragma mark - autosave exceptions
+
+- (void)autosaveExceptionsWithCompletion:(void (^)(NSArray *))completion {
+	[self request:@{@"@type" : @"getAutosaveSettings"}
+	   completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		if (TGStorageFailed(result)) {
+			completion([NSArray array]);
+			return;
+		}
+		NSMutableArray *out = [NSMutableArray array];
+		for (id item in TGStorageArray(result[@"exceptions"])) {
+			NSDictionary *exception = TGStorageDictionary(item);
+			if (!exception)
+				continue;
+			NSDictionary *settings = [self flattenAutosave:exception[@"settings"]];
+			if (!settings)
+				continue;
+			NSMutableDictionary *row = [settings mutableCopy];
+			row[@"chatId"] = exception[@"chat_id"] ?: @0;
+			[out addObject:row];
+		}
+		completion(out);
+	}];
+}
+
+- (void)setAutosavePhotos:(BOOL)photos
+				   videos:(BOOL)videos
+			maxVideoBytes:(long long)maxVideoBytes
+				  forChat:(int64_t)chatId {
+	[self send:@{
+		@"@type"    : @"setAutosaveSettings",
+		@"scope"    : @{@"@type"   : @"autosaveSettingsScopeChat",
+						@"chat_id" : @(chatId)},
+		@"settings" : @{
+			@"@type"               : @"scopeAutosaveSettings",
+			@"autosave_photos"     : @(photos),
+			@"autosave_videos"     : @(videos),
+			@"max_video_file_size" : @(maxVideoBytes > 0 ? maxVideoBytes : 512 * 1024),
+		},
+	}];
+}
+
+#pragma mark - download totals
+
+- (void)downloadTotalsWithCompletion:(void (^)(NSDictionary *))completion {
+	[self request:@{
+		@"@type"          : @"searchFileDownloads",
+		@"query"          : @"",
+		@"only_active"    : @NO,
+		@"only_completed" : @NO,
+		@"offset"         : @"",
+		@"limit"          : @(1),
+	} completion:^(NSDictionary *result){
+		if (!completion)
+			return;
+		NSDictionary *totals = TGStorageFailed(result) ? nil :
+				TGStorageDictionary(result[@"total_counts"]);
+		completion(@{
+			@"active"    : totals[@"active_count"] ?: @0,
+			@"paused"    : totals[@"paused_count"] ?: @0,
+			@"completed" : totals[@"completed_count"] ?: @0,
+		});
 	}];
 }
 

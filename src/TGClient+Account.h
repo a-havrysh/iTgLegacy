@@ -257,6 +257,55 @@
 /// Channel or group featured on our profile. Pass 0 to remove it.
 - (void)setPersonalChat:(int64_t)chatId completion:(void (^)(BOOL ok))completion;
 
+/// The signed-in user, flattened for the settings header. Keys: "id"
+/// (NSNumber int64), "firstName", "lastName", "name" (both joined),
+/// "username" (editable one, may be empty), "phoneNumber" (no "+"),
+/// "isPremium" (NSNumber bool), "isVerified" (NSNumber bool),
+/// "smallFileId" / "bigFileId" (NSNumber, profile photo, 0 when none).
+/// Nil on failure.
+- (void)accountInfoWithCompletion:(void (^)(NSDictionary *info))completion;
+
+/// Everything -accountInfoWithCompletion: returns plus the full-info parts
+/// the profile edit form needs: "bio" (NSString, plain text), "birthdayDay"
+/// / "birthdayMonth" / "birthdayYear" (NSNumber, 0 when unset),
+/// "personalChatId" (NSNumber int64, 0 when none). Nil on failure.
+- (void)profileInfoWithCompletion:(void (^)(NSDictionary *info))completion;
+
+/// Rename ourselves and hear back. TGClient's -setName:last: is the
+/// fire-and-forget form. `lastName` may be nil or empty.
+- (void)setFirstName:(NSString *)firstName
+            lastName:(NSString *)lastName
+          completion:(void (^)(BOOL ok))completion;
+
+/// Reporting form of TGClient's -setBio:. Pass nil or @"" to clear it.
+- (void)setBio:(NSString *)bio completion:(void (^)(BOOL ok))completion;
+
+#pragma mark - account lifetime and sessions
+
+/// Days of inactivity after which the whole account self-destructs. This is
+/// the reporting setter; TGClient owns -accountTtlWithCompletion: (getter)
+/// and the fire-and-forget -setAccountTtlDays:.
+- (void)setAccountTtlDays:(NSInteger)days completion:(void (^)(BOOL ok))completion;
+
+/// This device's own session, flattened like -sessionInfoForId:completion:.
+/// Nil when the list cannot be read. Lets the sessions screen render its
+/// "current session" block without diffing the whole list itself.
+- (void)currentSessionWithCompletion:(void (^)(NSDictionary *session))completion;
+
+/// One session by id, with the fields the detail screen needs and the list
+/// rows drop: "id" (NSNumber int64), "isCurrent", "isPasswordPending",
+/// "isUnconfirmed", "isOfficialApplication", "canAcceptCalls",
+/// "canAcceptSecretChats" (all NSNumber bool), "appName", "appVersion",
+/// "deviceModel", "deviceType", "platform", "systemVersion", "ipAddress",
+/// "location" (all NSString), "loginDate" / "lastActiveDate" (NSNumber,
+/// unix time), "apiId" (NSNumber). Nil when no such session exists.
+- (void)sessionInfoForId:(long long)sessionId
+              completion:(void (^)(NSDictionary *session))completion;
+
+/// Log out and hear back. TGClient's -logOut is the fire-and-forget form;
+/// the authorization-state callback still fires either way.
+- (void)logOutWithCompletion:(void (^)(BOOL ok))completion;
+
 @end
 
 // vim:ft=objc

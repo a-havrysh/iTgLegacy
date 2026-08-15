@@ -193,6 +193,50 @@
                         stars:(long long)stars
                    completion:(void (^)(BOOL ok, NSString *error))completion;
 
+/// Every gift code this account has received, newest first, scraped from the
+/// service chat with Telegram (user 777000) where gift-code and giveaway-prize
+/// notifications are delivered. `limit` is the number of service messages to
+/// scan, 0 for the default of 100. `completion` receives an array of:
+///   "code"        NSString, the gift code, "" for a star prize
+///   "months"      NSNumber, subscription length
+///   "days"        NSNumber
+///   "stars"       NSNumber, non-zero for a star giveaway prize
+///   "fromGiveaway" NSNumber BOOL
+///   "unclaimed"   NSNumber BOOL, YES while the code has not been redeemed
+///   "creatorId"   NSNumber, the user or chat that sent it
+///   "creatorIsChat" NSNumber BOOL
+///   "creatorName" NSString, "" when unknown
+///   "chatId"      NSNumber, the chat the notification lives in
+///   "messageId"   NSNumber, the notification message
+///   "boostedChatId" NSNumber, the channel a star prize boosted, 0 otherwise
+///   "giveawayMessageId" NSNumber, 0 when not from a giveaway
+///   "date"        NSNumber unix date
+///   "text"        NSString, the plain caption Telegram sent, may be ""
+/// The array is empty when nothing was found. Feed "code" to
+/// -checkGiftCode:completion: for the redeemed/unredeemed detail.
+- (void)accountGiftCodesWithLimit:(NSInteger)limit
+                       completion:(void (^)(NSArray *codes))completion;
+
+/// The giveaways this account has taken part in, found by scanning the recent
+/// history of every channel this account currently boosts (a boost is how a
+/// giveaway is entered) for giveaway messages and asking the server for this
+/// account's status in each. `limit` caps the number of giveaways returned,
+/// 0 for the default of 20. Costs one request per boosted chat plus one per
+/// giveaway found, so call it once per screen and cache the result.
+/// `completion` receives an array, newest first, of:
+///   "chatId"      NSNumber, the channel that runs the giveaway
+///   "chatTitle"   NSString, "" when unknown
+///   "messageId"   NSNumber, the giveaway message
+///   "date"        NSNumber unix date of the giveaway message
+///   "winnerCount" NSNumber
+///   "months"      NSNumber, Premium months at stake, 0 for a star giveaway
+///   "stars"       NSNumber, star prize, 0 for a Premium giveaway
+///   "winnersDate" NSNumber unix date the winners are picked
+///   plus every key of -giveawayInfoForMessage:inChat:completion: merged in
+///   ("ongoing", "status", "statusText", "winner", "giftCode", ...).
+- (void)enteredGiveawaysWithLimit:(NSInteger)limit
+                       completion:(void (^)(NSArray *giveaways))completion;
+
 #pragma mark - channel boosts
 
 /// The boost block for a channel profile. `completion` receives:

@@ -374,7 +374,7 @@ static NSArray *TGMsgBriefList(NSDictionary *result) {
 			return;
 		}
 
-		completion(@{
+		NSMutableDictionary *out = [@{
 			@"canEdit"                : result[@"can_be_edited"] ?: @NO,
 			@"canEditMedia"           : result[@"can_edit_media"] ?: @NO,
 			@"canDeleteForMe"         : result[@"can_be_deleted_only_for_self"] ?: @NO,
@@ -392,7 +392,96 @@ static NSArray *TGMsgBriefList(NSDictionary *result) {
 			@"canEditSchedulingState" : result[@"can_edit_scheduling_state"] ?: @NO,
 			@"canReport"              : result[@"can_report_chat"] ?: @NO,
 			@"canSave"                : result[@"can_be_saved"] ?: @NO,
-		});
+			@"canDeleteReactions"     : result[@"can_delete_reactions"] ?: @NO,
+			@"canReportReactions"     : result[@"can_report_reactions"] ?: @NO,
+			@"canReportSpam"          : result[@"can_report_supergroup_spam"] ?: @NO,
+			@"canRecognizeSpeech"     : result[@"can_recognize_speech"] ?: @NO,
+			@"canGetStatistics"       : result[@"can_get_statistics"] ?: @NO,
+		} mutableCopy];
+
+		BOOL canSelect = [result[@"can_be_copied"] boolValue] ||
+						 [result[@"can_be_forwarded"] boolValue] ||
+						 [result[@"can_be_deleted_only_for_self"] boolValue] ||
+						 [result[@"can_be_deleted_for_all_users"] boolValue];
+		out[@"canSelect"] = @(canSelect);
+
+		[self request:@{@"@type" : @"getMessage",
+						@"chat_id" : @(chatId),
+						@"message_id" : @(messageId)}
+		   completion:^(NSDictionary *message){
+			NSDictionary *flat = TGMsgIsError(message) ? nil : TGMsgBrief(message);
+			NSString *text = [flat[@"text"] isKindOfClass:NSString.class]
+					? flat[@"text"] : @"";
+			out[@"canTranslate"] = @(text.length > 0);
+			completion(out);
+		}];
+	}];
+}
+
+#pragma mark - pinning a message
+
+- (void)pinMessage:(int64_t)messageId
+            inChat:(int64_t)chatId
+          silently:(BOOL)silently
+         onlyForMe:(BOOL)onlyForMe
+        completion:(void (^)(BOOL))completion {
+	[self request:@{
+		@"@type"                : @"pinChatMessage",
+		@"chat_id"              : @(chatId),
+		@"message_id"           : @(messageId),
+		@"disable_notification" : @(silently),
+		@"only_for_self"        : @(onlyForMe),
+	} completion:^(NSDictionary *result){
+		if (completion)
+			completion(!TGMsgIsError(result));
+	}];
+}
+
+- (void)unpinMessage:(int64_t)messageId
+              inChat:(int64_t)chatId
+          completion:(void (^)(BOOL))completion {
+	[self request:@{
+		@"@type"      : @"unpinChatMessage",
+		@"chat_id"    : @(chatId),
+		@"message_id" : @(messageId),
+	} completion:^(NSDictionary *result){
+		if (completion)
+			completion(!TGMsgIsError(result));
+	}];
+}
+
+- (void)unpinAllMessagesInChat:(int64_t)chatId
+                    completion:(void (^)(BOOL))completion {
+	[self request:@{@"@type" : @"unpinAllChatMessages", @"chat_id" : @(chatId)}
+	   completion:^(NSDictionary *result){
+		if (completion)
+			completion(!TGMsgIsError(result));
+	}];
+}
+
+- (void)pinnedMessageIdInChat:(int64_t)chatId
+                   completion:(void (^)(int64_t))completion {
+	if (!completion)
+		return;
+
+	[self request:@{@"@type" : @"getChatPinnedMessage", @"chat_id" : @(chatId)}
+	   completion:^(NSDictionary *result){
+		if (TGMsgIsError(result) || ![result[@"id"] isKindOfClass:NSNumber.class]){
+			completion(0);
+			return;
+		}
+		completion([result[@"id"] longLongValue]);
+	}];
+}
+
+- (void)isMessagePinned:(int64_t)messageId
+                 inChat:(int64_t)chatId
+             completion:(void (^)(BOOL))completion {
+	if (!completion)
+		return;
+
+	[self pinnedMessageIdInChat:chatId completion:^(int64_t pinnedId){
+		completion(pinnedId != 0 && pinnedId == messageId);
 	}];
 }
 

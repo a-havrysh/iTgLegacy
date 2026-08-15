@@ -755,6 +755,223 @@ static NSArray *TGPremiumDisplayLimitTypes(void){
 	}];
 }
 
+- (NSDictionary *)giftCodeEntryFromMessage:(NSDictionary *)message {
+	NSDictionary *content = TGPremiumDict(message[@"content"]);
+	NSString *tag = TGPremiumTag(content, @"message");
+	if (!([tag isEqualToString:@"premiumGiftCode"] ||
+		  [tag isEqualToString:@"giveawayPrizeStars"]))
+		return nil;
+
+	NSDictionary *creator = TGPremiumDict(content[@"creator_id"]);
+	BOOL creatorIsChat = [TGPremiumString(creator[@"@type"])
+						  isEqualToString:@"messageSenderChat"];
+	NSNumber *creatorId = creatorIsChat ? TGPremiumNumber(creator[@"chat_id"])
+										: TGPremiumNumber(creator[@"user_id"]);
+	NSString *creatorName = @"";
+	if (creatorIsChat){
+		id title = [self.chatsById[creatorId] objectForKey:@"title"];
+		if ([title isKindOfClass:[NSString class]])
+			creatorName = title;
+	} else {
+		id name = [self.usersById objectForKey:creatorId];
+		if ([name isKindOfClass:[NSString class]])
+			creatorName = name;
+	}
+
+	NSDictionary *formatted = TGPremiumDict(content[@"text"]);
+	NSString *text = TGPremiumString(formatted[@"text"]);
+
+	return @{
+		@"code"              : TGPremiumString(content[@"code"]),
+		@"months"            : TGPremiumNumber(content[@"month_count"]),
+		@"days"              : TGPremiumNumber(content[@"day_count"]),
+		@"stars"             : TGPremiumNumber(content[@"star_count"]),
+		@"fromGiveaway"      : [NSNumber numberWithBool:
+								[content[@"is_from_giveaway"] boolValue] ||
+								[tag isEqualToString:@"giveawayPrizeStars"]],
+		@"unclaimed"         : [NSNumber numberWithBool:
+								[content[@"is_unclaimed"] boolValue]],
+		@"creatorId"         : creatorId,
+		@"creatorIsChat"     : [NSNumber numberWithBool:creatorIsChat],
+		@"creatorName"       : creatorName,
+		@"chatId"            : TGPremiumNumber(message[@"chat_id"]),
+		@"messageId"         : TGPremiumNumber(message[@"id"]),
+		@"boostedChatId"     : TGPremiumNumber(content[@"boosted_chat_id"]),
+		@"giveawayMessageId" : TGPremiumNumber(content[@"giveaway_message_id"]),
+		@"date"              : TGPremiumNumber(message[@"date"]),
+		@"text"              : text
+	};
+}
+
+- (void)accountGiftCodesWithLimit:(NSInteger)limit
+                       completion:(void (^)(NSArray *))completion {
+	NSInteger count = limit > 0 ? limit : 100;
+	if (count > 100)
+		count = 100;
+	[self request:@{@"@type"   : @"createPrivateChat",
+					@"user_id" : [NSNumber numberWithLongLong:777000LL],
+					@"force"   : [NSNumber numberWithBool:NO]}
+	   completion:^(NSDictionary *chat){
+		if (TGPremiumIsError(chat)){
+			if (completion)
+				completion([NSArray array]);
+			return;
+		}
+		long long chatId = [TGPremiumNumber(chat[@"id"]) longLongValue];
+		if (!chatId)
+			chatId = 777000LL;
+		NSDictionary *query = @{@"@type"           : @"getChatHistory",
+								@"chat_id"         : [NSNumber numberWithLongLong:chatId],
+								@"from_message_id" : [NSNumber numberWithInt:0],
+								@"offset"          : [NSNumber numberWithInt:0],
+								@"limit"           : [NSNumber numberWithInteger:count],
+								@"only_local"      : [NSNumber numberWithBool:NO]};
+		[self request:query completion:^(NSDictionary *first){
+			NSArray *messages = TGPremiumIsError(first) ? [NSArray array]
+														: TGPremiumArray(first[@"messages"]);
+			if (messages.count){
+				if (completion)
+					completion([self giftCodeEntriesFromMessages:messages]);
+				return;
+			}
+			[self request:query completion:^(NSDictionary *second){
+				if (!completion)
+					return;
+				if (TGPremiumIsError(second)){
+					completion([NSArray array]);
+					return;
+				}
+				completion([self giftCodeEntriesFromMessages:
+							TGPremiumArray(second[@"messages"])]);
+			}];
+		}];
+	}];
+}
+
+- (NSArray *)giftCodeEntriesFromMessages:(NSArray *)messages {
+	NSMutableArray *out = [NSMutableArray array];
+	for (id entry in TGPremiumArray(messages)){
+		NSDictionary *message = TGPremiumDict(entry);
+		if (!message)
+			continue;
+		NSDictionary *code = [self giftCodeEntryFromMessage:message];
+		if (code)
+			[out addObject:code];
+	}
+	return out;
+}
+
+- (NSDictionary *)giveawayEntryFromMessage:(NSDictionary *)message {
+	NSDictionary *content = TGPremiumDict(message[@"content"]);
+	if (![TGPremiumTag(content, @"message") isEqualToString:@"giveaway"])
+		return nil;
+	NSDictionary *parameters = TGPremiumDict(content[@"parameters"]);
+	NSDictionary *prize = TGPremiumDict(content[@"prize"]);
+	NSNumber *chatId = TGPremiumNumber(message[@"chat_id"]);
+	id title = [self.chatsById[chatId] objectForKey:@"title"];
+	return @{
+		@"chatId"      : chatId,
+		@"chatTitle"   : [title isKindOfClass:[NSString class]] ? title : @"",
+		@"messageId"   : TGPremiumNumber(message[@"id"]),
+		@"date"        : TGPremiumNumber(message[@"date"]),
+		@"winnerCount" : TGPremiumNumber(content[@"winner_count"]),
+		@"months"      : TGPremiumNumber(prize[@"month_count"]),
+		@"stars"       : TGPremiumNumber(prize[@"star_count"]),
+		@"winnersDate" : TGPremiumNumber(parameters[@"winners_selection_date"])
+	};
+}
+
+- (void)enteredGiveawaysWithLimit:(NSInteger)limit
+                       completion:(void (^)(NSArray *))completion {
+	NSInteger cap = limit > 0 ? limit : 20;
+	[self request:@{@"@type" : @"getAvailableChatBoostSlots"}
+	   completion:^(NSDictionary *result){
+		NSMutableArray *chatIds = [NSMutableArray array];
+		for (id entry in TGPremiumIsError(result) ? [NSArray array]
+												  : TGPremiumArray(result[@"slots"])){
+			NSDictionary *slot = TGPremiumDict(entry);
+			NSNumber *chatId = TGPremiumNumber(slot[@"currently_boosted_chat_id"]);
+			if ([chatId longLongValue] && ![chatIds containsObject:chatId])
+				[chatIds addObject:chatId];
+		}
+		if (!chatIds.count){
+			if (completion)
+				completion([NSArray array]);
+			return;
+		}
+		[self collectGiveawayMessagesFromChats:chatIds
+										 index:0
+									   results:[NSMutableArray array]
+										   cap:cap
+									completion:completion];
+	}];
+}
+
+- (void)collectGiveawayMessagesFromChats:(NSArray *)chatIds
+                                   index:(NSUInteger)index
+                                 results:(NSMutableArray *)results
+                                     cap:(NSInteger)cap
+                              completion:(void (^)(NSArray *))completion {
+	if (index >= chatIds.count || (NSInteger)results.count >= cap){
+		[results sortUsingComparator:^NSComparisonResult(id a, id b){
+			long long left = [TGPremiumNumber([a objectForKey:@"date"]) longLongValue];
+			long long right = [TGPremiumNumber([b objectForKey:@"date"]) longLongValue];
+			if (left == right)
+				return NSOrderedSame;
+			return left > right ? NSOrderedAscending : NSOrderedDescending;
+		}];
+		[self attachGiveawayInfoAtIndex:0 entries:results completion:completion];
+		return;
+	}
+	long long chatId = [TGPremiumNumber([chatIds objectAtIndex:index]) longLongValue];
+	[self request:@{@"@type"           : @"getChatHistory",
+					@"chat_id"         : [NSNumber numberWithLongLong:chatId],
+					@"from_message_id" : [NSNumber numberWithInt:0],
+					@"offset"          : [NSNumber numberWithInt:0],
+					@"limit"           : [NSNumber numberWithInt:40],
+					@"only_local"      : [NSNumber numberWithBool:NO]}
+	   completion:^(NSDictionary *history){
+		if (!TGPremiumIsError(history)){
+			for (id entry in TGPremiumArray(history[@"messages"])){
+				NSDictionary *message = TGPremiumDict(entry);
+				if (!message)
+					continue;
+				NSDictionary *giveaway = [self giveawayEntryFromMessage:message];
+				if (giveaway && (NSInteger)results.count < cap)
+					[results addObject:[NSMutableDictionary
+										dictionaryWithDictionary:giveaway]];
+			}
+		}
+		[self collectGiveawayMessagesFromChats:chatIds
+										 index:index + 1
+									   results:results
+										   cap:cap
+									completion:completion];
+	}];
+}
+
+- (void)attachGiveawayInfoAtIndex:(NSUInteger)index
+                          entries:(NSMutableArray *)entries
+                       completion:(void (^)(NSArray *))completion {
+	if (index >= entries.count){
+		if (completion)
+			completion(entries);
+		return;
+	}
+	NSMutableDictionary *entry = [entries objectAtIndex:index];
+	long long chatId = [TGPremiumNumber([entry objectForKey:@"chatId"]) longLongValue];
+	long long messageId = [TGPremiumNumber([entry objectForKey:@"messageId"]) longLongValue];
+	[self giveawayInfoForMessage:messageId
+						  inChat:chatId
+					  completion:^(NSDictionary *info){
+		if ([info isKindOfClass:[NSDictionary class]])
+			[entry addEntriesFromDictionary:info];
+		[self attachGiveawayInfoAtIndex:index + 1
+								entries:entries
+							 completion:completion];
+	}];
+}
+
 - (NSArray *)boostSlotsFromResult:(NSDictionary *)result {
 	NSMutableArray *out = [NSMutableArray array];
 	NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
