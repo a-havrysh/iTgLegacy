@@ -1111,15 +1111,13 @@ static const CGFloat kPhotoPageGap = 20.0f;
 
 @implementation TGBubbleCell
 
-- (id)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)reuseIdentifier {
-	self = [super initWithStyle:style reuseIdentifier:reuseIdentifier];
-	if (!self)
-		return nil;
-
+- (void)buildCellChrome {
 	self.backgroundColor = [UIColor clearColor];
 	self.contentView.backgroundColor = [UIColor clearColor];
 	self.selectionStyle = UITableViewCellSelectionStyleNone;
+}
 
+- (void)buildBubbleViews {
 	self.bubbleBg = [[UIImageView alloc] init];
 	self.bubbleBg.hidden = YES;
 	[self.contentView addSubview:self.bubbleBg];
@@ -1154,7 +1152,9 @@ static const CGFloat kPhotoPageGap = 20.0f;
 	self.wave = [[UIImageView alloc] init];
 	self.wave.hidden = YES;
 	[self.bubble addSubview:self.wave];
+}
 
+- (void)buildContentOverlays {
 	self.tail = [[UIImageView alloc] init];
 	self.tail.hidden = YES;
 	[self.contentView addSubview:self.tail];
@@ -1174,7 +1174,9 @@ static const CGFloat kPhotoPageGap = 20.0f;
 	self.ticks = [[UIImageView alloc] init];
 	self.ticks.hidden = YES;
 	[self.contentView addSubview:self.ticks];
+}
 
+- (void)buildBubbleDecorations {
 	self.quoteBar = [[UIView alloc] init];
 	self.quoteBar.hidden = YES;
 	[self.bubble addSubview:self.quoteBar];
@@ -1221,7 +1223,9 @@ static const CGFloat kPhotoPageGap = 20.0f;
 	self.mediaStamp.clipsToBounds = YES;
 	self.mediaStamp.hidden = YES;
 	[self.bubble addSubview:self.mediaStamp];
+}
 
+- (void)buildTimeViews {
 	self.time = [[UILabel alloc] init];
 	self.time.font = [UIFont systemFontOfSize:11];
 	self.time.backgroundColor = [UIColor clearColor];
@@ -1231,7 +1235,9 @@ static const CGFloat kPhotoPageGap = 20.0f;
 	self.checkView = [[UIImageView alloc] initWithFrame:CGRectMake(2, 0, 26, 26)];
 	self.checkView.hidden = YES;
 	[self addSubview:self.checkView];
+}
 
+- (void)buildDayPlateViews {
 	self.dayPlate = [[UIView alloc] init];
 	self.dayPlate.backgroundColor = TGSystemPlateColour();
 	self.dayPlate.layer.cornerRadius = kSystemPlateHeight / 2;
@@ -1247,7 +1253,9 @@ static const CGFloat kPhotoPageGap = 20.0f;
 	self.dayLabel.userInteractionEnabled = NO;
 	self.dayLabel.hidden = YES;
 	[self addSubview:self.dayLabel];
+}
 
+- (void)buildUnreadViews {
 	self.unreadStrip = [[UIView alloc] init];
 	self.unreadStrip.userInteractionEnabled = NO;
 	self.unreadStrip.hidden = YES;
@@ -1287,6 +1295,20 @@ static const CGFloat kPhotoPageGap = 20.0f;
 	self.unreadArrow = [[UIImageView alloc] initWithImage:TGUnreadArrowImage()];
 	self.unreadArrow.hidden = YES;
 	[self addSubview:self.unreadArrow];
+}
+
+- (id)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)reuseIdentifier {
+	self = [super initWithStyle:style reuseIdentifier:reuseIdentifier];
+	if (!self)
+		return nil;
+
+	[self buildCellChrome];
+	[self buildBubbleViews];
+	[self buildContentOverlays];
+	[self buildBubbleDecorations];
+	[self buildTimeViews];
+	[self buildDayPlateViews];
+	[self buildUnreadViews];
 
 	return self;
 }
@@ -2494,6 +2516,12 @@ static const NSInteger kClearRecentAlertTag  = 85;
 
 @end
 
+typedef NS_ENUM(NSInteger, TGComposeMode) {
+	TGComposeModeNew = 0,
+	TGComposeModeReply,
+	TGComposeModeEdit
+};
+
 @interface TGChatViewController () <UISearchBarDelegate, CLLocationManagerDelegate,
 		UIScrollViewDelegate, AVAudioPlayerDelegate, UIAlertViewDelegate,
 		ABPeoplePickerNavigationControllerDelegate, MPMediaPickerControllerDelegate,
@@ -2515,6 +2543,7 @@ static const NSInteger kClearRecentAlertTag  = 85;
 @property (nonatomic, strong) NSDictionary *actionMessage;   // long-pressed
 @property (nonatomic, assign) int64_t replyToId;             // composing a reply
 @property (nonatomic, assign) int64_t editingId;             // editing instead
+@property (nonatomic, readonly) TGComposeMode composeMode;
 @property (nonatomic, strong) UIView *composeBanner;         // "Reply to ..."
 @property (nonatomic, strong) UIButton *micButton;
 @property (nonatomic, strong) UISearchBar *chatSearchBar;
@@ -2625,6 +2654,7 @@ static const NSInteger kClearRecentAlertTag  = 85;
 @property (nonatomic, strong) NSArray *tappedLinkTargets;
 
 - (void)clearComposeState;
+- (void)setComposeMode:(TGComposeMode)mode messageId:(int64_t)messageId;
 - (void)showComposeBanner:(NSString *)text;
 - (void)installMessageHandler;
 - (void)updateEmptyState;
@@ -2892,18 +2922,15 @@ static const NSInteger kClearRecentAlertTag  = 85;
 	}];
 }
 
-- (void)buildInputBar:(CGRect)b {
-	const CGFloat retinaPixel = ([UIScreen mainScreen].scale > 1.0f) ? 0.5f : 0.0f;
-
+- (void)buildInputBarContainer:(CGRect)b {
 	self.inputBar = [[UIView alloc] initWithFrame:
 			CGRectMake(0, b.size.height - kInputHeight, b.size.width, kInputHeight)];
 	self.inputBar.backgroundColor = [[TGTheme shared] inputBarColour];
 	self.inputBar.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin;
 	self.inputBar.clipsToBounds = NO;
+}
 
-	// Their panel is three pieces of artwork: a tiled strip, a shadow that sits
-	// above it, and the field frame stretched across the whole width. There is
-	// no hairline and no drawn box anywhere in it.
+- (void)buildInputBarBackground:(CGRect)b retinaPixel:(CGFloat)retinaPixel {
 	UIImage *strip = [UIImage imageNamed:@"ConversationInputPanel_Background"];
 	if (strip){
 		UIImageView *stripView = [[UIImageView alloc] initWithFrame:
@@ -2947,9 +2974,9 @@ static const NSInteger kClearRecentAlertTag  = 85;
 		frameView.userInteractionEnabled = NO;
 		[self.inputBar addSubview:frameView];
 	}
+}
 
-	CGFloat sendY = 7 + retinaPixel;
-
+- (void)buildInputBarAttachButton:(CGRect)b retinaPixel:(CGFloat)retinaPixel {
 	UIButton *attach = [UIButton buttonWithType:UIButtonTypeCustom];
 	attach.frame = CGRectMake(6, 7 + retinaPixel, 29, 30);
 	attach.exclusiveTouch = YES;
@@ -2967,9 +2994,9 @@ static const NSInteger kClearRecentAlertTag  = 85;
 	[attach addTarget:self action:@selector(attachTapped)
 			forControlEvents:UIControlEventTouchUpInside];
 	[self.inputBar addSubview:attach];
+}
 
-	// Their placeholder starts at 49 and the field runs to 113 from the right;
-	// the sticker button takes 30 of that off the end.
+- (void)buildInputBarTextField:(CGRect)b retinaPixel:(CGFloat)retinaPixel {
 	self.input = [[UITextField alloc] initWithFrame:
 			CGRectMake(49, 5 - retinaPixel, b.size.width - 150, 34)];
 	self.input.borderStyle = UITextBorderStyleNone;
@@ -2990,9 +3017,9 @@ static const NSInteger kClearRecentAlertTag  = 85;
 							[UIColor colorWithRed:0.616f green:0.655f blue:0.702f alpha:1.0f]}];
 	}
 	[self.inputBar addSubview:self.input];
+}
 
-	// Their send button: 62x29 of SendButton.png stretched from its middle, the
-	// word in bold 14.5 with a one-point shadow above it.
+- (UIImage *)buildInputBarSendButton:(CGRect)b topY:(CGFloat)sendY {
 	CGFloat sendWidth = 62;
 	self.sendButton = [UIButton buttonWithType:UIButtonTypeCustom];
 	self.sendButton.frame = CGRectMake(b.size.width - sendWidth - 5, sendY,
@@ -3032,8 +3059,10 @@ static const NSInteger kClearRecentAlertTag  = 85;
 	[self.sendButton addTarget:self action:@selector(sendTapped)
 			forControlEvents:UIControlEventTouchUpInside];
 	[self.inputBar addSubview:self.sendButton];
+	return sendImage;
+}
 
-	// A sticker button beside the composer, as clients place it.
+- (void)buildInputBarStickerButton:(CGRect)b retinaPixel:(CGFloat)retinaPixel {
 	self.stickerButton = [UIButton buttonWithType:UIButtonTypeCustom];
 	self.stickerButton.frame = CGRectMake(b.size.width - 97, 7 + retinaPixel, 29, 30);
 	self.stickerButton.exclusiveTouch = YES;
@@ -3046,9 +3075,9 @@ static const NSInteger kClearRecentAlertTag  = 85;
 	[self.stickerButton addTarget:self action:@selector(toggleStickerPanel)
 				 forControlEvents:UIControlEventTouchUpInside];
 	[self.inputBar addSubview:self.stickerButton];
+}
 
-	// Hold to record, release to send - the gesture every client uses. It sits
-	// where Send is and swaps with it depending on whether anything is typed.
+- (void)buildInputBarMicButton:(UIImage *)sendImage {
 	self.micButton = [UIButton buttonWithType:UIButtonTypeCustom];
 	self.micButton.frame = self.sendButton.frame;
 	self.micButton.exclusiveTouch = YES;
@@ -3079,6 +3108,23 @@ static const NSInteger kClearRecentAlertTag  = 85;
 	[self.micButton addTarget:self action:@selector(recordCancel)
 			 forControlEvents:UIControlEventTouchUpOutside | UIControlEventTouchCancel];
 	[self.inputBar addSubview:self.micButton];
+}
+
+- (void)buildInputBar:(CGRect)b {
+	const CGFloat retinaPixel = ([UIScreen mainScreen].scale > 1.0f) ? 0.5f : 0.0f;
+
+	[self buildInputBarContainer:b];
+	[self buildInputBarBackground:b retinaPixel:retinaPixel];
+
+	CGFloat sendY = 7 + retinaPixel;
+
+	[self buildInputBarAttachButton:b retinaPixel:retinaPixel];
+	[self buildInputBarTextField:b retinaPixel:retinaPixel];
+
+	UIImage *sendImage = [self buildInputBarSendButton:b topY:sendY];
+
+	[self buildInputBarStickerButton:b retinaPixel:retinaPixel];
+	[self buildInputBarMicButton:sendImage];
 
 	[self.input addTarget:self action:@selector(inputChanged)
 		 forControlEvents:UIControlEventEditingChanged];
@@ -4141,15 +4187,27 @@ static const NSInteger kClearRecentAlertTag  = 85;
 
 #pragma mark - compose banner
 
+- (TGComposeMode)composeMode {
+	if (self.editingId != 0)
+		return TGComposeModeEdit;
+	if (self.replyToId != 0)
+		return TGComposeModeReply;
+	return TGComposeModeNew;
+}
+
+- (void)setComposeMode:(TGComposeMode)mode messageId:(int64_t)messageId {
+	self.replyToId = (mode == TGComposeModeReply) ? messageId : 0;
+	self.editingId = (mode == TGComposeModeEdit) ? messageId : 0;
+}
+
 /// Back to composing a plain message: no reply, no edit, no banner. Also
 /// missing, and reached from the recorder and from the banner's own cancel.
 - (void)clearComposeState {
 	// Cancelling an edit has to take the text it prefilled with it, otherwise
 	// the draft of a message already sent is left sitting in the composer.
-	if (self.editingId != 0)
+	if (self.composeMode == TGComposeModeEdit)
 		self.input.text = @"";
-	self.replyToId = 0;
-	self.editingId = 0;
+	[self setComposeMode:TGComposeModeNew messageId:0];
 	[self.sendButton setTitle:@"Send" forState:UIControlStateNormal];
 	self.composeBanner.hidden = YES;
 	[self inputChanged];
@@ -5685,8 +5743,7 @@ static const NSInteger kStickerLinkAlertTag = 102;
 	if (![self canReplyToRow:row])
 		return;
 	NSDictionary *m = self.messages[row];
-	self.replyToId = [m[@"id"] longLongValue];
-	self.editingId = 0;
+	[self setComposeMode:TGComposeModeReply messageId:[m[@"id"] longLongValue]];
 	[self.sendButton setTitle:@"Send" forState:UIControlStateNormal];
 	NSString *bodyText = [self textOf:m];
 	[self showComposeBanner:[NSString stringWithFormat:@"Reply to: %@",
@@ -5863,16 +5920,14 @@ static const NSInteger kStickerLinkAlertTag = 102;
 	__weak typeof(self) weakSelf = self;
 
 	if ([action isEqualToString:TGMessageActionReply]){
-		self.replyToId = messageId;
-		self.editingId = 0;
+		[self setComposeMode:TGComposeModeReply messageId:messageId];
 		[self.sendButton setTitle:@"Send" forState:UIControlStateNormal];
 		[self showComposeBanner:[NSString stringWithFormat:@"Reply to: %@",
 				bodyText.length ? bodyText : (m[@"kind"] ?: @"message")]];
 		[self.input becomeFirstResponder];
 
 	} else if ([action isEqualToString:TGMessageActionEdit]){
-		self.editingId = messageId;
-		self.replyToId = 0;
+		[self setComposeMode:TGComposeModeEdit messageId:messageId];
 		self.input.text = bodyText ?: @"";
 		[self inputChanged];
 		[self.sendButton setTitle:@"Save" forState:UIControlStateNormal];
@@ -6192,8 +6247,7 @@ static const NSInteger kStickerLinkAlertTag = 102;
 	NSString *bodyText = [self originalTextOf:m];
 
 	if ([action isEqualToString:@"Reply"]){
-		self.replyToId = messageId;
-		self.editingId = 0;
+		[self setComposeMode:TGComposeModeReply messageId:messageId];
 		[self showComposeBanner:[NSString stringWithFormat:@"Reply to: %@",
 				bodyText.length ? bodyText : (m[@"kind"] ?: @"message")]];
 		[self.input becomeFirstResponder];
@@ -6216,8 +6270,7 @@ static const NSInteger kStickerLinkAlertTag = 102;
 			[UIPasteboard generalPasteboard].string = bodyText;
 
 	} else if ([action isEqualToString:@"Edit"]){
-		self.editingId = messageId;
-		self.replyToId = 0;
+		[self setComposeMode:TGComposeModeEdit messageId:messageId];
 		self.input.text = bodyText ?: @"";
 		// Setting the text in code fires no editing-changed event, so Send has
 		// to be swapped in by hand or the field looks unsendable.
@@ -10063,188 +10116,188 @@ static UIColor *TGSenderColour(int64_t userId) {
 			[NSCharacterSet whitespaceAndNewlineCharacterSet]] ?: @"";
 }
 
-- (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {
-	if (alertView.tag == kPastePhotoAlertTag){
-		if (buttonIndex == alertView.cancelButtonIndex){
-			self.pendingPastedImage = nil;
+- (void)handlePastePhotoAlert:(UIAlertView *)alertView buttonIndex:(NSInteger)buttonIndex {
+	if (buttonIndex == alertView.cancelButtonIndex){
+		self.pendingPastedImage = nil;
+		return;
+	}
+	[self sendPendingPastedImage];
+}
+
+- (void)handleStickerLinkAlert:(UIAlertView *)alertView buttonIndex:(NSInteger)buttonIndex {
+	NSString *link = self.pendingStickerSetLink;
+	self.pendingStickerSetLink = nil;
+	if (buttonIndex == alertView.cancelButtonIndex || !link.length)
+		return;
+	[UIPasteboard generalPasteboard].string = link;
+	[TGSnackbar showInView:self.view text:@"Link copied" seconds:3 onCommit:nil];
+}
+
+- (void)handleBotPasswordAlert:(UIAlertView *)alertView buttonIndex:(NSInteger)buttonIndex {
+	NSDictionary *button = self.pendingCallbackButton;
+	self.pendingCallbackButton = nil;
+	if (buttonIndex == alertView.cancelButtonIndex || !button)
+		return;
+	NSString *password = [alertView respondsToSelector:@selector(textFieldAtIndex:)]
+			? [alertView textFieldAtIndex:0].text : @"";
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] pressCallbackButton:button
+									inChat:self.chatId
+								   message:self.botButtonsMessageId
+								  password:(password ?: @"")
+								completion:^(NSDictionary *answer){
+		[weakSelf showCallbackAnswer:answer];
+	}];
+}
+
+- (void)handleInlineQueryAlert:(UIAlertView *)alertView buttonIndex:(NSInteger)buttonIndex {
+	if (buttonIndex == alertView.cancelButtonIndex)
+		return;
+	NSString *entry = [alertView respondsToSelector:@selector(textFieldAtIndex:)]
+			? [alertView textFieldAtIndex:0].text : @"";
+	[self runInlineBotEntry:(entry ?: @"")];
+}
+
+- (void)handleAllowBotAlert:(UIAlertView *)alertView buttonIndex:(NSInteger)buttonIndex {
+	if (buttonIndex == alertView.cancelButtonIndex)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] allowBotToSendMessages:[self botChatUserId]
+								   completion:^(BOOL ok){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		[me showAlertTitle:@""
+				   message:(ok ? @"This bot may now message you."
+							   : @"That permission could not be granted.")];
+	}];
+}
+
+- (void)handleBotStartAlert:(UIAlertView *)alertView buttonIndex:(NSInteger)buttonIndex {
+	NSString *link = self.pendingBotStartLink;
+	self.pendingBotStartLink = nil;
+	if (buttonIndex == alertView.cancelButtonIndex || !link.length)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] openBotStartLink:link completion:^(int64_t openedChatId){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (!openedChatId){
+			[me showAlertTitle:@"" message:@"That bot link could not be used."];
 			return;
 		}
-		[self sendPendingPastedImage];
+		[me openChatId:openedChatId title:@"Bot" isGroup:NO];
+	}];
+}
+
+- (void)handleJoinLinkAlert:(UIAlertView *)alertView buttonIndex:(NSInteger)buttonIndex {
+	NSString *invite = self.pendingInviteLink;
+	self.pendingInviteLink = nil;
+	if (buttonIndex == alertView.cancelButtonIndex || !invite.length)
 		return;
-	}
-	if (alertView.tag == kStickerLinkAlertTag){
-		NSString *link = self.pendingStickerSetLink;
-		self.pendingStickerSetLink = nil;
-		if (buttonIndex == alertView.cancelButtonIndex || !link.length)
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] joinChatByInviteLink:invite
+								 completion:^(int64_t joinedChatId, BOOL requestSent){
+		TGChatViewController *me = weakSelf;
+		if (!me)
 			return;
-		[UIPasteboard generalPasteboard].string = link;
-		[TGSnackbar showInView:self.view text:@"Link copied" seconds:3 onCommit:nil];
-		return;
-	}
-	if (alertView.tag == kBotPasswordAlertTag){
-		NSDictionary *button = self.pendingCallbackButton;
-		self.pendingCallbackButton = nil;
-		if (buttonIndex == alertView.cancelButtonIndex || !button)
-			return;
-		NSString *password = [alertView respondsToSelector:@selector(textFieldAtIndex:)]
-				? [alertView textFieldAtIndex:0].text : @"";
-		__weak typeof(self) weakSelf = self;
-		[[TGClient shared] pressCallbackButton:button
-										inChat:self.chatId
-									   message:self.botButtonsMessageId
-									  password:(password ?: @"")
-									completion:^(NSDictionary *answer){
-			[weakSelf showCallbackAnswer:answer];
-		}];
-		return;
-	}
-	if (alertView.tag == kInlineQueryAlertTag){
-		if (buttonIndex == alertView.cancelButtonIndex)
-			return;
-		NSString *entry = [alertView respondsToSelector:@selector(textFieldAtIndex:)]
-				? [alertView textFieldAtIndex:0].text : @"";
-		[self runInlineBotEntry:(entry ?: @"")];
-		return;
-	}
-	if (alertView.tag == kAllowBotAlertTag){
-		if (buttonIndex == alertView.cancelButtonIndex)
-			return;
-		__weak typeof(self) weakSelf = self;
-		[[TGClient shared] allowBotToSendMessages:[self botChatUserId]
-									   completion:^(BOOL ok){
-			TGChatViewController *me = weakSelf;
-			if (!me)
-				return;
-			[me showAlertTitle:@""
-					   message:(ok ? @"This bot may now message you."
-								   : @"That permission could not be granted.")];
-		}];
-		return;
-	}
-	if (alertView.tag == kBotStartAlertTag){
-		NSString *link = self.pendingBotStartLink;
-		self.pendingBotStartLink = nil;
-		if (buttonIndex == alertView.cancelButtonIndex || !link.length)
-			return;
-		__weak typeof(self) weakSelf = self;
-		[[TGClient shared] openBotStartLink:link completion:^(int64_t openedChatId){
-			TGChatViewController *me = weakSelf;
-			if (!me)
-				return;
-			if (!openedChatId){
-				[me showAlertTitle:@"" message:@"That bot link could not be used."];
-				return;
-			}
-			[me openChatId:openedChatId title:@"Bot" isGroup:NO];
-		}];
-		return;
-	}
-	if (alertView.tag == kJoinLinkAlertTag){
-		NSString *invite = self.pendingInviteLink;
-		self.pendingInviteLink = nil;
-		if (buttonIndex == alertView.cancelButtonIndex || !invite.length)
-			return;
-		__weak typeof(self) weakSelf = self;
-		[[TGClient shared] joinChatByInviteLink:invite
-									 completion:^(int64_t joinedChatId, BOOL requestSent){
-			TGChatViewController *me = weakSelf;
-			if (!me)
-				return;
-			if (joinedChatId){
-				[me openChatId:joinedChatId title:@"Chat" isGroup:YES];
-				return;
-			}
-			[me showAlertTitle:@""
-					   message:(requestSent ? @"Your request to join has been sent."
-										    : @"This invite link was refused.")];
-		}];
-		return;
-	}
-	if (alertView.tag == kAlbumAlertTag){
-		if (buttonIndex == alertView.cancelButtonIndex){
-			self.attachMode = @"album";
-			[self pickMedia];
+		if (joinedChatId){
+			[me openChatId:joinedChatId title:@"Chat" isGroup:YES];
 			return;
 		}
-		[self sendCollectedAlbum];
+		[me showAlertTitle:@""
+				   message:(requestSent ? @"Your request to join has been sent."
+									    : @"This invite link was refused.")];
+	}];
+}
+
+- (void)handleAlbumAlert:(UIAlertView *)alertView buttonIndex:(NSInteger)buttonIndex {
+	if (buttonIndex == alertView.cancelButtonIndex){
+		self.attachMode = @"album";
+		[self pickMedia];
 		return;
 	}
-	if (alertView.tag == kVenueTitleAlertTag){
-		if (buttonIndex == alertView.cancelButtonIndex)
-			return;
-		self.venueTitle = [self textInAlert:alertView];
-		if (!self.venueTitle.length){
-			[self showAlertTitle:@"" message:@"A place needs a name."];
-			return;
-		}
-		UIAlertView *ask = [[UIAlertView alloc] initWithTitle:@"Place"
-													  message:@"Its address"
-													 delegate:self
-											cancelButtonTitle:@"Cancel"
-											otherButtonTitles:@"Send", nil];
-		if ([ask respondsToSelector:@selector(setAlertViewStyle:)])
-			ask.alertViewStyle = UIAlertViewStylePlainTextInput;
-		ask.tag = kVenueAddressAlertTag;
-		[ask show];
+	[self sendCollectedAlbum];
+}
+
+- (void)handleVenueTitleAlert:(UIAlertView *)alertView buttonIndex:(NSInteger)buttonIndex {
+	if (buttonIndex == alertView.cancelButtonIndex)
+		return;
+	self.venueTitle = [self textInAlert:alertView];
+	if (!self.venueTitle.length){
+		[self showAlertTitle:@"" message:@"A place needs a name."];
 		return;
 	}
-	if (alertView.tag == kVenueAddressAlertTag){
-		if (buttonIndex == alertView.cancelButtonIndex){
-			self.venueTitle = nil;
-			return;
-		}
-		self.venueAddress = [self textInAlert:alertView];
-		self.locationMode = @"venue";
-		[self sendCurrentLocation];
+	UIAlertView *ask = [[UIAlertView alloc] initWithTitle:@"Place"
+												  message:@"Its address"
+												 delegate:self
+										cancelButtonTitle:@"Cancel"
+										otherButtonTitles:@"Send", nil];
+	if ([ask respondsToSelector:@selector(setAlertViewStyle:)])
+		ask.alertViewStyle = UIAlertViewStylePlainTextInput;
+	ask.tag = kVenueAddressAlertTag;
+	[ask show];
+}
+
+- (void)handleVenueAddressAlert:(UIAlertView *)alertView buttonIndex:(NSInteger)buttonIndex {
+	if (buttonIndex == alertView.cancelButtonIndex){
+		self.venueTitle = nil;
 		return;
 	}
-	if (alertView.tag == kPollQuestionAlertTag){
-		if (buttonIndex == alertView.cancelButtonIndex)
-			return;
-		self.pollQuestion = [self textInAlert:alertView];
-		if (!self.pollQuestion.length){
-			[self showAlertTitle:@"" message:@"A poll needs a question."];
-			return;
-		}
+	self.venueAddress = [self textInAlert:alertView];
+	self.locationMode = @"venue";
+	[self sendCurrentLocation];
+}
+
+- (void)handlePollQuestionAlert:(UIAlertView *)alertView buttonIndex:(NSInteger)buttonIndex {
+	if (buttonIndex == alertView.cancelButtonIndex)
+		return;
+	self.pollQuestion = [self textInAlert:alertView];
+	if (!self.pollQuestion.length){
+		[self showAlertTitle:@"" message:@"A poll needs a question."];
+		return;
+	}
+	[self askPollOption];
+}
+
+- (void)handlePollOptionAlert:(UIAlertView *)alertView buttonIndex:(NSInteger)buttonIndex {
+	if (buttonIndex == alertView.cancelButtonIndex){
+		self.pollQuestion = nil;
+		self.pollOptionsBeingWritten = nil;
+		return;
+	}
+	NSString *option = [self textInAlert:alertView];
+	if (option.length)
+		[self.pollOptionsBeingWritten addObject:option];
+	if (buttonIndex == alertView.firstOtherButtonIndex &&
+		self.pollOptionsBeingWritten.count < 10){
 		[self askPollOption];
 		return;
 	}
-	if (alertView.tag == kPollOptionAlertTag){
-		if (buttonIndex == alertView.cancelButtonIndex){
-			self.pollQuestion = nil;
-			self.pollOptionsBeingWritten = nil;
-			return;
-		}
-		NSString *option = [self textInAlert:alertView];
-		if (option.length)
-			[self.pollOptionsBeingWritten addObject:option];
-		if (buttonIndex == alertView.firstOtherButtonIndex &&
-			self.pollOptionsBeingWritten.count < 10){
-			[self askPollOption];
-			return;
-		}
-		[self sendWrittenPoll];
+	[self sendWrittenPoll];
+}
+
+- (void)handleQuickReplyAlert:(UIAlertView *)alertView buttonIndex:(NSInteger)buttonIndex {
+	if (buttonIndex == alertView.cancelButtonIndex)
+		return;
+	NSString *name = [self textInAlert:alertView];
+	NSString *body = [self composerText];
+	if (!name.length || !body.length){
+		[self showAlertTitle:@"" message:@"A quick reply needs a name and some text."];
 		return;
 	}
-	if (alertView.tag == kQuickReplyAlertTag){
-		if (buttonIndex == alertView.cancelButtonIndex)
-			return;
-		NSString *name = [self textInAlert:alertView];
-		NSString *body = [self composerText];
-		if (!name.length || !body.length){
-			[self showAlertTitle:@"" message:@"A quick reply needs a name and some text."];
-			return;
-		}
-		__weak TGChatViewController *weakSelf = self;
-		[[TGClient shared] addQuickReplyShortcutNamed:name text:body
-										   completion:^(BOOL ok){
-			[weakSelf showAlertTitle:@""
-						 message:(ok ? @"Saved as a quick reply."
-									 : @"That name was refused.")];
-		}];
-		return;
-	}
-	if (alertView.tag != kReportTextAlertTag || buttonIndex == alertView.cancelButtonIndex)
+	__weak TGChatViewController *weakSelf = self;
+	[[TGClient shared] addQuickReplyShortcutNamed:name text:body
+									   completion:^(BOOL ok){
+		[weakSelf showAlertTitle:@""
+					 message:(ok ? @"Saved as a quick reply."
+								 : @"That name was refused.")];
+	}];
+}
+
+- (void)handleReportTextAlert:(UIAlertView *)alertView buttonIndex:(NSInteger)buttonIndex {
+	if (buttonIndex == alertView.cancelButtonIndex)
 		return;
 	NSString *text = @"";
 	if ([alertView respondsToSelector:@selector(textFieldAtIndex:)])
@@ -10252,6 +10305,64 @@ static UIColor *TGSenderColour(int64_t userId) {
 	[self reportMessage:self.reportMessageId
 			   optionId:self.reportTextOptionId
 				   text:text];
+}
+
+- (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {
+	if (alertView.tag == kPastePhotoAlertTag){
+		[self handlePastePhotoAlert:alertView buttonIndex:buttonIndex];
+		return;
+	}
+	if (alertView.tag == kStickerLinkAlertTag){
+		[self handleStickerLinkAlert:alertView buttonIndex:buttonIndex];
+		return;
+	}
+	if (alertView.tag == kBotPasswordAlertTag){
+		[self handleBotPasswordAlert:alertView buttonIndex:buttonIndex];
+		return;
+	}
+	if (alertView.tag == kInlineQueryAlertTag){
+		[self handleInlineQueryAlert:alertView buttonIndex:buttonIndex];
+		return;
+	}
+	if (alertView.tag == kAllowBotAlertTag){
+		[self handleAllowBotAlert:alertView buttonIndex:buttonIndex];
+		return;
+	}
+	if (alertView.tag == kBotStartAlertTag){
+		[self handleBotStartAlert:alertView buttonIndex:buttonIndex];
+		return;
+	}
+	if (alertView.tag == kJoinLinkAlertTag){
+		[self handleJoinLinkAlert:alertView buttonIndex:buttonIndex];
+		return;
+	}
+	if (alertView.tag == kAlbumAlertTag){
+		[self handleAlbumAlert:alertView buttonIndex:buttonIndex];
+		return;
+	}
+	if (alertView.tag == kVenueTitleAlertTag){
+		[self handleVenueTitleAlert:alertView buttonIndex:buttonIndex];
+		return;
+	}
+	if (alertView.tag == kVenueAddressAlertTag){
+		[self handleVenueAddressAlert:alertView buttonIndex:buttonIndex];
+		return;
+	}
+	if (alertView.tag == kPollQuestionAlertTag){
+		[self handlePollQuestionAlert:alertView buttonIndex:buttonIndex];
+		return;
+	}
+	if (alertView.tag == kPollOptionAlertTag){
+		[self handlePollOptionAlert:alertView buttonIndex:buttonIndex];
+		return;
+	}
+	if (alertView.tag == kQuickReplyAlertTag){
+		[self handleQuickReplyAlert:alertView buttonIndex:buttonIndex];
+		return;
+	}
+	if (alertView.tag != kReportTextAlertTag)
+		return;
+	[self handleReportTextAlert:alertView buttonIndex:buttonIndex];
 }
 
 #pragma mark - keyboard

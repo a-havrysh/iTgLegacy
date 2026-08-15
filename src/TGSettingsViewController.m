@@ -336,45 +336,12 @@ static NSString *TGSettingsDuration(double seconds) {
 	cell.detailTextLabel.textColor = [[TGTheme shared] cellDetailColour];
 
 	if (indexPath.section == 0){
-		if (indexPath.row == 0){
-			cell.textLabel.text = @"Name";
-			NSString *name = [self.account[@"name"] isKindOfClass:[NSString class]]
-					? self.account[@"name"] : nil;
-			cell.detailTextLabel.text = name.length ? name : @"...";
-		} else if (indexPath.row == 1){
-			cell.textLabel.text = @"Phone Number";
-			cell.detailTextLabel.text = self.phoneDetail.length ? self.phoneDetail : @"...";
-		} else if (indexPath.row == 2){
-			cell.textLabel.text = @"Usernames";
-			cell.detailTextLabel.text = [self usernameDetail];
-		} else {
-			cell.textLabel.text = @"Public Link";
-			if (!self.publicLink.length)
-				cell.detailTextLabel.text = @"...";
-			else if (self.publicLinkExpiry > 0)
-				cell.detailTextLabel.text = [NSString stringWithFormat:@"expires in %ld min",
-						(long)(self.publicLinkExpiry / 60)];
-			else
-				cell.detailTextLabel.text = self.publicLink;
-		}
+		[self fillIdentityCell:cell atRow:indexPath.row];
 		return cell;
 	}
 
 	if (indexPath.section == 1){
-		if (indexPath.row == 0){
-			cell.textLabel.text = @"Profile Photos";
-			cell.detailTextLabel.text = self.photosLoaded
-					? [NSString stringWithFormat:@"%lu", (unsigned long)self.photos.count]
-					: @"...";
-		} else if (indexPath.row == 1){
-			cell.textLabel.text = @"Birthday";
-			cell.detailTextLabel.text = self.birthdayText.length ? self.birthdayText
-																 : @"Not set";
-		} else {
-			cell.textLabel.text = @"Featured Chat";
-			cell.detailTextLabel.text = self.personalChatTitle.length
-					? self.personalChatTitle : @"None";
-		}
+		[self fillProfileCell:cell atRow:indexPath.row];
 		return cell;
 	}
 
@@ -389,6 +356,47 @@ static NSString *TGSettingsDuration(double seconds) {
 	cell.detailTextLabel.text = self.sessionDetail.length ? self.sessionDetail : @"...";
 	cell.selectionStyle = UITableViewCellSelectionStyleNone;
 	return cell;
+}
+
+- (void)fillIdentityCell:(UITableViewCell *)cell atRow:(NSInteger)row {
+	if (row == 0){
+		cell.textLabel.text = @"Name";
+		NSString *name = [self.account[@"name"] isKindOfClass:[NSString class]]
+				? self.account[@"name"] : nil;
+		cell.detailTextLabel.text = name.length ? name : @"...";
+	} else if (row == 1){
+		cell.textLabel.text = @"Phone Number";
+		cell.detailTextLabel.text = self.phoneDetail.length ? self.phoneDetail : @"...";
+	} else if (row == 2){
+		cell.textLabel.text = @"Usernames";
+		cell.detailTextLabel.text = [self usernameDetail];
+	} else {
+		cell.textLabel.text = @"Public Link";
+		if (!self.publicLink.length)
+			cell.detailTextLabel.text = @"...";
+		else if (self.publicLinkExpiry > 0)
+			cell.detailTextLabel.text = [NSString stringWithFormat:@"expires in %ld min",
+					(long)(self.publicLinkExpiry / 60)];
+		else
+			cell.detailTextLabel.text = self.publicLink;
+	}
+}
+
+- (void)fillProfileCell:(UITableViewCell *)cell atRow:(NSInteger)row {
+	if (row == 0){
+		cell.textLabel.text = @"Profile Photos";
+		cell.detailTextLabel.text = self.photosLoaded
+				? [NSString stringWithFormat:@"%lu", (unsigned long)self.photos.count]
+				: @"...";
+	} else if (row == 1){
+		cell.textLabel.text = @"Birthday";
+		cell.detailTextLabel.text = self.birthdayText.length ? self.birthdayText
+															 : @"Not set";
+	} else {
+		cell.textLabel.text = @"Featured Chat";
+		cell.detailTextLabel.text = self.personalChatTitle.length
+				? self.personalChatTitle : @"None";
+	}
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -1256,6 +1264,17 @@ static NSString *TGSettingsDuration(double seconds) {
 	NSDictionary *me = [TGClient shared].me;
 	NSString *name = [self displayName];
 
+	[self buildHeaderAvatarIn:header forName:name account:me];
+	[self buildHeaderNameLabelIn:header width:width dark:dark name:name];
+	[self buildHeaderStatusLabelIn:header width:width dark:dark];
+
+	self.tableView.tableHeaderView = header;
+	[self refreshHeader];
+}
+
+- (void)buildHeaderAvatarIn:(UIView *)header
+					forName:(NSString *)name
+					account:(NSDictionary *)me {
 	self.avatarView = [[UIImageView alloc] initWithFrame:
 			CGRectMake(9, 14, kHeaderAvatar, kHeaderAvatar)];
 	self.avatarView.layer.cornerRadius = 6.0f;
@@ -1265,7 +1284,12 @@ static NSString *TGSettingsDuration(double seconds) {
 												   size:kHeaderAvatar
 											   colourId:[me[@"id"] longLongValue]];
 	[header addSubview:self.avatarView];
+}
 
+- (void)buildHeaderNameLabelIn:(UIView *)header
+						 width:(CGFloat)width
+						  dark:(BOOL)dark
+						  name:(NSString *)name {
 	UILabel *nameLabel = [[UILabel alloc] initWithFrame:
 			CGRectMake(94, 24, width - 94 - 9, 24)];
 	nameLabel.text = name;
@@ -1281,7 +1305,11 @@ static NSString *TGSettingsDuration(double seconds) {
 	nameLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	[header addSubview:nameLabel];
 	self.headerNameLabel = nameLabel;
+}
 
+- (void)buildHeaderStatusLabelIn:(UIView *)header
+						   width:(CGFloat)width
+							dark:(BOOL)dark {
 	UILabel *status = [[UILabel alloc] initWithFrame:
 			CGRectMake(94, 52, width - 94 - 9, 24)];
 	status.text = @"online";
@@ -1290,15 +1318,12 @@ static NSString *TGSettingsDuration(double seconds) {
 							: TGSettingsRGB(0x6d7d90);
 	status.backgroundColor = [UIColor clearColor];
 	if (!dark){
-		status.shadowColor = nameLabel.shadowColor;
+		status.shadowColor = self.headerNameLabel.shadowColor;
 		status.shadowOffset = CGSizeMake(0, 1);
 	}
 	status.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	[header addSubview:status];
 	self.headerStatusLabel = status;
-
-	self.tableView.tableHeaderView = header;
-	[self refreshHeader];
 }
 
 - (NSString *)displayName {
@@ -2120,29 +2145,12 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
 	if ((NSInteger)self.page == TGSettingsPageAutoDownload)
 		return section == 0 ? (NSInteger)[TGSettingsViewController networkKinds].count : 1;
-	if ((NSInteger)self.page == TGSettingsPageAutosave){
-		if (section == 3)
-			return (NSInteger)MAX((NSUInteger)1, self.autosaveExceptions.count);
-		if (section == 4)
-			return 1;
-		return 2;
-	}
-	if ((NSInteger)self.page == TGSettingsPageDataUsage){
-		if (section == TGSettingsUsageSectionTotal)
-			return 2 + (NSInteger)self.usageNetworks.count;
-		if (section == TGSettingsUsageSectionMedia)
-			return (NSInteger)MAX((NSUInteger)1, self.usageMedia.count);
-		if (section == TGSettingsUsageSectionCalls)
-			return 3;
-		return 1;
-	}
-	if ((NSInteger)self.page == TGSettingsPageWallpaper){
-		if (section == 0)
-			return [TGTheme shared].wallpaper ? 5 : 4;
-		if (section == 2)
-			return 1;
-		return (NSInteger)MAX((NSUInteger)1, self.backgrounds.count);
-	}
+	if ((NSInteger)self.page == TGSettingsPageAutosave)
+		return [self autosaveRowsInSection:section];
+	if ((NSInteger)self.page == TGSettingsPageDataUsage)
+		return [self usageRowsInSection:section];
+	if ((NSInteger)self.page == TGSettingsPageWallpaper)
+		return [self wallpaperRowsInSection:section];
 	if ((NSInteger)self.page == TGSettingsPageChatListLayout)
 		return (NSInteger)[TGSettingsViewController chatListLayouts].count;
 	if ((NSInteger)self.page == TGSettingsPageNotificationExceptions)
@@ -2176,6 +2184,36 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		default: break;
 	}
 
+	return [self rootRowsInSection:section];
+}
+
+- (NSInteger)autosaveRowsInSection:(NSInteger)section {
+	if (section == 3)
+		return (NSInteger)MAX((NSUInteger)1, self.autosaveExceptions.count);
+	if (section == 4)
+		return 1;
+	return 2;
+}
+
+- (NSInteger)usageRowsInSection:(NSInteger)section {
+	if (section == TGSettingsUsageSectionTotal)
+		return 2 + (NSInteger)self.usageNetworks.count;
+	if (section == TGSettingsUsageSectionMedia)
+		return (NSInteger)MAX((NSUInteger)1, self.usageMedia.count);
+	if (section == TGSettingsUsageSectionCalls)
+		return 3;
+	return 1;
+}
+
+- (NSInteger)wallpaperRowsInSection:(NSInteger)section {
+	if (section == 0)
+		return [TGTheme shared].wallpaper ? 5 : 4;
+	if (section == 2)
+		return 1;
+	return (NSInteger)MAX((NSUInteger)1, self.backgrounds.count);
+}
+
+- (NSInteger)rootRowsInSection:(NSInteger)section {
 	switch ([self rootKindForSection:section]){
 		case TGSettingsRootKindSuggestions: return (NSInteger)self.suggestions.count;
 		case TGSettingsRootKindGeneral:
@@ -2237,92 +2275,31 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
 	if ((NSInteger)self.page == TGSettingsPageAutoDownload)
-		return section == 0
-			? @"Telegram cannot report which settings are in force, so these rows "
-			  @"show what this device last applied."
-			: @"Voice calls send less audio, which sounds worse and costs less "
-			  @"data. It is written onto every network type at once.";
-	if ((NSInteger)self.page == TGSettingsPageAutosave && section == 3)
-		return @"Chats with a setting of their own. Per-chat exceptions are set "
-			   @"from the chat itself.";
-	if ((NSInteger)self.page == TGSettingsPageAutosave && section == 4)
-		return @"Media arriving in these chats is copied into the camera roll.";
-	if ((NSInteger)self.page == TGSettingsPageDataUsage){
-		if (section == TGSettingsUsageSectionReset){
-			if (self.usageSince <= 0)
-				return nil;
-			NSDate *since = [NSDate dateWithTimeIntervalSince1970:self.usageSince];
-			NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-			formatter.dateStyle = NSDateFormatterMediumStyle;
-			formatter.timeStyle = NSDateFormatterShortStyle;
-			return [NSString stringWithFormat:@"Counting since %@.",
-					[formatter stringFromDate:since]];
-		}
-		if (section == TGSettingsUsageSectionCalls)
-			return @"Call traffic never reaches Telegram's own counters, so it is "
-				   @"added here as each call ends.";
-		return nil;
-	}
-	if ((NSInteger)self.page == TGSettingsPageWallpaper && section == 0)
-		return @"Blur softens a photographic wallpaper so message text stays "
-			   @"readable over it.";
-	if ((NSInteger)self.page == TGSettingsPageWallpaper && section == 2)
-		return @"Hold a background in the list above to copy its link or drop it "
-			   @"from the list. Clearing empties the whole list on your account.";
-	if ((NSInteger)self.page == TGSettingsPageWallpaper && section == 1)
-		return [TGCapabilities canShowWallpaper]
-			? @"Colours and gradients cost nothing to draw. A photograph is held "
-			  @"full-screen in memory, so pick a small one."
-			: @"This device has too little memory for a photographic wallpaper, "
-			  @"so only colours and gradients are offered.";
+		return [self autoDownloadFooterForSection:section];
+	if ((NSInteger)self.page == TGSettingsPageAutosave)
+		return [self autosaveFooterForSection:section];
+	if ((NSInteger)self.page == TGSettingsPageDataUsage)
+		return [self usageFooterForSection:section];
+	if ((NSInteger)self.page == TGSettingsPageWallpaper)
+		return [self wallpaperFooterForSection:section];
 	if ((NSInteger)self.page == TGSettingsPageChatListLayout)
 		return @"The chooser keeps the list as it is: the folder name sits in the "
 			   @"title bar and tapping it raises the list of folders. The strip "
 			   @"puts the folders under the title bar, where they are always "
 			   @"visible and cost one row of chats.";
-	if (self.page == TGSettingsPageRoot
-			&& [self rootKindForSection:section] == TGSettingsRootKindStories)
-		return @"Turn off to hide stories everywhere: no tray over the chat list "
-			   @"and no story entries anywhere in the app.";
-	if (self.page == TGSettingsPageAppearance && section == 2)
-		return @"Theme files made for the official clients - .tgios-theme and "
-			   @".attheme - are read from the app's Documents folder, or from "
-			   @"one received in a chat.";
-	if (self.page == TGSettingsPageAppearance && section == 0)
-		return (NSFoundationVersionNumber > 993.00)
-			? @"This system shipped flat, so that is the default here."
-			: @"This system shipped skeuomorphic, so that is the default here.";
-	if (self.page == TGSettingsPageNotifications){
-		if (section == TGSettingsNotifSectionReactions)
-			return @"Who may raise a notification when they react to your "
-				   @"messages or your stories, or answer one of your polls. "
-				   @"Telegram cannot report these back, so the rows show what "
-				   @"this device last wrote.";
-		if (section == TGSettingsNotifSectionSounds)
-			return @"Sounds uploaded to your account. They play in the app; "
-				   @"alerts raised while Telegram is closed use the sound the "
-				   @"system gives them.";
-		if (section == TGSettingsNotifSectionContacts)
-			return @"Telegram announces a phone-book contact the first time "
-				   @"they sign up. Turn this off to keep that quiet.";
-		if (section == TGSettingsNotifSectionReset)
-			return @"Every scope and every chat goes back to the settings a "
-				   @"fresh account has.";
-		return nil;
-	}
+	if (self.page == TGSettingsPageRoot)
+		return [self rootFooterForSection:section];
+	if (self.page == TGSettingsPageAppearance)
+		return [self appearanceFooterForSection:section];
+	if (self.page == TGSettingsPageNotifications)
+		return [self notificationsFooterForSection:section];
 	if ((NSInteger)self.page == TGSettingsPageNotificationSounds)
 		return self.savedSoundsLoaded && !self.savedSounds.count
 			? @"Nothing here yet. Sounds are uploaded from a desktop or mobile "
 			  @"Telegram and appear on every device signed into the account."
 			: @"Hold or tap a sound to drop it from the account.";
-	if ((NSInteger)self.page == TGSettingsPageNotificationExceptions && section == 1)
-		return @"Every chat in the list above goes back to the scope default.";
 	if ((NSInteger)self.page == TGSettingsPageNotificationExceptions)
-		return [self.exceptionsScope isEqualToString:TGSettingsStoriesExceptionsScope]
-			? @"These chats have a story setting of their own. Tap one to hand "
-			  @"it back to the default."
-			: @"These chats have notification settings of their own. Tap one to "
-			  @"hand it back to the scope default.";
+		return [self exceptionsFooterForSection:section];
 	if (self.page == TGSettingsPagePrivacy && section == 2)
 		return @"If you do not come online at least once within this period, "
 			   @"the account is deleted along with everything in it.";
@@ -2330,17 +2307,114 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		return @"Data Saver applies Telegram's low preset to Wi-Fi, mobile and "
 			   @"roaming at once. Turning it off puts back whatever each network "
 			   @"had before, and Auto-Download Media tunes them one by one.";
-	if (self.page == TGSettingsPageRoot
-			&& [self rootKindForSection:section] == TGSettingsRootKindGroupTools)
-		return @"Pick a group or channel when you tap one of these.";
-	if (self.page == TGSettingsPageRoot
-			&& [self rootKindForSection:section] == TGSettingsRootKindHelp)
-		return @"Save incoming photos to the Camera Roll";
 	if (self.page == TGSettingsPageLanguage)
 		return @"This app's own text is English throughout. The language is "
 			   @"what Telegram itself writes in, and it follows the account "
 			   @"onto your other devices.";
 	return nil;
+}
+
+- (NSString *)autoDownloadFooterForSection:(NSInteger)section {
+	return section == 0
+		? @"Telegram cannot report which settings are in force, so these rows "
+		  @"show what this device last applied."
+		: @"Voice calls send less audio, which sounds worse and costs less "
+		  @"data. It is written onto every network type at once.";
+}
+
+- (NSString *)autosaveFooterForSection:(NSInteger)section {
+	if (section == 3)
+		return @"Chats with a setting of their own. Per-chat exceptions are set "
+			   @"from the chat itself.";
+	if (section == 4)
+		return @"Media arriving in these chats is copied into the camera roll.";
+	return nil;
+}
+
+- (NSString *)usageFooterForSection:(NSInteger)section {
+	if (section == TGSettingsUsageSectionReset){
+		if (self.usageSince <= 0)
+			return nil;
+		NSDate *since = [NSDate dateWithTimeIntervalSince1970:self.usageSince];
+		NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+		formatter.dateStyle = NSDateFormatterMediumStyle;
+		formatter.timeStyle = NSDateFormatterShortStyle;
+		return [NSString stringWithFormat:@"Counting since %@.",
+				[formatter stringFromDate:since]];
+	}
+	if (section == TGSettingsUsageSectionCalls)
+		return @"Call traffic never reaches Telegram's own counters, so it is "
+			   @"added here as each call ends.";
+	return nil;
+}
+
+- (NSString *)wallpaperFooterForSection:(NSInteger)section {
+	if (section == 0)
+		return @"Blur softens a photographic wallpaper so message text stays "
+			   @"readable over it.";
+	if (section == 2)
+		return @"Hold a background in the list above to copy its link or drop it "
+			   @"from the list. Clearing empties the whole list on your account.";
+	if (section == 1)
+		return [TGCapabilities canShowWallpaper]
+			? @"Colours and gradients cost nothing to draw. A photograph is held "
+			  @"full-screen in memory, so pick a small one."
+			: @"This device has too little memory for a photographic wallpaper, "
+			  @"so only colours and gradients are offered.";
+	return nil;
+}
+
+- (NSString *)rootFooterForSection:(NSInteger)section {
+	NSInteger kind = [self rootKindForSection:section];
+	if (kind == TGSettingsRootKindStories)
+		return @"Turn off to hide stories everywhere: no tray over the chat list "
+			   @"and no story entries anywhere in the app.";
+	if (kind == TGSettingsRootKindGroupTools)
+		return @"Pick a group or channel when you tap one of these.";
+	if (kind == TGSettingsRootKindHelp)
+		return @"Save incoming photos to the Camera Roll";
+	return nil;
+}
+
+- (NSString *)appearanceFooterForSection:(NSInteger)section {
+	if (section == 2)
+		return @"Theme files made for the official clients - .tgios-theme and "
+			   @".attheme - are read from the app's Documents folder, or from "
+			   @"one received in a chat.";
+	if (section == 0)
+		return (NSFoundationVersionNumber > 993.00)
+			? @"This system shipped flat, so that is the default here."
+			: @"This system shipped skeuomorphic, so that is the default here.";
+	return nil;
+}
+
+- (NSString *)notificationsFooterForSection:(NSInteger)section {
+	if (section == TGSettingsNotifSectionReactions)
+		return @"Who may raise a notification when they react to your "
+			   @"messages or your stories, or answer one of your polls. "
+			   @"Telegram cannot report these back, so the rows show what "
+			   @"this device last wrote.";
+	if (section == TGSettingsNotifSectionSounds)
+		return @"Sounds uploaded to your account. They play in the app; "
+			   @"alerts raised while Telegram is closed use the sound the "
+			   @"system gives them.";
+	if (section == TGSettingsNotifSectionContacts)
+		return @"Telegram announces a phone-book contact the first time "
+			   @"they sign up. Turn this off to keep that quiet.";
+	if (section == TGSettingsNotifSectionReset)
+		return @"Every scope and every chat goes back to the settings a "
+			   @"fresh account has.";
+	return nil;
+}
+
+- (NSString *)exceptionsFooterForSection:(NSInteger)section {
+	if (section == 1)
+		return @"Every chat in the list above goes back to the scope default.";
+	return [self.exceptionsScope isEqualToString:TGSettingsStoriesExceptionsScope]
+		? @"These chats have a story setting of their own. Tap one to hand "
+		  @"it back to the default."
+		: @"These chats have notification settings of their own. Tap one to "
+		  @"hand it back to the scope default.";
 }
 
 #pragma mark - rows
@@ -2456,17 +2530,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 
 - (UITableViewCell *)fillRootCell:(UITableViewCell *)cell at:(NSIndexPath *)indexPath {
 	NSInteger kind = [self rootKindForSection:indexPath.section];
-	NSArray *table = nil;
-	if (kind == TGSettingsRootKindGeneral)
-		table = [TGSettingsViewController generalRows];
-	else if (kind == TGSettingsRootKindSettings)
-		table = [TGSettingsViewController rootSettingsRows];
-	else if (kind == TGSettingsRootKindTelegram)
-		table = [TGSettingsViewController telegramRows];
-	else if (kind == TGSettingsRootKindGroupTools)
-		table = [TGSettingsViewController groupToolRows];
-	else if (kind == TGSettingsRootKindHelp)
-		table = [TGSettingsViewController helpRows];
+	NSArray *table = [self rootRowTableForKind:kind];
 
 	if (kind == TGSettingsRootKindHelp
 			&& (NSUInteger)indexPath.row == table.count)
@@ -2476,25 +2540,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		NSArray *row = table[indexPath.row];
 		cell.textLabel.text = row[0];
 		cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
-		if (kind == TGSettingsRootKindSettings
-				&& [row[0] isEqualToString:@"Chat List"]){
-			cell.detailTextLabel.text = [TGSettingsViewController chatListLayoutTitle];
-			cell.detailTextLabel.textColor = TGSettingsRGB(0x356596);
-			cell.detailTextLabel.font = [UIFont systemFontOfSize:16];
-		}
-		if (kind == TGSettingsRootKindTelegram
-				&& [row[0] isEqualToString:@"Telegram Premium"]){
-			cell.detailTextLabel.text = self.premiumSummary.length
-					? self.premiumSummary : @"";
-			cell.detailTextLabel.textColor = TGSettingsRGB(0x356596);
-			cell.detailTextLabel.font = [UIFont systemFontOfSize:16];
-		}
-		if (kind == TGSettingsRootKindSettings
-				&& [row[0] isEqualToString:@"Proxy"]){
-			cell.detailTextLabel.text = self.proxyDetail.length ? self.proxyDetail : @"";
-			cell.detailTextLabel.textColor = TGSettingsRGB(0x356596);
-			cell.detailTextLabel.font = [UIFont systemFontOfSize:16];
-		}
+		[self decorateRootCell:cell kind:kind title:row[0]];
 		[self markDisclosure:cell];
 		return cell;
 	}
@@ -2503,6 +2549,44 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
 	cell.textLabel.textColor = [UIColor colorWithRed:0.8f green:0.1f blue:0.1f alpha:1.0f];
 	return cell;
+}
+
+- (NSArray *)rootRowTableForKind:(NSInteger)kind {
+	if (kind == TGSettingsRootKindGeneral)
+		return [TGSettingsViewController generalRows];
+	if (kind == TGSettingsRootKindSettings)
+		return [TGSettingsViewController rootSettingsRows];
+	if (kind == TGSettingsRootKindTelegram)
+		return [TGSettingsViewController telegramRows];
+	if (kind == TGSettingsRootKindGroupTools)
+		return [TGSettingsViewController groupToolRows];
+	if (kind == TGSettingsRootKindHelp)
+		return [TGSettingsViewController helpRows];
+	return nil;
+}
+
+- (void)decorateRootCell:(UITableViewCell *)cell
+					kind:(NSInteger)kind
+				   title:(NSString *)title {
+	if (kind == TGSettingsRootKindSettings
+			&& [title isEqualToString:@"Chat List"]){
+		cell.detailTextLabel.text = [TGSettingsViewController chatListLayoutTitle];
+		cell.detailTextLabel.textColor = TGSettingsRGB(0x356596);
+		cell.detailTextLabel.font = [UIFont systemFontOfSize:16];
+	}
+	if (kind == TGSettingsRootKindTelegram
+			&& [title isEqualToString:@"Telegram Premium"]){
+		cell.detailTextLabel.text = self.premiumSummary.length
+				? self.premiumSummary : @"";
+		cell.detailTextLabel.textColor = TGSettingsRGB(0x356596);
+		cell.detailTextLabel.font = [UIFont systemFontOfSize:16];
+	}
+	if (kind == TGSettingsRootKindSettings
+			&& [title isEqualToString:@"Proxy"]){
+		cell.detailTextLabel.text = self.proxyDetail.length ? self.proxyDetail : @"";
+		cell.detailTextLabel.textColor = TGSettingsRGB(0x356596);
+		cell.detailTextLabel.font = [UIFont systemFontOfSize:16];
+	}
 }
 
 - (UITableViewCell *)fillSavePhotosCell:(UITableViewCell *)cell {
@@ -2641,36 +2725,8 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	if (path.section <= TGSettingsNotifSectionChannels)
 		return [self fillNotificationScopeCell:cell at:path];
 
-	if (path.section == TGSettingsNotifSectionReactions){
-		if (path.row == 0){
-			cell.textLabel.text = @"Notify About Reactions";
-			NSUInteger index = [[TGSettingsViewController reactionSources]
-					indexOfObject:[TGSettingsViewController reactionSource]];
-			if (index == NSNotFound)
-				index = 1;
-			cell.detailTextLabel.text =
-					[TGSettingsViewController reactionSourceTitles][index];
-			[self markDisclosure:cell];
-			return cell;
-		}
-		if (path.row == 1){
-			cell.textLabel.text = @"Notify About Poll Votes";
-			NSUInteger index = [[TGSettingsViewController reactionSources]
-					indexOfObject:[TGSettingsViewController pollVoteSource]];
-			if (index == NSNotFound)
-				index = 1;
-			cell.detailTextLabel.text =
-					[TGSettingsViewController reactionSourceTitles][index];
-			[self markDisclosure:cell];
-			return cell;
-		}
-		cell.textLabel.text = @"Reaction Preview";
-		cell.selectionStyle = UITableViewCellSelectionStyleNone;
-		cell.accessoryView = [self notificationSwitchOn:
-				[TGSettingsViewController reactionPreview]
-												   tag:path.section * 10 + path.row];
-		return cell;
-	}
+	if (path.section == TGSettingsNotifSectionReactions)
+		return [self fillReactionCell:cell at:path];
 
 	if (path.section == TGSettingsNotifSectionStories){
 		cell.textLabel.text = @"Story Exceptions";
@@ -2699,6 +2755,37 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	cell.textLabel.text = @"Reset All Notifications";
 	cell.textLabel.textColor = TGSettingsRGB(0xc4362f);
 	cell.textLabel.textAlignment = NSTextAlignmentCenter;
+	return cell;
+}
+
+- (UITableViewCell *)fillReactionCell:(UITableViewCell *)cell at:(NSIndexPath *)path {
+	if (path.row == 0){
+		cell.textLabel.text = @"Notify About Reactions";
+		NSUInteger index = [[TGSettingsViewController reactionSources]
+				indexOfObject:[TGSettingsViewController reactionSource]];
+		if (index == NSNotFound)
+			index = 1;
+		cell.detailTextLabel.text =
+				[TGSettingsViewController reactionSourceTitles][index];
+		[self markDisclosure:cell];
+		return cell;
+	}
+	if (path.row == 1){
+		cell.textLabel.text = @"Notify About Poll Votes";
+		NSUInteger index = [[TGSettingsViewController reactionSources]
+				indexOfObject:[TGSettingsViewController pollVoteSource]];
+		if (index == NSNotFound)
+			index = 1;
+		cell.detailTextLabel.text =
+				[TGSettingsViewController reactionSourceTitles][index];
+		[self markDisclosure:cell];
+		return cell;
+	}
+	cell.textLabel.text = @"Reaction Preview";
+	cell.selectionStyle = UITableViewCellSelectionStyleNone;
+	cell.accessoryView = [self notificationSwitchOn:
+			[TGSettingsViewController reactionPreview]
+											   tag:path.section * 10 + path.row];
 	return cell;
 }
 
@@ -2995,60 +3082,14 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	cell.detailTextLabel.textColor = [[TGTheme shared] cellDetailColour];
 	cell.selectionStyle = UITableViewCellSelectionStyleNone;
 
-	if (path.section == TGSettingsUsageSectionTotal){
-		if (path.row == 0){
-			cell.textLabel.text = @"Sent";
-			cell.detailTextLabel.text = TGSettingsBytes(self.usageSent);
-			return cell;
-		}
-		if (path.row == 1){
-			cell.textLabel.text = @"Received";
-			cell.detailTextLabel.text = TGSettingsBytes(self.usageReceived);
-			return cell;
-		}
-		NSUInteger index = (NSUInteger)(path.row - 2);
-		if (index >= self.usageNetworks.count)
-			return cell;
-		NSDictionary *entry = self.usageNetworks[index];
-		cell.textLabel.text = [TGSettingsViewController
-				usageNetworkTitle:entry[@"name"]];
-		cell.detailTextLabel.text =
-				TGSettingsBytes([entry[@"bytes"] longLongValue]);
-		return cell;
-	}
+	if (path.section == TGSettingsUsageSectionTotal)
+		return [self fillUsageTotalCell:cell at:path];
 
-	if (path.section == TGSettingsUsageSectionMedia){
-		if (!self.usageMedia.count){
-			cell.textLabel.text = self.usageLoaded ? @"Nothing counted yet"
-												   : @"Loading...";
-			cell.textLabel.font = [UIFont systemFontOfSize:15];
-			cell.textLabel.textColor = [[TGTheme shared] secondaryTextColour];
-			return cell;
-		}
-		NSDictionary *entry = self.usageMedia[path.row];
-		cell.textLabel.text = [TGSettingsViewController
-				usageMediaTitle:entry[@"kind"]];
-		cell.detailTextLabel.text =
-				TGSettingsBytes([entry[@"bytes"] longLongValue]);
-		return cell;
-	}
+	if (path.section == TGSettingsUsageSectionMedia)
+		return [self fillUsageMediaCell:cell at:path];
 
-	if (path.section == TGSettingsUsageSectionCalls){
-		if (path.row == 0){
-			cell.textLabel.text = @"Sent";
-			cell.detailTextLabel.text =
-					TGSettingsBytes([self.usageCalls[@"sent"] longLongValue]);
-		} else if (path.row == 1){
-			cell.textLabel.text = @"Received";
-			cell.detailTextLabel.text =
-					TGSettingsBytes([self.usageCalls[@"received"] longLongValue]);
-		} else {
-			cell.textLabel.text = @"Total time";
-			cell.detailTextLabel.text =
-					TGSettingsDuration([self.usageCalls[@"duration"] doubleValue]);
-		}
-		return cell;
-	}
+	if (path.section == TGSettingsUsageSectionCalls)
+		return [self fillUsageCallsCell:cell at:path];
 
 	cell.textLabel.text = @"Reset statistics";
 	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
@@ -3057,34 +3098,66 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	return cell;
 }
 
+- (UITableViewCell *)fillUsageTotalCell:(UITableViewCell *)cell at:(NSIndexPath *)path {
+	if (path.row == 0){
+		cell.textLabel.text = @"Sent";
+		cell.detailTextLabel.text = TGSettingsBytes(self.usageSent);
+		return cell;
+	}
+	if (path.row == 1){
+		cell.textLabel.text = @"Received";
+		cell.detailTextLabel.text = TGSettingsBytes(self.usageReceived);
+		return cell;
+	}
+	NSUInteger index = (NSUInteger)(path.row - 2);
+	if (index >= self.usageNetworks.count)
+		return cell;
+	NSDictionary *entry = self.usageNetworks[index];
+	cell.textLabel.text = [TGSettingsViewController
+			usageNetworkTitle:entry[@"name"]];
+	cell.detailTextLabel.text =
+			TGSettingsBytes([entry[@"bytes"] longLongValue]);
+	return cell;
+}
+
+- (UITableViewCell *)fillUsageMediaCell:(UITableViewCell *)cell at:(NSIndexPath *)path {
+	if (!self.usageMedia.count){
+		cell.textLabel.text = self.usageLoaded ? @"Nothing counted yet"
+											   : @"Loading...";
+		cell.textLabel.font = [UIFont systemFontOfSize:15];
+		cell.textLabel.textColor = [[TGTheme shared] secondaryTextColour];
+		return cell;
+	}
+	NSDictionary *entry = self.usageMedia[path.row];
+	cell.textLabel.text = [TGSettingsViewController
+			usageMediaTitle:entry[@"kind"]];
+	cell.detailTextLabel.text =
+			TGSettingsBytes([entry[@"bytes"] longLongValue]);
+	return cell;
+}
+
+- (UITableViewCell *)fillUsageCallsCell:(UITableViewCell *)cell at:(NSIndexPath *)path {
+	if (path.row == 0){
+		cell.textLabel.text = @"Sent";
+		cell.detailTextLabel.text =
+				TGSettingsBytes([self.usageCalls[@"sent"] longLongValue]);
+	} else if (path.row == 1){
+		cell.textLabel.text = @"Received";
+		cell.detailTextLabel.text =
+				TGSettingsBytes([self.usageCalls[@"received"] longLongValue]);
+	} else {
+		cell.textLabel.text = @"Total time";
+		cell.detailTextLabel.text =
+				TGSettingsDuration([self.usageCalls[@"duration"] doubleValue]);
+	}
+	return cell;
+}
+
 - (UITableViewCell *)fillAutosaveCell:(UITableViewCell *)cell at:(NSIndexPath *)path {
 	cell.textLabel.font = [UIFont boldSystemFontOfSize:15];
 
-	if (path.section == 3){
-		if (!self.autosaveExceptions.count){
-			cell.textLabel.text = self.autosaveExceptionsLoaded ? @"No exceptions"
-															   : @"Loading...";
-			cell.textLabel.textColor = [[TGTheme shared] secondaryTextColour];
-			cell.selectionStyle = UITableViewCellSelectionStyleNone;
-			return cell;
-		}
-		NSDictionary *entry = self.autosaveExceptions[path.row];
-		if (![entry isKindOfClass:[NSDictionary class]])
-			return cell;
-		int64_t chatId = [entry[@"chatId"] longLongValue];
-		NSString *title = self.chatTitles[@(chatId)];
-		cell.textLabel.text = title.length ? title : @"Chat";
-		cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
-		NSMutableArray *parts = [NSMutableArray array];
-		if ([entry[@"photos"] boolValue]) [parts addObject:@"photos"];
-		if ([entry[@"videos"] boolValue]) [parts addObject:@"videos"];
-		cell.detailTextLabel.text = parts.count
-				? [[parts componentsJoinedByString:@", "] capitalizedString]
-				: @"Nothing saved";
-		cell.detailTextLabel.textColor = [[TGTheme shared] secondaryTextColour];
-		cell.selectionStyle = UITableViewCellSelectionStyleNone;
-		return cell;
-	}
+	if (path.section == 3)
+		return [self fillAutosaveExceptionCell:cell at:path];
 
 	if (path.section == 4){
 		cell.textLabel.text = @"Clear exceptions";
@@ -3102,6 +3175,33 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	[toggle addTarget:self action:@selector(autosaveToggled:)
 	 forControlEvents:UIControlEventValueChanged];
 	cell.accessoryView = toggle;
+	cell.selectionStyle = UITableViewCellSelectionStyleNone;
+	return cell;
+}
+
+- (UITableViewCell *)fillAutosaveExceptionCell:(UITableViewCell *)cell
+											at:(NSIndexPath *)path {
+	if (!self.autosaveExceptions.count){
+		cell.textLabel.text = self.autosaveExceptionsLoaded ? @"No exceptions"
+														   : @"Loading...";
+		cell.textLabel.textColor = [[TGTheme shared] secondaryTextColour];
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		return cell;
+	}
+	NSDictionary *entry = self.autosaveExceptions[path.row];
+	if (![entry isKindOfClass:[NSDictionary class]])
+		return cell;
+	int64_t chatId = [entry[@"chatId"] longLongValue];
+	NSString *title = self.chatTitles[@(chatId)];
+	cell.textLabel.text = title.length ? title : @"Chat";
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+	NSMutableArray *parts = [NSMutableArray array];
+	if ([entry[@"photos"] boolValue]) [parts addObject:@"photos"];
+	if ([entry[@"videos"] boolValue]) [parts addObject:@"videos"];
+	cell.detailTextLabel.text = parts.count
+			? [[parts componentsJoinedByString:@", "] capitalizedString]
+			: @"Nothing saved";
+	cell.detailTextLabel.textColor = [[TGTheme shared] secondaryTextColour];
 	cell.selectionStyle = UITableViewCellSelectionStyleNone;
 	return cell;
 }
@@ -3149,38 +3249,8 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		return cell;
 	}
 
-	if (path.section == 0){
-		if (path.row == 0){
-			cell.textLabel.text = @"Choose from library";
-			cell.detailTextLabel.text = [TGTheme shared].wallpaper ? @"Set" : @"None";
-			cell.detailTextLabel.textColor = [[TGTheme shared] cellDetailColour];
-			[self markDisclosure:cell];
-			return cell;
-		}
-		if (path.row == 1){
-			cell.textLabel.text = @"Solid colour";
-			[self markDisclosure:cell];
-			return cell;
-		}
-		if (path.row == 2){
-			cell.textLabel.text = @"Gradient";
-			[self markDisclosure:cell];
-			return cell;
-		}
-		if (path.row == 3){
-			cell.textLabel.text = @"Blur";
-			UISwitch *toggle = [[UISwitch alloc] init];
-			toggle.on = self.wallpaperBlurred;
-			[toggle addTarget:self action:@selector(wallpaperBlurToggled:)
-			 forControlEvents:UIControlEventValueChanged];
-			cell.accessoryView = toggle;
-			cell.selectionStyle = UITableViewCellSelectionStyleNone;
-			return cell;
-		}
-		cell.textLabel.text = @"Remove wallpaper";
-		cell.textLabel.textColor = [UIColor colorWithRed:0.8f green:0.1f blue:0.1f alpha:1.0f];
-		return cell;
-	}
+	if (path.section == 0)
+		return [self fillWallpaperChooserCell:cell at:path];
 
 	if (!self.backgrounds.count){
 		cell.textLabel.text = self.backgroundsLoaded ? @"No backgrounds on this account"
@@ -3207,6 +3277,40 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	return cell;
 }
 
+- (UITableViewCell *)fillWallpaperChooserCell:(UITableViewCell *)cell
+										   at:(NSIndexPath *)path {
+	if (path.row == 0){
+		cell.textLabel.text = @"Choose from library";
+		cell.detailTextLabel.text = [TGTheme shared].wallpaper ? @"Set" : @"None";
+		cell.detailTextLabel.textColor = [[TGTheme shared] cellDetailColour];
+		[self markDisclosure:cell];
+		return cell;
+	}
+	if (path.row == 1){
+		cell.textLabel.text = @"Solid colour";
+		[self markDisclosure:cell];
+		return cell;
+	}
+	if (path.row == 2){
+		cell.textLabel.text = @"Gradient";
+		[self markDisclosure:cell];
+		return cell;
+	}
+	if (path.row == 3){
+		cell.textLabel.text = @"Blur";
+		UISwitch *toggle = [[UISwitch alloc] init];
+		toggle.on = self.wallpaperBlurred;
+		[toggle addTarget:self action:@selector(wallpaperBlurToggled:)
+		 forControlEvents:UIControlEventValueChanged];
+		cell.accessoryView = toggle;
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		return cell;
+	}
+	cell.textLabel.text = @"Remove wallpaper";
+	cell.textLabel.textColor = [UIColor colorWithRed:0.8f green:0.1f blue:0.1f alpha:1.0f];
+	return cell;
+}
+
 + (NSArray *)archiveKeys {
 	static NSArray *keys = nil;
 	if (!keys)
@@ -3226,53 +3330,61 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 - (UITableViewCell *)fillDataCell:(UITableViewCell *)cell at:(NSIndexPath *)indexPath {
 	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
 
-	if (indexPath.section == 0){
-		if (indexPath.row == 0){
-			cell.textLabel.text = @"Storage and cache";
-			[self markDisclosure:cell];
-			return cell;
-		}
-		if (indexPath.row == 1){
-			cell.textLabel.text = @"Data Usage";
-			[self markDisclosure:cell];
-			return cell;
-		}
-		if (indexPath.row == 2){
-			cell.textLabel.text = @"Auto-Download Media";
-			[self markDisclosure:cell];
-			return cell;
-		}
-		if (indexPath.row == 3){
-			cell.textLabel.text = @"Save to Camera Roll";
-			[self markDisclosure:cell];
-			return cell;
-		}
-		cell.textLabel.text = @"Data Saver";
-		UISwitch *toggle = [[UISwitch alloc] init];
-		toggle.on = self.dataSaver;
-		[toggle addTarget:self action:@selector(dataSaverToggled:)
-		 forControlEvents:UIControlEventValueChanged];
-		cell.accessoryView = toggle;
-		cell.selectionStyle = UITableViewCellSelectionStyleNone;
-		return cell;
-	}
+	if (indexPath.section == 0)
+		return [self fillDataMainCell:cell at:indexPath];
 
-	if (indexPath.section == 1){
-		NSString *key = [TGSettingsViewController archiveKeys][indexPath.row];
-		cell.textLabel.text = [TGSettingsViewController archiveTitles][indexPath.row];
-		cell.textLabel.font = [UIFont boldSystemFontOfSize:15];
-		UISwitch *toggle = [[UISwitch alloc] init];
-		toggle.on = [self.archive[key] boolValue];
-		toggle.tag = indexPath.row;
-		[toggle addTarget:self action:@selector(archiveToggled:)
-		 forControlEvents:UIControlEventValueChanged];
-		cell.accessoryView = toggle;
-		cell.selectionStyle = UITableViewCellSelectionStyleNone;
-		return cell;
-	}
+	if (indexPath.section == 1)
+		return [self fillArchiveCell:cell at:indexPath];
 
 	cell.textLabel.text = @"Clear local database";
 	cell.textLabel.textColor = [UIColor colorWithRed:0.8f green:0.1f blue:0.1f alpha:1.0f];
+	return cell;
+}
+
+- (UITableViewCell *)fillDataMainCell:(UITableViewCell *)cell
+								   at:(NSIndexPath *)indexPath {
+	if (indexPath.row == 0){
+		cell.textLabel.text = @"Storage and cache";
+		[self markDisclosure:cell];
+		return cell;
+	}
+	if (indexPath.row == 1){
+		cell.textLabel.text = @"Data Usage";
+		[self markDisclosure:cell];
+		return cell;
+	}
+	if (indexPath.row == 2){
+		cell.textLabel.text = @"Auto-Download Media";
+		[self markDisclosure:cell];
+		return cell;
+	}
+	if (indexPath.row == 3){
+		cell.textLabel.text = @"Save to Camera Roll";
+		[self markDisclosure:cell];
+		return cell;
+	}
+	cell.textLabel.text = @"Data Saver";
+	UISwitch *toggle = [[UISwitch alloc] init];
+	toggle.on = self.dataSaver;
+	[toggle addTarget:self action:@selector(dataSaverToggled:)
+	 forControlEvents:UIControlEventValueChanged];
+	cell.accessoryView = toggle;
+	cell.selectionStyle = UITableViewCellSelectionStyleNone;
+	return cell;
+}
+
+- (UITableViewCell *)fillArchiveCell:(UITableViewCell *)cell
+								  at:(NSIndexPath *)indexPath {
+	NSString *key = [TGSettingsViewController archiveKeys][indexPath.row];
+	cell.textLabel.text = [TGSettingsViewController archiveTitles][indexPath.row];
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:15];
+	UISwitch *toggle = [[UISwitch alloc] init];
+	toggle.on = [self.archive[key] boolValue];
+	toggle.tag = indexPath.row;
+	[toggle addTarget:self action:@selector(archiveToggled:)
+	 forControlEvents:UIControlEventValueChanged];
+	cell.accessoryView = toggle;
+	cell.selectionStyle = UITableViewCellSelectionStyleNone;
 	return cell;
 }
 
@@ -3400,21 +3512,31 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		return;
 	}
 
+	[self applyScopeToggle:toggle section:section row:row];
+}
+
+- (NSDictionary *)scopeChangesForKind:(NSString *)kind on:(BOOL)on {
+	if ([kind isEqualToString:@"alert"])
+		return @{@"muteFor" : @(on ? 0 : TGNotificationMuteForever)};
+	if ([kind isEqualToString:@"preview"])
+		return @{@"showPreview" : @(on)};
+	if ([kind isEqualToString:@"pinned"])
+		return @{@"disablePinnedMessageNotifications" : @(!on)};
+	if ([kind isEqualToString:@"mentions"])
+		return @{@"disableMentionNotifications" : @(!on)};
+	return nil;
+}
+
+- (void)applyScopeToggle:(UISwitch *)toggle
+				 section:(NSInteger)section
+					 row:(NSInteger)row {
 	NSArray *rows = [TGSettingsViewController notificationRowsForSection:section];
 	if ((NSUInteger)row >= rows.count)
 		return;
 	NSString *kind = rows[row];
 	NSString *scope = [TGSettingsViewController notificationScopes][section];
 
-	NSDictionary *changes = nil;
-	if ([kind isEqualToString:@"alert"])
-		changes = @{@"muteFor" : @(toggle.on ? 0 : TGNotificationMuteForever)};
-	else if ([kind isEqualToString:@"preview"])
-		changes = @{@"showPreview" : @(toggle.on)};
-	else if ([kind isEqualToString:@"pinned"])
-		changes = @{@"disablePinnedMessageNotifications" : @(!toggle.on)};
-	else if ([kind isEqualToString:@"mentions"])
-		changes = @{@"disableMentionNotifications" : @(!toggle.on)};
+	NSDictionary *changes = [self scopeChangesForKind:kind on:toggle.on];
 	if (!changes)
 		return;
 
@@ -3458,40 +3580,51 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		return;
 	}
 	if (path.section == TGSettingsNotifSectionReactions && path.row == 1){
-		UIActionSheet *sheet = [[UIActionSheet alloc]
-				initWithTitle:@"Notify about poll votes from"
-					 delegate:self
-			cancelButtonTitle:nil
-	   destructiveButtonTitle:nil
-			otherButtonTitles:@"Everybody", @"My Contacts", @"Nobody", nil];
-		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
-		sheet.tag = 142;
-		[sheet showInView:self.view];
+		[self showPollVoteSourceSheet];
 		return;
 	}
 	if (path.section == TGSettingsNotifSectionReactions && path.row == 0){
-		UIActionSheet *sheet = [[UIActionSheet alloc]
-				initWithTitle:@"Notify about reactions from"
-					 delegate:self
-			cancelButtonTitle:nil
-	   destructiveButtonTitle:nil
-			otherButtonTitles:@"Everybody", @"My Contacts", @"Nobody", nil];
-		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
-		sheet.tag = 141;
-		[sheet showInView:self.view];
+		[self showReactionSourceSheet];
 		return;
 	}
-	if (path.section == TGSettingsNotifSectionReset){
-		UIAlertView *confirm = [[UIAlertView alloc]
-				initWithTitle:@"Reset All Notifications"
-					  message:@"Every scope and every chat goes back to its "
-							  @"default notification settings."
-					 delegate:self
-			cancelButtonTitle:@"Cancel"
-			otherButtonTitles:@"Reset", nil];
-		confirm.tag = 404;
-		[confirm show];
-	}
+	if (path.section == TGSettingsNotifSectionReset)
+		[self confirmResetAllNotifications];
+}
+
+- (void)showPollVoteSourceSheet {
+	UIActionSheet *sheet = [[UIActionSheet alloc]
+			initWithTitle:@"Notify about poll votes from"
+				 delegate:self
+		cancelButtonTitle:nil
+   destructiveButtonTitle:nil
+		otherButtonTitles:@"Everybody", @"My Contacts", @"Nobody", nil];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = 142;
+	[sheet showInView:self.view];
+}
+
+- (void)showReactionSourceSheet {
+	UIActionSheet *sheet = [[UIActionSheet alloc]
+			initWithTitle:@"Notify about reactions from"
+				 delegate:self
+		cancelButtonTitle:nil
+   destructiveButtonTitle:nil
+		otherButtonTitles:@"Everybody", @"My Contacts", @"Nobody", nil];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = 141;
+	[sheet showInView:self.view];
+}
+
+- (void)confirmResetAllNotifications {
+	UIAlertView *confirm = [[UIAlertView alloc]
+			initWithTitle:@"Reset All Notifications"
+				  message:@"Every scope and every chat goes back to its "
+						  @"default notification settings."
+				 delegate:self
+		cancelButtonTitle:@"Cancel"
+		otherButtonTitles:@"Reset", nil];
+	confirm.tag = 404;
+	[confirm show];
 }
 
 - (BOOL)canClearExceptions {
@@ -3622,6 +3755,10 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		default: break;
 	}
 
+	[self tapRootRowAtIndexPath:indexPath];
+}
+
+- (void)tapRootRowAtIndexPath:(NSIndexPath *)indexPath {
 	NSInteger kind = [self rootKindForSection:indexPath.section];
 
 	if (kind == TGSettingsRootKindSuggestions){
@@ -3636,12 +3773,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	}
 
 	if (kind == TGSettingsRootKindGeneral){
-		if (indexPath.row == 0)
-			[self openPage:TGSettingsPageNotifications];
-		else if (indexPath.row == 1)
-			[self openPage:TGSettingsPageBlocked];
-		else
-			[self openPage:TGSettingsPageAppearance];
+		[self tapGeneralRow:indexPath.row];
 		return;
 	}
 
@@ -3670,6 +3802,15 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	}
 
 	[self confirmLogout];
+}
+
+- (void)tapGeneralRow:(NSInteger)row {
+	if (row == 0)
+		[self openPage:TGSettingsPageNotifications];
+	else if (row == 1)
+		[self openPage:TGSettingsPageBlocked];
+	else
+		[self openPage:TGSettingsPageAppearance];
 }
 
 - (void)tapData:(NSIndexPath *)indexPath {
@@ -4160,51 +4301,12 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 
 - (void)tapWallpaper:(NSIndexPath *)indexPath {
 	if (indexPath.section == 2){
-		UIAlertView *confirm = [[UIAlertView alloc]
-				initWithTitle:@"Clear background list"
-					  message:@"Every background installed on this account is "
-							  @"forgotten. The one in use stays as it is."
-					 delegate:self
-			cancelButtonTitle:@"Cancel"
-			otherButtonTitles:@"Clear", nil];
-		confirm.tag = 406;
-		[confirm show];
+		[self confirmClearBackgroundList];
 		return;
 	}
 
 	if (indexPath.section == 0){
-		if (indexPath.row == 0){
-			[self presentWallpaperPicker];
-			return;
-		}
-		if (indexPath.row == 1){
-			UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Solid colour"
-					delegate:self cancelButtonTitle:nil destructiveButtonTitle:nil
-			  otherButtonTitles:nil];
-			for (NSString *name in [TGSettingsViewController wallpaperColourNames])
-				[sheet addButtonWithTitle:name];
-			sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
-			sheet.tag = 150;
-			[sheet showInView:self.view];
-			return;
-		}
-		if (indexPath.row == 2){
-			UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Gradient"
-					delegate:self cancelButtonTitle:nil destructiveButtonTitle:nil
-			  otherButtonTitles:nil];
-			for (NSString *name in [TGSettingsViewController wallpaperGradientNames])
-				[sheet addButtonWithTitle:name];
-			sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
-			sheet.tag = 151;
-			[sheet showInView:self.view];
-			return;
-		}
-		if (indexPath.row == 3)
-			return;
-		self.wallpaperOriginal = nil;
-		[[TGTheme shared] setWallpaperImage:nil];
-		[[TGClient shared] resetDefaultBackgroundForDarkTheme:[[TGTheme shared] isDark]];
-		[self.tableView reloadData];
+		[self tapWallpaperChooserRow:indexPath.row];
 		return;
 	}
 
@@ -4214,6 +4316,61 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	if (![background isKindOfClass:[NSDictionary class]])
 		return;
 	[self applyBackground:background];
+}
+
+- (void)confirmClearBackgroundList {
+	UIAlertView *confirm = [[UIAlertView alloc]
+			initWithTitle:@"Clear background list"
+				  message:@"Every background installed on this account is "
+						  @"forgotten. The one in use stays as it is."
+				 delegate:self
+		cancelButtonTitle:@"Cancel"
+		otherButtonTitles:@"Clear", nil];
+	confirm.tag = 406;
+	[confirm show];
+}
+
+- (void)tapWallpaperChooserRow:(NSInteger)row {
+	if (row == 0){
+		[self presentWallpaperPicker];
+		return;
+	}
+	if (row == 1){
+		[self showWallpaperColourSheet];
+		return;
+	}
+	if (row == 2){
+		[self showWallpaperGradientSheet];
+		return;
+	}
+	if (row == 3)
+		return;
+	self.wallpaperOriginal = nil;
+	[[TGTheme shared] setWallpaperImage:nil];
+	[[TGClient shared] resetDefaultBackgroundForDarkTheme:[[TGTheme shared] isDark]];
+	[self.tableView reloadData];
+}
+
+- (void)showWallpaperColourSheet {
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Solid colour"
+			delegate:self cancelButtonTitle:nil destructiveButtonTitle:nil
+	  otherButtonTitles:nil];
+	for (NSString *name in [TGSettingsViewController wallpaperColourNames])
+		[sheet addButtonWithTitle:name];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = 150;
+	[sheet showInView:self.view];
+}
+
+- (void)showWallpaperGradientSheet {
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Gradient"
+			delegate:self cancelButtonTitle:nil destructiveButtonTitle:nil
+	  otherButtonTitles:nil];
+	for (NSString *name in [TGSettingsViewController wallpaperGradientNames])
+		[sheet addButtonWithTitle:name];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = 151;
+	[sheet showInView:self.view];
 }
 
 - (void)applyBackground:(NSDictionary *)background {
@@ -4291,41 +4448,22 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		return;
 
 	if (sheet.tag == 88){
-		[TGTheme shared].messageFontSize = 13.0f + index * 2.0f;
-		[self.tableView reloadData];
+		[self applyMessageFontSizeAtIndex:index];
 		return;
 	}
 
 	if (sheet.tag == 90){
-		static const NSInteger months[4] = {1, 3, 6, 12};
-		[[TGClient shared] setAccountTtlDays:months[index] * 30];
-		self.accountTtl = months[index] * 30;
-		[self.tableView reloadData];
+		[self applyAccountTtlAtIndex:index];
 		return;
 	}
 
 	if (sheet.tag == 89){
-		if (index == sheet.destructiveButtonIndex)
-			[[TGTheme shared] setWallpaperImage:nil];
-		else
-			[self presentWallpaperPicker];
-		[self.tableView reloadData];
+		[self handleWallpaperSheet:sheet atIndex:index];
 		return;
 	}
 
 	if (sheet.tag == 141 || sheet.tag == 142){
-		NSArray *sources = [TGSettingsViewController reactionSources];
-		if ((NSUInteger)index >= sources.count)
-			return;
-		if (sheet.tag == 141)
-			[self writeReactionSource:sources[index]
-					   pollVoteSource:[TGSettingsViewController pollVoteSource]
-							  preview:[TGSettingsViewController reactionPreview]];
-		else
-			[self writeReactionSource:[TGSettingsViewController reactionSource]
-					   pollVoteSource:sources[index]
-							  preview:[TGSettingsViewController reactionPreview]];
-		[self.tableView reloadData];
+		[self applyReactionSourceFromSheet:sheet atIndex:index];
 		return;
 	}
 
@@ -4367,21 +4505,64 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	}
 
 	if (sheet.tag >= 91){
-		NSInteger row = sheet.tag - 91;
-		NSString *setting = [TGSettingsViewController privacySettings][row];
-		NSString *value = @[@"everybody", @"contacts", @"nobody"][index];
-		[[TGClient shared] setPrivacyRule:setting to:value];
-		self.privacy[setting] = value;
-		[self.tableView reloadData];
+		[self applyPrivacyRuleForSheetTag:sheet.tag atIndex:index];
 		return;
 	}
 
+	[self handleUntaggedWallpaperSheet:sheet atIndex:index];
+}
+
+- (void)handleUntaggedWallpaperSheet:(UIActionSheet *)sheet atIndex:(NSInteger)index {
 	if (index == sheet.destructiveButtonIndex){
 		[[TGTheme shared] setWallpaperImage:nil];
 		[self.tableView reloadData];
 		return;
 	}
 	[self presentWallpaperPicker];
+}
+
+- (void)applyMessageFontSizeAtIndex:(NSInteger)index {
+	[TGTheme shared].messageFontSize = 13.0f + index * 2.0f;
+	[self.tableView reloadData];
+}
+
+- (void)applyAccountTtlAtIndex:(NSInteger)index {
+	static const NSInteger months[4] = {1, 3, 6, 12};
+	[[TGClient shared] setAccountTtlDays:months[index] * 30];
+	self.accountTtl = months[index] * 30;
+	[self.tableView reloadData];
+}
+
+- (void)handleWallpaperSheet:(UIActionSheet *)sheet atIndex:(NSInteger)index {
+	if (index == sheet.destructiveButtonIndex)
+		[[TGTheme shared] setWallpaperImage:nil];
+	else
+		[self presentWallpaperPicker];
+	[self.tableView reloadData];
+}
+
+- (void)applyReactionSourceFromSheet:(UIActionSheet *)sheet atIndex:(NSInteger)index {
+	NSArray *sources = [TGSettingsViewController reactionSources];
+	if ((NSUInteger)index >= sources.count)
+		return;
+	if (sheet.tag == 141)
+		[self writeReactionSource:sources[index]
+				   pollVoteSource:[TGSettingsViewController pollVoteSource]
+						  preview:[TGSettingsViewController reactionPreview]];
+	else
+		[self writeReactionSource:[TGSettingsViewController reactionSource]
+				   pollVoteSource:sources[index]
+						  preview:[TGSettingsViewController reactionPreview]];
+	[self.tableView reloadData];
+}
+
+- (void)applyPrivacyRuleForSheetTag:(NSInteger)tag atIndex:(NSInteger)index {
+	NSInteger row = tag - 91;
+	NSString *setting = [TGSettingsViewController privacySettings][row];
+	NSString *value = @[@"everybody", @"contacts", @"nobody"][index];
+	[[TGClient shared] setPrivacyRule:setting to:value];
+	self.privacy[setting] = value;
+	[self.tableView reloadData];
 }
 
 - (void)toggleProxyFromSheet {
@@ -4663,77 +4844,95 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 - (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {
 	if (buttonIndex == alertView.cancelButtonIndex)
 		return;
-	if (alertView.tag == 401){
-		[[TGClient shared] logOutWithCompletion:^(BOOL ok){
-			if (ok){
-				[[TGClient shared] forgetAutoDownloadSettingsMirror];
-				[[NSUserDefaults standardUserDefaults]
-						removeObjectForKey:TGSettingsPresetDefaultsKey];
-				[[NSUserDefaults standardUserDefaults] synchronize];
-				return;
-			}
-			UIAlertView *failed = [[UIAlertView alloc] initWithTitle:@"Log out"
-					message:@"Telegram could not close this session. Try again "
-							@"once the connection is back."
-				   delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
-			[failed show];
-		}];
-	}
+	if (alertView.tag == 401)
+		[self confirmedLogOut];
 	else if (alertView.tag == 402)
 		[[TGClient shared] clearLocalDatabase];
-	else if (alertView.tag == 403){
-		[[TGClient shared] clearAutosaveExceptions];
-		self.autosaveExceptions = @[];
-		[self.tableView reloadData];
-	}
-	else if (alertView.tag == 406){
-		[[TGClient shared] resetInstalledBackgrounds];
-		self.backgrounds = @[];
-		self.backgroundsLoaded = YES;
-		[self.tableView reloadData];
-	}
-	else if (alertView.tag == 405){
-		__weak typeof(self) weakSelf = self;
-		[[TGClient shared] resetNetworkStatisticsWithCompletion:^(BOOL ok){
-			if (!ok)
-				return;
-			weakSelf.usageMedia = @[];
-			weakSelf.usageNetworks = @[];
-			weakSelf.usageCalls = nil;
-			weakSelf.usageSent = 0;
-			weakSelf.usageReceived = 0;
-			[weakSelf loadUsage];
-			[weakSelf.tableView reloadData];
-		}];
-	}
-	else if (alertView.tag == 407){
-		__weak typeof(self) weakSelf = self;
-		[[TGClient shared] clearNotificationExceptionsForScope:self.exceptionsScope
-													completion:^(NSInteger resetCount){
-			weakSelf.exceptions = @[];
-			weakSelf.exceptionsLoaded = YES;
-			[weakSelf.tableView reloadData];
-			if (resetCount <= 0)
-				return;
-			UIAlertView *done = [[UIAlertView alloc] initWithTitle:@"Exceptions"
-					message:[NSString stringWithFormat:
-							@"%d chats went back to the scope default.",
-							(int)resetCount]
-				   delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
-			[done show];
-		}];
-	}
-	else if (alertView.tag == 404){
-		__weak typeof(self) weakSelf = self;
-		[[TGClient shared] resetAllNotificationSettingsWithCompletion:^(BOOL ok){
-			if (!ok)
-				return;
-			[weakSelf.scopeSettings removeAllObjects];
-			[weakSelf.exceptionCounts removeAllObjects];
-			[weakSelf loadForPage];
-			[weakSelf.tableView reloadData];
-		}];
-	}
+	else if (alertView.tag == 403)
+		[self confirmedClearAutosaveExceptions];
+	else if (alertView.tag == 406)
+		[self confirmedResetInstalledBackgrounds];
+	else if (alertView.tag == 405)
+		[self confirmedResetUsage];
+	else if (alertView.tag == 407)
+		[self confirmedClearNotificationExceptions];
+	else if (alertView.tag == 404)
+		[self confirmedResetAllNotificationSettings];
+}
+
+- (void)confirmedLogOut {
+	[[TGClient shared] logOutWithCompletion:^(BOOL ok){
+		if (ok){
+			[[TGClient shared] forgetAutoDownloadSettingsMirror];
+			[[NSUserDefaults standardUserDefaults]
+					removeObjectForKey:TGSettingsPresetDefaultsKey];
+			[[NSUserDefaults standardUserDefaults] synchronize];
+			return;
+		}
+		UIAlertView *failed = [[UIAlertView alloc] initWithTitle:@"Log out"
+				message:@"Telegram could not close this session. Try again "
+						@"once the connection is back."
+			   delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+		[failed show];
+	}];
+}
+
+- (void)confirmedClearAutosaveExceptions {
+	[[TGClient shared] clearAutosaveExceptions];
+	self.autosaveExceptions = @[];
+	[self.tableView reloadData];
+}
+
+- (void)confirmedResetInstalledBackgrounds {
+	[[TGClient shared] resetInstalledBackgrounds];
+	self.backgrounds = @[];
+	self.backgroundsLoaded = YES;
+	[self.tableView reloadData];
+}
+
+- (void)confirmedResetUsage {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] resetNetworkStatisticsWithCompletion:^(BOOL ok){
+		if (!ok)
+			return;
+		weakSelf.usageMedia = @[];
+		weakSelf.usageNetworks = @[];
+		weakSelf.usageCalls = nil;
+		weakSelf.usageSent = 0;
+		weakSelf.usageReceived = 0;
+		[weakSelf loadUsage];
+		[weakSelf.tableView reloadData];
+	}];
+}
+
+- (void)confirmedClearNotificationExceptions {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] clearNotificationExceptionsForScope:self.exceptionsScope
+												completion:^(NSInteger resetCount){
+		weakSelf.exceptions = @[];
+		weakSelf.exceptionsLoaded = YES;
+		[weakSelf.tableView reloadData];
+		if (resetCount <= 0)
+			return;
+		UIAlertView *done = [[UIAlertView alloc] initWithTitle:@"Exceptions"
+				message:[NSString stringWithFormat:
+						@"%d chats went back to the scope default.",
+						(int)resetCount]
+			   delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+		[done show];
+	}];
+}
+
+- (void)confirmedResetAllNotificationSettings {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] resetAllNotificationSettingsWithCompletion:^(BOOL ok){
+		if (!ok)
+			return;
+		[weakSelf.scopeSettings removeAllObjects];
+		[weakSelf.exceptionCounts removeAllObjects];
+		[weakSelf loadForPage];
+		[weakSelf.tableView reloadData];
+	}];
 }
 
 @end

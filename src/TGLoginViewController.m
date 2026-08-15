@@ -377,6 +377,31 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
 }
 
 - (void)setupUI {
+    [self buildBackgroundLayers];
+    [self buildNoticeLabel];
+    [self buildCountryButton];
+    [self buildPlateImages];
+    [self buildInputPlate];
+    [self buildPhoneFields];
+    [self buildLastNameRow];
+    [self buildCountdownLabels];
+    [self buildResendAndExtraButtons];
+    [self buildQrLinkLabel];
+    [self buildShadeView];
+
+    self.currentStep = TGLoginStepPhone;
+    [self updateCountryNameForDialCode];
+    [self layoutInterface];
+    [self updateNextEnabled];
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.inputField becomeFirstResponder];
+    });
+
+    [self prefillGuessedCountry];
+}
+
+- (void)buildBackgroundLayers {
     UIImage *linen = [UIImage imageNamed:@"DarkLinen.png"];
     if (linen != nil)
         self.view.backgroundColor = [UIColor colorWithPatternImage:linen];
@@ -398,7 +423,9 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
         headerShadowView.autoresizingMask = UIViewAutoresizingFlexibleWidth;
         [self.view addSubview:headerShadowView];
     }
+}
 
+- (void)buildNoticeLabel {
     self.noticeLabel = [[UILabel alloc] initWithFrame:CGRectZero];
     self.noticeLabel.font = [UIFont systemFontOfSize:14];
     self.noticeLabel.textColor = tgRGB(0xc0c5cc);
@@ -410,7 +437,9 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     self.noticeLabel.numberOfLines = 0;
     self.noticeLabel.text = @"Please confirm your country code and enter your phone number.";
     [self.view addSubview:self.noticeLabel];
+}
 
+- (void)buildCountryButton {
     UIImage *rawCountryImage = [UIImage imageNamed:@"LoginCountry.png"];
     UIImage *rawCountryImageHighlighted = [UIImage imageNamed:@"LoginCountry_Highlighted.png"];
 
@@ -442,7 +471,9 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
         [self.countryButton addSubview:arrowView];
     }
     [self.view addSubview:self.countryButton];
+}
 
+- (void)buildPlateImages {
     UIImage *rawInputImage = [UIImage imageNamed:@"LoginInput.png"];
     if (rawInputImage != nil)
         self.plateImage = [rawInputImage stretchableImageWithLeftCapWidth:(int)(rawInputImage.size.width / 2) topCapHeight:(int)(rawInputImage.size.height / 2)];
@@ -456,7 +487,9 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     self.plateBottomImage = rawBottomImage != nil
         ? [rawBottomImage stretchableImageWithLeftCapWidth:(int)(rawBottomImage.size.width / 2) topCapHeight:0]
         : self.plateImage;
+}
 
+- (void)buildInputPlate {
     self.inputBackgroundView = [[UIImageView alloc] initWithFrame:CGRectZero];
     self.inputBackgroundView.image = self.plateImage;
     [self.view addSubview:self.inputBackgroundView];
@@ -469,7 +502,9 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
 
     self.inputBackgroundView.userInteractionEnabled = YES;
     [self.inputBackgroundView addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(inputBackgroundTapped:)]];
+}
 
+- (void)buildPhoneFields {
     self.countryCodeField = [[UITextField alloc] initWithFrame:CGRectZero];
     self.countryCodeField.font = [UIFont boldSystemFontOfSize:18];
     self.countryCodeField.backgroundColor = tgRGB(0xf5f5f5);
@@ -495,7 +530,9 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     [self.inputField addTarget:self action:@selector(inputChanged) forControlEvents:UIControlEventEditingChanged];
     [self.inputField addTarget:self action:@selector(phoneFieldsDidEndEditing) forControlEvents:UIControlEventEditingDidEnd];
     [self.view addSubview:self.inputField];
+}
 
+- (void)buildLastNameRow {
     self.lastNameBackgroundView = [[UIImageView alloc] initWithFrame:CGRectZero];
     self.lastNameBackgroundView.image = self.plateBottomImage;
     self.lastNameBackgroundView.userInteractionEnabled = YES;
@@ -515,7 +552,9 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     self.lastNameField.hidden = YES;
     [self.lastNameField addTarget:self action:@selector(inputChanged) forControlEvents:UIControlEventEditingChanged];
     [self.view addSubview:self.lastNameField];
+}
 
+- (void)buildCountdownLabels {
     self.timeoutLabel = [[UILabel alloc] initWithFrame:CGRectZero];
     self.timeoutLabel.font = [UIFont systemFontOfSize:14];
     self.timeoutLabel.textColor = tgRGB(0xc4c9d2);
@@ -533,7 +572,9 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
 
     self.callSentLabel = [self countdownStateLabelWithText:@"Telegram dialed your number"];
     [self.view addSubview:self.callSentLabel];
+}
 
+- (void)buildResendAndExtraButtons {
     self.resendButton = [self loginToolbarButtonWithTitle:@"Send the code again"
                                                     plate:@"HeaderButton_Login.png"
                                                   pressed:@"HeaderButton_Login_Pressed.png"
@@ -552,7 +593,9 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     [self.extraButton addTarget:self action:@selector(extraTapped) forControlEvents:UIControlEventTouchUpInside];
     self.extraButton.hidden = YES;
     [self.view addSubview:self.extraButton];
+}
 
+- (void)buildQrLinkLabel {
     self.qrLinkLabel = [[UILabel alloc] initWithFrame:CGRectZero];
     self.qrLinkLabel.font = [UIFont boldSystemFontOfSize:13];
     self.qrLinkLabel.textColor = tgRGB(0xf0f0f0);
@@ -564,23 +607,14 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     self.qrLinkLabel.backgroundColor = [UIColor clearColor];
     self.qrLinkLabel.hidden = YES;
     [self.view addSubview:self.qrLinkLabel];
+}
 
+- (void)buildShadeView {
     self.shadeView = [[UIView alloc] initWithFrame:self.view.bounds];
     self.shadeView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     self.shadeView.backgroundColor = [UIColor clearColor];
     self.shadeView.hidden = YES;
     [self.view addSubview:self.shadeView];
-
-    self.currentStep = TGLoginStepPhone;
-    [self updateCountryNameForDialCode];
-    [self layoutInterface];
-    [self updateNextEnabled];
-
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [self.inputField becomeFirstResponder];
-    });
-
-    [self prefillGuessedCountry];
 }
 
 - (void)prefillGuessedCountry {
@@ -808,69 +842,12 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     }
 
     if (self.currentStep == TGLoginStepRegistration) {
-        CGFloat width = 288;
-        self.countryButton.hidden = YES;
-        self.countryCodeField.hidden = YES;
-        self.inputDivider.hidden = YES;
-        self.qrLinkLabel.hidden = YES;
-        self.inputBackgroundView.hidden = NO;
-        self.inputField.hidden = NO;
-        self.lastNameBackgroundView.hidden = NO;
-        self.lastNameField.hidden = NO;
-
-        self.inputBackgroundView.image = self.plateTopImage;
-        self.lastNameBackgroundView.image = self.plateBottomImage;
-
-        CGFloat retinaOffset = [UIScreen mainScreen].scale > 1.0f ? 0.5f : 0.0f;
-        CGFloat top = (int)((viewSize.height - 68) / 2) - 7;
-        self.inputBackgroundView.frame = CGRectMake((int)((viewSize.width - width) / 2), top, width, 43);
-        self.inputField.frame = CGRectMake(self.inputBackgroundView.frame.origin.x + 15,
-                                           self.inputBackgroundView.frame.origin.y + 11.0f + retinaOffset,
-                                           width - 20, 22);
-        self.inputField.textAlignment = NSTextAlignmentLeft;
-
-        self.lastNameBackgroundView.frame = CGRectIntegral(CGRectMake(self.inputBackgroundView.frame.origin.x,
-                                                                      self.inputBackgroundView.frame.origin.y + 43,
-                                                                      width, 43));
-        self.lastNameField.frame = CGRectMake(self.lastNameBackgroundView.frame.origin.x + 15,
-                                              self.lastNameBackgroundView.frame.origin.y + 10.0f + retinaOffset,
-                                              width - 20, 22);
-
-        self.noticeLabel.hidden = YES;
-
-        self.timeoutLabel.hidden = YES;
-        self.requestingCallLabel.hidden = YES;
-        self.callSentLabel.hidden = YES;
-        self.resendButton.hidden = YES;
-        self.extraButton.hidden = YES;
+        [self layoutRegistrationStepForViewSize:viewSize];
         return;
     }
 
     if (self.currentStep == TGLoginStepQrCode) {
-        self.countryButton.hidden = YES;
-        self.countryCodeField.hidden = YES;
-        self.inputDivider.hidden = YES;
-        self.inputBackgroundView.hidden = YES;
-        self.inputField.hidden = YES;
-        self.qrLinkLabel.hidden = NO;
-
-        CGSize noticeSize = [self.noticeLabel sizeThatFits:CGSizeMake(280, 1024)];
-        self.noticeLabel.frame = CGRectIntegral(CGRectMake((viewSize.width - noticeSize.width) / 2, 40, noticeSize.width, noticeSize.height));
-        self.noticeLabel.alpha = 1.0f;
-
-        CGSize linkSize = [self.qrLinkLabel sizeThatFits:CGSizeMake(280, 1024)];
-        self.qrLinkLabel.frame = CGRectIntegral(CGRectMake((viewSize.width - linkSize.width) / 2,
-                                                           self.noticeLabel.frame.origin.y + self.noticeLabel.frame.size.height + 24,
-                                                           linkSize.width, linkSize.height));
-
-        self.timeoutLabel.hidden = YES;
-        self.requestingCallLabel.hidden = YES;
-        self.callSentLabel.hidden = YES;
-        self.resendButton.hidden = YES;
-        self.extraButton.hidden = NO;
-        self.extraButton.frame = CGRectMake((int)((viewSize.width - self.extraButton.frame.size.width) / 2),
-                                            viewSize.height - self.extraButton.frame.size.height - 20,
-                                            self.extraButton.frame.size.width, self.extraButton.frame.size.height);
+        [self layoutQrStepForViewSize:viewSize];
         return;
     }
 
@@ -878,38 +855,115 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     self.inputField.hidden = NO;
     self.qrLinkLabel.hidden = YES;
 
-    if (self.currentStep == TGLoginStepPhone) {
-        CGFloat width = 290;
-        self.countryButton.hidden = NO;
-        self.countryCodeField.hidden = NO;
-        self.inputDivider.hidden = NO;
+    if (self.currentStep == TGLoginStepPhone)
+        [self layoutPhoneRowForViewSize:viewSize];
+    else
+        [self layoutCentredPlateForViewSize:viewSize];
 
-        self.countryButton.frame = CGRectMake((int)((viewSize.width - width) / 2),
-                                              (int)((viewSize.height - 68) / 2) + 4.5f,
-                                              width, self.countryButton.frame.size.height);
-        self.inputBackgroundView.frame = CGRectIntegral(CGRectMake((viewSize.width - width) / 2,
-                                                                   self.countryButton.frame.origin.y + self.countryButton.frame.size.height + 7.5f,
-                                                                   width, 47));
-        self.inputDivider.frame = CGRectMake(60, 1, 1, self.inputBackgroundView.frame.size.height + 1);
-        self.countryCodeField.frame = CGRectMake(self.inputBackgroundView.frame.origin.x + 4, self.inputBackgroundView.frame.origin.y + 12, 54, 22);
-        self.inputField.frame = CGRectMake(self.inputBackgroundView.frame.origin.x + 74, self.inputBackgroundView.frame.origin.y + 2,
-                                           self.inputBackgroundView.frame.size.width - 74 - 14, 32);
-        self.inputField.textAlignment = NSTextAlignmentLeft;
-    } else {
-        CGFloat width = [self plateWidthForCurrentStep];
-        self.countryButton.hidden = YES;
-        self.countryCodeField.hidden = YES;
-        self.inputDivider.hidden = YES;
+    [self layoutNoticeLabelForViewSize:viewSize];
+    [self layoutCountdownRowForViewSize:viewSize];
+}
 
-        self.inputBackgroundView.frame = CGRectIntegral(CGRectMake((viewSize.width - width) / 2,
-                                                                   (viewSize.height - 26) / 2,
-                                                                   width, 43));
-        self.inputField.frame = CGRectMake(self.inputBackgroundView.frame.origin.x + 9,
-                                           self.inputBackgroundView.frame.origin.y + 10,
-                                           self.inputBackgroundView.frame.size.width - 20, 22);
-        self.inputField.textAlignment = NSTextAlignmentCenter;
-    }
+- (void)layoutRegistrationStepForViewSize:(CGSize)viewSize {
+    CGFloat width = 288;
+    self.countryButton.hidden = YES;
+    self.countryCodeField.hidden = YES;
+    self.inputDivider.hidden = YES;
+    self.qrLinkLabel.hidden = YES;
+    self.inputBackgroundView.hidden = NO;
+    self.inputField.hidden = NO;
+    self.lastNameBackgroundView.hidden = NO;
+    self.lastNameField.hidden = NO;
 
+    self.inputBackgroundView.image = self.plateTopImage;
+    self.lastNameBackgroundView.image = self.plateBottomImage;
+
+    CGFloat retinaOffset = [UIScreen mainScreen].scale > 1.0f ? 0.5f : 0.0f;
+    CGFloat top = (int)((viewSize.height - 68) / 2) - 7;
+    self.inputBackgroundView.frame = CGRectMake((int)((viewSize.width - width) / 2), top, width, 43);
+    self.inputField.frame = CGRectMake(self.inputBackgroundView.frame.origin.x + 15,
+                                       self.inputBackgroundView.frame.origin.y + 11.0f + retinaOffset,
+                                       width - 20, 22);
+    self.inputField.textAlignment = NSTextAlignmentLeft;
+
+    self.lastNameBackgroundView.frame = CGRectIntegral(CGRectMake(self.inputBackgroundView.frame.origin.x,
+                                                                  self.inputBackgroundView.frame.origin.y + 43,
+                                                                  width, 43));
+    self.lastNameField.frame = CGRectMake(self.lastNameBackgroundView.frame.origin.x + 15,
+                                          self.lastNameBackgroundView.frame.origin.y + 10.0f + retinaOffset,
+                                          width - 20, 22);
+
+    self.noticeLabel.hidden = YES;
+
+    self.timeoutLabel.hidden = YES;
+    self.requestingCallLabel.hidden = YES;
+    self.callSentLabel.hidden = YES;
+    self.resendButton.hidden = YES;
+    self.extraButton.hidden = YES;
+}
+
+- (void)layoutQrStepForViewSize:(CGSize)viewSize {
+    self.countryButton.hidden = YES;
+    self.countryCodeField.hidden = YES;
+    self.inputDivider.hidden = YES;
+    self.inputBackgroundView.hidden = YES;
+    self.inputField.hidden = YES;
+    self.qrLinkLabel.hidden = NO;
+
+    CGSize noticeSize = [self.noticeLabel sizeThatFits:CGSizeMake(280, 1024)];
+    self.noticeLabel.frame = CGRectIntegral(CGRectMake((viewSize.width - noticeSize.width) / 2, 40, noticeSize.width, noticeSize.height));
+    self.noticeLabel.alpha = 1.0f;
+
+    CGSize linkSize = [self.qrLinkLabel sizeThatFits:CGSizeMake(280, 1024)];
+    self.qrLinkLabel.frame = CGRectIntegral(CGRectMake((viewSize.width - linkSize.width) / 2,
+                                                       self.noticeLabel.frame.origin.y + self.noticeLabel.frame.size.height + 24,
+                                                       linkSize.width, linkSize.height));
+
+    self.timeoutLabel.hidden = YES;
+    self.requestingCallLabel.hidden = YES;
+    self.callSentLabel.hidden = YES;
+    self.resendButton.hidden = YES;
+    self.extraButton.hidden = NO;
+    self.extraButton.frame = CGRectMake((int)((viewSize.width - self.extraButton.frame.size.width) / 2),
+                                        viewSize.height - self.extraButton.frame.size.height - 20,
+                                        self.extraButton.frame.size.width, self.extraButton.frame.size.height);
+}
+
+- (void)layoutPhoneRowForViewSize:(CGSize)viewSize {
+    CGFloat width = 290;
+    self.countryButton.hidden = NO;
+    self.countryCodeField.hidden = NO;
+    self.inputDivider.hidden = NO;
+
+    self.countryButton.frame = CGRectMake((int)((viewSize.width - width) / 2),
+                                          (int)((viewSize.height - 68) / 2) + 4.5f,
+                                          width, self.countryButton.frame.size.height);
+    self.inputBackgroundView.frame = CGRectIntegral(CGRectMake((viewSize.width - width) / 2,
+                                                               self.countryButton.frame.origin.y + self.countryButton.frame.size.height + 7.5f,
+                                                               width, 47));
+    self.inputDivider.frame = CGRectMake(60, 1, 1, self.inputBackgroundView.frame.size.height + 1);
+    self.countryCodeField.frame = CGRectMake(self.inputBackgroundView.frame.origin.x + 4, self.inputBackgroundView.frame.origin.y + 12, 54, 22);
+    self.inputField.frame = CGRectMake(self.inputBackgroundView.frame.origin.x + 74, self.inputBackgroundView.frame.origin.y + 2,
+                                       self.inputBackgroundView.frame.size.width - 74 - 14, 32);
+    self.inputField.textAlignment = NSTextAlignmentLeft;
+}
+
+- (void)layoutCentredPlateForViewSize:(CGSize)viewSize {
+    CGFloat width = [self plateWidthForCurrentStep];
+    self.countryButton.hidden = YES;
+    self.countryCodeField.hidden = YES;
+    self.inputDivider.hidden = YES;
+
+    self.inputBackgroundView.frame = CGRectIntegral(CGRectMake((viewSize.width - width) / 2,
+                                                               (viewSize.height - 26) / 2,
+                                                               width, 43));
+    self.inputField.frame = CGRectMake(self.inputBackgroundView.frame.origin.x + 9,
+                                       self.inputBackgroundView.frame.origin.y + 10,
+                                       self.inputBackgroundView.frame.size.width - 20, 22);
+    self.inputField.textAlignment = NSTextAlignmentCenter;
+}
+
+- (void)layoutNoticeLabelForViewSize:(CGSize)viewSize {
     CGSize noticeSize = [self.noticeLabel sizeThatFits:CGSizeMake(self.currentStep == TGLoginStepPhone ? 270 : 300, 1024)];
     CGFloat anchorY = self.currentStep == TGLoginStepPhone ? self.countryButton.frame.origin.y : self.inputBackgroundView.frame.origin.y;
     CGFloat spacing = self.currentStep == TGLoginStepPhone ? 16 : 14;
@@ -917,7 +971,9 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
                                                        anchorY - spacing - noticeSize.height,
                                                        noticeSize.width, noticeSize.height));
     self.noticeLabel.alpha = self.noticeLabel.frame.origin.y < 0 ? 0.0f : 1.0f;
+}
 
+- (void)layoutCountdownRowForViewSize:(CGSize)viewSize {
     CGFloat resendY = self.inputBackgroundView.frame.origin.y + self.inputBackgroundView.frame.size.height + 14;
 
     CGSize timeoutSize = [self.timeoutLabel sizeThatFits:CGSizeMake(300, 1024)];
@@ -1115,98 +1171,130 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     [self setBusy:YES];
 
     if (self.currentStep == TGLoginStepPhone) {
-        NSString *code = [self digitsOnly:self.countryCodeField.text];
-        NSString *fullPhone = [NSString stringWithFormat:@"+%@%@", code, [self digitsOnly:text]];
-        self.savedPhoneNumber = fullPhone;
-        __weak TGLoginViewController *weakSelf = self;
-        [[TGClient shared] startLoginWithPhoneNumber:fullPhone
-                                     isCurrentNumber:NO
-                                          completion:^(BOOL ok) {
-            TGLoginViewController *me = weakSelf;
-            if (me == nil || ok)
-                return;
-            if (me.currentStep != TGLoginStepPhone)
-                return;
-            [me setBusy:NO];
-            [me shakeInputRow];
-            [me showLoginAlert:@"This phone number was not accepted. Please check it and try again."];
-            [me.inputField becomeFirstResponder];
-        }];
+        [self submitPhoneNumber:text];
     } else if (self.currentStep == TGLoginStepCode) {
-        if (self.onCodeSubmitted) {
-            self.onCodeSubmitted(self.codeIsText ? text : [self digitsOnly:text]);
-        }
+        [self submitCode:text];
     } else if (self.currentStep == TGLoginStepRegistration) {
-        NSString *lastName = [self.lastNameField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        __weak TGLoginViewController *weakSelf = self;
-        [[TGClient shared] registerWithFirstName:text lastName:lastName.length > 0 ? lastName : nil completion:^(BOOL ok) {
-            TGLoginViewController *me = weakSelf;
-            if (me == nil)
-                return;
-            [me setBusy:NO];
-            if (!ok)
-                [me showLoginAlert:@"This name was not accepted. Please try again."];
-        }];
+        [self submitRegistrationFirstName:text];
     } else if (self.currentStep == TGLoginStepPassword) {
-        if (self.onPasswordSubmitted) {
-            self.onPasswordSubmitted(text);
-        }
+        [self submitPassword:text];
     } else if (self.currentStep == TGLoginStepEmail) {
-        __weak TGLoginViewController *weakSelf = self;
-        [[TGClient shared] setAuthenticationEmailAddress:text completion:^(NSString *pattern, NSInteger codeLength) {
-            TGLoginViewController *me = weakSelf;
-            if (me == nil)
-                return;
-            [me setBusy:NO];
-            if (pattern.length == 0) {
-                [me showLoginAlert:@"This email address was not accepted."];
-                return;
-            }
-            [me showEmailCodeStepWithPattern:pattern];
-        }];
+        [self submitEmailAddress:text];
     } else if (self.currentStep == TGLoginStepEmailCode) {
-        __weak TGLoginViewController *weakSelf = self;
-        [[TGClient shared] checkAuthenticationEmailCode:text completion:^(BOOL ok) {
-            TGLoginViewController *me = weakSelf;
-            if (me == nil)
-                return;
-            [me setBusy:NO];
-            if (!ok) {
-                me.inputField.text = @"";
-                [me updateNextEnabled];
-                [me showLoginAlert:@"Invalid code. Please try again."];
-            }
-        }];
+        [self submitEmailCode:text];
     } else if (self.currentStep == TGLoginStepRecoveryCode) {
-        __weak TGLoginViewController *weakSelf = self;
-        [[TGClient shared] checkAuthenticationPasswordRecoveryCode:text completion:^(BOOL ok) {
-            TGLoginViewController *me = weakSelf;
-            if (me == nil)
-                return;
-            [me setBusy:NO];
-            if (!ok) {
-                me.inputField.text = @"";
-                [me updateNextEnabled];
-                [me showLoginAlert:@"Invalid recovery code. Please try again."];
-                return;
-            }
-            me.verifiedRecoveryCode = text;
-            [me showNewPasswordStep];
-        }];
+        [self submitRecoveryCode:text];
     } else if (self.currentStep == TGLoginStepNewPassword) {
-        __weak TGLoginViewController *weakSelf = self;
-        [[TGClient shared] recoverAuthenticationPasswordWithCode:self.verifiedRecoveryCode
-                                                     newPassword:text
-                                                         newHint:nil
-                                                      completion:^(BOOL ok) {
-            TGLoginViewController *me = weakSelf;
-            if (me == nil)
-                return;
-            [me setBusy:NO];
-            if (!ok)
-                [me showLoginAlert:@"The password could not be changed. Please try again."];
-        }];
+        [self submitNewPassword:text];
     }
+}
+
+- (void)submitPhoneNumber:(NSString *)text {
+    NSString *code = [self digitsOnly:self.countryCodeField.text];
+    NSString *fullPhone = [NSString stringWithFormat:@"+%@%@", code, [self digitsOnly:text]];
+    self.savedPhoneNumber = fullPhone;
+    __weak TGLoginViewController *weakSelf = self;
+    [[TGClient shared] startLoginWithPhoneNumber:fullPhone
+                                 isCurrentNumber:NO
+                                      completion:^(BOOL ok) {
+        TGLoginViewController *me = weakSelf;
+        if (me == nil || ok)
+            return;
+        if (me.currentStep != TGLoginStepPhone)
+            return;
+        [me setBusy:NO];
+        [me shakeInputRow];
+        [me showLoginAlert:@"This phone number was not accepted. Please check it and try again."];
+        [me.inputField becomeFirstResponder];
+    }];
+}
+
+- (void)submitCode:(NSString *)text {
+    if (self.onCodeSubmitted) {
+        self.onCodeSubmitted(self.codeIsText ? text : [self digitsOnly:text]);
+    }
+}
+
+- (void)submitRegistrationFirstName:(NSString *)text {
+    NSString *lastName = [self.lastNameField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    __weak TGLoginViewController *weakSelf = self;
+    [[TGClient shared] registerWithFirstName:text lastName:lastName.length > 0 ? lastName : nil completion:^(BOOL ok) {
+        TGLoginViewController *me = weakSelf;
+        if (me == nil)
+            return;
+        [me setBusy:NO];
+        if (!ok)
+            [me showLoginAlert:@"This name was not accepted. Please try again."];
+    }];
+}
+
+- (void)submitPassword:(NSString *)text {
+    if (self.onPasswordSubmitted) {
+        self.onPasswordSubmitted(text);
+    }
+}
+
+- (void)submitEmailAddress:(NSString *)text {
+    __weak TGLoginViewController *weakSelf = self;
+    [[TGClient shared] setAuthenticationEmailAddress:text completion:^(NSString *pattern, NSInteger codeLength) {
+        TGLoginViewController *me = weakSelf;
+        if (me == nil)
+            return;
+        [me setBusy:NO];
+        if (pattern.length == 0) {
+            [me showLoginAlert:@"This email address was not accepted."];
+            return;
+        }
+        [me showEmailCodeStepWithPattern:pattern];
+    }];
+}
+
+- (void)submitEmailCode:(NSString *)text {
+    __weak TGLoginViewController *weakSelf = self;
+    [[TGClient shared] checkAuthenticationEmailCode:text completion:^(BOOL ok) {
+        TGLoginViewController *me = weakSelf;
+        if (me == nil)
+            return;
+        [me setBusy:NO];
+        if (!ok) {
+            me.inputField.text = @"";
+            [me updateNextEnabled];
+            [me showLoginAlert:@"Invalid code. Please try again."];
+        }
+    }];
+}
+
+- (void)submitRecoveryCode:(NSString *)text {
+    __weak TGLoginViewController *weakSelf = self;
+    [[TGClient shared] checkAuthenticationPasswordRecoveryCode:text completion:^(BOOL ok) {
+        TGLoginViewController *me = weakSelf;
+        if (me == nil)
+            return;
+        [me setBusy:NO];
+        if (!ok) {
+            me.inputField.text = @"";
+            [me updateNextEnabled];
+            [me showLoginAlert:@"Invalid recovery code. Please try again."];
+            return;
+        }
+        me.verifiedRecoveryCode = text;
+        [me showNewPasswordStep];
+    }];
+}
+
+- (void)submitNewPassword:(NSString *)text {
+    __weak TGLoginViewController *weakSelf = self;
+    [[TGClient shared] recoverAuthenticationPasswordWithCode:self.verifiedRecoveryCode
+                                                 newPassword:text
+                                                     newHint:nil
+                                                  completion:^(BOOL ok) {
+        TGLoginViewController *me = weakSelf;
+        if (me == nil)
+            return;
+        [me setBusy:NO];
+        if (!ok)
+            [me showLoginAlert:@"The password could not be changed. Please try again."];
+    }];
 }
 
 - (void)showLoginAlert:(NSString *)message {
@@ -1218,16 +1306,32 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     [alert show];
 }
 
+- (void)enterStep:(TGLoginStep)step title:(NSString *)title notice:(NSString *)notice {
+    self.currentStep = step;
+    self.title = title;
+    self.noticeLabel.text = notice;
+}
+
+- (void)finishStepTransition {
+    [self layoutInterface];
+    [self updateNextEnabled];
+}
+
+- (void)finishStepTransitionFocusingInput {
+    [self finishStepTransition];
+    [self.inputField becomeFirstResponder];
+}
+
 - (void)showCodeStepWithPhoneNumber:(NSString *)phoneNumber {
     (void)self.view;
     [self setBusy:NO];
     [self stopQrRefresh];
-    self.currentStep = TGLoginStepCode;
     self.suppressResendButton = NO;
     self.codeIsText = NO;
     self.codeIsPhrase = NO;
-    self.title = phoneNumber.length > 0 ? phoneNumber : (self.savedPhoneNumber.length > 0 ? self.savedPhoneNumber : @"Enter Code");
-    self.noticeLabel.text = @"We've sent an SMS with an activation code to your phone. Please enter the code below.";
+    [self enterStep:TGLoginStepCode
+              title:phoneNumber.length > 0 ? phoneNumber : (self.savedPhoneNumber.length > 0 ? self.savedPhoneNumber : @"Enter Code")
+             notice:@"We've sent an SMS with an activation code to your phone. Please enter the code below."];
 
     self.inputField.text = @"";
     self.inputField.secureTextEntry = NO;
@@ -1243,9 +1347,7 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
 
     [self installBackButton];
     [self startResendCountdown];
-    [self layoutInterface];
-    [self updateNextEnabled];
-    [self.inputField becomeFirstResponder];
+    [self finishStepTransitionFocusingInput];
 
     __weak TGLoginViewController *weakSelf = self;
     [[TGClient shared] authenticationCodeInfoWithCompletion:^(NSDictionary *info) {
@@ -1342,9 +1444,9 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     [self stopAuthPoll];
     [self stopResendCountdown];
     [self stopQrRefresh];
-    self.currentStep = TGLoginStepRegistration;
-    self.title = @"Your Info";
-    self.noticeLabel.text = @"Enter your name so your friends know who is writing to them.";
+    [self enterStep:TGLoginStepRegistration
+              title:@"Your Info"
+             notice:@"Enter your name so your friends know who is writing to them."];
 
     self.inputField.text = @"";
     self.inputField.secureTextEntry = NO;
@@ -1356,9 +1458,7 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     self.lastNameField.text = @"";
 
     [self installBackButton];
-    [self layoutInterface];
-    [self updateNextEnabled];
-    [self.inputField becomeFirstResponder];
+    [self finishStepTransitionFocusingInput];
 
     __weak TGLoginViewController *weakSelf = self;
     [[TGClient shared] registrationTermsWithCompletion:^(NSDictionary *terms) {
@@ -1412,9 +1512,9 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     [self setBusy:NO];
     [self stopQrRefresh];
     [self stopAuthPoll];
-    self.currentStep = TGLoginStepPassword;
-    self.title = @"Password";
-    self.noticeLabel.text = @"Your account is protected with a password. Please enter it below.";
+    [self enterStep:TGLoginStepPassword
+              title:@"Password"
+             notice:@"Your account is protected with a password. Please enter it below."];
     [self setLoginButton:self.extraButton title:@"Forgot password?"];
 
     self.inputField.text = @"";
@@ -1427,17 +1527,15 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     self.passwordResetPending = NO;
     [self stopResendCountdown];
     [self installBackButton];
-    [self layoutInterface];
-    [self updateNextEnabled];
-    [self.inputField becomeFirstResponder];
+    [self finishStepTransitionFocusingInput];
 }
 
 - (void)showPhoneStep {
     (void)self.view;
     [self setBusy:NO];
-    self.currentStep = TGLoginStepPhone;
-    self.title = @"Your Phone";
-    self.noticeLabel.text = @"Please confirm your country code and enter your phone number.";
+    [self enterStep:TGLoginStepPhone
+              title:@"Your Phone"
+             notice:@"Please confirm your country code and enter your phone number."];
 
     self.inputField.text = @"";
     self.inputField.secureTextEntry = NO;
@@ -1455,9 +1553,7 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     [self stopQrRefresh];
     [self stopAuthPoll];
     [self installOptionsButton];
-    [self layoutInterface];
-    [self updateNextEnabled];
-    [self.inputField becomeFirstResponder];
+    [self finishStepTransitionFocusingInput];
     [self prefillGuessedCountry];
 }
 
@@ -1495,9 +1591,9 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     [self setBusy:NO];
     [self stopResendCountdown];
     [self stopQrRefresh];
-    self.currentStep = TGLoginStepEmail;
-    self.title = @"Email";
-    self.noticeLabel.text = @"Enter the email address connected to your Telegram account.";
+    [self enterStep:TGLoginStepEmail
+              title:@"Email"
+             notice:@"Enter the email address connected to your Telegram account."];
 
     self.inputField.text = @"";
     self.inputField.secureTextEntry = NO;
@@ -1505,20 +1601,18 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     self.inputField.keyboardType = UIKeyboardTypeEmailAddress;
 
     [self installBackButton];
-    [self layoutInterface];
-    [self updateNextEnabled];
-    [self.inputField becomeFirstResponder];
+    [self finishStepTransitionFocusingInput];
 }
 
 - (void)showEmailCodeStepWithPattern:(NSString *)pattern {
     (void)self.view;
     [self setBusy:NO];
     [self stopQrRefresh];
-    self.currentStep = TGLoginStepEmailCode;
     self.suppressResendButton = NO;
     self.emailPattern = pattern;
-    self.title = @"Email Code";
-    self.noticeLabel.text = [NSString stringWithFormat:@"We have sent a code to %@", pattern];
+    [self enterStep:TGLoginStepEmailCode
+              title:@"Email Code"
+             notice:[NSString stringWithFormat:@"We have sent a code to %@", pattern]];
 
     self.inputField.text = @"";
     self.inputField.secureTextEntry = NO;
@@ -1527,9 +1621,7 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
 
     [self setLoginButton:self.resendButton title:@"Reset email address"];
     [self installBackButton];
-    [self layoutInterface];
-    [self updateNextEnabled];
-    [self.inputField becomeFirstResponder];
+    [self finishStepTransitionFocusingInput];
 
     __weak TGLoginViewController *weakSelf = self;
     [[TGClient shared] authenticationEmailStateWithCompletion:^(NSDictionary *info) {
@@ -1567,9 +1659,9 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     [self setBusy:NO];
     [self stopResendCountdown];
     [self stopQrRefresh];
-    self.currentStep = TGLoginStepRecoveryCode;
-    self.title = @"Recovery";
-    self.noticeLabel.text = @"We have sent a recovery code to the email address you provided when setting up your password.";
+    [self enterStep:TGLoginStepRecoveryCode
+              title:@"Recovery"
+             notice:@"We have sent a recovery code to the email address you provided when setting up your password."];
 
     self.inputField.text = @"";
     self.inputField.secureTextEntry = NO;
@@ -1577,9 +1669,7 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     self.inputField.keyboardType = UIKeyboardTypeNumberPad;
 
     [self installBackButton];
-    [self layoutInterface];
-    [self updateNextEnabled];
-    [self.inputField becomeFirstResponder];
+    [self finishStepTransitionFocusingInput];
 }
 
 - (void)showNewPasswordStep {
@@ -1587,9 +1677,9 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     [self setBusy:NO];
     [self stopResendCountdown];
     [self stopQrRefresh];
-    self.currentStep = TGLoginStepNewPassword;
-    self.title = @"New Password";
-    self.noticeLabel.text = @"Please enter a new password for your account.";
+    [self enterStep:TGLoginStepNewPassword
+              title:@"New Password"
+             notice:@"Please enter a new password for your account."];
 
     self.inputField.text = @"";
     self.inputField.secureTextEntry = YES;
@@ -1597,18 +1687,16 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     self.inputField.keyboardType = UIKeyboardTypeDefault;
 
     [self installBackButton];
-    [self layoutInterface];
-    [self updateNextEnabled];
-    [self.inputField becomeFirstResponder];
+    [self finishStepTransitionFocusingInput];
 }
 
 - (void)showQrCodeStep {
     (void)self.view;
     [self setBusy:YES];
     [self stopResendCountdown];
-    self.currentStep = TGLoginStepQrCode;
-    self.title = @"Log in by QR Code";
-    self.noticeLabel.text = @"1. Open Telegram on your other phone\n2. Go to Settings → Devices\n3. Add this device with the link below";
+    [self enterStep:TGLoginStepQrCode
+              title:@"Log in by QR Code"
+             notice:@"1. Open Telegram on your other phone\n2. Go to Settings → Devices\n3. Add this device with the link below"];
     self.qrLinkLabel.text = @"Requesting a link…";
 
     [self.inputField resignFirstResponder];
@@ -1616,8 +1704,7 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
 
     [self setLoginButton:self.extraButton title:@"Log in with phone number"];
     [self installBackButton];
-    [self layoutInterface];
-    [self updateNextEnabled];
+    [self finishStepTransition];
 
     __weak TGLoginViewController *weakSelf = self;
     [[TGClient shared] requestQrCodeLoginWithCompletion:^(NSString *link) {
@@ -2082,41 +2169,45 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     }
 
     if (self.currentStep == TGLoginStepPhone) {
-        NSString *result = [textField.text stringByReplacingCharactersInRange:range withString:string];
-        NSString *digits = [self digitsOnly:result];
-        if (digits.length > 15)
-            return NO;
-
-        NSString *prefix = [textField.text substringToIndex:range.location];
-        NSUInteger digitsBeforeCaret = [self digitsOnly:prefix].length + [self digitsOnly:string].length;
-
-        NSString *formatted = [self formattedPhoneForDigits:digits];
-        textField.text = formatted;
-
-        NSUInteger caret = formatted.length;
-        NSUInteger seen = 0;
-        for (NSUInteger i = 0; i < formatted.length; i++) {
-            if (seen == digitsBeforeCaret) {
-                caret = i;
-                break;
-            }
-            unichar c = [formatted characterAtIndex:i];
-            if (c >= '0' && c <= '9')
-                seen++;
-        }
-        if (seen == digitsBeforeCaret && caret == formatted.length)
-            caret = formatted.length;
-
-        UITextPosition *position = [textField positionFromPosition:textField.beginningOfDocument offset:(NSInteger)caret];
-        if (position != nil)
-            textField.selectedTextRange = [textField textRangeFromPosition:position toPosition:position];
-
-        [self updateTitleText];
-        [self inputChanged];
+        [self applyPhoneFormattingInField:textField range:range replacement:string];
         return NO;
     }
 
     return YES;
+}
+
+- (void)applyPhoneFormattingInField:(UITextField *)textField range:(NSRange)range replacement:(NSString *)string {
+    NSString *result = [textField.text stringByReplacingCharactersInRange:range withString:string];
+    NSString *digits = [self digitsOnly:result];
+    if (digits.length > 15)
+        return;
+
+    NSString *prefix = [textField.text substringToIndex:range.location];
+    NSUInteger digitsBeforeCaret = [self digitsOnly:prefix].length + [self digitsOnly:string].length;
+
+    NSString *formatted = [self formattedPhoneForDigits:digits];
+    textField.text = formatted;
+
+    NSUInteger caret = formatted.length;
+    NSUInteger seen = 0;
+    for (NSUInteger i = 0; i < formatted.length; i++) {
+        if (seen == digitsBeforeCaret) {
+            caret = i;
+            break;
+        }
+        unichar c = [formatted characterAtIndex:i];
+        if (c >= '0' && c <= '9')
+            seen++;
+    }
+    if (seen == digitsBeforeCaret && caret == formatted.length)
+        caret = formatted.length;
+
+    UITextPosition *position = [textField positionFromPosition:textField.beginningOfDocument offset:(NSInteger)caret];
+    if (position != nil)
+        textField.selectedTextRange = [textField textRangeFromPosition:position toPosition:position];
+
+    [self updateTitleText];
+    [self inputChanged];
 }
 
 - (BOOL)textFieldShouldReturn:(UITextField *)textField {

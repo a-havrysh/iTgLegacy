@@ -379,72 +379,88 @@ typedef void (^TGSecurityStepBlock)(TGSecurityStepViewController *step, NSString
 	return cell;
 }
 
-- (UITableViewCell *)tableView:(UITableView *)tableView
-		 cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-	UITableViewCell *cell = [self plainCellFor:tableView identifier:@"row"];
+- (void)configureSetPasswordCell:(UITableViewCell *)cell {
+	cell.textLabel.text = @"Set Additional Password";
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:16];
+	cell.textLabel.textAlignment = NSTextAlignmentCenter;
+	cell.textLabel.textColor = TGPrivacyActionColour();
+	cell.textLabel.highlightedTextColor = [UIColor whiteColor];
+}
 
-	if (![self hasPassword]){
-		cell.textLabel.text = @"Set Additional Password";
-		cell.textLabel.font = [UIFont boldSystemFontOfSize:16];
-		cell.textLabel.textAlignment = NSTextAlignmentCenter;
-		cell.textLabel.textColor = TGPrivacyActionColour();
-		cell.textLabel.highlightedTextColor = [UIColor whiteColor];
-		return cell;
-	}
-
-	if (indexPath.section == 0){
-		if (indexPath.row == 0){
-			cell.textLabel.text = @"Password";
-			NSString *pending = [self pendingEmailPattern];
-			if (pending){
-				cell.detailTextLabel.text = @"e-mail unconfirmed";
-				cell.detailTextLabel.textColor = TGPrivacyDestructiveColour();
-			} else {
-				cell.detailTextLabel.text = @"On";
-			}
-			cell.selectionStyle = UITableViewCellSelectionStyleNone;
-			return cell;
-		}
-		cell.textLabel.text = @"Hint";
-		cell.detailTextLabel.text = [self hint];
-		cell.selectionStyle = UITableViewCellSelectionStyleNone;
-		return cell;
-	}
-
-	if (indexPath.section == 1){
-		if (indexPath.row == 0){
-			cell.textLabel.text = @"Change Password";
+- (void)configureStatusCell:(UITableViewCell *)cell atRow:(NSInteger)row {
+	if (row == 0){
+		cell.textLabel.text = @"Password";
+		NSString *pending = [self pendingEmailPattern];
+		if (pending){
+			cell.detailTextLabel.text = @"e-mail unconfirmed";
+			cell.detailTextLabel.textColor = TGPrivacyDestructiveColour();
 		} else {
-			NSString *pending = [self pendingEmailPattern];
-			if (pending)
-				cell.textLabel.text = @"Enter E-Mail Code";
-			else
-				cell.textLabel.text = [self hasRecoveryEmail]
-						? @"Change Recovery E-Mail" : @"Set Recovery E-Mail";
+			cell.detailTextLabel.text = @"On";
 		}
-		cell.textLabel.font = [UIFont boldSystemFontOfSize:16];
-		cell.textLabel.textAlignment = NSTextAlignmentCenter;
-		cell.textLabel.textColor = TGPrivacyActionColour();
-		cell.textLabel.highlightedTextColor = [UIColor whiteColor];
-		return cell;
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		return;
 	}
+	cell.textLabel.text = @"Hint";
+	cell.detailTextLabel.text = [self hint];
+	cell.selectionStyle = UITableViewCellSelectionStyleNone;
+}
 
-	if (indexPath.row == 1){
-		cell.textLabel.text = [self pendingResetDate] > 0
-				? @"Cancel Password Reset" : @"Reset Password";
-		cell.textLabel.font = [UIFont boldSystemFontOfSize:16];
-		cell.textLabel.textAlignment = NSTextAlignmentCenter;
-		cell.textLabel.textColor = [self pendingResetDate] > 0
-				? TGPrivacyActionColour() : TGPrivacyDestructiveColour();
-		cell.textLabel.highlightedTextColor = [UIColor whiteColor];
-		return cell;
+- (void)configureActionCell:(UITableViewCell *)cell atRow:(NSInteger)row {
+	if (row == 0){
+		cell.textLabel.text = @"Change Password";
+	} else {
+		NSString *pending = [self pendingEmailPattern];
+		if (pending)
+			cell.textLabel.text = @"Enter E-Mail Code";
+		else
+			cell.textLabel.text = [self hasRecoveryEmail]
+					? @"Change Recovery E-Mail" : @"Set Recovery E-Mail";
 	}
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:16];
+	cell.textLabel.textAlignment = NSTextAlignmentCenter;
+	cell.textLabel.textColor = TGPrivacyActionColour();
+	cell.textLabel.highlightedTextColor = [UIColor whiteColor];
+}
 
+- (void)configureResetCell:(UITableViewCell *)cell {
+	cell.textLabel.text = [self pendingResetDate] > 0
+			? @"Cancel Password Reset" : @"Reset Password";
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:16];
+	cell.textLabel.textAlignment = NSTextAlignmentCenter;
+	cell.textLabel.textColor = [self pendingResetDate] > 0
+			? TGPrivacyActionColour() : TGPrivacyDestructiveColour();
+	cell.textLabel.highlightedTextColor = [UIColor whiteColor];
+}
+
+- (void)configureTurnOffCell:(UITableViewCell *)cell {
 	cell.textLabel.text = @"Turn Password Off";
 	cell.textLabel.font = [UIFont boldSystemFontOfSize:16];
 	cell.textLabel.textAlignment = NSTextAlignmentCenter;
 	cell.textLabel.textColor = TGPrivacyDestructiveColour();
 	cell.textLabel.highlightedTextColor = [UIColor whiteColor];
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView
+		 cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	UITableViewCell *cell = [self plainCellFor:tableView identifier:@"row"];
+
+	if (![self hasPassword]){
+		[self configureSetPasswordCell:cell];
+		return cell;
+	}
+	if (indexPath.section == 0){
+		[self configureStatusCell:cell atRow:indexPath.row];
+		return cell;
+	}
+	if (indexPath.section == 1){
+		[self configureActionCell:cell atRow:indexPath.row];
+		return cell;
+	}
+	if (indexPath.row == 1){
+		[self configureResetCell:cell];
+		return cell;
+	}
+	[self configureTurnOffCell:cell];
 	return cell;
 }
 
@@ -2216,57 +2232,64 @@ typedef void (^TGPrivacyPickerBlock)(NSArray *userIds);
 	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
 
 	if (indexPath.section == 0){
-		NSArray *settings = [self settings];
-		if ((NSUInteger)indexPath.row < settings.count){
-			NSString *setting = settings[indexPath.row];
-			cell.textLabel.text = [TGClient titleForPrivacySetting:setting];
-			cell.detailTextLabel.text = [self shortTitleForValue:self.ruleValues[setting]];
-			return cell;
-		}
-		NSInteger extra = indexPath.row - (NSInteger)settings.count;
-		if (extra == 0){
-			cell.textLabel.text = @"Blocked Users";
-			cell.detailTextLabel.text = @"";
-			return cell;
-		}
-		if (extra == 1){
-			cell.textLabel.text = @"Hidden Stories";
-			cell.detailTextLabel.text = @"";
-			return cell;
-		}
-		cell.textLabel.text = @"Auto-Delete Messages";
-		cell.detailTextLabel.text = self.autoDeleteLoaded
-				? [self autoDeleteTitleForSeconds:self.autoDeleteSeconds] : @"...";
+		[self configurePrivacyCell:cell atRow:indexPath.row];
 		return cell;
 	}
+	[self configureSecurityCell:cell atRow:indexPath.row];
+	return cell;
+}
 
-	if (indexPath.row == 0){
+- (void)configurePrivacyCell:(UITableViewCell *)cell atRow:(NSInteger)row {
+	NSArray *settings = [self settings];
+	if ((NSUInteger)row < settings.count){
+		NSString *setting = settings[row];
+		cell.textLabel.text = [TGClient titleForPrivacySetting:setting];
+		cell.detailTextLabel.text = [self shortTitleForValue:self.ruleValues[setting]];
+		return;
+	}
+	NSInteger extra = row - (NSInteger)settings.count;
+	if (extra == 0){
+		cell.textLabel.text = @"Blocked Users";
+		cell.detailTextLabel.text = @"";
+		return;
+	}
+	if (extra == 1){
+		cell.textLabel.text = @"Hidden Stories";
+		cell.detailTextLabel.text = @"";
+		return;
+	}
+	cell.textLabel.text = @"Auto-Delete Messages";
+	cell.detailTextLabel.text = self.autoDeleteLoaded
+			? [self autoDeleteTitleForSeconds:self.autoDeleteSeconds] : @"...";
+}
+
+- (void)configureSecurityCell:(UITableViewCell *)cell atRow:(NSInteger)row {
+	if (row == 0){
 		cell.textLabel.text = @"Passcode Lock";
 		cell.detailTextLabel.text = [TGPasscodeViewController passcodeIsSet] ? @"On" : @"Off";
-		return cell;
+		return;
 	}
-	if (indexPath.row == 1){
+	if (row == 1){
 		cell.textLabel.text = @"Two-Step Verification";
 		cell.detailTextLabel.text = self.passwordLoaded
 				? (self.passwordOn ? @"On" : @"Off") : @"...";
-		return cell;
+		return;
 	}
-	if (indexPath.row == 2){
+	if (row == 2){
 		cell.textLabel.text = @"Active Sessions";
 		cell.detailTextLabel.text = @"";
-		return cell;
+		return;
 	}
-	if (indexPath.row == 3){
+	if (row == 3){
 		cell.textLabel.text = @"Connected Websites";
 		cell.detailTextLabel.text = @"";
-		return cell;
+		return;
 	}
 	cell.textLabel.text = @"Login E-Mail";
 	if (!self.passwordLoaded)
 		cell.detailTextLabel.text = @"...";
 	else
 		cell.detailTextLabel.text = self.loginEmailPattern ?: @"Off";
-	return cell;
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {

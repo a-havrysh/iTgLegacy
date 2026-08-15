@@ -318,48 +318,25 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 	// Answer to getMe. updateUser also carries our own record, but the direct
 	// reply is the one that always has the phone number.
 	if ([type isEqualToString:@"user"] && obj[@"phone_number"]){
-		self.me = @{
-			@"id"         : obj[@"id"] ?: @(0),
-			@"first_name" : obj[@"first_name"] ?: @"",
-			@"username"   : TGActiveUsername(obj) ?: (obj[@"username"] ?: @""),
-			@"phone"      : obj[@"phone_number"] ?: @"",
-			@"is_premium" : obj[@"is_premium"] ?: @NO,
-		};
-		NSLog(@"TGClient: signed in as +%@", self.me[@"phone"]);
+		[self handleMeUser:obj];
 		return;
 	}
 	if ([type isEqualToString:@"updateUser"]){
-		NSDictionary *u = obj[@"user"];
-		NSString *name = [[NSString stringWithFormat:@"%@ %@",
-				u[@"first_name"] ?: @"", u[@"last_name"] ?: @""]
-				stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-		if (!name.length)
-			name = TGActiveUsername(u) ?: @"";
-		if (u[@"id"] && name.length)
-			self.usersById[u[@"id"]] = name;
-		[self cacheProfilePhoto:u];
+		[self handleUpdateUser:obj];
 		return;
 	}
 
 	// Live message updates - without these a chat only refreshes when reopened.
 	if ([type isEqualToString:@"updateNewMessage"]){
-		NSDictionary *m = obj[@"message"];
-		if (self.onMessage && m)
-			self.onMessage([m[@"chat_id"] longLongValue], TGFlattenMessage(m), 0);
+		[self handleUpdateNewMessage:obj];
 		return;
 	}
 	if ([type isEqualToString:@"updateMessageContent"]){
-		// Content changed in place (a photo finished uploading, a text edited).
-		if (self.onMessage)
-			self.onMessage([obj[@"chat_id"] longLongValue], nil, 0);
+		[self handleUpdateMessageContent:obj];
 		return;
 	}
 	if ([type isEqualToString:@"updateDeleteMessages"]){
-		if ([obj[@"is_permanent"] boolValue] && self.onMessage){
-			int64_t chatId = [obj[@"chat_id"] longLongValue];
-			for (NSNumber *mid in obj[@"message_ids"])
-				self.onMessage(chatId, nil, [mid longLongValue]);
-		}
+		[self handleUpdateDeleteMessages:obj];
 		return;
 	}
 	if ([type isEqualToString:@"updateNewChat"]){
@@ -375,25 +352,7 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 		return;
 	}
 	if ([type isEqualToString:@"updateConnectionState"]){
-		NSString *st = obj[@"state"][@"@type"];
-		NSLog(@"TGClient: connection %@", st);
-
-		TGConnectionState state = TGConnectionStateUnknown;
-		NSString *text = nil;
-		if ([st isEqualToString:@"connectionStateWaitingForNetwork"]){
-			state = TGConnectionStateWaitingForNetwork; text = @"Waiting for network";
-		} else if ([st isEqualToString:@"connectionStateConnecting"] ||
-				   [st isEqualToString:@"connectionStateConnectingToProxy"]){
-			state = TGConnectionStateConnecting; text = @"Connecting";
-		} else if ([st isEqualToString:@"connectionStateUpdating"]){
-			state = TGConnectionStateUpdating; text = @"Updating";
-		} else if ([st isEqualToString:@"connectionStateReady"]){
-			state = TGConnectionStateReady; text = nil;
-		}
-
-		self.connectionState = state;
-		if (self.onConnectionState)
-			self.onConnectionState(state, text);
+		[self handleUpdateConnectionState:obj];
 		return;
 	}
 	if ([type isEqualToString:@"updateNewCallSignalingData"]){
@@ -409,105 +368,27 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 	}
 
 	if ([type isEqualToString:@"updateFile"]){
-		// Big files take long enough on a 4S that silence looks like a hang.
-		NSDictionary *file = obj[@"file"];
-		NSDictionary *local = file[@"local"];
-		if (self.onFileProgress && [local[@"is_downloading_active"] boolValue]){
-			double expected = [file[@"expected_size"] doubleValue];
-			double got = [local[@"downloaded_size"] doubleValue];
-			if (expected > 0)
-				self.onFileProgress([file[@"id"] integerValue], (float)(got / expected));
-		}
+		[self handleUpdateFile:obj];
 		return;
 	}
 
 	if ([type isEqualToString:@"updateChatAction"]){
-		// TDLib names the action; the client turns it into the phrase every
-		// other client shows.
-		NSString *kind = obj[@"action"][@"@type"];
-		NSString *phrase = nil;
-		if ([kind isEqualToString:@"chatActionTyping"])
-			phrase = @"typing...";
-		else if ([kind isEqualToString:@"chatActionRecordingVoiceNote"])
-			phrase = @"recording audio...";
-		else if ([kind isEqualToString:@"chatActionRecordingVideoNote"] ||
-				 [kind isEqualToString:@"chatActionRecordingVideo"])
-			phrase = @"recording video...";
-		else if ([kind isEqualToString:@"chatActionUploadingPhoto"])
-			phrase = @"sending a photo...";
-		else if ([kind hasPrefix:@"chatActionUploading"])
-			phrase = @"sending a file...";
-		// chatActionCancel and anything unknown clear it.
-		int64_t actingChat = [obj[@"chat_id"] longLongValue];
-		// The chat list shows this in place of the preview, so it has to live
-		// on the chat rather than only reach whichever chat is open.
-		NSMutableDictionary *acting = self.chatsById[@(actingChat)];
-		if (acting){
-			acting[@"action"] = phrase ?: @"";
-			[self rebuildChats];
-		}
-		if (self.onChatAction)
-			self.onChatAction(actingChat, phrase);
+		[self handleUpdateChatAction:obj];
 		return;
 	}
 
-	// Whether a supergroup is a forum is a property of the supergroup, not of
-	// the chat, and it arrives in an update of its own. Chats already built
-	// from that supergroup have to be told.
 	if ([type isEqualToString:@"updateSupergroup"]){
-		NSDictionary *group = obj[@"supergroup"];
-		NSNumber *groupId = group[@"id"];
-		if (!groupId)
-			return;
-		BOOL isForum = [group[@"is_forum"] boolValue];
-		if ([self.forumSupergroups[groupId] boolValue] == isForum &&
-			self.forumSupergroups[groupId])
-			return;
-		self.forumSupergroups[groupId] = @(isForum);
-
-		BOOL changed = NO;
-		for (NSMutableDictionary *chat in self.chatsById.allValues){
-			if (![chat[@"supergroupId"] isEqual:groupId])
-				continue;
-			chat[@"isForum"] = @(isForum);
-			changed = YES;
-		}
-		if (changed)
-			[self rebuildChats];
+		[self handleUpdateSupergroup:obj];
 		return;
 	}
 
-	// A private chat's id is the user's id, so presence lands straight on the
-	// chat the list is drawing.
 	if ([type isEqualToString:@"updateUserStatus"]){
-		NSDictionary *status = TGUserStatusInfo(obj[@"status"]);
-		[[NSNotificationCenter defaultCenter]
-				postNotificationName:TGUserStatusDidChangeNotification
-							  object:self
-							userInfo:@{@"userId" : obj[@"user_id"] ?: @(0), @"status" : status}];
-
-		NSMutableDictionary *chat = self.chatsById[obj[@"user_id"]];
-		if (!chat)
-			return;
-		BOOL online = [status[@"isOnline"] boolValue];
-		if ([chat[@"isOnline"] boolValue] == online)
-			return;
-		chat[@"isOnline"] = @(online);
-		[self rebuildChats];
+		[self handleUpdateUserStatus:obj];
 		return;
 	}
 
 	if ([type isEqualToString:@"updateChatFolders"]){
-		NSMutableArray *out = [NSMutableArray array];
-		for (NSDictionary *f in obj[@"chat_folders"]){
-			// chatFolderInfo.name is chatFolderName{text:formattedText}, so the
-			// plain string sits two levels down: name.text.text.
-			id nameText = f[@"name"][@"text"][@"text"];
-			[out addObject:@{@"id"    : f[@"id"] ?: @(0),
-							 @"title" : [nameText isKindOfClass:[NSString class]] ? nameText : @""}];
-		}
-		self.folders = out;
-		NSLog(@"TGClient: %lu folders", (unsigned long)out.count);
+		[self handleUpdateChatFolders:obj];
 		return;
 	}
 	if ([type isEqualToString:@"updateUnreadChatCount"]){
@@ -516,20 +397,187 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 		return;
 	}
 	if ([type isEqualToString:@"error"]){
-		NSString *msg = obj[@"message"] ?: @"unknown error";
-		NSLog(@"TGClient: ERROR code=%@ msg=%@", obj[@"code"], msg);
-		if ([obj[@"code"] intValue] == 404){
-			// loadChats answers 404 when the whole list is loaded
-			self.chatListComplete = YES;
-			NSLog(@"TGClient: chat list complete (%lu)",
-					(unsigned long)self.chatsById.count);
-			return;
-		}
-		NSLog(@"TGClient: error: %@", obj);
-		if (self.onError)
-			self.onError(msg);
+		[self handleErrorObject:obj];
 		return;
 	}
+}
+
+- (void)handleMeUser:(NSDictionary *)obj {
+	self.me = @{
+		@"id"         : obj[@"id"] ?: @(0),
+		@"first_name" : obj[@"first_name"] ?: @"",
+		@"username"   : TGActiveUsername(obj) ?: (obj[@"username"] ?: @""),
+		@"phone"      : obj[@"phone_number"] ?: @"",
+		@"is_premium" : obj[@"is_premium"] ?: @NO,
+	};
+	NSLog(@"TGClient: signed in as +%@", self.me[@"phone"]);
+}
+
+- (void)handleUpdateUser:(NSDictionary *)obj {
+	NSDictionary *u = obj[@"user"];
+	NSString *name = [[NSString stringWithFormat:@"%@ %@",
+			u[@"first_name"] ?: @"", u[@"last_name"] ?: @""]
+			stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+	if (!name.length)
+		name = TGActiveUsername(u) ?: @"";
+	if (u[@"id"] && name.length)
+		self.usersById[u[@"id"]] = name;
+	[self cacheProfilePhoto:u];
+}
+
+- (void)handleUpdateNewMessage:(NSDictionary *)obj {
+	NSDictionary *m = obj[@"message"];
+	if (self.onMessage && m)
+		self.onMessage([m[@"chat_id"] longLongValue], TGFlattenMessage(m), 0);
+}
+
+// Content changed in place (a photo finished uploading, a text edited).
+- (void)handleUpdateMessageContent:(NSDictionary *)obj {
+	if (self.onMessage)
+		self.onMessage([obj[@"chat_id"] longLongValue], nil, 0);
+}
+
+- (void)handleUpdateDeleteMessages:(NSDictionary *)obj {
+	if ([obj[@"is_permanent"] boolValue] && self.onMessage){
+		int64_t chatId = [obj[@"chat_id"] longLongValue];
+		for (NSNumber *mid in obj[@"message_ids"])
+			self.onMessage(chatId, nil, [mid longLongValue]);
+	}
+}
+
+- (void)handleUpdateConnectionState:(NSDictionary *)obj {
+	NSString *st = obj[@"state"][@"@type"];
+	NSLog(@"TGClient: connection %@", st);
+
+	TGConnectionState state = TGConnectionStateUnknown;
+	NSString *text = nil;
+	if ([st isEqualToString:@"connectionStateWaitingForNetwork"]){
+		state = TGConnectionStateWaitingForNetwork; text = @"Waiting for network";
+	} else if ([st isEqualToString:@"connectionStateConnecting"] ||
+			   [st isEqualToString:@"connectionStateConnectingToProxy"]){
+		state = TGConnectionStateConnecting; text = @"Connecting";
+	} else if ([st isEqualToString:@"connectionStateUpdating"]){
+		state = TGConnectionStateUpdating; text = @"Updating";
+	} else if ([st isEqualToString:@"connectionStateReady"]){
+		state = TGConnectionStateReady; text = nil;
+	}
+
+	self.connectionState = state;
+	if (self.onConnectionState)
+		self.onConnectionState(state, text);
+}
+
+// Big files take long enough on a 4S that silence looks like a hang.
+- (void)handleUpdateFile:(NSDictionary *)obj {
+	NSDictionary *file = obj[@"file"];
+	NSDictionary *local = file[@"local"];
+	if (self.onFileProgress && [local[@"is_downloading_active"] boolValue]){
+		double expected = [file[@"expected_size"] doubleValue];
+		double got = [local[@"downloaded_size"] doubleValue];
+		if (expected > 0)
+			self.onFileProgress([file[@"id"] integerValue], (float)(got / expected));
+	}
+}
+
+// TDLib names the action; the client turns it into the phrase every
+// other client shows.
+- (void)handleUpdateChatAction:(NSDictionary *)obj {
+	NSString *kind = obj[@"action"][@"@type"];
+	NSString *phrase = nil;
+	if ([kind isEqualToString:@"chatActionTyping"])
+		phrase = @"typing...";
+	else if ([kind isEqualToString:@"chatActionRecordingVoiceNote"])
+		phrase = @"recording audio...";
+	else if ([kind isEqualToString:@"chatActionRecordingVideoNote"] ||
+			 [kind isEqualToString:@"chatActionRecordingVideo"])
+		phrase = @"recording video...";
+	else if ([kind isEqualToString:@"chatActionUploadingPhoto"])
+		phrase = @"sending a photo...";
+	else if ([kind hasPrefix:@"chatActionUploading"])
+		phrase = @"sending a file...";
+	// chatActionCancel and anything unknown clear it.
+	int64_t actingChat = [obj[@"chat_id"] longLongValue];
+	// The chat list shows this in place of the preview, so it has to live
+	// on the chat rather than only reach whichever chat is open.
+	NSMutableDictionary *acting = self.chatsById[@(actingChat)];
+	if (acting){
+		acting[@"action"] = phrase ?: @"";
+		[self rebuildChats];
+	}
+	if (self.onChatAction)
+		self.onChatAction(actingChat, phrase);
+}
+
+// Whether a supergroup is a forum is a property of the supergroup, not of
+// the chat, and it arrives in an update of its own. Chats already built
+// from that supergroup have to be told.
+- (void)handleUpdateSupergroup:(NSDictionary *)obj {
+	NSDictionary *group = obj[@"supergroup"];
+	NSNumber *groupId = group[@"id"];
+	if (!groupId)
+		return;
+	BOOL isForum = [group[@"is_forum"] boolValue];
+	if ([self.forumSupergroups[groupId] boolValue] == isForum &&
+		self.forumSupergroups[groupId])
+		return;
+	self.forumSupergroups[groupId] = @(isForum);
+
+	BOOL changed = NO;
+	for (NSMutableDictionary *chat in self.chatsById.allValues){
+		if (![chat[@"supergroupId"] isEqual:groupId])
+			continue;
+		chat[@"isForum"] = @(isForum);
+		changed = YES;
+	}
+	if (changed)
+		[self rebuildChats];
+}
+
+// A private chat's id is the user's id, so presence lands straight on the
+// chat the list is drawing.
+- (void)handleUpdateUserStatus:(NSDictionary *)obj {
+	NSDictionary *status = TGUserStatusInfo(obj[@"status"]);
+	[[NSNotificationCenter defaultCenter]
+			postNotificationName:TGUserStatusDidChangeNotification
+						  object:self
+						userInfo:@{@"userId" : obj[@"user_id"] ?: @(0), @"status" : status}];
+
+	NSMutableDictionary *chat = self.chatsById[obj[@"user_id"]];
+	if (!chat)
+		return;
+	BOOL online = [status[@"isOnline"] boolValue];
+	if ([chat[@"isOnline"] boolValue] == online)
+		return;
+	chat[@"isOnline"] = @(online);
+	[self rebuildChats];
+}
+
+- (void)handleUpdateChatFolders:(NSDictionary *)obj {
+	NSMutableArray *out = [NSMutableArray array];
+	for (NSDictionary *f in obj[@"chat_folders"]){
+		// chatFolderInfo.name is chatFolderName{text:formattedText}, so the
+		// plain string sits two levels down: name.text.text.
+		id nameText = f[@"name"][@"text"][@"text"];
+		[out addObject:@{@"id"    : f[@"id"] ?: @(0),
+						 @"title" : [nameText isKindOfClass:[NSString class]] ? nameText : @""}];
+	}
+	self.folders = out;
+	NSLog(@"TGClient: %lu folders", (unsigned long)out.count);
+}
+
+- (void)handleErrorObject:(NSDictionary *)obj {
+	NSString *msg = obj[@"message"] ?: @"unknown error";
+	NSLog(@"TGClient: ERROR code=%@ msg=%@", obj[@"code"], msg);
+	if ([obj[@"code"] intValue] == 404){
+		// loadChats answers 404 when the whole list is loaded
+		self.chatListComplete = YES;
+		NSLog(@"TGClient: chat list complete (%lu)",
+				(unsigned long)self.chatsById.count);
+		return;
+	}
+	NSLog(@"TGClient: error: %@", obj);
+	if (self.onError)
+		self.onError(msg);
 }
 
 - (void)handleAuthState:(NSDictionary *)state {
@@ -2409,6 +2457,39 @@ static NSArray *TGPacksFrom(NSDictionary *target) {
 	}];
 }
 
+// A forum keeps several threads in one chat, so it opens on a topic list
+// rather than a merged stream. The flag is on the supergroup, not here:
+// the chat only names which supergroup it is, and reading is_forum off the
+// chat - which has no such field - meant no forum was ever recognised.
+- (void)mergeForumFlagFromChat:(NSDictionary *)chat
+                          into:(NSMutableDictionary *)info
+                        chatId:(NSNumber *)chatId {
+	NSNumber *supergroupId = chat[@"type"][@"supergroup_id"];
+	if (!supergroupId)
+		return;
+
+	info[@"supergroupId"] = supergroupId;
+	NSNumber *known = self.forumSupergroups[supergroupId];
+	if (known){
+		info[@"isForum"] = known;
+		return;
+	}
+
+	// Not seen yet: ask, and the answer updates the row in place.
+	__weak typeof(self) weakSelf = self;
+	[self request:@{@"@type" : @"getSupergroup",
+					@"supergroup_id" : supergroupId}
+	   completion:^(NSDictionary *group){
+		TGClient *me = weakSelf;
+		if (!me || !group[@"id"])
+			return;
+		me.forumSupergroups[group[@"id"]] = @([group[@"is_forum"] boolValue]);
+		NSMutableDictionary *row = me.chatsById[chatId];
+		row[@"isForum"] = @([group[@"is_forum"] boolValue]);
+		[me rebuildChats];
+	}];
+}
+
 - (void)mergeChat:(NSDictionary *)chat {
 	if (![chat isKindOfClass:NSDictionary.class])
 		return;
@@ -2448,32 +2529,8 @@ static NSArray *TGPacksFrom(NSDictionary *target) {
 		info[@"isPrivate"] = @([chatType isEqualToString:@"chatTypePrivate"]);
 	}
 
-	// A forum keeps several threads in one chat, so it opens on a topic list
-	// rather than a merged stream. The flag is on the supergroup, not here:
-	// the chat only names which supergroup it is, and reading is_forum off the
-	// chat - which has no such field - meant no forum was ever recognised.
-	NSNumber *supergroupId = chat[@"type"][@"supergroup_id"];
-	if (supergroupId){
-		info[@"supergroupId"] = supergroupId;
-		NSNumber *known = self.forumSupergroups[supergroupId];
-		if (known){
-			info[@"isForum"] = known;
-		} else {
-			// Not seen yet: ask, and the answer updates the row in place.
-			__weak typeof(self) weakSelf = self;
-			[self request:@{@"@type" : @"getSupergroup",
-							@"supergroup_id" : supergroupId}
-			   completion:^(NSDictionary *group){
-				TGClient *me = weakSelf;
-				if (!me || !group[@"id"])
-					return;
-				me.forumSupergroups[group[@"id"]] = @([group[@"is_forum"] boolValue]);
-				NSMutableDictionary *row = me.chatsById[chatId];
-				row[@"isForum"] = @([group[@"is_forum"] boolValue]);
-				[me rebuildChats];
-			}];
-		}
-	}
+	[self mergeForumFlagFromChat:chat into:info chatId:chatId];
+
 	if (chat[@"positions"]){
 		info[@"order"] = @(TGMainListOrder(chat[@"positions"]));
 		info[@"archiveOrder"] = @(TGArchiveOrder(chat[@"positions"]));

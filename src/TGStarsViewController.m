@@ -1749,6 +1749,56 @@ enum {
 	[self.navigationController pushViewController:controller animated:YES];
 }
 
+- (void)handleTransactionsTapAtRow:(NSInteger)row {
+	if (!self.transactions.count)
+		return;
+	if (row >= (NSInteger)self.transactions.count){
+		if (!self.transactionsLoading){
+			[self loadMoreTransactions];
+			[self.tableView reloadData];
+		}
+		return;
+	}
+	[self pushTransactionDetails:self.transactions[row]];
+}
+
+- (void)handleGiftsTapAtRow:(NSInteger)row {
+	if (!self.gifts.count)
+		return;
+	if (row >= (NSInteger)self.gifts.count){
+		if (!self.giftsLoading){
+			[self loadMoreGifts];
+			[self.tableView reloadData];
+		}
+		return;
+	}
+	[self pushGiftDetails:self.gifts[row]];
+}
+
+- (void)handleGiftToolsTapAtRow:(NSInteger)row {
+	switch (row){
+		case TGStarsGiftToolCatalogue: [self pushGiftCatalogue]; break;
+		case TGStarsGiftToolCollections: [self pushGiftCollections]; break;
+		case TGStarsGiftToolSettings: [self pushGiftSettings]; break;
+		default: [self pushChannelGifts]; break;
+	}
+}
+
+- (void)handleMoreTapAtRow:(NSInteger)row {
+	switch (row){
+		case TGStarsMoreStarPacks: [self pushStarPacks]; break;
+		case TGStarsMoreIncoming:
+			[self pushTransactionsWithDirection:@"incoming" title:@"Incoming Payments"];
+			break;
+		case TGStarsMoreOutgoing:
+			[self pushTransactionsWithDirection:@"outgoing" title:@"Outgoing Payments"];
+			break;
+		case TGStarsMoreInvoice: [self openInvoiceByName]; break;
+		case TGStarsMorePaidMessages: [self pushPaidMessages]; break;
+		default: [self clearSavedPaymentInfo]; break;
+	}
+}
+
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
 
@@ -1756,16 +1806,7 @@ enum {
 		return;
 
 	if (indexPath.section == TGStarsSectionTransactions){
-		if (!self.transactions.count)
-			return;
-		if (indexPath.row >= (NSInteger)self.transactions.count){
-			if (!self.transactionsLoading){
-				[self loadMoreTransactions];
-				[self.tableView reloadData];
-			}
-			return;
-		}
-		[self pushTransactionDetails:self.transactions[indexPath.row]];
+		[self handleTransactionsTapAtRow:indexPath.row];
 		return;
 	}
 
@@ -1776,41 +1817,16 @@ enum {
 	}
 
 	if (indexPath.section == TGStarsSectionGiftTools){
-		switch (indexPath.row){
-			case TGStarsGiftToolCatalogue: [self pushGiftCatalogue]; break;
-			case TGStarsGiftToolCollections: [self pushGiftCollections]; break;
-			case TGStarsGiftToolSettings: [self pushGiftSettings]; break;
-			default: [self pushChannelGifts]; break;
-		}
+		[self handleGiftToolsTapAtRow:indexPath.row];
 		return;
 	}
 
 	if (indexPath.section == TGStarsSectionMore){
-		switch (indexPath.row){
-			case TGStarsMoreStarPacks: [self pushStarPacks]; break;
-			case TGStarsMoreIncoming:
-				[self pushTransactionsWithDirection:@"incoming" title:@"Incoming Payments"];
-				break;
-			case TGStarsMoreOutgoing:
-				[self pushTransactionsWithDirection:@"outgoing" title:@"Outgoing Payments"];
-				break;
-			case TGStarsMoreInvoice: [self openInvoiceByName]; break;
-			case TGStarsMorePaidMessages: [self pushPaidMessages]; break;
-			default: [self clearSavedPaymentInfo]; break;
-		}
+		[self handleMoreTapAtRow:indexPath.row];
 		return;
 	}
 
-	if (!self.gifts.count)
-		return;
-	if (indexPath.row >= (NSInteger)self.gifts.count){
-		if (!self.giftsLoading){
-			[self loadMoreGifts];
-			[self.tableView reloadData];
-		}
-		return;
-	}
-	[self pushGiftDetails:self.gifts[indexPath.row]];
+	[self handleGiftsTapAtRow:indexPath.row];
 }
 
 #pragma mark - shared helpers
@@ -2656,6 +2672,46 @@ enum {
 	[self.navigationController pushViewController:controller animated:YES];
 }
 
+- (NSDictionary *)newCollectionRowForList:(TGStarsListViewController *)list {
+	__weak typeof(self) weakSelf = self;
+	__weak TGStarsListViewController *weakList = list;
+	return TGStarsRow(@"New Collection", nil, nil, ^{
+		typeof(self) innerSelf = weakSelf;
+		TGStarsListViewController *innerList = weakList;
+		if (!innerSelf || !innerList)
+			return;
+		[innerSelf promptWithTitle:@"New Collection"
+						   message:@"Name this collection."
+					   placeholder:@"Name"
+						   numeric:NO
+					   actionTitle:@"Create"
+						   handler:^(NSString *text)
+		{
+			typeof(self) createSelf = weakSelf;
+			TGStarsListViewController *createList = weakList;
+			if (!createSelf || !createList)
+				return;
+			createList.loading = YES;
+			[createList.tableView reloadData];
+			[[TGClient shared] createGiftCollectionNamed:text
+												 giftIds:@[]
+											  completion:^(NSDictionary *created)
+			{
+				typeof(self) doneSelf = weakSelf;
+				TGStarsListViewController *doneList = weakList;
+				if (!doneSelf || !doneList)
+					return;
+				if (![created isKindOfClass:[NSDictionary class]]){
+					[doneList finishLoadingWithMore:NO];
+					[doneSelf showMessage:@"The collection could not be created."];
+					return;
+				}
+				[doneSelf fillCollectionsList:doneList];
+			}];
+		}];
+	});
+}
+
 - (void)fillCollectionsList:(TGStarsListViewController *)list {
 	__weak typeof(self) weakSelf = self;
 	__weak TGStarsListViewController *weakList = list;
@@ -2680,41 +2736,7 @@ enum {
 					[innerSelf pushCollection:collection all:all];
 			})];
 		}
-		[strongList appendRow:TGStarsRow(@"New Collection", nil, nil, ^{
-			typeof(self) innerSelf = weakSelf;
-			TGStarsListViewController *innerList = weakList;
-			if (!innerSelf || !innerList)
-				return;
-			[innerSelf promptWithTitle:@"New Collection"
-							   message:@"Name this collection."
-						   placeholder:@"Name"
-							   numeric:NO
-						   actionTitle:@"Create"
-							   handler:^(NSString *text)
-			{
-				typeof(self) createSelf = weakSelf;
-				TGStarsListViewController *createList = weakList;
-				if (!createSelf || !createList)
-					return;
-				createList.loading = YES;
-				[createList.tableView reloadData];
-				[[TGClient shared] createGiftCollectionNamed:text
-													 giftIds:@[]
-												  completion:^(NSDictionary *created)
-				{
-					typeof(self) doneSelf = weakSelf;
-					TGStarsListViewController *doneList = weakList;
-					if (!doneSelf || !doneList)
-						return;
-					if (![created isKindOfClass:[NSDictionary class]]){
-						[doneList finishLoadingWithMore:NO];
-						[doneSelf showMessage:@"The collection could not be created."];
-						return;
-					}
-					[doneSelf fillCollectionsList:doneList];
-				}];
-			}];
-		})];
+		[strongList appendRow:[strongSelf newCollectionRowForList:strongList]];
 		[strongList finishLoadingWithMore:NO];
 	}];
 }

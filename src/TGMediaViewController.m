@@ -67,6 +67,50 @@ static UIImage *TGMediaTilePlaceholder(void) {
 	return placeholder;
 }
 
+static NSMutableDictionary *TGMediaPhotoFields(NSDictionary *content, TGClient *client,
+											   CGFloat scale) {
+	NSArray *sizes = content[@"photo"][@"sizes"];
+	if (![sizes isKindOfClass:NSArray.class] || sizes.count == 0)
+		return nil;
+	NSDictionary *small = [client bestPhotoSizeIn:sizes forWidth:TGMediaTileSide scale:scale];
+	NSDictionary *large = [client bestPhotoSizeIn:sizes forWidth:320.0f scale:scale];
+
+	NSMutableDictionary *fields = [NSMutableDictionary dictionary];
+	id thumbId = small[@"fileId"];
+	if (thumbId)
+		fields[@"thumbId"] = thumbId;
+	id fullId = large[@"fileId"] ?: [sizes lastObject][@"photo"][@"id"];
+	if (fullId)
+		fields[@"fullId"] = fullId;
+	fields[@"sizes"] = sizes;
+	id minithumb = content[@"photo"][@"minithumbnail"];
+	if (minithumb)
+		fields[@"minithumb"] = minithumb;
+	fields[@"fileType"] = TGFileTypePhoto;
+	return fields;
+}
+
+static NSMutableDictionary *TGMediaMovingImageFields(NSDictionary *content, TGClient *client,
+													 NSString *key, NSString *fileType) {
+	NSDictionary *media = content[key];
+	NSDictionary *thumb = [client decodableThumbnail:media[@"thumbnail"]];
+
+	NSMutableDictionary *fields = [NSMutableDictionary dictionary];
+	id thumbId = thumb[@"fileId"];
+	if (thumbId)
+		fields[@"thumbId"] = thumbId;
+	id fullId = media[key][@"id"];
+	if (fullId)
+		fields[@"fullId"] = fullId;
+	fields[@"duration"] = @([media[@"duration"] integerValue]);
+	id minithumb = media[@"minithumbnail"];
+	if (minithumb)
+		fields[@"minithumb"] = minithumb;
+	fields[@"fileType"] = fileType;
+	fields[@"isVideo"] = @(YES);
+	return fields;
+}
+
 static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 	if (![message isKindOfClass:NSDictionary.class])
 		return nil;
@@ -79,46 +123,26 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 	CGFloat scale = [UIScreen mainScreen].scale;
 	TGClient *client = [TGClient shared];
 
-	NSNumber *thumbId = nil;
-	NSNumber *fullId = nil;
-	NSInteger duration = 0;
-	BOOL isVideo = NO;
-	NSArray *photoSizes = nil;
-	NSDictionary *minithumb = nil;
-	NSString *fileType = TGFileTypePhoto;
-
-	if ([kind isEqualToString:@"messagePhoto"]){
-		NSArray *sizes = content[@"photo"][@"sizes"];
-		if (![sizes isKindOfClass:NSArray.class] || sizes.count == 0)
-			return nil;
-		NSDictionary *small = [client bestPhotoSizeIn:sizes forWidth:TGMediaTileSide scale:scale];
-		NSDictionary *large = [client bestPhotoSizeIn:sizes forWidth:320.0f scale:scale];
-		thumbId = small[@"fileId"];
-		fullId = large[@"fileId"] ?: [sizes lastObject][@"photo"][@"id"];
-		photoSizes = sizes;
-		minithumb = content[@"photo"][@"minithumbnail"];
-
-	} else if ([kind isEqualToString:@"messageVideo"]){
-		NSDictionary *thumb = [client decodableThumbnail:content[@"video"][@"thumbnail"]];
-		thumbId = thumb[@"fileId"];
-		fullId = content[@"video"][@"video"][@"id"];
-		duration = [content[@"video"][@"duration"] integerValue];
-		minithumb = content[@"video"][@"minithumbnail"];
-		fileType = TGFileTypeVideo;
-		isVideo = YES;
-
-	} else if ([kind isEqualToString:@"messageAnimation"]){
-		NSDictionary *thumb = [client decodableThumbnail:content[@"animation"][@"thumbnail"]];
-		thumbId = thumb[@"fileId"];
-		fullId = content[@"animation"][@"animation"][@"id"];
-		duration = [content[@"animation"][@"duration"] integerValue];
-		minithumb = content[@"animation"][@"minithumbnail"];
-		fileType = TGFileTypeAnimation;
-		isVideo = YES;
-
-	} else {
+	NSMutableDictionary *fields = nil;
+	if ([kind isEqualToString:@"messagePhoto"])
+		fields = TGMediaPhotoFields(content, client, scale);
+	else if ([kind isEqualToString:@"messageVideo"])
+		fields = TGMediaMovingImageFields(content, client, @"video", TGFileTypeVideo);
+	else if ([kind isEqualToString:@"messageAnimation"])
+		fields = TGMediaMovingImageFields(content, client, @"animation", TGFileTypeAnimation);
+	else
 		return nil;
-	}
+
+	if (!fields)
+		return nil;
+
+	NSNumber *thumbId = fields[@"thumbId"];
+	NSNumber *fullId = fields[@"fullId"];
+	NSInteger duration = [fields[@"duration"] integerValue];
+	BOOL isVideo = [fields[@"isVideo"] boolValue];
+	NSArray *photoSizes = fields[@"sizes"];
+	NSDictionary *minithumb = fields[@"minithumb"];
+	NSString *fileType = fields[@"fileType"];
 
 	if (![thumbId isKindOfClass:NSNumber.class] && ![fullId isKindOfClass:NSNumber.class])
 		return nil;
@@ -215,6 +239,74 @@ static NSString *TGMediaFirstUrlInText(NSString *text, NSDictionary *content) {
 	return nil;
 }
 
+static NSMutableDictionary *TGMediaDocumentFields(NSDictionary *content) {
+	NSDictionary *document = content[@"document"];
+	NSString *name = document[@"file_name"];
+	NSDictionary *file = document[@"document"];
+	long long size = [file[@"size"] longLongValue];
+	if (size <= 0)
+		size = [file[@"expected_size"] longLongValue];
+
+	NSMutableDictionary *fields = [NSMutableDictionary dictionary];
+	fields[@"title"] = [name isKindOfClass:NSString.class] && name.length ? name : @"File";
+	id fileId = file[@"id"];
+	if (fileId)
+		fields[@"fileId"] = fileId;
+	fields[@"size"] = @(size);
+	fields[@"detail"] = TGMediaFormatBytes(size);
+	NSString *mimeType = document[@"mime_type"];
+	if ([mimeType isKindOfClass:NSString.class])
+		fields[@"mime"] = mimeType;
+	return fields;
+}
+
+static NSMutableDictionary *TGMediaAudioFields(NSDictionary *content) {
+	NSDictionary *audio = content[@"audio"];
+	NSString *name = audio[@"title"];
+	if (![name isKindOfClass:NSString.class] || name.length == 0)
+		name = audio[@"file_name"];
+	NSString *performer = audio[@"performer"];
+	NSInteger duration = [audio[@"duration"] integerValue];
+	NSDictionary *file = audio[@"audio"];
+	long long size = [file[@"size"] longLongValue];
+	if (size <= 0)
+		size = [file[@"expected_size"] longLongValue];
+
+	NSMutableDictionary *fields = [NSMutableDictionary dictionary];
+	fields[@"title"] = [name isKindOfClass:NSString.class] && name.length ? name : @"Audio";
+	id fileId = file[@"id"];
+	if (fileId)
+		fields[@"fileId"] = fileId;
+	fields[@"fileType"] = TGFileTypeAudio;
+	NSString *mimeType = audio[@"mime_type"];
+	if ([mimeType isKindOfClass:NSString.class])
+		fields[@"mime"] = mimeType;
+	fields[@"size"] = @(size);
+	fields[@"duration"] = @(duration);
+	fields[@"detail"] = [performer isKindOfClass:NSString.class] && performer.length
+			? [NSString stringWithFormat:@"%@ · %@", performer,
+					TGMediaFormatDuration(duration)]
+			: TGMediaFormatDuration(duration);
+	return fields;
+}
+
+static NSMutableDictionary *TGMediaLinkFields(NSDictionary *content) {
+	NSString *body = content[@"text"][@"text"];
+	if (![body isKindOfClass:NSString.class])
+		body = content[@"caption"][@"text"];
+	NSString *found = TGMediaFirstUrlInText(body, content);
+	if (!found.length)
+		return nil;
+
+	NSMutableDictionary *fields = [NSMutableDictionary dictionary];
+	fields[@"url"] = found;
+	NSString *pageTitle = content[@"web_page"][@"title"];
+	fields[@"title"] = [pageTitle isKindOfClass:NSString.class] && pageTitle.length
+			? pageTitle : found;
+	fields[@"detail"] = found;
+	return fields;
+}
+
 static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger scope) {
 	if (![message isKindOfClass:NSDictionary.class])
 		return nil;
@@ -224,81 +316,38 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	if (![kind isKindOfClass:NSString.class])
 		return nil;
 
-	NSString *title = @"";
-	NSString *detail = @"";
-	NSString *url = @"";
-	NSNumber *fileId = nil;
-	long long size = 0;
-	NSInteger duration = 0;
-	NSString *mime = @"";
-	NSString *fileType = TGFileTypeDocument;
-
+	NSMutableDictionary *fields = nil;
 	if (scope == TGMediaScopeFiles){
 		if (![kind isEqualToString:@"messageDocument"])
 			return nil;
-		NSDictionary *document = content[@"document"];
-		NSString *name = document[@"file_name"];
-		title = [name isKindOfClass:NSString.class] && name.length ? name : @"File";
-		NSDictionary *file = document[@"document"];
-		fileId = file[@"id"];
-		size = [file[@"size"] longLongValue];
-		if (size <= 0)
-			size = [file[@"expected_size"] longLongValue];
-		detail = TGMediaFormatBytes(size);
-		NSString *mimeType = document[@"mime_type"];
-		if ([mimeType isKindOfClass:NSString.class])
-			mime = mimeType;
+		fields = TGMediaDocumentFields(content);
 
 	} else if (scope == TGMediaScopeMusic){
 		if (![kind isEqualToString:@"messageAudio"])
 			return nil;
-		NSDictionary *audio = content[@"audio"];
-		NSString *name = audio[@"title"];
-		if (![name isKindOfClass:NSString.class] || name.length == 0)
-			name = audio[@"file_name"];
-		title = [name isKindOfClass:NSString.class] && name.length ? name : @"Audio";
-		NSString *performer = audio[@"performer"];
-		duration = [audio[@"duration"] integerValue];
-		NSDictionary *file = audio[@"audio"];
-		fileId = file[@"id"];
-		fileType = TGFileTypeAudio;
-		NSString *mimeType = audio[@"mime_type"];
-		if ([mimeType isKindOfClass:NSString.class])
-			mime = mimeType;
-		size = [file[@"size"] longLongValue];
-		if (size <= 0)
-			size = [file[@"expected_size"] longLongValue];
-		detail = [performer isKindOfClass:NSString.class] && performer.length
-				? [NSString stringWithFormat:@"%@ · %@", performer,
-						TGMediaFormatDuration(duration)]
-				: TGMediaFormatDuration(duration);
+		fields = TGMediaAudioFields(content);
 
 	} else {
-		NSString *body = content[@"text"][@"text"];
-		if (![body isKindOfClass:NSString.class])
-			body = content[@"caption"][@"text"];
-		NSString *found = TGMediaFirstUrlInText(body, content);
-		if (!found.length)
-			return nil;
-		url = found;
-		NSString *pageTitle = content[@"web_page"][@"title"];
-		title = [pageTitle isKindOfClass:NSString.class] && pageTitle.length ? pageTitle : found;
-		detail = found;
+		fields = TGMediaLinkFields(content);
 	}
 
+	if (!fields)
+		return nil;
+
+	NSNumber *fileId = fields[@"fileId"];
 	if (scope != TGMediaScopeLinks && ![fileId isKindOfClass:NSNumber.class])
 		return nil;
 
 	return @{
 		@"messageId" : message[@"id"] ?: @(0),
-		@"title"     : title,
-		@"detail"    : detail,
-		@"url"       : url,
+		@"title"     : fields[@"title"] ?: @"",
+		@"detail"    : fields[@"detail"] ?: @"",
+		@"url"       : fields[@"url"] ?: @"",
 		@"fileId"    : [fileId isKindOfClass:NSNumber.class] ? fileId : @(0),
-		@"size"      : @(size),
-		@"duration"  : @(duration),
-		@"mime"      : mime,
-		@"fileType"  : fileType,
+		@"size"      : fields[@"size"] ?: @(0),
+		@"duration"  : fields[@"duration"] ?: @(0),
+		@"mime"      : fields[@"mime"] ?: @"",
+		@"fileType"  : fields[@"fileType"] ?: TGFileTypeDocument,
 		@"date"      : message[@"date"] ?: @(0),
 		@"list"      : @(YES),
 	};
@@ -747,6 +796,22 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 		[_topBar addSubview:corners];
 	}
 
+	[self buildCloseButton];
+
+	_counterLabel = [[UILabel alloc] initWithFrame:
+			CGRectMake((CGFloat)(int)((bounds.size.width - 140) / 2), 11, 140, 20)];
+	_counterLabel.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin
+			| UIViewAutoresizingFlexibleRightMargin;
+	_counterLabel.backgroundColor = [UIColor clearColor];
+	_counterLabel.textColor = [UIColor whiteColor];
+	_counterLabel.font = [UIFont boldSystemFontOfSize:20];
+	_counterLabel.shadowColor = [UIColor colorWithWhite:0.0f alpha:0.5f];
+	_counterLabel.shadowOffset = CGSizeMake(0, -1);
+	_counterLabel.textAlignment = NSTextAlignmentCenter;
+	[_topBar addSubview:_counterLabel];
+}
+
+- (void)buildCloseButton {
 	UIImage *closePlate = [UIImage imageNamed:@"GalleryDoneButton.png"];
 	UIImage *closePlateHighlighted = [UIImage imageNamed:@"GalleryDoneButton_Highlighted.png"];
 	UIButton *done = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -771,18 +836,6 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	done.frame = CGRectMake(5, 7, closeWidth, 30);
 	[done addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
 	[_topBar addSubview:done];
-
-	_counterLabel = [[UILabel alloc] initWithFrame:
-			CGRectMake((CGFloat)(int)((bounds.size.width - 140) / 2), 11, 140, 20)];
-	_counterLabel.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin
-			| UIViewAutoresizingFlexibleRightMargin;
-	_counterLabel.backgroundColor = [UIColor clearColor];
-	_counterLabel.textColor = [UIColor whiteColor];
-	_counterLabel.font = [UIFont boldSystemFontOfSize:20];
-	_counterLabel.shadowColor = [UIColor colorWithWhite:0.0f alpha:0.5f];
-	_counterLabel.shadowOffset = CGSizeMake(0, -1);
-	_counterLabel.textAlignment = NSTextAlignmentCenter;
-	[_topBar addSubview:_counterLabel];
 }
 
 - (void)buildBottomBar {
@@ -1121,17 +1174,46 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 		(!page.imageView.image || page.showingMinithumb))
 		[self loadThumbnailForPageAtIndex:index fileId:thumbId];
 
-	CGFloat maxSidePixels = MAX(self.view.bounds.size.width, self.view.bounds.size.height)
-			* [UIScreen mainScreen].scale;
-	if (maxSidePixels > 960.0f)
-		maxSidePixels = 960.0f;
+	CGFloat maxSidePixels = [self fullImageMaxSidePixels];
 
 	[[TGClient shared] startDownloadingFile:[fileId integerValue]
 								   priority:(index == _currentIndex ? 32 : 8)
 								 completion:nil];
 
+	void (^handlePath)(NSString *) = [self pathHandlerForPageKey:key
+														  fileId:fileId
+												   maxSidePixels:maxSidePixels];
+
+	NSArray *sizes = item[@"sizes"];
+	if ([sizes isKindOfClass:NSArray.class] && sizes.count > 0 &&
+		![item[@"isVideo"] boolValue]){
+		CGFloat wanted = self.view.bounds.size.width;
+		[[TGClient shared] downloadPhotoSizes:sizes
+									 forWidth:wanted
+										scale:[UIScreen mainScreen].scale
+								   completion:^(NSString *path, NSDictionary *size){
+			handlePath(path);
+		}];
+	} else {
+		[[TGClient shared] downloadFile:[fileId integerValue] completion:handlePath];
+	}
+
+	[self prefetchNeighboursOfIndex:index];
+}
+
+- (CGFloat)fullImageMaxSidePixels {
+	CGFloat maxSidePixels = MAX(self.view.bounds.size.width, self.view.bounds.size.height)
+			* [UIScreen mainScreen].scale;
+	if (maxSidePixels > 960.0f)
+		maxSidePixels = 960.0f;
+	return maxSidePixels;
+}
+
+- (void (^)(NSString *))pathHandlerForPageKey:(NSNumber *)key
+									   fileId:(NSNumber *)fileId
+								maxSidePixels:(CGFloat)maxSidePixels {
 	__weak typeof(self) weakSelf = self;
-	void (^handlePath)(NSString *) = ^(NSString *path){
+	return ^(NSString *path){
 		typeof(self) me = weakSelf;
 		if (!me)
 			return;
@@ -1165,22 +1247,6 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 			});
 		});
 	};
-
-	NSArray *sizes = item[@"sizes"];
-	if ([sizes isKindOfClass:NSArray.class] && sizes.count > 0 &&
-		![item[@"isVideo"] boolValue]){
-		CGFloat wanted = self.view.bounds.size.width;
-		[[TGClient shared] downloadPhotoSizes:sizes
-									 forWidth:wanted
-										scale:[UIScreen mainScreen].scale
-								   completion:^(NSString *path, NSDictionary *size){
-			handlePath(path);
-		}];
-	} else {
-		[[TGClient shared] downloadFile:[fileId integerValue] completion:handlePath];
-	}
-
-	[self prefetchNeighboursOfIndex:index];
 }
 
 - (void)loadThumbnailForPageAtIndex:(NSInteger)index fileId:(NSNumber *)thumbId {
@@ -2528,44 +2594,47 @@ static const long long TGMediaExportLimit = 12 * 1024 * 1024;
 		typeof(self) me = weakSelf;
 		if (!me || me.loadToken != token)
 			return;
-
-		me.loading = NO;
-		me.loadedOnce = YES;
-		[me.spinner stopAnimating];
-
-		NSArray *messages = result[@"messages"];
-		if (![messages isKindOfClass:NSArray.class] || messages.count == 0){
-			me.canLoadMore = NO;
-			[me setEmptyVisible:(me.items.count == 0) animated:YES];
-			[me.tableView reloadData];
-			return;
-		}
-
-		NSInteger added = 0;
-		for (NSDictionary *message in messages){
-			if (![message isKindOfClass:NSDictionary.class])
-				continue;
-			NSDictionary *item = TGMediaScopeIsGrid(scope)
-					? TGMediaItemFromMessage(message)
-					: TGMediaListItemFromMessage(message, scope);
-			if (item){
-				[me.items addObject:item];
-				added++;
-			}
-			int64_t identifier = [message[@"id"] longLongValue];
-			if (identifier != 0)
-				me.lastMessageId = identifier;
-		}
-
-		if (messages.count < (NSUInteger)TGMediaPageSize)
-			me.canLoadMore = NO;
-
-		[me setEmptyVisible:(me.items.count == 0 && !me.canLoadMore) animated:YES];
-		[me.tableView reloadData];
-
-		if (added == 0 && me.canLoadMore)
-			[me loadNextPage];
+		[me applyPageResult:result scope:scope];
 	}];
+}
+
+- (void)applyPageResult:(NSDictionary *)result scope:(NSInteger)scope {
+	self.loading = NO;
+	self.loadedOnce = YES;
+	[self.spinner stopAnimating];
+
+	NSArray *messages = result[@"messages"];
+	if (![messages isKindOfClass:NSArray.class] || messages.count == 0){
+		self.canLoadMore = NO;
+		[self setEmptyVisible:(self.items.count == 0) animated:YES];
+		[self.tableView reloadData];
+		return;
+	}
+
+	NSInteger added = 0;
+	for (NSDictionary *message in messages){
+		if (![message isKindOfClass:NSDictionary.class])
+			continue;
+		NSDictionary *item = TGMediaScopeIsGrid(scope)
+				? TGMediaItemFromMessage(message)
+				: TGMediaListItemFromMessage(message, scope);
+		if (item){
+			[self.items addObject:item];
+			added++;
+		}
+		int64_t identifier = [message[@"id"] longLongValue];
+		if (identifier != 0)
+			self.lastMessageId = identifier;
+	}
+
+	if (messages.count < (NSUInteger)TGMediaPageSize)
+		self.canLoadMore = NO;
+
+	[self setEmptyVisible:(self.items.count == 0 && !self.canLoadMore) animated:YES];
+	[self.tableView reloadData];
+
+	if (added == 0 && self.canLoadMore)
+		[self loadNextPage];
 }
 
 #pragma mark - downloads banner

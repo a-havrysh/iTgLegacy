@@ -269,6 +269,12 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 	self.subtitleLabel.highlightedTextColor = [UIColor whiteColor];
 	[self.contentView addSubview:self.subtitleLabel];
 
+	[self buildBadgeViews];
+
+	return self;
+}
+
+- (void)buildBadgeViews {
 	self.premiumView = [[UIImageView alloc] initWithFrame:CGRectZero];
 	self.premiumView.contentMode = UIViewContentModeScaleAspectFit;
 	self.premiumView.hidden = YES;
@@ -293,8 +299,6 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 	self.closeFriendLabel.text = @"★";
 	self.closeFriendLabel.hidden = YES;
 	[self.contentView addSubview:self.closeFriendLabel];
-
-	return self;
 }
 
 - (void)resetForConfiguration {
@@ -1490,6 +1494,10 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 		return;
 	}
 
+	[self requestActionDetailsForUser:u userId:userId];
+}
+
+- (void)requestActionDetailsForUser:(NSDictionary *)u userId:(NSNumber *)userId {
 	[NSObject cancelPreviousPerformRequestsWithTarget:self
 											 selector:@selector(showContactActions)
 											   object:nil];
@@ -1890,79 +1898,94 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 	}];
 }
 
+- (void)handleContactSheetAtIndex:(NSInteger)index {
+	NSDictionary *u = self.actionUser;
+	self.actionUser = nil;
+	if (!u || index < 0 || index >= (NSInteger)self.actionKeys.count)
+		return;
+	NSString *key = self.actionKeys[(NSUInteger)index];
+	if ([key isEqualToString:@"closeFriend"])
+		[self toggleCloseFriendForUser:u];
+	else if ([key isEqualToString:@"message"])
+		[self openChatWithUser:u];
+	else if ([key isEqualToString:@"secret"])
+		[self startSecretChatWithUser:u];
+	else if ([key isEqualToString:@"sharePhone"])
+		[self confirmSharePhoneWithUser:u];
+	else if ([key isEqualToString:@"suggestBirthday"])
+		[self showBirthdayPickerForUser:u];
+	else if ([key isEqualToString:@"delete"])
+		[self confirmDeleteContact:u];
+}
+
+- (void)clearImportedContacts {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] clearImportedContactsWithCompletion:^(BOOL ok){
+		TGContactsViewController *me = weakSelf;
+		if (!me)
+			return;
+		[me reloadImportedCount];
+		if (ok)
+			[me reloadContacts];
+	}];
+}
+
+- (void)handleImportSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
+	NSString *title = [sheet buttonTitleAtIndex:index];
+	if ([title isEqualToString:@"Add by Link"]){
+		[self promptForContactToken];
+		return;
+	}
+	if ([title isEqualToString:@"Remove My Birthday"]){
+		[self confirmRemoveMyBirthday];
+		return;
+	}
+	if ([title hasPrefix:@"My Birthday"] || [title isEqualToString:@"Set My Birthday"]){
+		[self showBirthdayPickerForSelf];
+		return;
+	}
+	if ([title isEqualToString:@"Hide Birthdays Today"]){
+		[[TGClient shared] hideContactCloseBirthdays];
+		self.birthdaysHidden = YES;
+		[self.tableView reloadData];
+		return;
+	}
+	if (index == sheet.destructiveButtonIndex){
+		[self clearImportedContacts];
+		return;
+	}
+	if ([[sheet buttonTitleAtIndex:index] isEqualToString:@"Sync Contacts"])
+		[self startAddressBookImport];
+}
+
+- (void)handleLinkSheetAtIndex:(NSInteger)index {
+	NSString *link = [self shareableLink];
+	if (!link.length)
+		return;
+	if (index == 0){
+		[UIPasteboard generalPasteboard].string = link;
+		return;
+	}
+	if (index == 1){
+		UIActivityViewController *share = [[UIActivityViewController alloc]
+				initWithActivityItems:@[link] applicationActivities:nil];
+		[self presentViewController:share animated:YES completion:nil];
+	}
+}
+
 - (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
 	if (index == sheet.cancelButtonIndex)
 		return;
 	if (sheet.tag == 2){
-		NSDictionary *u = self.actionUser;
-		self.actionUser = nil;
-		if (!u || index < 0 || index >= (NSInteger)self.actionKeys.count)
-			return;
-		NSString *key = self.actionKeys[(NSUInteger)index];
-		if ([key isEqualToString:@"closeFriend"])
-			[self toggleCloseFriendForUser:u];
-		else if ([key isEqualToString:@"message"])
-			[self openChatWithUser:u];
-		else if ([key isEqualToString:@"secret"])
-			[self startSecretChatWithUser:u];
-		else if ([key isEqualToString:@"sharePhone"])
-			[self confirmSharePhoneWithUser:u];
-		else if ([key isEqualToString:@"suggestBirthday"])
-			[self showBirthdayPickerForUser:u];
-		else if ([key isEqualToString:@"delete"])
-			[self confirmDeleteContact:u];
+		[self handleContactSheetAtIndex:index];
 		return;
 	}
 	if (sheet.tag == 3){
-		NSString *title = [sheet buttonTitleAtIndex:index];
-		if ([title isEqualToString:@"Add by Link"]){
-			[self promptForContactToken];
-			return;
-		}
-		if ([title isEqualToString:@"Remove My Birthday"]){
-			[self confirmRemoveMyBirthday];
-			return;
-		}
-		if ([title hasPrefix:@"My Birthday"] || [title isEqualToString:@"Set My Birthday"]){
-			[self showBirthdayPickerForSelf];
-			return;
-		}
-		if ([title isEqualToString:@"Hide Birthdays Today"]){
-			[[TGClient shared] hideContactCloseBirthdays];
-			self.birthdaysHidden = YES;
-			[self.tableView reloadData];
-			return;
-		}
-		if (index == sheet.destructiveButtonIndex){
-			__weak typeof(self) weakSelf = self;
-			[[TGClient shared] clearImportedContactsWithCompletion:^(BOOL ok){
-				TGContactsViewController *me = weakSelf;
-				if (!me)
-					return;
-				[me reloadImportedCount];
-				if (ok)
-					[me reloadContacts];
-			}];
-			return;
-		}
-		if ([[sheet buttonTitleAtIndex:index] isEqualToString:@"Sync Contacts"])
-			[self startAddressBookImport];
+		[self handleImportSheet:sheet clickedButtonAtIndex:index];
 		return;
 	}
-	if (sheet.tag == 4){
-		NSString *link = [self shareableLink];
-		if (!link.length)
-			return;
-		if (index == 0){
-			[UIPasteboard generalPasteboard].string = link;
-			return;
-		}
-		if (index == 1){
-			UIActivityViewController *share = [[UIActivityViewController alloc]
-					initWithActivityItems:@[link] applicationActivities:nil];
-			[self presentViewController:share animated:YES completion:nil];
-		}
-	}
+	if (sheet.tag == 4)
+		[self handleLinkSheetAtIndex:index];
 }
 
 - (void)confirmDeleteContact:(NSDictionary *)u {
@@ -2351,6 +2374,45 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 	if (self.phonebookAccessOverlay)
 		return;
 
+	UIView *overlay = [self buildPhonebookAccessOverlay];
+	[self.view addSubview:overlay];
+	self.phonebookAccessOverlay = overlay;
+	self.tableView.scrollEnabled = NO;
+	self.addButton.hidden = YES;
+	[self layoutPhonebookAccessOverlay];
+}
+
+- (UILabel *)buildPhonebookAccessSubtitleLabel {
+	CGFloat bodySize = ([UIScreen mainScreen].scale > 1.5f) ? 14.5f : 15.0f;
+	NSString *body = @"Please go to your iPhone Settings — Privacy — Contacts."
+			" Then select ON for Telegram.";
+	UILabel *subtitleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	subtitleLabel.tag = 400;
+	subtitleLabel.backgroundColor = [UIColor clearColor];
+	subtitleLabel.font = [UIFont boldSystemFontOfSize:bodySize];
+	subtitleLabel.textColor = TGContactsRGB(0x697487);
+	subtitleLabel.shadowColor = [UIColor colorWithWhite:1.0f alpha:0.3f];
+	subtitleLabel.shadowOffset = CGSizeMake(0, 1);
+	subtitleLabel.numberOfLines = 0;
+	subtitleLabel.textAlignment = NSTextAlignmentCenter;
+	if ([UILabel instancesRespondToSelector:@selector(setAttributedText:)]){
+		NSMutableAttributedString *text = [[NSMutableAttributedString alloc]
+				initWithString:body
+					attributes:@{NSFontAttributeName : [UIFont systemFontOfSize:bodySize],
+								 NSForegroundColorAttributeName : TGContactsRGB(0x697487)}];
+		NSRange range = [body rangeOfString:@"ON"];
+		if (range.length)
+			[text addAttribute:NSFontAttributeName
+						 value:[UIFont boldSystemFontOfSize:bodySize]
+						 range:range];
+		subtitleLabel.attributedText = text;
+	} else {
+		subtitleLabel.text = body;
+	}
+	return subtitleLabel;
+}
+
+- (UIView *)buildPhonebookAccessOverlay {
 	UIView *overlay = [[UIView alloc] initWithFrame:self.view.bounds];
 	overlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
 	UIImage *lines = [UIImage imageNamed:@"SettingsBackground"];
@@ -2384,39 +2446,9 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 	titleLabel.text = @"Telegram does not have access to your contacts";
 	[container addSubview:titleLabel];
 
-	CGFloat bodySize = ([UIScreen mainScreen].scale > 1.5f) ? 14.5f : 15.0f;
-	NSString *body = @"Please go to your iPhone Settings — Privacy — Contacts."
-			" Then select ON for Telegram.";
-	UILabel *subtitleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
-	subtitleLabel.tag = 400;
-	subtitleLabel.backgroundColor = [UIColor clearColor];
-	subtitleLabel.font = [UIFont boldSystemFontOfSize:bodySize];
-	subtitleLabel.textColor = TGContactsRGB(0x697487);
-	subtitleLabel.shadowColor = [UIColor colorWithWhite:1.0f alpha:0.3f];
-	subtitleLabel.shadowOffset = CGSizeMake(0, 1);
-	subtitleLabel.numberOfLines = 0;
-	subtitleLabel.textAlignment = NSTextAlignmentCenter;
-	if ([UILabel instancesRespondToSelector:@selector(setAttributedText:)]){
-		NSMutableAttributedString *text = [[NSMutableAttributedString alloc]
-				initWithString:body
-					attributes:@{NSFontAttributeName : [UIFont systemFontOfSize:bodySize],
-								 NSForegroundColorAttributeName : TGContactsRGB(0x697487)}];
-		NSRange range = [body rangeOfString:@"ON"];
-		if (range.length)
-			[text addAttribute:NSFontAttributeName
-						 value:[UIFont boldSystemFontOfSize:bodySize]
-						 range:range];
-		subtitleLabel.attributedText = text;
-	} else {
-		subtitleLabel.text = body;
-	}
-	[container addSubview:subtitleLabel];
+	[container addSubview:[self buildPhonebookAccessSubtitleLabel]];
 
-	[self.view addSubview:overlay];
-	self.phonebookAccessOverlay = overlay;
-	self.tableView.scrollEnabled = NO;
-	self.addButton.hidden = YES;
-	[self layoutPhonebookAccessOverlay];
+	return overlay;
 }
 
 - (void)viewDidLayoutSubviews {
@@ -2514,31 +2546,9 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 			? UITableViewCellSeparatorStyleSingleLine
 			: UITableViewCellSeparatorStyleNone;
 
-	UIView *overscroll = [[UIView alloc] initWithFrame:
-			CGRectMake(0, -500, self.tableView.bounds.size.width, 500)];
-	overscroll.backgroundColor = TGContactsRGB(0xe4e9f0);
-	overscroll.opaque = YES;
-	overscroll.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-	[self.tableView addSubview:overscroll];
-
-	self.searchBar = [[UISearchBar alloc] initWithFrame:
-			CGRectMake(0, 0, self.tableView.bounds.size.width, 44)];
-	self.searchBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-	self.searchBar.delegate = self;
-	self.searchBar.placeholder = @"Search";
-	UIImage *searchBackground = [UIImage imageNamed:@"SearchBarBackground"];
-	if (searchBackground && [self.searchBar respondsToSelector:@selector(setBackgroundImage:)])
-		[self.searchBar setBackgroundImage:searchBackground];
-	else if (![self.searchBar respondsToSelector:@selector(setBackgroundImage:)])
-		[self.searchBar tg_setTintColor:[UIColor colorWithWhite:0.68f alpha:1.0f]];
-	self.tableView.tableHeaderView = self.searchBar;
-	[self styleSearchField:self.searchBar];
-	[self hideStripe:self.searchBar];
-
-	UIView *background = [[UIView alloc] initWithFrame:self.tableView.bounds];
-	background.backgroundColor = [[TGTheme shared] listBackgroundColour];
-	background.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-	self.tableView.backgroundView = background;
+	[self buildOverscrollView];
+	[self buildSearchBar];
+	[self buildTableBackground];
 
 	if (!self.isPickerMode && [self respondsToSelector:@selector(setRefreshControl:)]
 			&& NSClassFromString(@"UIRefreshControl")){
@@ -2548,28 +2558,8 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 		self.refreshControl = refresh;
 	}
 
-	if (!self.isPickerMode){
-		UIButton *add = [UIButton buttonWithType:UIButtonTypeCustom];
-		[TGIcons styleHeaderButton:add];
-		[add addTarget:self action:@selector(addContactTapped) forControlEvents:UIControlEventTouchUpInside];
-		add.frame = CGRectMake(0, 0, 30, 30);
-		UILabel *plus = [[UILabel alloc] initWithFrame:CGRectOffset(add.bounds, 0, -2)];
-		plus.text = @"+";
-		plus.textColor = [UIColor whiteColor];
-		plus.textAlignment = NSTextAlignmentCenter;
-		plus.backgroundColor = [UIColor clearColor];
-		plus.font = [UIFont boldSystemFontOfSize:18];
-		plus.userInteractionEnabled = NO;
-		UIImage *addIcon = [UIImage imageNamed:@"AddIcon"];
-		if (addIcon){
-			plus.hidden = YES;
-			[add setImage:addIcon forState:UIControlStateNormal];
-			add.frame = CGRectMake(0, 0, MAX(35.0f, addIcon.size.width + 12), 30);
-		}
-		[add addSubview:plus];
-		self.addButton = add;
-		self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:add];
-	}
+	if (!self.isPickerMode)
+		[self buildAddButton];
 
 	self.tableView.tableFooterView = [[UIView alloc] init];
 
@@ -2586,6 +2576,10 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 			  object:nil];
 
 	[self updatePhonebookAccess];
+	[self loadInitialContactData];
+}
+
+- (void)loadInitialContactData {
 	[self reloadContacts];
 	if (!self.isPickerMode){
 		[self reloadCloseFriends];
@@ -2594,6 +2588,61 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 		[self reloadMyUsernames];
 		[self reloadMyBirthdate];
 	}
+}
+
+- (void)buildOverscrollView {
+	UIView *overscroll = [[UIView alloc] initWithFrame:
+			CGRectMake(0, -500, self.tableView.bounds.size.width, 500)];
+	overscroll.backgroundColor = TGContactsRGB(0xe4e9f0);
+	overscroll.opaque = YES;
+	overscroll.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	[self.tableView addSubview:overscroll];
+}
+
+- (void)buildSearchBar {
+	self.searchBar = [[UISearchBar alloc] initWithFrame:
+			CGRectMake(0, 0, self.tableView.bounds.size.width, 44)];
+	self.searchBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	self.searchBar.delegate = self;
+	self.searchBar.placeholder = @"Search";
+	UIImage *searchBackground = [UIImage imageNamed:@"SearchBarBackground"];
+	if (searchBackground && [self.searchBar respondsToSelector:@selector(setBackgroundImage:)])
+		[self.searchBar setBackgroundImage:searchBackground];
+	else if (![self.searchBar respondsToSelector:@selector(setBackgroundImage:)])
+		[self.searchBar tg_setTintColor:[UIColor colorWithWhite:0.68f alpha:1.0f]];
+	self.tableView.tableHeaderView = self.searchBar;
+	[self styleSearchField:self.searchBar];
+	[self hideStripe:self.searchBar];
+}
+
+- (void)buildTableBackground {
+	UIView *background = [[UIView alloc] initWithFrame:self.tableView.bounds];
+	background.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	background.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+	self.tableView.backgroundView = background;
+}
+
+- (void)buildAddButton {
+	UIButton *add = [UIButton buttonWithType:UIButtonTypeCustom];
+	[TGIcons styleHeaderButton:add];
+	[add addTarget:self action:@selector(addContactTapped) forControlEvents:UIControlEventTouchUpInside];
+	add.frame = CGRectMake(0, 0, 30, 30);
+	UILabel *plus = [[UILabel alloc] initWithFrame:CGRectOffset(add.bounds, 0, -2)];
+	plus.text = @"+";
+	plus.textColor = [UIColor whiteColor];
+	plus.textAlignment = NSTextAlignmentCenter;
+	plus.backgroundColor = [UIColor clearColor];
+	plus.font = [UIFont boldSystemFontOfSize:18];
+	plus.userInteractionEnabled = NO;
+	UIImage *addIcon = [UIImage imageNamed:@"AddIcon"];
+	if (addIcon){
+		plus.hidden = YES;
+		[add setImage:addIcon forState:UIControlStateNormal];
+		add.frame = CGRectMake(0, 0, MAX(35.0f, addIcon.size.width + 12), 30);
+	}
+	[add addSubview:plus];
+	self.addButton = add;
+	self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:add];
 }
 
 - (NSString *)inviteMessageText {
@@ -3030,57 +3079,46 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 	return 0;
 }
 
-- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-	static NSString *reuse = @"TGContactCell";
+- (UITableViewCell *)actionCellForTableView:(UITableView *)tableView identifier:(NSString *)action {
 	static NSString *actionReuse = @"TGFlatActionCell";
-
-	NSString *action = [self actionIdentifierAtIndexPath:indexPath];
-	if (action){
-		TGFlatActionCell *cell = (TGFlatActionCell *)
-				[tableView dequeueReusableCellWithIdentifier:actionReuse];
-		if (!cell)
-			cell = [[TGFlatActionCell alloc] initWithStyle:UITableViewCellStyleDefault
-										   reuseIdentifier:actionReuse];
-		cell.accessoryType = UITableViewCellAccessoryNone;
-		cell.disclosureIndicator.hidden = NO;
-		if ([action isEqualToString:TGContactActionInvite]){
-			cell.titleLabel.text = @"Invite Friends";
-			[cell setIconImage:[UIImage imageNamed:@"ListIconInvite"] at:CGPointMake(13, 12)];
-		} else if ([action isEqualToString:TGContactActionNewGroup]){
-			cell.titleLabel.text = @"New Group";
-			[cell setIconImage:[UIImage imageNamed:@"ListIconFriends"] at:CGPointMake(10, 12)];
-		} else if ([action isEqualToString:TGContactActionSync]){
-			cell.titleLabel.text = @"Sync Contacts";
-			[cell setIconImage:nil at:CGPointZero];
-		} else {
-			cell.titleLabel.text = [self contactLinkSubtitle];
-			[cell setIconImage:nil at:CGPointZero];
-		}
-		[cell setNeedsLayout];
-		return cell;
-	}
-
-	TGContactRowCell *cell = (TGContactRowCell *)[tableView dequeueReusableCellWithIdentifier:reuse];
+	TGFlatActionCell *cell = (TGFlatActionCell *)
+			[tableView dequeueReusableCellWithIdentifier:actionReuse];
 	if (!cell)
-		cell = [[TGContactRowCell alloc] initWithStyle:UITableViewCellStyleDefault
-									   reuseIdentifier:reuse];
-	[cell resetForConfiguration];
-
-	NSDictionary *u = [self userAtIndexPath:indexPath];
-	if (!u){
-		cell.titleLabel.text = @"";
-		cell.secondTitleLabel.text = @"";
-		cell.secondTitleLabel.hidden = YES;
-		cell.subtitleLabel.text = @"";
-		cell.avatarView.image = nil;
-		cell.premiumView.hidden = YES;
-		cell.verifiedLabel.hidden = YES;
-		cell.closeFriendLabel.hidden = YES;
-		return cell;
+		cell = [[TGFlatActionCell alloc] initWithStyle:UITableViewCellStyleDefault
+									   reuseIdentifier:actionReuse];
+	cell.accessoryType = UITableViewCellAccessoryNone;
+	cell.disclosureIndicator.hidden = NO;
+	if ([action isEqualToString:TGContactActionInvite]){
+		cell.titleLabel.text = @"Invite Friends";
+		[cell setIconImage:[UIImage imageNamed:@"ListIconInvite"] at:CGPointMake(13, 12)];
+	} else if ([action isEqualToString:TGContactActionNewGroup]){
+		cell.titleLabel.text = @"New Group";
+		[cell setIconImage:[UIImage imageNamed:@"ListIconFriends"] at:CGPointMake(10, 12)];
+	} else if ([action isEqualToString:TGContactActionSync]){
+		cell.titleLabel.text = @"Sync Contacts";
+		[cell setIconImage:nil at:CGPointZero];
+	} else {
+		cell.titleLabel.text = [self contactLinkSubtitle];
+		[cell setIconImage:nil at:CGPointZero];
 	}
+	[cell setNeedsLayout];
+	return cell;
+}
+
+- (void)clearContactCell:(TGContactRowCell *)cell {
+	cell.titleLabel.text = @"";
+	cell.secondTitleLabel.text = @"";
+	cell.secondTitleLabel.hidden = YES;
+	cell.subtitleLabel.text = @"";
+	cell.avatarView.image = nil;
+	cell.premiumView.hidden = YES;
+	cell.verifiedLabel.hidden = YES;
+	cell.closeFriendLabel.hidden = YES;
+}
+
+- (void)applyNameToCell:(TGContactRowCell *)cell user:(NSDictionary *)u {
 	NSString *first = [u[@"first_name"] isKindOfClass:NSString.class] ? u[@"first_name"] : @"";
 	NSString *last  = [u[@"last_name"] isKindOfClass:NSString.class] ? u[@"last_name"] : @"";
-	NSString *name = TGContactName(u);
 	BOOL online = [u[@"isOnline"] boolValue];
 
 	cell.titleLabel.font = [UIFont systemFontOfSize:19];
@@ -3089,7 +3127,7 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 		cell.secondTitleLabel.text = last;
 		cell.secondTitleLabel.hidden = NO;
 	} else {
-		cell.titleLabel.text = name;
+		cell.titleLabel.text = TGContactName(u);
 		cell.secondTitleLabel.text = @"";
 		cell.secondTitleLabel.hidden = YES;
 	}
@@ -3102,7 +3140,9 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 			? TGContactsRGB(0x0779d0) : [UIColor colorWithWhite:0.0f alpha:0.53f];
 	cell.backgroundColor = [[TGTheme shared] listBackgroundColour];
 	cell.accessoryType = UITableViewCellAccessoryNone;
+}
 
+- (void)applyBadgesToCell:(TGContactRowCell *)cell user:(NSDictionary *)u {
 	NSDictionary *badges = [self badgesForUser:u];
 	BOOL premium = [badges[@"isPremium"] boolValue];
 	BOOL verified = [badges[@"isVerified"] boolValue];
@@ -3125,8 +3165,10 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 				? [NSString stringWithFormat:@"%@ · %@", mark, cell.subtitleLabel.text]
 				: mark;
 	}
-	[cell setNeedsLayout];
+}
 
+- (void)applyAvatarToCell:(TGContactRowCell *)cell user:(NSDictionary *)u {
+	NSString *name = TGContactName(u);
 	UIImage *photo = [self photoForUser:u];
 	if (!photo)
 		photo = [TGIcons avatarWithInitials:
@@ -3135,6 +3177,30 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 								   colourId:[u[@"id"] longLongValue]];
 	cell.avatarView.image = photo;
 	cell.avatarView.layer.cornerRadius = kContactAvatarCorner;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	static NSString *reuse = @"TGContactCell";
+
+	NSString *action = [self actionIdentifierAtIndexPath:indexPath];
+	if (action)
+		return [self actionCellForTableView:tableView identifier:action];
+
+	TGContactRowCell *cell = (TGContactRowCell *)[tableView dequeueReusableCellWithIdentifier:reuse];
+	if (!cell)
+		cell = [[TGContactRowCell alloc] initWithStyle:UITableViewCellStyleDefault
+									   reuseIdentifier:reuse];
+	[cell resetForConfiguration];
+
+	NSDictionary *u = [self userAtIndexPath:indexPath];
+	if (!u){
+		[self clearContactCell:cell];
+		return cell;
+	}
+	[self applyNameToCell:cell user:u];
+	[self applyBadgesToCell:cell user:u];
+	[cell setNeedsLayout];
+	[self applyAvatarToCell:cell user:u];
 	return cell;
 }
 

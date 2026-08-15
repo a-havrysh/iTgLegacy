@@ -115,6 +115,8 @@ static NSString *const kFontKey   = @"messageFontSize";
 	return _imported[key];
 }
 
+#pragma mark - style state
+
 - (void)setStyle:(TGThemeStyle)style {
 	if (_style == style)
 		return;
@@ -136,35 +138,6 @@ static NSString *const kFontKey   = @"messageFontSize";
 	return _style == TGThemeStyleDark && _imported == nil;
 }
 
-- (void)styleCell:(UITableViewCell *)cell {
-	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
-	cell.detailTextLabel.font = [UIFont systemFontOfSize:16];
-	cell.detailTextLabel.textColor = [self cellDetailColour];
-
-	if (!_imported && !self.isDarkStyle){
-		cell.textLabel.textColor = [UIColor blackColor];
-		return;
-	}
-	cell.backgroundColor = [self listBackgroundColour];
-	cell.textLabel.textColor = [self primaryTextColour];
-	// A selection flash of white would be worse than none.
-	UIView *selected = [[UIView alloc] init];
-	selected.backgroundColor = [self bubbleTheirsColour];
-	cell.selectedBackgroundView = selected;
-}
-
-- (void)styleTabBar:(UITabBar *)bar {
-	if (!bar || (!_imported && !self.isDarkStyle))
-		return;
-	if ([bar respondsToSelector:@selector(setBarTintColor:)]){
-		bar.translucent = NO;
-		bar.barTintColor = [self barColour];
-		bar.tintColor = [self accentColour];
-	} else {
-		bar.tintColor = [self barColour];
-	}
-}
-
 #pragma mark - wallpaper
 
 - (NSString *)wallpaperPath {
@@ -179,20 +152,25 @@ static NSString *const kFontKey   = @"messageFontSize";
 	return _wallpaper;
 }
 
+// Scaled down first: a full camera frame behind every chat is megabytes of
+// memory on a device that has 512.
+static UIImage *TGThemeScaledWallpaper(UIImage *image) {
+	CGFloat maxSide = 640;
+	CGFloat scale = MIN(1.0f, maxSide / MAX(image.size.width, image.size.height));
+	if (scale >= 1.0f)
+		return image;
+	CGSize size = CGSizeMake(image.size.width * scale, image.size.height * scale);
+	UIGraphicsBeginImageContextWithOptions(size, YES, 1);
+	[image drawInRect:CGRectMake(0, 0, size.width, size.height)];
+	UIImage *scaled = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return scaled;
+}
+
 - (void)setWallpaperImage:(UIImage *)image {
 	NSString *path = [self wallpaperPath];
 	if (image){
-		// Scaled down first: a full camera frame behind every chat is megabytes
-		// of memory on a device that has 512.
-		CGFloat maxSide = 640;
-		CGFloat scale = MIN(1.0f, maxSide / MAX(image.size.width, image.size.height));
-		if (scale < 1.0f){
-			CGSize size = CGSizeMake(image.size.width * scale, image.size.height * scale);
-			UIGraphicsBeginImageContextWithOptions(size, YES, 1);
-			[image drawInRect:CGRectMake(0, 0, size.width, size.height)];
-			image = UIGraphicsGetImageFromCurrentImageContext();
-			UIGraphicsEndImageContext();
-		}
+		image = TGThemeScaledWallpaper(image);
 		[UIImageJPEGRepresentation(image, 0.8f) writeToFile:path atomically:YES];
 	} else {
 		[[NSFileManager defaultManager] removeItemAtPath:path error:nil];
@@ -247,7 +225,6 @@ static UIColor *rgb(int r, int g, int b) {
 	return self.isFlat ? TG_GRAY_LIGHT3 : TG_BLUE_DARK4;
 }
 
-
 - (UIColor *)barTitleColour {
 	UIColor *imported = [self importedColour:@"barTitle"];
 	if (imported) return imported;
@@ -255,14 +232,12 @@ static UIColor *rgb(int r, int g, int b) {
 	return self.isFlat ? TG_TEXT_PRIMARY : [UIColor whiteColor];
 }
 
-
 - (UIColor *)accentColour {
 	UIColor *imported = [self importedColour:@"accent"];
 	if (imported) return imported;
 	if (self.isDarkStyle) return TG_BLUE_LIGHT4;
 	return self.isFlat ? TG_BLUE_LIGHT4 : TG_BLUE_DARK4;
 }
-
 
 - (UIColor *)chatBackgroundColour {
 	UIColor *imported = [self importedColour:@"chatBackground"];
@@ -279,7 +254,6 @@ static UIColor *rgb(int r, int g, int b) {
 	return linen ?: rgb(217, 222, 212);
 }
 
-
 - (UIColor *)bubbleMineColour {
 	UIColor *imported = [self importedColour:@"bubbleMine"];
 	if (imported) return imported;
@@ -289,14 +263,12 @@ static UIColor *rgb(int r, int g, int b) {
 	return TG_GREEN_LIGHT1;
 }
 
-
 - (UIColor *)bubbleTheirsColour {
 	UIColor *imported = [self importedColour:@"bubbleTheirs"];
 	if (imported) return imported;
 	if (self.isDarkStyle) return TG_GRAY_DARK13;
 	return [UIColor whiteColor];
 }
-
 
 - (UIColor *)bubbleBorderColour {
 	if (self.isDark)
@@ -311,7 +283,6 @@ static UIColor *rgb(int r, int g, int b) {
 	return [UIColor whiteColor];
 }
 
-
 - (UIColor *)primaryTextColour {
 	UIColor *imported = [self importedColour:@"primaryText"];
 	if (imported) return imported;
@@ -319,14 +290,12 @@ static UIColor *rgb(int r, int g, int b) {
 	return TG_TEXT_PRIMARY;
 }
 
-
 - (UIColor *)secondaryTextColour {
 	UIColor *imported = [self importedColour:@"secondaryText"];
 	if (imported) return imported;
 	if (self.isDarkStyle) return TG_GRAY_DARK6;
 	return TG_TEXT_SECONDARY;
 }
-
 
 - (UIColor *)timeColour {
 	UIColor *imported = [self importedColour:@"secondaryText"];
@@ -433,6 +402,8 @@ static UIColor *rgb(int r, int g, int b) {
 							: [UIColor whiteColor];
 }
 
+#pragma mark - bubble metrics
+
 - (CGFloat)bubbleCornerRadius {
 	// Their bubble is a 6pt tail on a softly rounded box, not a capsule.
 	return self.isFlat ? 12.0f : 10.0f;
@@ -440,6 +411,37 @@ static UIColor *rgb(int r, int g, int b) {
 
 - (CGFloat)bubbleBorderWidth {
 	return 1.0f;
+}
+
+#pragma mark - styling views
+
+- (void)styleCell:(UITableViewCell *)cell {
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+	cell.detailTextLabel.font = [UIFont systemFontOfSize:16];
+	cell.detailTextLabel.textColor = [self cellDetailColour];
+
+	if (!_imported && !self.isDarkStyle){
+		cell.textLabel.textColor = [UIColor blackColor];
+		return;
+	}
+	cell.backgroundColor = [self listBackgroundColour];
+	cell.textLabel.textColor = [self primaryTextColour];
+	// A selection flash of white would be worse than none.
+	UIView *selected = [[UIView alloc] init];
+	selected.backgroundColor = [self bubbleTheirsColour];
+	cell.selectedBackgroundView = selected;
+}
+
+- (void)styleTabBar:(UITabBar *)bar {
+	if (!bar || (!_imported && !self.isDarkStyle))
+		return;
+	if ([bar respondsToSelector:@selector(setBarTintColor:)]){
+		bar.translucent = NO;
+		bar.barTintColor = [self barColour];
+		bar.tintColor = [self accentColour];
+	} else {
+		bar.tintColor = [self barColour];
+	}
 }
 
 - (void)styleNavigationBar:(UINavigationBar *)bar {
@@ -462,15 +464,18 @@ static UIColor *rgb(int r, int g, int b) {
 		bar.titleTextAttributes = @{ UITextAttributeTextColor : [self barTitleColour] };
 	}
 
-	if (!self.isFlat && _imported == nil){
-		UIImage *background = [UIImage imageNamed:@"NavBarBackground"];
-		if ([background respondsToSelector:@selector(resizableImageWithCapInsets:)])
-			background = [background resizableImageWithCapInsets:UIEdgeInsetsMake(0, 8, 0, 8)];
-		if (background && [bar respondsToSelector:@selector(setBackgroundImage:forBarMetrics:)])
-			[bar setBackgroundImage:background forBarMetrics:UIBarMetricsDefault];
-	}
+	if (!self.isFlat && _imported == nil)
+		[self applyCarvedBarBackground:bar];
 
 	[self styleBackButton];
+}
+
+- (void)applyCarvedBarBackground:(UINavigationBar *)bar {
+	UIImage *background = [UIImage imageNamed:@"NavBarBackground"];
+	if ([background respondsToSelector:@selector(resizableImageWithCapInsets:)])
+		background = [background resizableImageWithCapInsets:UIEdgeInsetsMake(0, 8, 0, 8)];
+	if (background && [bar respondsToSelector:@selector(setBackgroundImage:forBarMetrics:)])
+		[bar setBackgroundImage:background forBarMetrics:UIBarMetricsDefault];
 }
 
 /// The back button is created by UINavigationController itself, so it can only

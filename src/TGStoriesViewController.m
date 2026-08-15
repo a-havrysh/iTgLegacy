@@ -74,6 +74,32 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 	return [value respondsToSelector:@selector(boolValue)] ? [value boolValue] : NO;
 }
 
+static NSDictionary *TGStoryPosterEntry(int64_t chatId, NSString *title, NSDictionary *active)
+{
+	NSArray *stories = [active objectForKey:@"stories"];
+	if (![stories isKindOfClass:[NSArray class]] || stories.count == 0 ||
+		TGStoryFlag(active, @"archived"))
+	{
+		return nil;
+	}
+
+	NSMutableArray *ids = [[NSMutableArray alloc] init];
+	for (NSDictionary *story in stories)
+	{
+		if ([story isKindOfClass:[NSDictionary class]])
+			[ids addObject:[NSNumber numberWithInteger:TGStoryNumber(story, @"id")]];
+	}
+	if (ids.count == 0)
+		return nil;
+
+	return [NSDictionary dictionaryWithObjectsAndKeys:
+			[NSNumber numberWithLongLong:chatId], @"chatId",
+			title, @"title",
+			ids, @"ids",
+			([active objectForKey:@"order"] ?: [NSNumber numberWithInt:0]), @"order",
+			nil];
+}
+
 @interface TGStoryTextViewController : UIViewController
 @property (nonatomic, strong) NSString *text;
 @end
@@ -550,27 +576,10 @@ typedef enum
 	}];
 }
 
-- (void)loadMore
+- (void (^)(NSArray *stories, BOOL more))appendStoriesHandler
 {
-	if (_loading || _exhausted)
-		return;
-	_loading = YES;
-
-	if (self.mode == TGStoryListMenu)
-	{
-		[self loadMenuCounts];
-		return;
-	}
-
-	if (self.mode == TGStoryListSettings)
-	{
-		[self loadSettingsCounts];
-		return;
-	}
-
 	__weak TGStoryListViewController *weakSelf = self;
-
-	void (^appendStories)(NSArray *, BOOL) = ^(NSArray *stories, BOOL more)
+	return ^(NSArray *stories, BOOL more)
 	{
 		TGStoryListViewController *strongSelf = weakSelf;
 		if (strongSelf == nil)
@@ -589,6 +598,27 @@ typedef enum
 		strongSelf->_exhausted = !more;
 		[strongSelf->_tableView reloadData];
 	};
+}
+
+- (void)loadMore
+{
+	if (_loading || _exhausted)
+		return;
+	_loading = YES;
+
+	if (self.mode == TGStoryListMenu)
+	{
+		[self loadMenuCounts];
+		return;
+	}
+
+	if (self.mode == TGStoryListSettings)
+	{
+		[self loadSettingsCounts];
+		return;
+	}
+
+	void (^appendStories)(NSArray *, BOOL) = [self appendStoriesHandler];
 
 	if (self.mode == TGStoryListArchive)
 	{
@@ -1423,52 +1453,60 @@ typedef enum
 			return;
 		}
 
-		NSMutableArray *actions = [[NSMutableArray alloc] init];
-		NSMutableDictionary *byTitle = [[NSMutableDictionary alloc] init];
-		for (NSDictionary *album in albums)
-		{
-			if (![album isKindOfClass:[NSDictionary class]])
-				continue;
-			NSString *name = TGStoryString(album, @"name");
-			if (name.length == 0)
-				continue;
-			[byTitle setObject:[NSNumber numberWithInteger:TGStoryNumber(album, @"id")] forKey:name];
-			[actions addObject:[[TGActionSheetAction alloc] initWithTitle:name action:name]];
-		}
-		if (actions.count == 0)
-		{
-			[strongSelf showMessage:@"No albums yet"];
-			return;
-		}
-
-		TGActionSheet *sheet = [[TGActionSheet alloc] initWithTitle:@"Add to album"
-														   actions:actions
-													   actionBlock:^(id target, NSString *action)
-		{
-			(void)target;
-			TGStoryListViewController *inner = weakSelf;
-			if (inner == nil)
-				return;
-			NSNumber *albumId = [byTitle objectForKey:action];
-			if (albumId == nil)
-				return;
-			[[TGClient shared] addStories:[NSArray arrayWithObject:
-											[NSNumber numberWithInteger:storyId]]
-								  toAlbum:[albumId integerValue]
-								   inChat:chatId
-							   completion:^(NSDictionary *album)
-			{
-				TGStoryListViewController *host = weakSelf;
-				if (host == nil)
-					return;
-				[host showMessage:[album isKindOfClass:[NSDictionary class]]
-						? @"Added to the album"
-						: @"Could not add to the album"];
-			}];
-		}
-															target:strongSelf];
-		[sheet showInView:strongSelf.view];
+		[strongSelf presentAlbumChooser:albums forStoryId:storyId inChat:chatId];
 	}];
+}
+
+- (void)presentAlbumChooser:(NSArray *)albums
+				 forStoryId:(NSInteger)storyId
+					 inChat:(int64_t)chatId
+{
+	NSMutableArray *actions = [[NSMutableArray alloc] init];
+	NSMutableDictionary *byTitle = [[NSMutableDictionary alloc] init];
+	for (NSDictionary *album in albums)
+	{
+		if (![album isKindOfClass:[NSDictionary class]])
+			continue;
+		NSString *name = TGStoryString(album, @"name");
+		if (name.length == 0)
+			continue;
+		[byTitle setObject:[NSNumber numberWithInteger:TGStoryNumber(album, @"id")] forKey:name];
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:name action:name]];
+	}
+	if (actions.count == 0)
+	{
+		[self showMessage:@"No albums yet"];
+		return;
+	}
+
+	__weak TGStoryListViewController *weakSelf = self;
+	TGActionSheet *sheet = [[TGActionSheet alloc] initWithTitle:@"Add to album"
+													   actions:actions
+												   actionBlock:^(id target, NSString *action)
+	{
+		(void)target;
+		TGStoryListViewController *inner = weakSelf;
+		if (inner == nil)
+			return;
+		NSNumber *albumId = [byTitle objectForKey:action];
+		if (albumId == nil)
+			return;
+		[[TGClient shared] addStories:[NSArray arrayWithObject:
+										[NSNumber numberWithInteger:storyId]]
+							  toAlbum:[albumId integerValue]
+							   inChat:chatId
+						   completion:^(NSDictionary *album)
+		{
+			TGStoryListViewController *host = weakSelf;
+			if (host == nil)
+				return;
+			[host showMessage:[album isKindOfClass:[NSDictionary class]]
+					? @"Added to the album"
+					: @"Could not add to the album"];
+		}];
+	}
+														target:self];
+	[sheet showInView:self.view];
 }
 
 - (void)removeStoryFromAlbum:(NSInteger)storyId
@@ -2655,41 +2693,29 @@ typedef enum
 			if (strongSelf == nil)
 				return;
 
-			NSArray *stories = [active objectForKey:@"stories"];
-			if ([stories isKindOfClass:[NSArray class]] && stories.count > 0 &&
-				!TGStoryFlag(active, @"archived"))
-			{
-				NSMutableArray *ids = [[NSMutableArray alloc] init];
-				for (NSDictionary *story in stories)
-				{
-					if ([story isKindOfClass:[NSDictionary class]])
-						[ids addObject:[NSNumber numberWithInteger:TGStoryNumber(story, @"id")]];
-				}
-				if (ids.count > 0)
-				{
-					[found addObject:[NSDictionary dictionaryWithObjectsAndKeys:
-							[NSNumber numberWithLongLong:chatId], @"chatId",
-							title, @"title",
-							ids, @"ids",
-							([active objectForKey:@"order"] ?: [NSNumber numberWithInt:0]), @"order",
-							nil]];
-				}
-			}
+			NSDictionary *entry = TGStoryPosterEntry(chatId, title, active);
+			if (entry != nil)
+				[found addObject:entry];
 
 			if (pending > 0)
 				return;
 
-			[found sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b)
-			{
-				long long left = [[a objectForKey:@"order"] longLongValue];
-				long long right = [[b objectForKey:@"order"] longLongValue];
-				if (left == right)
-					return NSOrderedSame;
-				return left > right ? NSOrderedAscending : NSOrderedDescending;
-			}];
-			[strongSelf->_posterList addObjectsFromArray:found];
+			[strongSelf appendDiscoveredPosters:found];
 		}];
 	}
+}
+
+- (void)appendDiscoveredPosters:(NSMutableArray *)found
+{
+	[found sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b)
+	{
+		long long left = [[a objectForKey:@"order"] longLongValue];
+		long long right = [[b objectForKey:@"order"] longLongValue];
+		if (left == right)
+			return NSOrderedSame;
+		return left > right ? NSOrderedAscending : NSOrderedDescending;
+	}];
+	[_posterList addObjectsFromArray:found];
 }
 
 - (void)movePosterBy:(NSInteger)delta
@@ -3214,17 +3240,7 @@ typedef enum
 	}
 
 	if (![self isOwnStory])
-	{
-		if ([self unreadStoryIds].count > 0)
-		{
-			[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Mark All as Read"
-																   action:@"markread"]];
-		}
-		NSString *hide = [NSString stringWithFormat:@"Hide Stories from %@",
-				[self resolvedPosterName]];
-		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:hide action:@"hide"]];
-		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Report" action:@"report"]];
-	}
+		[self appendOtherPosterActionsTo:actions];
 
 	NSString *hashtag = [self hashtagInCaption];
 	if (hashtag.length > 0)
@@ -3234,6 +3250,26 @@ typedef enum
 					   action:@"hashtag"]];
 	}
 
+	[self appendStoryStateActionsTo:actions story:story];
+
+	return actions;
+}
+
+- (void)appendOtherPosterActionsTo:(NSMutableArray *)actions
+{
+	if ([self unreadStoryIds].count > 0)
+	{
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Mark All as Read"
+															   action:@"markread"]];
+	}
+	NSString *hide = [NSString stringWithFormat:@"Hide Stories from %@",
+			[self resolvedPosterName]];
+	[actions addObject:[[TGActionSheetAction alloc] initWithTitle:hide action:@"hide"]];
+	[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Report" action:@"report"]];
+}
+
+- (void)appendStoryStateActionsTo:(NSMutableArray *)actions story:(NSDictionary *)story
+{
 	if (story != nil && TGStoryNumber(story, @"forwards") > 0)
 	{
 		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Reposts"
@@ -3272,8 +3308,6 @@ typedef enum
 															  action:@"delete"
 																type:TGActionSheetActionTypeDestructive]];
 	}
-
-	return actions;
 }
 
 - (void)morePressed
@@ -3363,9 +3397,7 @@ typedef enum
 
 	if ([action isEqualToString:@"save"])
 	{
-		UIImage *image = [self currentImage];
-		if (image != nil)
-			UIImageWriteToSavedPhotosAlbum(image, nil, NULL, NULL);
+		[self saveCurrentImageToPhotos];
 		return;
 	}
 
@@ -3383,8 +3415,7 @@ typedef enum
 
 	if ([action isEqualToString:@"hide"])
 	{
-		[[TGClient shared] setUser:_chatId storiesHidden:YES];
-		[self.navigationController popViewControllerAnimated:YES];
+		[self hideStoriesFromCurrentPoster];
 		return;
 	}
 
@@ -3430,6 +3461,19 @@ typedef enum
 		[self openMyStories];
 		return;
 	}
+}
+
+- (void)saveCurrentImageToPhotos
+{
+	UIImage *image = [self currentImage];
+	if (image != nil)
+		UIImageWriteToSavedPhotosAlbum(image, nil, NULL, NULL);
+}
+
+- (void)hideStoriesFromCurrentPoster
+{
+	[[TGClient shared] setUser:_chatId storiesHidden:YES];
+	[self.navigationController popViewControllerAnimated:YES];
 }
 
 - (void)toggleOnProfileForStoryId:(NSInteger)storyId
@@ -3823,38 +3867,44 @@ static NSMutableArray *TGStoryComposersInFlight(void)
 			return;
 		}
 
-		NSMutableArray *actions = [[NSMutableArray alloc] init];
-		NSMutableDictionary *byTitle = [[NSMutableDictionary alloc] init];
-		for (NSDictionary *chat in chats)
-		{
-			if (![chat isKindOfClass:[NSDictionary class]])
-				continue;
-			NSString *title = TGStoryString(chat, @"title");
-			if (title.length == 0)
-				continue;
-			[byTitle setObject:[chat objectForKey:@"id"] forKey:title];
-			[actions addObject:[[TGActionSheetAction alloc] initWithTitle:title action:title]];
-		}
-
-		TGActionSheet *sheet = [[TGActionSheet alloc] initWithTitle:@"Post story as"
-														   actions:actions
-													   actionBlock:^(id target, NSString *action)
-		{
-			(void)target;
-			TGStoryComposer *inner = weakSelf;
-			if (inner == nil)
-				return;
-			NSNumber *identifier = [byTitle objectForKey:action];
-			if (identifier == nil)
-			{
-				[inner finishPosted:NO];
-				return;
-			}
-			[inner checkChat:(int64_t)[identifier longLongValue]];
-		}
-															target:strongSelf];
-		[sheet showInView:strongSelf->_host.view];
+		[strongSelf presentChatChooserForChats:chats];
 	}];
+}
+
+- (void)presentChatChooserForChats:(NSArray *)chats
+{
+	NSMutableArray *actions = [[NSMutableArray alloc] init];
+	NSMutableDictionary *byTitle = [[NSMutableDictionary alloc] init];
+	for (NSDictionary *chat in chats)
+	{
+		if (![chat isKindOfClass:[NSDictionary class]])
+			continue;
+		NSString *title = TGStoryString(chat, @"title");
+		if (title.length == 0)
+			continue;
+		[byTitle setObject:[chat objectForKey:@"id"] forKey:title];
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:title action:title]];
+	}
+
+	__weak TGStoryComposer *weakSelf = self;
+	TGActionSheet *sheet = [[TGActionSheet alloc] initWithTitle:@"Post story as"
+													   actions:actions
+												   actionBlock:^(id target, NSString *action)
+	{
+		(void)target;
+		TGStoryComposer *inner = weakSelf;
+		if (inner == nil)
+			return;
+		NSNumber *identifier = [byTitle objectForKey:action];
+		if (identifier == nil)
+		{
+			[inner finishPosted:NO];
+			return;
+		}
+		[inner checkChat:(int64_t)[identifier longLongValue]];
+	}
+														target:self];
+	[sheet showInView:_host.view];
 }
 
 - (void)checkChat:(int64_t)chatId
