@@ -1,0 +1,118 @@
+{
+  "screen": "Contacts list (TGContactsViewController)",
+  "originalCounterpart": "telegram-original-sources/extracted/telegram_iphone.src/Telegraph/Telegraph/TGContactsController.mm, TGContactCell.m, TGContactCellContents.m, TGFlatActionCell.m, TGTelegraph.mm",
+  "findings": [
+    {
+      "kind": "order",
+      "visibility": "obvious",
+      "ours": "src/TGContactsViewController.m:487-497 and :1062-1067 — sortByName defaults to NO, so the list is sorted by statusRank (last seen) and rebuildSections returns nil, giving one flat section with no A-Z headers.",
+      "theirs": "The contact list is always alphabetical; sections are built per first letter and sorted by sortByFirstName/sortByLastName, never by presence.",
+      "citation": "TGContactsController.mm:3085-3101 (it->get()->sortByLastName(); std::sort(...TGContactListSectionComparator))",
+      "fix": "Remove the last-seen ordering path: always sort alphabetically (by last name, falling back to first name, per TGContactListItemSortByLastNameFunction at TGContactsController.mm:87-108) and always build the letter sections."
+    },
+    {
+      "kind": "layout",
+      "visibility": "obvious",
+      "ours": "src/TGContactsViewController.m:1661-1690 — the 'Invite Friends' row is a TGContactRowCell: 51pt tall (kContactRowHeight, :1604-1606), 40pt avatar image, system 19 title in accentColour, no disclosure arrow.",
+      "theirs": "Action rows are TGFlatActionCell: 44pt high, Cell88.png plate, title UILabel at x=53 y=12 in boldSystemFontOfSize:16 coloured #0779D0, icon ListIconInvite.png at (13,12), grouped-cell disclosure arrow at right (contentWidth-arrowWidth-12, 14).",
+      "citation": "TGContactsController.mm:1350-1351 (return 44 for section 0 in MainContacts) and TGFlatActionCell.m:30,39-53,64,91-99",
+      "fix": "Give the action row height 44, plate Cell88/CellHighlighted88 (or Cell102 clipped), title boldSystemFontOfSize:16 #0779D0 at x=53 y=12, icon at (13,12), and a right-hand disclosure arrow at x = width-arrow-12, y=14."
+    },
+    {
+      "kind": "order",
+      "visibility": "obvious",
+      "ours": "src/TGContactsViewController.m:1570-1581 — extra rows are injected into section 0 as rows 0..n, so they sit underneath the first letter's section header.",
+      "theirs": "The action rows live in their own headerless section inserted at the front of the section list, and the first alphabetical section has its letter cleared so it draws no header either.",
+      "citation": "TGContactsController.mm:3094-3098 (newSectionListTelegraph[0]->letter = nil) and :3103-3118 (serviceSection with letter = nil inserted at begin())",
+      "fix": "Make the action rows section 0 with no header view (height 0), and suppress the section header of the first letter section."
+    },
+    {
+      "kind": "state",
+      "visibility": "obvious",
+      "ours": "src/TGContactsViewController.m:1570-1574 — only one action row ('Invite Friends'), plus our own 'My Invite Link'.",
+      "theirs": "The service section carries two rows in main-contacts mode: uid==INT_MAX ('Invite Friends') and uid==INT_MAX-1, rendered as TGFlatActionCellModeCreateGroupContacts with the label 'New Group' and the friends icon at (10,12).",
+      "citation": "TGContactsController.mm:3106-3118 and TGFlatActionCell.m:65-66,101-111",
+      "fix": "Add a second action row directly below Invite Friends titled 'New Group' (ListIconFriends icon at x=10,y=12, disclosure arrow shown), same 44pt flat action cell."
+    },
+    {
+      "kind": "behaviour",
+      "visibility": "noticeable",
+      "ours": "src/TGContactsViewController.m:1653-1655 — sectionIndexTitlesForTableView returns the letters, so the A-Z index strip is drawn down the right edge of the main Contacts list.",
+      "theirs": "Section indices are generated only for Compose / CreateGroupOption modes; in main Contacts mode newIndices is nil, so there is no index strip. When it is shown it starts with UITableViewIndexSearch (the magnifier) and needs more than 10 entries.",
+      "citation": "TGContactsController.mm:3125 (newIndices = compose||createGroupOption ? [self generateIndices:] : nil), :3147-3150 (count > 10), :2515-2517 (UITableViewIndexSearch first)",
+      "fix": "Return nil from sectionIndexTitlesForTableView on the main Contacts screen; if it is ever enabled (picker), prefix UITableViewIndexSearch and only return the array when it has more than 10 entries."
+    },
+    {
+      "kind": "state",
+      "visibility": "noticeable",
+      "ours": "src/TGContactsViewController.m:1134-1146 — no address-book-denied state at all; the only overlay is a centred grey label.",
+      "theirs": "When phonebook access is disabled the whole view is covered by an overlay on the lines background with ContactsIcon.png, a bold 17 title #697487 with white 0.3 shadow at (0,1) reading 'Telegram does not have access to your contacts', and a 14.5 (retina) body 'Please go to your iPhone Settings - Privacy - Contacts. Then select ON for Telegram.' with 'ON' bold; the nav-bar add button is hidden while it shows.",
+      "citation": "TGContactsController.mm:664-712 and :735-757; strings at Telegraph/en.lproj/Localizable.strings:257-260",
+      "fix": "Add the denied overlay with those exact strings, fonts (bold 17 / 14.5), colour #697487, white-0.3 shadow at (0,1), the icon above the title, and hide the add button while it is visible."
+    },
+    {
+      "kind": "wording",
+      "visibility": "noticeable",
+      "ours": "src/TGContactsViewController.m:1236-1238 — a 'Sort' custom left bar button opening a 'Sort by / Last Seen / Name' action sheet (:499-515).",
+      "theirs": "In main-contacts mode the left bar button item is nil; there is no sort control on the screen (sort order is a Settings preference).",
+      "citation": "TGContactsController.mm:409-411 (controllerLeftBarButtonItem returns nil for TGContactsModeMainContacts)",
+      "fix": "Remove the left 'Sort' button and its action sheet from the Contacts screen."
+    },
+    {
+      "kind": "colour",
+      "visibility": "noticeable",
+      "ours": "src/TGContactsViewController.m:1199-1211 — the table background view is listBackgroundColour, so rubber-banding above the search bar shows the list colour.",
+      "theirs": "A 500pt tall opaque view coloured #E4E9F0 is pinned above the top of the table so the overscroll area behind the search bar is that blue-grey, not the list colour.",
+      "citation": "TGContactsController.mm:503-509 (headerView frame (0,-500,w,500), layer.backgroundColor UIColorRGB(0xe4e9f0))",
+      "fix": "Add a 500pt subview at y=-500 inside the table view with backgroundColor #E4E9F0 and flexible width."
+    },
+    {
+      "kind": "asset",
+      "visibility": "noticeable",
+      "ours": "src/TGContactsViewController.m:1190-1197 — a stock UISearchBar with barTintColor / tintColor set by hand.",
+      "theirs": "TGSearchBar with backgroundImage SearchBarBackground.png, the input field background cleared and the dialog-list magnifier icon set explicitly, and the 1px stripe hidden.",
+      "citation": "TGContactsController.mm:78-84 (searchBarBackgroundNormal -> SearchBarBackground.png), :516-519, :581-585",
+      "fix": "Set the search bar background to images/SearchBarBackground@2x.png (already bundled, currently unused) and the magnifier to SearchBarIcon@2x.png, clear the field background and hide the bottom stripe."
+    },
+    {
+      "kind": "layout",
+      "visibility": "noticeable",
+      "ours": "src/TGContactsViewController.m:1241-1259 — a 58pt table footer with an invented two-line 'N contacts synced from your address book' label.",
+      "theirs": "tableFooterView is a bare empty UIView; there is no sync-status footer on the contacts list.",
+      "citation": "TGContactsController.mm:578 (_tableView.tableFooterView = [[UIView alloc] init])",
+      "fix": "Replace the footer with an empty UIView; if the sync entry point must stay, move it into the flat action section rather than a text footer."
+    },
+    {
+      "kind": "layout",
+      "visibility": "subtle",
+      "ours": "src/TGContactsViewController.m:1713-1725 — first and last name are one attributed string joined by a literal space, in a single UILabel that truncates the whole string.",
+      "theirs": "The two names are drawn separately: the first name is clipped to (width - titleOffset.x - 5 - 14) and drawn with NSLineBreakByTruncatingTail, then the second name is drawn starting 4pt after the measured first-name width.",
+      "citation": "TGContactCellContents.m:70-72,84-86",
+      "fix": "Draw/lay out the second name at firstNameWidth + 4 (not a space glyph) and truncate the first name at width - 54 - 5 - 14."
+    },
+    {
+      "kind": "metric",
+      "visibility": "subtle",
+      "ours": "src/TGContactsViewController.m:1683 and :1768 — avatar corner radius = kContactAvatar * 0.12f = 4.8pt.",
+      "theirs": "The 'avatar40' image processor rounds a 40x40 avatar with a corner radius of exactly 4.",
+      "citation": "TGTelegraph.mm:486-489 (TGScaleAndRoundCorners(source, CGSizeMake(40, 40), CGSizeZero, 4, ...))",
+      "fix": "Use a fixed corner radius of 4.0 for the 40pt contact avatar."
+    },
+    {
+      "kind": "wording",
+      "visibility": "subtle",
+      "ours": "src/TGContactsViewController.m:1134-1146 — centred labels reading 'Loading...', 'No results' and 'You have no contacts yet'.",
+      "theirs": "The contacts list has no empty or loading placeholder text; it shows the action rows over an empty white table, and the only overlay state is the phonebook-access-denied one.",
+      "citation": "TGContactsController.mm:495-509 and :664-712 (no empty/loading label anywhere in loadView or the table delegate)",
+      "fix": "Drop the invented placeholder strings; leave the table empty and rely on the action rows plus the access-denied overlay."
+    },
+    {
+      "kind": "asset",
+      "visibility": "subtle",
+      "ours": "src/TGContactsViewController.m:1222-1234 — the add button is a custom UIButton with a '+' drawn as a boldSystemFontOfSize:18 UILabel.",
+      "theirs": "The add button is a TGToolbarButton whose image is AddIcon.png (AddIcon_Landscape.png in landscape) with minWidth 35.",
+      "citation": "TGContactsController.mm:359-366",
+      "fix": "Use the AddIcon artwork inside the standard toolbar button (minWidth 35) instead of drawing a '+' character."
+    }
+  ]
+}

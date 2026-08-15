@@ -11,10 +11,6 @@
 #import "TGTabsContainerViewDelegate.h"
 #import "UIView+SafeTint.h"
 
-@protocol TGScrollToTopTarget <NSObject>
-- (void)scrollToTopRequested;
-@end
-
 @interface RootViewController () <TGTabBarDelegate, UINavigationControllerDelegate>
 @property (nonatomic, strong) TGTabBar *customTabBar;
 @property (nonatomic, strong) id layoutDelegate;
@@ -26,18 +22,6 @@
 	[super loadView];
 	self.layoutDelegate = [[TGTabsContainerViewDelegate alloc] init];
 	[TGHacks setLayoutDelegateForContainerView:self.view layoutDelegate:self.layoutDelegate];
-	if (self.view.subviews.count > 0)
-		[TGHacks setLayoutDelegateForContainerView:self.view.subviews[0] layoutDelegate:self.layoutDelegate];
-}
-
-- (void)reassociateLayoutDelegate {
-	if (self.view.subviews.count > 0)
-		[TGHacks setLayoutDelegateForContainerView:self.view.subviews[0] layoutDelegate:self.layoutDelegate];
-}
-
-- (void)viewDidLayoutSubviews {
-	[super viewDidLayoutSubviews];
-	[self reassociateLayoutDelegate];
 }
 
 - (void)viewDidLoad {
@@ -88,15 +72,8 @@
 }
 
 - (void)tabBarSelectedItem:(int)index {
-	if ((int)self.selectedIndex != index){
+	if ((int)self.selectedIndex != index)
 		[self setSelectedIndex:index];
-	} else {
-		UIViewController *controller = self.selectedViewController;
-		if ([controller isKindOfClass:[UINavigationController class]])
-			controller = ((UINavigationController *)controller).topViewController;
-		if ([controller respondsToSelector:@selector(scrollToTopRequested)])
-			[(id<TGScrollToTopTarget>)controller scrollToTopRequested];
-	}
 }
 
 - (void)setSelectedIndex:(NSUInteger)selectedIndex {

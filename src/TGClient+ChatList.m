@@ -58,10 +58,12 @@ static NSMutableSet *TGMarkedUnreadChatIds(void){
 	return set;
 }
 
-static NSMutableDictionary *TGChatTitleCache(void){
-	static NSMutableDictionary *titles = nil;
-	if (!titles)
-		titles = [[NSMutableDictionary alloc] init];
+static NSCache *TGChatTitleCache(void){
+	static NSCache *titles = nil;
+	if (!titles){
+		titles = [[NSCache alloc] init];
+		titles.countLimit = 200;
+	}
 	return titles;
 }
 
@@ -113,9 +115,6 @@ static void (^TGFoldersChangedBlock)(void) = nil;
 			NSMutableDictionary *row = [info mutableCopy];
 			if (![row[@"markedUnread"] isKindOfClass:NSNumber.class])
 				row[@"markedUnread"] = @([TGMarkedUnreadChatIds() containsObject:chatId]);
-			if ([row[@"title"] isKindOfClass:NSString.class] &&
-				[row[@"title"] length] > 0)
-				TGChatTitleCache()[chatId] = row[@"title"];
 			[out addObject:row];
 		} else {
 			[out addObject:@{@"id" : chatId, @"title" : @"", @"unread" : @(0)}];
@@ -854,10 +853,8 @@ static void (^TGFoldersChangedBlock)(void) = nil;
 - (NSString *)cachedTitleForChatId:(int64_t)chatId {
 	NSNumber *key = @(chatId);
 	NSDictionary *info = self.chatsById[key];
-	if ([info[@"title"] isKindOfClass:NSString.class] && [info[@"title"] length] > 0){
-		TGChatTitleCache()[key] = info[@"title"];
+	if ([info[@"title"] isKindOfClass:NSString.class] && [info[@"title"] length] > 0)
 		return info[@"title"];
-	}
 	for (NSDictionary *row in self.chats){
 		if ([row isKindOfClass:NSDictionary.class] &&
 			[row[@"id"] longLongValue] == chatId &&
@@ -870,7 +867,7 @@ static void (^TGFoldersChangedBlock)(void) = nil;
 			[row[@"title"] isKindOfClass:NSString.class])
 			return row[@"title"];
 	}
-	NSString *remembered = TGChatTitleCache()[key];
+	NSString *remembered = [TGChatTitleCache() objectForKey:key];
 	return [remembered isKindOfClass:NSString.class] ? remembered : nil;
 }
 
@@ -887,7 +884,7 @@ static void (^TGFoldersChangedBlock)(void) = nil;
 		if (!TGIsError(chat) && [chat[@"title"] isKindOfClass:NSString.class])
 			title = chat[@"title"];
 		if (title.length > 0)
-			TGChatTitleCache()[@(chatId)] = title;
+			[TGChatTitleCache() setObject:title forKey:@(chatId)];
 		if (completion)
 			completion(title);
 	}];

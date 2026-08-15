@@ -34,6 +34,10 @@
 #import "TGClient+Notifications.h"
 #import "TGVideoCaptureViewController.h"
 #import <ImageIO/ImageIO.h>
+#import "TGClient+Groups.h"
+#import "TGClient+SecretChats.h"
+#import "TGClient+ChatManagement.h"
+#import "TGClient+Stickers.h"
 
 // Their design system is drawn for Android at 360dp; a 4S is 320pt, so
 // everything taken from it is scaled by 0.889 and rounded to a whole point.
@@ -1161,7 +1165,8 @@ static const CGFloat kPhotoPageGap = 20.0f;
 
 @interface TGChatViewController () <UISearchBarDelegate, CLLocationManagerDelegate,
 		UIScrollViewDelegate, AVAudioPlayerDelegate, UIAlertViewDelegate,
-		ABPeoplePickerNavigationControllerDelegate>
+		ABPeoplePickerNavigationControllerDelegate, MPMediaPickerControllerDelegate,
+		UIGestureRecognizerDelegate>
 @property (nonatomic, strong) UITableView *table;
 @property (nonatomic, strong) UIView *inputBar;
 @property (nonatomic, strong) UITextField *input;
@@ -1238,6 +1243,17 @@ static const CGFloat kPhotoPageGap = 20.0f;
 @property (nonatomic, assign) BOOL draftRestored;
 @property (nonatomic, copy) NSString *reportTextOptionId;
 @property (nonatomic, assign) NSTimeInterval pendingPlaybackOffset;
+@property (nonatomic, strong) UIView *datePickerPanel;
+@property (nonatomic, strong) UIDatePicker *schedulePicker;
+@property (nonatomic, strong) UIImage *pendingPastedImage;
+@property (nonatomic, strong) UIPanGestureRecognizer *replySwipe;
+@property (nonatomic, assign) NSInteger swipingRow;
+@property (nonatomic, strong) UIImageView *swipeArrow;
+@property (nonatomic, strong) NSMutableDictionary *translations;
+@property (nonatomic, copy) NSString *pendingInviteLink;
+@property (nonatomic, assign) int64_t moderationUserId;
+@property (nonatomic, copy) NSString *moderationName;
+@property (nonatomic, strong) NSArray *moderationMessageIds;
 
 - (void)clearComposeState;
 - (void)showComposeBanner:(NSString *)text;
@@ -1274,6 +1290,7 @@ static const CGFloat kPhotoPageGap = 20.0f;
 	self.linkPreviews = [NSMutableDictionary dictionary];
 	self.linkPreviewsRequested = [NSMutableSet set];
 	self.selectedIds = [NSMutableArray array];
+	self.translations = [NSMutableDictionary dictionary];
 	self.sendStates = [NSMutableDictionary dictionary];
 	self.sendStatesRequested = [NSMutableSet set];
 	self.readMessageIds = [NSMutableSet set];
@@ -1308,6 +1325,12 @@ static const CGFloat kPhotoPageGap = 20.0f;
 	doubleTap.numberOfTapsRequired = 2;
 	[self.table addGestureRecognizer:doubleTap];
 
+	self.swipingRow = -1;
+	self.replySwipe = [[UIPanGestureRecognizer alloc]
+			initWithTarget:self action:@selector(replySwiped:)];
+	self.replySwipe.delegate = self;
+	[self.table addGestureRecognizer:self.replySwipe];
+
 	[self.view addSubview:self.table];
 
 	[self buildInputBar:b];
@@ -1324,6 +1347,13 @@ static const CGFloat kPhotoPageGap = 20.0f;
 			name:UIKeyboardWillShowNotification object:nil];
 	[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(keyboardWillHide:)
 			name:UIKeyboardWillHideNotification object:nil];
+
+	[[NSNotificationCenter defaultCenter] addObserver:self
+			selector:@selector(flushDraftOnAppState:)
+			name:UIApplicationDidEnterBackgroundNotification object:nil];
+	[[NSNotificationCenter defaultCenter] addObserver:self
+			selector:@selector(flushDraftOnAppState:)
+			name:UIApplicationWillTerminateNotification object:nil];
 
 	[self installMessageHandler];
 
@@ -1839,6 +1869,7 @@ static const CGFloat kPhotoPageGap = 20.0f;
 				return;
 			me.quotes[replyId] = original;
 			[me.table reloadData];
+			[me fetchMissingImages];
 		}];
 	}
 }
@@ -1966,7 +1997,12 @@ static const CGFloat kPhotoPageGap = 20.0f;
 		}];
 	}
 
-	for (NSDictionary *m in self.messages){
+	// The reply bar draws a thumbnail of what it answers, and that original is
+	// usually not itself on screen, so its picture is fetched too.
+	NSMutableArray *wanted = [NSMutableArray arrayWithArray:self.messages];
+	[wanted addObjectsFromArray:[self.quotes allValues]];
+
+	for (NSDictionary *m in wanted){
 		NSNumber *fileId = m[@"photoId"];
 		if (![fileId isKindOfClass:NSNumber.class])
 			continue;
@@ -2994,6 +3030,9 @@ static const NSInteger kScheduledListSheetTag = 47;
 static const NSInteger kSelectionDeleteSheetTag = 48;
 static const NSInteger kLinkSheetTag        = 49;
 static const NSInteger kReportTextAlertTag  = 61;
+static const NSInteger kPastePhotoAlertTag  = 62;
+static const NSInteger kJoinLinkAlertTag    = 63;
+static const NSInteger kModerationSheetTag  = 50;
 
 - (Class)videoCaptureClass {
 	if (![UIImagePickerController isSourceTypeAvailable:
@@ -3002,12 +3041,32 @@ static const NSInteger kReportTextAlertTag  = 61;
 	return NSClassFromString(@"TGVideoCaptureViewController");
 }
 
+- (BOOL)cameraAvailable {
+	return [UIImagePickerController isSourceTypeAvailable:
+			UIImagePickerControllerSourceTypeCamera];
+}
+
+- (UIImage *)pasteboardImage {
+	UIPasteboard *board = [UIPasteboard generalPasteboard];
+	UIImage *image = board.image;
+	if (image)
+		return image;
+	id first = [board.images firstObject];
+	return [first isKindOfClass:UIImage.class] ? first : nil;
+}
+
 - (void)attachTapped {
-	NSMutableArray *titles = [NSMutableArray arrayWithObject:@"Photo or Video"];
+	NSMutableArray *titles = [NSMutableArray array];
+	if ([self cameraAvailable])
+		[titles addObject:@"Take Photo"];
+	[titles addObject:@"Photo or Video"];
 	if ([self videoCaptureClass]){
 		[titles addObject:@"Video"];
 		[titles addObject:@"Video Message"];
 	}
+	if ([self pasteboardImage])
+		[titles addObject:@"Paste Photo"];
+	[titles addObject:@"Music"];
 	[titles addObject:@"Location"];
 	[titles addObject:@"Contact"];
 
@@ -3135,17 +3194,25 @@ static const NSInteger kReportTextAlertTag  = 61;
 			[UIPasteboard generalPasteboard].string = link;
 		return;
 	}
+	if (sheet.tag == kModerationSheetTag){
+		[self runModerationAction:([sheet buttonTitleAtIndex:index] ?: @"")];
+		return;
+	}
 	if (sheet.tag == kSelectionDeleteSheetTag){
-		NSString *title = [sheet buttonTitleAtIndex:index] ?: @"";
-		[self deleteSelectedForEveryone:
-				([title rangeOfString:@"Everyone"].location != NSNotFound)];
+		[self deleteSelectedForEveryone:(index == sheet.destructiveButtonIndex)];
 		return;
 	}
 	if (sheet.tag != kAttachSheetTag)
 		return;
 
 	NSString *chosen = [sheet buttonTitleAtIndex:index] ?: @"";
-	if ([chosen isEqualToString:@"Photo or Video"])
+	if ([chosen isEqualToString:@"Take Photo"])
+		[self takePhoto];
+	else if ([chosen isEqualToString:@"Paste Photo"])
+		[self pastePhoto];
+	else if ([chosen isEqualToString:@"Music"])
+		[self pickMusic];
+	else if ([chosen isEqualToString:@"Photo or Video"])
 		[self pickMedia];
 	else if ([chosen isEqualToString:@"Video"])
 		[self captureVideoRound:NO];
@@ -3181,12 +3248,136 @@ static const NSInteger kReportTextAlertTag  = 61;
 			}];
 			return;
 		}
+		if ([me routeInternalLink:link])
+			return;
 		if (link && ![link[@"supported"] boolValue]){
-			[me showAlertTitle:@"" message:@"This link cannot be opened."];
+			[me explainUnsupportedLink:url];
 			return;
 		}
 		[me confirmExternalLink:url];
 	}];
+}
+
+- (BOOL)routeInternalLink:(NSDictionary *)link {
+	NSString *kind = link[@"kind"];
+	if (!kind.length)
+		return NO;
+
+	if ([kind isEqualToString:@"publicChat"] || [kind isEqualToString:@"publicChatUsername"]){
+		NSString *username = link[@"username"];
+		if (!username.length)
+			return NO;
+		__weak typeof(self) weakSelf = self;
+		[[TGClient shared] publicChatWithUsername:username completion:^(NSDictionary *chat){
+			TGChatViewController *me = weakSelf;
+			if (!me)
+				return;
+			int64_t target = [chat[@"id"] longLongValue];
+			if (!target)
+				target = [chat[@"chatId"] longLongValue];
+			if (!target){
+				[me showAlertTitle:@"" message:@"There is no such public chat."];
+				return;
+			}
+			[me openChatId:target
+					 title:(chat[@"title"] ?: [NSString stringWithFormat:@"@%@", username])
+				   isGroup:[chat[@"isGroup"] boolValue]];
+		}];
+		return YES;
+	}
+
+	if ([kind isEqualToString:@"chatInvite"]){
+		NSString *invite = link[@"inviteLink"] ?: link[@"link"];
+		if (!invite.length)
+			return NO;
+		__weak typeof(self) weakSelf = self;
+		[[TGClient shared] previewInviteLink:invite completion:^(NSDictionary *info){
+			TGChatViewController *me = weakSelf;
+			if (!me)
+				return;
+			if (!info){
+				[me showAlertTitle:@"" message:@"This invite link has expired."];
+				return;
+			}
+			int64_t known = [info[@"chatId"] longLongValue];
+			if (known){
+				[me openChatId:known title:(info[@"title"] ?: @"Chat")
+					   isGroup:YES];
+				return;
+			}
+			me.pendingInviteLink = invite;
+			UIAlertView *ask = [[UIAlertView alloc] initWithTitle:(info[@"title"] ?: @"Join")
+														  message:([info[@"requiresApproval"] boolValue]
+																  ? @"Your request to join will be sent to the admins."
+																  : @"Join this chat?")
+														 delegate:me
+												cancelButtonTitle:@"Cancel"
+												otherButtonTitles:@"Join", nil];
+			ask.tag = kJoinLinkAlertTag;
+			[ask show];
+		}];
+		return YES;
+	}
+
+	if ([kind isEqualToString:@"stickerSet"]){
+		NSString *name = link[@"stickerSetName"];
+		if (!name.length)
+			return NO;
+		__weak typeof(self) weakSelf = self;
+		[[TGClient shared] stickerSetWithName:name completion:^(NSDictionary *set){
+			TGChatViewController *me = weakSelf;
+			if (!me)
+				return;
+			if (!set){
+				[me showAlertTitle:@"" message:@"This sticker set no longer exists."];
+				return;
+			}
+			int64_t setId = [set[@"id"] longLongValue];
+			if ([set[@"installed"] boolValue] || !setId){
+				[me showAlertTitle:(set[@"title"] ?: @"Stickers")
+						   message:@"This set is already in your stickers."];
+				return;
+			}
+			[[TGClient shared] installStickerSet:setId completion:^(BOOL ok){
+				[me showAlertTitle:(set[@"title"] ?: @"Stickers")
+						   message:(ok ? @"Added to your stickers."
+									   : @"This set could not be added.")];
+			}];
+		}];
+		return YES;
+	}
+
+	return NO;
+}
+
+- (void)explainUnsupportedLink:(NSString *)url {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] deepLinkInfoForUrl:url completion:^(NSString *text, BOOL needsUpdate){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		(void)needsUpdate;
+		[me showAlertTitle:@""
+				   message:(text.length ? text : @"This link cannot be opened.")];
+	}];
+}
+
+- (void)openChatId:(int64_t)targetChatId title:(NSString *)title isGroup:(BOOL)isGroup {
+	if (targetChatId == self.chatId)
+		return;
+	for (UIViewController *existing in self.navigationController.viewControllers){
+		if (![existing isKindOfClass:TGChatViewController.class])
+			continue;
+		if (((TGChatViewController *)existing).chatId != targetChatId)
+			continue;
+		[self.navigationController popToViewController:existing animated:YES];
+		return;
+	}
+	TGChatViewController *controller = [[TGChatViewController alloc] init];
+	controller.chatId = targetChatId;
+	controller.chatTitle = title.length ? title : @"Chat";
+	controller.isGroup = isGroup;
+	[self.navigationController pushViewController:controller animated:YES];
 }
 
 - (void)confirmExternalLink:(NSString *)url {
@@ -3250,6 +3441,100 @@ static const NSInteger kReportTextAlertTag  = 61;
 		[self showActionsForRow:path.row];
 }
 
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)recognizer {
+	if (recognizer != self.replySwipe)
+		return YES;
+	if (self.selecting || self.postingBlocked)
+		return NO;
+
+	CGPoint velocity = [self.replySwipe velocityInView:self.table];
+	if (velocity.x <= 0 || fabs(velocity.x) < fabs(velocity.y) * 1.5f)
+		return NO;
+
+	NSIndexPath *path = [self.table indexPathForRowAtPoint:
+			[self.replySwipe locationInView:self.table]];
+	return (path != nil && [self canReplyToRow:path.row]);
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)recognizer
+		shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other {
+	return (recognizer == self.replySwipe || other == self.replySwipe);
+}
+
+- (BOOL)canReplyToRow:(NSInteger)row {
+	if (row < 0 || row >= (NSInteger)self.messages.count)
+		return NO;
+	NSDictionary *m = self.messages[row];
+	if ([m[@"service"] boolValue] || ![m[@"id"] isKindOfClass:NSNumber.class])
+		return NO;
+	return ([m[@"id"] longLongValue] != 0);
+}
+
+- (void)replySwiped:(UIPanGestureRecognizer *)pan {
+	const CGFloat trigger = 46.0f;
+	const CGFloat limit   = 62.0f;
+
+	if (pan.state == UIGestureRecognizerStateBegan){
+		NSIndexPath *path = [self.table indexPathForRowAtPoint:[pan locationInView:self.table]];
+		self.swipingRow = (path && [self canReplyToRow:path.row]) ? path.row : -1;
+		if (self.swipingRow < 0)
+			return;
+		if (!self.swipeArrow){
+			self.swipeArrow = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, 22, 22)];
+			self.swipeArrow.contentMode = UIViewContentModeCenter;
+			self.swipeArrow.image = [TGIcons menuGlyphNamed:@"reply"];
+			self.swipeArrow.alpha = 0.0f;
+			[self.table addSubview:self.swipeArrow];
+		}
+		CGRect rect = [self.table rectForRowAtIndexPath:
+				[NSIndexPath indexPathForRow:self.swipingRow inSection:0]];
+		self.swipeArrow.center = CGPointMake(14, CGRectGetMidY(rect));
+		self.swipeArrow.hidden = NO;
+		return;
+	}
+
+	if (self.swipingRow < 0)
+		return;
+
+	UITableViewCell *cell = [self.table cellForRowAtIndexPath:
+			[NSIndexPath indexPathForRow:self.swipingRow inSection:0]];
+	CGFloat offset = MAX(0.0f, MIN(limit, [pan translationInView:self.table].x));
+
+	if (pan.state == UIGestureRecognizerStateChanged){
+		cell.contentView.transform = CGAffineTransformMakeTranslation(offset, 0);
+		self.swipeArrow.alpha = MIN(1.0f, offset / trigger);
+		return;
+	}
+
+	if (pan.state == UIGestureRecognizerStateEnded ||
+		pan.state == UIGestureRecognizerStateCancelled ||
+		pan.state == UIGestureRecognizerStateFailed){
+		NSInteger row = self.swipingRow;
+		self.swipingRow = -1;
+		[UIView animateWithDuration:0.18 animations:^{
+			cell.contentView.transform = CGAffineTransformIdentity;
+			self.swipeArrow.alpha = 0.0f;
+		} completion:^(BOOL finished){
+			self.swipeArrow.hidden = YES;
+		}];
+		if (pan.state == UIGestureRecognizerStateEnded && offset >= trigger)
+			[self beginReplyToRow:row];
+	}
+}
+
+- (void)beginReplyToRow:(NSInteger)row {
+	if (![self canReplyToRow:row])
+		return;
+	NSDictionary *m = self.messages[row];
+	self.replyToId = [m[@"id"] longLongValue];
+	self.editingId = 0;
+	[self.sendButton setTitle:@"Send" forState:UIControlStateNormal];
+	NSString *bodyText = [self textOf:m];
+	[self showComposeBanner:[NSString stringWithFormat:@"Reply to: %@",
+			bodyText.length ? bodyText : (m[@"kind"] ?: @"message")]];
+	[self.input becomeFirstResponder];
+}
+
 /// Holding the chips opens the strip of emoji the message accepts, over the
 /// bubble the chips belong to.
 - (void)chipsHeld:(UILongPressGestureRecognizer *)hold {
@@ -3283,6 +3568,15 @@ static const NSInteger kReportTextAlertTag  = 61;
 /// string selector - asking one for its length is an unrecognized selector and
 /// takes the app down.
 - (NSString *)textOf:(NSDictionary *)m {
+	if ([m[@"id"] isKindOfClass:NSNumber.class]){
+		NSString *translated = self.translations[m[@"id"]];
+		if ([translated isKindOfClass:NSString.class] && translated.length)
+			return translated;
+	}
+	return [self originalTextOf:m];
+}
+
+- (NSString *)originalTextOf:(NSDictionary *)m {
 	NSString *text = m[@"text"];
 	return [text isKindOfClass:NSString.class] ? text : nil;
 }
@@ -3347,7 +3641,7 @@ static const NSInteger kReportTextAlertTag  = 61;
 	if (![m[@"id"] isKindOfClass:NSNumber.class])
 		return;
 	int64_t messageId = [m[@"id"] longLongValue];
-	NSString *bodyText = [self textOf:m];
+	NSString *bodyText = [self originalTextOf:m];
 	__weak typeof(self) weakSelf = self;
 
 	if ([action isEqualToString:TGMessageActionReply]){
@@ -3431,7 +3725,7 @@ static const NSInteger kReportTextAlertTag  = 61;
 		[self reportMessage:messageId optionId:nil];
 
 	} else if ([action isEqualToString:TGMessageActionDeleteForMe]){
-		[self deleteMessage:m forEveryone:NO];
+		[self deleteMessage:m forEveryone:[[TGClient shared] isSecretChat:self.chatId]];
 
 	} else if ([action isEqualToString:TGMessageActionDeleteForEveryone]){
 		[self deleteMessage:m forEveryone:YES];
@@ -3461,6 +3755,81 @@ static const NSInteger kReportTextAlertTag  = 61;
 	}];
 	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6.0 * NSEC_PER_SEC)),
 			dispatch_get_main_queue(), ^{ [weakSelf reload]; });
+
+	[self offerModerationForMessage:m];
+}
+
+- (void)offerModerationForMessage:(NSDictionary *)m {
+	if (!self.isGroup || [m[@"outgoing"] boolValue])
+		return;
+	int64_t senderId = [m[@"senderId"] longLongValue];
+	if (!senderId)
+		return;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] myAdministratorRightsInGroup:self.chatId
+										 completion:^(NSDictionary *rights, NSString *status){
+		TGChatViewController *me = weakSelf;
+		if (!me || !rights)
+			return;
+		BOOL canRestrict = [rights[@"can_restrict_members"] boolValue] ||
+						   [status isEqualToString:@"creator"];
+		if (!canRestrict)
+			return;
+
+		NSString *name = [[TGClient shared] nameForUserId:senderId];
+		if (!name.length)
+			name = @"this user";
+		me.moderationUserId = senderId;
+		me.moderationName = name;
+		me.moderationMessageIds = ([m[@"id"] isKindOfClass:NSNumber.class]
+				? @[m[@"id"]] : @[]);
+
+		UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:name
+														   delegate:me
+												  cancelButtonTitle:nil
+											 destructiveButtonTitle:nil
+												  otherButtonTitles:
+						@"Delete All From This User",
+						@"Ban From The Group",
+						@"Report Spam", nil];
+		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Done"];
+		sheet.tag = kModerationSheetTag;
+		[sheet showInView:me.view];
+	}];
+}
+
+- (void)runModerationAction:(NSString *)action {
+	int64_t userId = self.moderationUserId;
+	if (!userId)
+		return;
+
+	if ([action isEqualToString:@"Delete All From This User"]){
+		[[TGClient shared] deleteAllMessagesFromUser:userId inGroup:self.chatId];
+		[self reload];
+		return;
+	}
+	if ([action isEqualToString:@"Ban From The Group"]){
+		__weak typeof(self) weakSelf = self;
+		NSString *name = self.moderationName ?: @"";
+		[[TGClient shared] banMember:userId
+							 inGroup:self.chatId
+						   untilDate:0
+					  revokeMessages:NO
+						  completion:^(BOOL ok){
+			TGChatViewController *me = weakSelf;
+			if (!me)
+				return;
+			[me showAlertTitle:@""
+					   message:(ok ? [NSString stringWithFormat:@"%@ can no longer post here.", name]
+								   : @"This user could not be banned.")];
+		}];
+		return;
+	}
+	if ([action isEqualToString:@"Report Spam"] && self.moderationMessageIds.count){
+		[[TGClient shared] reportSpamMessages:self.moderationMessageIds inGroup:self.chatId];
+		[self showAlertTitle:@"" message:@"Thank you. This has been reported as spam."];
+	}
 }
 
 /// Forwarding is three choices, not one: with the sender's name, without it,
@@ -3504,6 +3873,12 @@ static const NSInteger kReportTextAlertTag  = 61;
 /// Translate into whatever the phone is set to, which is the only target a
 /// screen with no language picker can honestly offer.
 - (void)translateMessage:(int64_t)messageId {
+	if (self.translations[@(messageId)]){
+		[self.translations removeObjectForKey:@(messageId)];
+		[self.table reloadData];
+		return;
+	}
+
 	NSString *preferred = [[NSLocale preferredLanguages] firstObject];
 	NSString *language = (preferred.length >= 2)
 			? [preferred substringToIndex:2] : @"en";
@@ -3516,8 +3891,12 @@ static const NSInteger kReportTextAlertTag  = 61;
 		TGChatViewController *me = weakSelf;
 		if (!me)
 			return;
-		[me showAlertTitle:@"Translation"
-				   message:(text.length ? text : @"This message could not be translated.")];
+		if (!text.length){
+			[me showAlertTitle:@"" message:@"This message could not be translated."];
+			return;
+		}
+		me.translations[@(messageId)] = text;
+		[me.table reloadData];
 	}];
 }
 
@@ -3579,7 +3958,7 @@ static const NSInteger kReportTextAlertTag  = 61;
 	int64_t messageId = [m[@"id"] longLongValue];
 	if (!messageId)
 		return;
-	NSString *bodyText = [self textOf:m];
+	NSString *bodyText = [self originalTextOf:m];
 
 	if ([action isEqualToString:@"Reply"]){
 		self.replyToId = messageId;
@@ -3636,6 +4015,132 @@ static const NSInteger kReportTextAlertTag  = 61;
 				dispatch_get_main_queue(), ^{ [weakSelf reload]; });
 	}
 	self.actionMessage = nil;
+}
+
+- (void)takePhoto {
+	if (![self cameraAvailable] || self.postingBlocked)
+		return;
+	UIImagePickerController *picker = [[UIImagePickerController alloc] init];
+	picker.sourceType = UIImagePickerControllerSourceTypeCamera;
+	picker.mediaTypes = @[(NSString *)kUTTypeImage];
+	picker.delegate = self;
+	[self presentViewController:picker animated:YES completion:nil];
+}
+
+- (NSString *)stageImageForSending:(UIImage *)image {
+	if (!image)
+		return nil;
+	NSData *jpeg = UIImageJPEGRepresentation(image, 0.85f);
+	if (!jpeg.length)
+		return nil;
+	NSString *name = [NSString stringWithFormat:@"outgoing-%.0f.jpg",
+			[[NSDate date] timeIntervalSince1970] * 1000];
+	NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:name];
+	if (![jpeg writeToFile:path atomically:YES])
+		return nil;
+	return path;
+}
+
+- (void)pastePhoto {
+	if (self.postingBlocked)
+		return;
+	UIImage *image = [self pasteboardImage];
+	if (!image)
+		return;
+	self.pendingPastedImage = image;
+	UIAlertView *ask = [[UIAlertView alloc] initWithTitle:@"Send Photo"
+												  message:@"Send the image from the clipboard?"
+												 delegate:self
+										cancelButtonTitle:@"Cancel"
+										otherButtonTitles:@"Send", nil];
+	ask.tag = kPastePhotoAlertTag;
+	[ask show];
+}
+
+- (void)sendPendingPastedImage {
+	UIImage *image = self.pendingPastedImage;
+	self.pendingPastedImage = nil;
+	NSString *path = [self stageImageForSending:image];
+	if (!path)
+		return;
+	[[TGClient shared] sendPhotoAtPath:path
+								toChat:self.chatId
+								thread:self.threadId
+							   caption:@""
+							   spoiler:NO
+				   selfDestructSeconds:0];
+	[self clearComposeState];
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+			dispatch_get_main_queue(), ^{ [self reload]; });
+}
+
+- (void)pickMusic {
+	if (self.postingBlocked)
+		return;
+	MPMediaPickerController *picker = [[MPMediaPickerController alloc]
+			initWithMediaTypes:MPMediaTypeMusic];
+	picker.delegate = self;
+	picker.allowsPickingMultipleItems = NO;
+	[self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)mediaPicker:(MPMediaPickerController *)mediaPicker
+		didPickMediaItems:(MPMediaItemCollection *)collection
+{
+	[mediaPicker dismissViewControllerAnimated:YES completion:nil];
+
+	MPMediaItem *item = [collection.items firstObject];
+	NSURL *asset = [item valueForProperty:MPMediaItemPropertyAssetURL];
+	if (!asset){
+		[self showAlertTitle:@"" message:@"This track cannot be sent."];
+		return;
+	}
+
+	NSString *title = [item valueForProperty:MPMediaItemPropertyTitle];
+	NSString *performer = [item valueForProperty:MPMediaItemPropertyArtist];
+	NSNumber *seconds = [item valueForProperty:MPMediaItemPropertyPlaybackDuration];
+
+	AVURLAsset *source = [AVURLAsset URLAssetWithURL:asset options:nil];
+	AVAssetExportSession *export = [[AVAssetExportSession alloc]
+			initWithAsset:source presetName:AVAssetExportPresetAppleM4A];
+	if (!export){
+		[self showAlertTitle:@"" message:@"This track cannot be sent."];
+		return;
+	}
+
+	NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:
+			[NSString stringWithFormat:@"music-%.0f.m4a",
+					[[NSDate date] timeIntervalSince1970] * 1000]];
+	export.outputURL = [NSURL fileURLWithPath:path];
+	export.outputFileType = AVFileTypeAppleM4A;
+
+	__weak typeof(self) weakSelf = self;
+	[export exportAsynchronouslyWithCompletionHandler:^{
+		AVAssetExportSessionStatus status = export.status;
+		dispatch_async(dispatch_get_main_queue(), ^{
+			TGChatViewController *me = weakSelf;
+			if (!me)
+				return;
+			if (status != AVAssetExportSessionStatusCompleted){
+				[me showAlertTitle:@"" message:@"This track cannot be sent."];
+				return;
+			}
+			[[TGClient shared] sendAudioAtPath:path
+										toChat:me.chatId
+										thread:me.threadId
+										 title:title
+									 performer:performer
+									  duration:(NSInteger)[seconds doubleValue]
+									   caption:@""];
+			[me clearComposeState];
+			dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+					dispatch_get_main_queue(), ^{ [me reload]; });
+		});
+	}];
+}
+
+- (void)mediaPickerDidCancel:(MPMediaPickerController *)mediaPicker {
+	[mediaPicker dismissViewControllerAnimated:YES completion:nil];
 }
 
 - (void)pickMedia {
@@ -3720,13 +4225,19 @@ static const NSInteger kReportTextAlertTag  = 61;
 		return;
 
 	// TDLib wants a path, so write the pick to a temporary file first.
-	NSString *path = [NSTemporaryDirectory()
-			stringByAppendingPathComponent:@"outgoing.jpg"];
-	if (![UIImageJPEGRepresentation(image, 0.85f) writeToFile:path atomically:YES]){
+	NSString *path = [self stageImageForSending:image];
+	if (!path){
 		NSLog(@"cannot stage the picked image");
 		return;
 	}
-	[[TGClient shared] sendPhotoAtPath:path toChat:self.chatId];
+	[[TGClient shared] sendPhotoAtPath:path
+								toChat:self.chatId
+								thread:self.threadId
+							   caption:@""
+							   spoiler:NO
+				   selfDestructSeconds:0];
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+			dispatch_get_main_queue(), ^{ [self reload]; });
 }
 
 - (void)imagePickerControllerDidCancel:(UIImagePickerController *)picker {
@@ -4125,6 +4636,51 @@ static const NSInteger kReportTextAlertTag  = 61;
 	return [[TGClient shared] nameForUserId:[original[@"senderId"] longLongValue]];
 }
 
+- (NSString *)quoteKindLabelFor:(NSDictionary *)original {
+	NSString *kind = original[@"kind"];
+	if ([kind isEqualToString:@"messagePhoto"])        return @"Photo";
+	if ([kind isEqualToString:@"messageVideo"])        return @"Video";
+	if ([kind isEqualToString:@"messageAnimation"])    return @"GIF";
+	if ([kind isEqualToString:@"messageVoiceNote"])    return @"Voice message";
+	if ([kind isEqualToString:@"messageVideoNote"])    return @"Video message";
+	if ([kind isEqualToString:@"messageAudio"])        return @"Music";
+	if ([kind isEqualToString:@"messageDocument"])     return @"File";
+	if ([kind isEqualToString:@"messageContact"])      return @"Contact";
+	if ([kind isEqualToString:@"messagePoll"])         return @"Poll";
+	if ([kind isEqualToString:@"messageLocation"])     return @"Location";
+	if ([kind isEqualToString:@"messageLiveLocation"]) return @"Live location";
+	if ([kind isEqualToString:@"messageSticker"] ||
+		[kind isEqualToString:@"messageAnimatedEmoji"]){
+		NSString *text = original[@"text"];
+		return [text isKindOfClass:NSString.class] && text.length
+				? [NSString stringWithFormat:@"Sticker %@", text] : @"Sticker";
+	}
+	return nil;
+}
+
+/// The line under the author in a reply bar: what was said, or what kind of
+/// thing it was when there is nothing to quote.
+- (NSString *)quoteDisplayTextFor:(NSDictionary *)m {
+	NSString *text = [self quoteTextFor:m];
+	if (text.length && ![text isEqualToString:@"..."])
+		return text;
+	NSNumber *replyId = [m[@"replyId"] isKindOfClass:NSNumber.class] ? m[@"replyId"] : nil;
+	NSDictionary *original = replyId ? self.quotes[replyId] : nil;
+	NSString *label = original ? [self quoteKindLabelFor:original] : nil;
+	return label ?: text;
+}
+
+/// The little rounded picture of the thing being answered, once its thumbnail
+/// has come down.
+- (UIImage *)quoteThumbnailFor:(NSDictionary *)m {
+	NSNumber *replyId = [m[@"replyId"] isKindOfClass:NSNumber.class] ? m[@"replyId"] : nil;
+	if (!replyId)
+		return nil;
+	NSDictionary *original = self.quotes[replyId];
+	NSNumber *fileId = original[@"photoId"];
+	return [fileId isKindOfClass:NSNumber.class] ? self.images[fileId] : nil;
+}
+
 - (CGFloat)decorationHeightFor:(NSDictionary *)m {
 	CGFloat h = 0;
 	if ([m[@"forward"] length])
@@ -4172,6 +4728,8 @@ static const NSInteger kReportTextAlertTag  = 61;
 	if (!text.length || [text rangeOfString:@"\n"].location != NSNotFound)
 		return NO;
 	if ([self previewSizeFor:m].height > 0)
+		return NO;
+	if ([self largeEmojiCountFor:m] > 0)
 		return NO;
 
 	CGFloat oneLine = [text sizeWithFont:
@@ -4228,7 +4786,44 @@ static const NSInteger kReportTextAlertTag  = 61;
 					 constrainedToSize:CGSizeMake(kBubbleMaxW - 2 * kPadH, 200)
 						 lineBreakMode:NSLineBreakByWordWrapping];
 	NSArray *options = m[@"pollOptions"];
-	return kPadV + qs.height + 22 + kPollRow * options.count + 18;
+	CGFloat retract = [self pollCanRetractFor:m] ? 24 : 0;
+	return kPadV + qs.height + 22 + kPollRow * options.count + retract + 18;
+}
+
+/// You have voted and the poll is still open, so the vote can be taken back -
+/// which is the one poll action every client offers.
+- (BOOL)pollCanRetractFor:(NSDictionary *)m {
+	if ([m[@"pollClosed"] boolValue])
+		return NO;
+	for (NSDictionary *option in m[@"pollOptions"])
+		if ([option[@"is_chosen"] boolValue])
+			return YES;
+	return NO;
+}
+
+- (NSString *)pollSubtitleFor:(NSDictionary *)m {
+	BOOL closed = [m[@"pollClosed"] boolValue];
+	NSInteger total = [m[@"pollTotal"] integerValue];
+	NSString *count = total == 0
+			? (closed ? @"No votes" : @"No votes yet")
+			: [NSString stringWithFormat:@"%ld voted", (long)total];
+	if (closed)
+		return [NSString stringWithFormat:@"Final results  ·  %@", count];
+	NSString *kind = [m[@"pollAnonymous"] boolValue] ? @"Anonymous Poll" : @"Public Poll";
+	return [NSString stringWithFormat:@"%@  ·  %@", kind, count];
+}
+
+- (void)pollRetractTapped:(UIButton *)button {
+	UIView *view = button;
+	while (view && ![view isKindOfClass:TGBubbleCell.class])
+		view = view.superview;
+	TGBubbleCell *cell = (TGBubbleCell *)view;
+	if (!cell || !cell.pollMessageId)
+		return;
+
+	[[TGClient shared] votePoll:cell.pollMessageId inChat:self.chatId options:@[]];
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+			dispatch_get_main_queue(), ^{ [self reload]; });
 }
 
 /// A picture with no caption carries its own stamp on a plate, so the bubble
@@ -4240,11 +4835,79 @@ static const NSInteger kReportTextAlertTag  = 61;
 		   ![m[@"kind"] isEqualToString:@"messageAnimatedEmoji"];
 }
 
+static BOOL TGIsEmojiPiece(NSString *piece) {
+	if (!piece.length)
+		return NO;
+	unichar high = [piece characterAtIndex:0];
+	UTF32Char code = high;
+	if (high >= 0xD800 && high <= 0xDBFF && piece.length > 1){
+		unichar low = [piece characterAtIndex:1];
+		code = ((high - 0xD800) * 0x400) + (low - 0xDC00) + 0x10000;
+	}
+	if (code >= 0x1F000 && code <= 0x1FAFF) return YES;
+	if (code >= 0x2600  && code <= 0x27BF)  return YES;
+	if (code >= 0x2B00  && code <= 0x2BFF)  return YES;
+	if (code >= 0x2190  && code <= 0x21FF)  return YES;
+	if (code >= 0xFE00  && code <= 0xFE0F)  return YES;
+	if (code == 0x200D || code == 0x203C || code == 0x2049) return YES;
+	if (code == 0x00A9 || code == 0x00AE)   return YES;
+	if (code >= 0x2122 && code <= 0x2199)   return YES;
+	return NO;
+}
+
+/// One to three emoji and nothing else are drawn big and bare, the way a
+/// sticker is - no bubble behind them.
+- (NSInteger)largeEmojiCountFor:(NSDictionary *)m {
+	if (![m[@"kind"] isEqualToString:@"messageText"])
+		return 0;
+	if ([m[@"service"] boolValue])
+		return 0;
+	NSString *text = [([self textOf:m] ?: @"")
+			stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+	if (!text.length || text.length > 12)
+		return 0;
+
+	__block NSInteger count = 0;
+	__block BOOL onlyEmoji = YES;
+	[text enumerateSubstringsInRange:NSMakeRange(0, text.length)
+							 options:NSStringEnumerationByComposedCharacterSequences
+						  usingBlock:^(NSString *piece, NSRange range,
+									   NSRange enclosing, BOOL *stop){
+		if (!TGIsEmojiPiece(piece)){
+			onlyEmoji = NO;
+			*stop = YES;
+			return;
+		}
+		count++;
+		if (count > 3){
+			onlyEmoji = NO;
+			*stop = YES;
+		}
+	}];
+	if (!onlyEmoji || count == 0)
+		return 0;
+
+	if ([self quoteTextFor:m] || [m[@"forward"] length])
+		return 0;
+	if ([self previewSizeFor:m].height > 0)
+		return 0;
+	return count;
+}
+
+- (UIFont *)bodyFontFor:(NSDictionary *)m {
+	switch ([self largeEmojiCountFor:m]){
+		case 1:  return [UIFont systemFontOfSize:52];
+		case 2:  return [UIFont systemFontOfSize:42];
+		case 3:  return [UIFont systemFontOfSize:34];
+		default: return [UIFont systemFontOfSize:[TGTheme shared].messageFontSize];
+	}
+}
+
 - (CGSize)bodySizeFor:(NSDictionary *)m {
 	NSString *text = [self textOf:m] ?: @"";
 	if (!text.length)
 		return CGSizeZero;
-	return [text sizeWithFont:[UIFont systemFontOfSize:[TGTheme shared].messageFontSize]
+	return [text sizeWithFont:[self bodyFontFor:m]
 			constrainedToSize:CGSizeMake(kBubbleMaxW - 2 * kPadH, 10000)
 				lineBreakMode:NSLineBreakByWordWrapping];
 }
@@ -4369,6 +5032,9 @@ static UIColor *TGSenderColour(int64_t userId) {
 	if (!cell)
 		cell = [[TGBubbleCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:reuse];
 
+	if (indexPath.row != self.swipingRow)
+		cell.contentView.transform = CGAffineTransformIdentity;
+
 	NSDictionary *m = self.messages[indexPath.row];
 	BOOL mine = [m[@"outgoing"] boolValue];
 	NSString *kind = m[@"kind"];
@@ -4387,7 +5053,8 @@ static UIColor *TGSenderColour(int64_t userId) {
 
 	// Stickers never sit in a bubble - they are drawn straight on the wallpaper.
 	BOOL isSticker = [kind isEqualToString:@"messageSticker"] ||
-					 [kind isEqualToString:@"messageAnimatedEmoji"];
+					 [kind isEqualToString:@"messageAnimatedEmoji"] ||
+					 [self largeEmojiCountFor:m] > 0;
 
 	cell.icon.hidden = YES;
 	cell.bubbleBg.hidden = YES;
@@ -4473,9 +5140,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 		cell.subtitle.hidden = NO;
 		cell.subtitle.font = [UIFont systemFontOfSize:12];
 		cell.subtitle.textColor = [pollTheme secondaryTextColour];
-		cell.subtitle.text = closed ? @"Final results"
-			: [NSString stringWithFormat:@"%@ voted",
-					[m[@"pollTotal"] integerValue] == 0 ? @"Nobody" : m[@"pollTotal"]];
+		cell.subtitle.text = [self pollSubtitleFor:m];
 		cell.subtitle.frame = CGRectMake(kPadH, kPadV + qs.height + 2,
 										 width - 2 * kPadH, 16);
 
@@ -4542,6 +5207,18 @@ static UIColor *TGSenderColour(int64_t userId) {
 			[row addSubview:fill];
 
 			y += kPollRow;
+		}
+
+		if ([self pollCanRetractFor:m]){
+			UIButton *retract = [UIButton buttonWithType:UIButtonTypeCustom];
+			retract.frame = CGRectMake(kPadH, y, width - 2 * kPadH, 22);
+			retract.tag = 0x91F0;
+			retract.titleLabel.font = [UIFont systemFontOfSize:14];
+			[retract setTitle:@"Retract Vote" forState:UIControlStateNormal];
+			[retract setTitleColor:[pollTheme accentColour] forState:UIControlStateNormal];
+			[retract addTarget:self action:@selector(pollRetractTapped:)
+			  forControlEvents:UIControlEventTouchUpInside];
+			[cell.bubble addSubview:retract];
 		}
 
 		cell.picture.hidden = YES;
@@ -4699,7 +5376,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 	CGFloat timeW = [self timeWidthFor:m];
 	CGFloat contentW = MAX(body.width, pic.width);
 	if ([self quoteTextFor:m] || [m[@"forward"] length])
-		contentW = MAX(contentW, 170);
+		contentW = MAX(contentW, [self quoteThumbnailFor:m] ? 200 : 170);
 	if ([[self chipsFor:m] count])
 		contentW = MAX(contentW, kChipsWidth);
 	CGSize previewSize = [self previewSizeFor:m];
@@ -4834,6 +5511,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 
 	NSString *quoted = [self quoteTextFor:m];
 	UILabel *quoteAuthor = (UILabel *)[cell.bubble viewWithTag:0x9003];
+	UIImageView *quoteThumb = (UIImageView *)[cell.bubble viewWithTag:0x9008];
 	if (quoted){
 		// A 2pt stripe the height of the block, then the author's name and the
 		// line being answered - which is how their reply reads at a glance.
@@ -4847,11 +5525,33 @@ static UIColor *TGSenderColour(int64_t userId) {
 			quoteAuthor.backgroundColor = [UIColor clearColor];
 			[cell.bubble addSubview:quoteAuthor];
 		}
+		// A reply to a picture shows the picture, small and rounded, the way
+		// every client draws it - the words alone lose what was answered.
+		UIImage *thumb = [self quoteThumbnailFor:m];
+		CGFloat textX = kPadH + 8;
+		if (thumb){
+			if (!quoteThumb){
+				quoteThumb = [[UIImageView alloc] initWithFrame:CGRectZero];
+				quoteThumb.tag = 0x9008;
+				quoteThumb.contentMode = UIViewContentModeScaleAspectFill;
+				quoteThumb.clipsToBounds = YES;
+				quoteThumb.layer.cornerRadius = 3;
+				[cell.bubble addSubview:quoteThumb];
+			}
+			quoteThumb.hidden = NO;
+			quoteThumb.image = thumb;
+			quoteThumb.frame = CGRectMake(kPadH + 7, y + 1, 32, 32);
+			textX = kPadH + 45;
+		} else {
+			quoteThumb.hidden = YES;
+		}
+
+		CGFloat quoteW = MAX(bubbleW - textX - kPadH, 40);
 		quoteAuthor.hidden = NO;
 		quoteAuthor.font = [UIFont boldSystemFontOfSize:13];
 		quoteAuthor.textColor = [theme accentColour];
 		quoteAuthor.text = [self quoteAuthorFor:m] ?: @"Reply";
-		quoteAuthor.frame = CGRectMake(kPadH + 8, y, bubbleW - 2 * kPadH - 10, 16);
+		quoteAuthor.frame = CGRectMake(textX, y, quoteW, 16);
 
 		// The forwarded line has a label of its own now, so the quote can use
 		// this one rather than a second one built at runtime.
@@ -4859,11 +5559,12 @@ static UIColor *TGSenderColour(int64_t userId) {
 		cell.quote.numberOfLines = 1;
 		cell.quote.font = [UIFont systemFontOfSize:13];
 		cell.quote.textColor = [theme primaryTextColour];
-		cell.quote.text = quoted;
-		cell.quote.frame = CGRectMake(kPadH + 8, y + 17, bubbleW - 2 * kPadH - 10, 17);
+		cell.quote.text = [self quoteDisplayTextFor:m];
+		cell.quote.frame = CGRectMake(textX, y + 17, quoteW, 17);
 		y += 38;
 	} else {
 		quoteAuthor.hidden = YES;
+		quoteThumb.hidden = YES;
 	}
 
 	cell.mediaStamp.hidden = YES;
@@ -4955,7 +5656,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 
 	cell.body.hidden = (body.height == 0);
 	cell.body.numberOfLines = 0;
-	cell.body.font = [UIFont systemFontOfSize:[TGTheme shared].messageFontSize];
+	cell.body.font = [self bodyFontFor:m];
 	cell.body.text = [self textOf:m] ?: @"";
 	[self highlightTimestampInLabel:cell.body];
 	cell.body.frame = CGRectMake(kPadH, y, body.width, body.height);
@@ -5083,6 +5784,10 @@ static UIColor *TGSenderColour(int64_t userId) {
 	}];
 }
 
+- (void)flushDraftOnAppState:(NSNotification *)note {
+	[self saveDraft];
+}
+
 - (void)saveDraft {
 	if (self.editingId != 0)
 		return;
@@ -5107,9 +5812,10 @@ static UIColor *TGSenderColour(int64_t userId) {
 												 : @"Send Without Sound")];
 	[sheet addButtonWithTitle:(self.protectContent ? @"Allow Forwarding"
 												   : @"Protect Content")];
-	[sheet addButtonWithTitle:@"Schedule Message"];
+	BOOL reminders = [self isRemindersChat];
+	[sheet addButtonWithTitle:(reminders ? @"Set a Reminder" : @"Schedule Message")];
 	if (self.scheduledMessages.count)
-		[sheet addButtonWithTitle:@"Scheduled Messages"];
+		[sheet addButtonWithTitle:(reminders ? @"Reminders" : @"Scheduled Messages")];
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 	sheet.tag = kSendOptionsSheetTag;
 	[sheet showInView:self.view];
@@ -5135,23 +5841,113 @@ static UIColor *TGSenderColour(int64_t userId) {
 					   seconds:3 onCommit:nil];
 		return;
 	}
-	if ([title isEqualToString:@"Schedule Message"]){
-		UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Send later"
-														  delegate:self
-												 cancelButtonTitle:nil
-											destructiveButtonTitle:nil
-												 otherButtonTitles:@"In 1 Hour",
-																   @"In 8 Hours",
-																   @"Tomorrow Morning", nil];
-		if (!self.isGroup)
+	if ([title isEqualToString:@"Schedule Message"] ||
+		[title isEqualToString:@"Set a Reminder"]){
+		UIActionSheet *sheet = [[UIActionSheet alloc]
+				initWithTitle:([self isRemindersChat] ? @"Remind me" : @"Send later")
+					 delegate:self
+			cancelButtonTitle:nil
+	   destructiveButtonTitle:nil
+			otherButtonTitles:@"In 1 Hour",
+							  @"In 8 Hours",
+							  @"Tomorrow Morning", nil];
+		if (!self.isGroup && ![self isRemindersChat])
 			[sheet addButtonWithTitle:@"When Online"];
+		[sheet addButtonWithTitle:@"Choose Date"];
 		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 		sheet.tag = kScheduleSheetTag;
 		[sheet showInView:self.view];
 		return;
 	}
-	if ([title isEqualToString:@"Scheduled Messages"])
+	if ([title isEqualToString:@"Scheduled Messages"] ||
+		[title isEqualToString:@"Reminders"])
 		[self showScheduledMessages];
+}
+
+- (BOOL)isRemindersChat {
+	return (self.chatId == [[TGClient shared] savedMessagesChatId]);
+}
+
+- (void)showSchedulePicker {
+	if (self.datePickerPanel)
+		return;
+
+	CGRect b = self.view.bounds;
+	CGFloat panelHeight = 260;
+	UIView *panel = [[UIView alloc] initWithFrame:
+			CGRectMake(0, b.size.height, b.size.width, panelHeight)];
+	panel.backgroundColor = [UIColor colorWithWhite:0.85f alpha:1.0f];
+	panel.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+							 UIViewAutoresizingFlexibleTopMargin;
+
+	UIToolbar *bar = [[UIToolbar alloc] initWithFrame:
+			CGRectMake(0, 0, b.size.width, 44)];
+	bar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	UIBarButtonItem *cancel = [[UIBarButtonItem alloc]
+			initWithBarButtonSystemItem:UIBarButtonSystemItemCancel
+								 target:self
+								 action:@selector(dismissSchedulePicker)];
+	UIBarButtonItem *space = [[UIBarButtonItem alloc]
+			initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace
+								 target:nil action:nil];
+	UIBarButtonItem *done = [[UIBarButtonItem alloc]
+			initWithBarButtonSystemItem:UIBarButtonSystemItemDone
+								 target:self
+								 action:@selector(commitSchedulePicker)];
+	bar.items = @[cancel, space, done];
+	[panel addSubview:bar];
+
+	UIDatePicker *picker = [[UIDatePicker alloc] initWithFrame:
+			CGRectMake(0, 44, b.size.width, panelHeight - 44)];
+	picker.datePickerMode = UIDatePickerModeDateAndTime;
+	picker.minuteInterval = 5;
+	picker.minimumDate = [NSDate dateWithTimeIntervalSinceNow:60];
+	picker.date = [NSDate dateWithTimeIntervalSinceNow:3600];
+	picker.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	[panel addSubview:picker];
+
+	self.schedulePicker = picker;
+	self.datePickerPanel = panel;
+
+	[self.input resignFirstResponder];
+	[self.view addSubview:panel];
+	[UIView animateWithDuration:0.25 animations:^{
+		panel.frame = CGRectMake(0, b.size.height - panelHeight,
+								 b.size.width, panelHeight);
+	}];
+}
+
+- (void)dismissSchedulePicker {
+	UIView *panel = self.datePickerPanel;
+	if (!panel)
+		return;
+	self.datePickerPanel = nil;
+	self.schedulePicker = nil;
+	CGRect gone = panel.frame;
+	gone.origin.y = self.view.bounds.size.height;
+	[UIView animateWithDuration:0.25 animations:^{
+		panel.frame = gone;
+	} completion:^(BOOL finished){
+		[panel removeFromSuperview];
+	}];
+}
+
+- (void)commitSchedulePicker {
+	NSDate *when = self.schedulePicker.date;
+	[self dismissSchedulePicker];
+	if (!when)
+		return;
+	NSTimeInterval stamp = [when timeIntervalSince1970];
+	if (stamp <= [[NSDate date] timeIntervalSince1970])
+		return;
+	self.scheduleWhenOnline = NO;
+	self.scheduledSendDate = stamp;
+	[self showComposeBanner:[NSString stringWithFormat:
+			([self isRemindersChat] ? @"Reminder for %@" : @"Scheduled for %@"),
+			[NSDateFormatter localizedStringFromDate:when
+										   dateStyle:NSDateFormatterShortStyle
+										   timeStyle:NSDateFormatterShortStyle]]];
+	[self.input becomeFirstResponder];
 }
 
 - (void)runScheduleOption:(NSString *)title {
@@ -5173,13 +5969,17 @@ static UIColor *TGSenderColour(int64_t userId) {
 		self.scheduledSendDate = [[calendar dateFromComponents:parts] timeIntervalSince1970];
 	} else if ([title isEqualToString:@"When Online"]){
 		self.scheduleWhenOnline = YES;
+	} else if ([title isEqualToString:@"Choose Date"]){
+		[self showSchedulePicker];
+		return;
 	} else {
 		return;
 	}
 
 	[self showComposeBanner:(self.scheduleWhenOnline
 			? @"Will be sent when online"
-			: [NSString stringWithFormat:@"Scheduled for %@",
+			: [NSString stringWithFormat:
+					([self isRemindersChat] ? @"Reminder for %@" : @"Scheduled for %@"),
 					[NSDateFormatter localizedStringFromDate:
 							[NSDate dateWithTimeIntervalSince1970:self.scheduledSendDate]
 												   dateStyle:NSDateFormatterShortStyle
@@ -5343,7 +6143,9 @@ static UIColor *TGSenderColour(int64_t userId) {
 		[panel addSubview:plate];
 	}
 
-	NSArray *titles = @[@"Forward", @"Copy", @"Save", @"Delete"];
+	NSArray *titles = [[TGClient shared] isSecretChat:self.chatId]
+			? @[@"Delete"]
+			: @[@"Forward", @"Copy", @"Save", @"Delete"];
 	CGFloat slice = b.size.width / titles.count;
 	for (NSUInteger i = 0; i < titles.count; i++){
 		UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -5374,12 +6176,15 @@ static UIColor *TGSenderColour(int64_t userId) {
 - (void)selectionButtonTapped:(UIButton *)button {
 	if (!self.selectedIds.count)
 		return;
-	switch (button.tag){
-		case 0: [self forwardSelected];      break;
-		case 1: [self copySelected];         break;
-		case 2: [self saveSelectedToCameraRoll]; break;
-		default: [self confirmDeleteSelected]; break;
-	}
+	NSString *title = button.currentTitle ?: @"";
+	if ([title isEqualToString:@"Forward"])
+		[self forwardSelected];
+	else if ([title isEqualToString:@"Copy"])
+		[self copySelected];
+	else if ([title isEqualToString:@"Save"])
+		[self saveSelectedToCameraRoll];
+	else
+		[self confirmDeleteSelected];
 }
 
 - (void)forwardSelected {
@@ -5408,7 +6213,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 		if (![m[@"id"] isKindOfClass:NSNumber.class] ||
 			![self.selectedIds containsObject:m[@"id"]])
 			continue;
-		NSString *body = [self textOf:m];
+		NSString *body = [self originalTextOf:m];
 		if (body.length)
 			[lines addObject:body];
 	}
@@ -5493,13 +6298,17 @@ static UIColor *TGSenderColour(int64_t userId) {
 }
 
 - (void)confirmDeleteSelected {
+	BOOL secret = [[TGClient shared] isSecretChat:self.chatId];
 	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:
 			[NSString stringWithFormat:@"Delete %lu messages?",
 					(unsigned long)self.selectedIds.count]
 													  delegate:self
 											 cancelButtonTitle:nil
-										destructiveButtonTitle:@"Delete for Everyone"
-											 otherButtonTitles:@"Delete for Me", nil];
+										destructiveButtonTitle:(secret ? @"Delete"
+																	   : @"Delete for Everyone")
+											 otherButtonTitles:nil];
+	if (!secret)
+		[sheet addButtonWithTitle:@"Delete for Me"];
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 	sheet.tag = kSelectionDeleteSheetTag;
 	[sheet showInView:self.view];
@@ -5817,6 +6626,35 @@ static UIColor *TGSenderColour(int64_t userId) {
 #pragma mark - alerts
 
 - (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {
+	if (alertView.tag == kPastePhotoAlertTag){
+		if (buttonIndex == alertView.cancelButtonIndex){
+			self.pendingPastedImage = nil;
+			return;
+		}
+		[self sendPendingPastedImage];
+		return;
+	}
+	if (alertView.tag == kJoinLinkAlertTag){
+		NSString *invite = self.pendingInviteLink;
+		self.pendingInviteLink = nil;
+		if (buttonIndex == alertView.cancelButtonIndex || !invite.length)
+			return;
+		__weak typeof(self) weakSelf = self;
+		[[TGClient shared] joinChatByInviteLink:invite
+									 completion:^(int64_t joinedChatId, BOOL requestSent){
+			TGChatViewController *me = weakSelf;
+			if (!me)
+				return;
+			if (joinedChatId){
+				[me openChatId:joinedChatId title:@"Chat" isGroup:YES];
+				return;
+			}
+			[me showAlertTitle:@""
+					   message:(requestSent ? @"Your request to join has been sent."
+										    : @"This invite link was refused.")];
+		}];
+		return;
+	}
 	if (alertView.tag != kReportTextAlertTag || buttonIndex == alertView.cancelButtonIndex)
 		return;
 	NSString *text = @"";

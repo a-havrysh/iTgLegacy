@@ -17,8 +17,10 @@ NSString *const TGNetworkTypeOther         = @"networkTypeOther";
 NSString *const TGNetworkTypeNone          = @"networkTypeNone";
 
 static BOOL TGFilesIsError(NSDictionary *result) {
-	return ![result isKindOfClass:NSDictionary.class] ||
-			[result[@"@type"] isEqualToString:@"error"];
+	if (![result isKindOfClass:NSDictionary.class])
+		return YES;
+	id type = result[@"@type"];
+	return [type isKindOfClass:NSString.class] && [type isEqualToString:@"error"];
 }
 
 static NSArray *TGFilesArray(id value) {
@@ -583,7 +585,7 @@ static NSDictionary *TGFileOfMessageContent(NSDictionary *content) {
 	NSDictionary *from = TGFilesDict(settings) ?: @{};
 	NSDictionary *payload = @{
 		@"@type"                   : @"autoDownloadSettings",
-		@"is_auto_download_enabled": from[@"enabled"] ?: @YES,
+		@"is_auto_download_enabled": from[@"enabled"] ?: @NO,
 		@"max_photo_file_size"     : from[@"maxPhotoSize"] ?: @(1048576),
 		@"max_video_file_size"     : from[@"maxVideoSize"] ?: @(1048576),
 		@"max_other_file_size"     : from[@"maxOtherSize"] ?: @(1048576),
@@ -591,7 +593,8 @@ static NSDictionary *TGFileOfMessageContent(NSDictionary *content) {
 		@"preload_large_videos"    : from[@"preloadLargeVideos"] ?: @NO,
 		@"preload_next_audio"      : from[@"preloadNextAudio"] ?: @NO,
 		@"preload_stories"         : from[@"preloadStories"] ?: @NO,
-		@"use_less_data_for_calls" : from[@"lessDataForCalls"] ?: @NO,
+		@"use_less_data_for_calls" : from[@"useLessDataForCalls"] ?:
+									 from[@"lessDataForCalls"] ?: @NO,
 	};
 	[self request:@{
 		@"@type"    : @"setAutoDownloadSettings",

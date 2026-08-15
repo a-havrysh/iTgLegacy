@@ -1,0 +1,134 @@
+{
+  "screen": "Login (phone / code / info-registration), src/TGLoginViewController.m",
+  "originalCounterpart": "telegram-original-sources/extracted/telegram_iphone.src/Telegraph/Telegraph/TGLoginPhoneController.m, TGLoginCodeController.m, TGLoginProfileController.m, en.lproj/Localizable.strings; TelegraphKit/TelegraphKit/TGToolbarButton.m",
+  "findings": [
+    {
+      "kind": "behaviour",
+      "visibility": "obvious",
+      "ours": "The phone field shows raw digits as typed and the navigation title stays \"Your Phone\" forever (src/TGLoginViewController.m:106, 336, 1634-1637 — only a 15-digit cap, no formatting).",
+      "theirs": "Every keystroke is reformatted through [TGStringUtils formatPhone:...] so the number appears grouped (e.g. \"(555) 123-4567\") with the caret repositioned, and the nav title is rewritten to the formatted international number as soon as a code + number exist.",
+      "citation": "TGLoginPhoneController.m:491-552 (formatting in shouldChangeCharactersInRange) and TGLoginPhoneController.m:646-662 (updateTitleText, falls back to Login.PhoneTitle only when empty)",
+      "fix": "Port formatPhone-style grouping into -textField:shouldChangeCharactersInRange: for the phone step (reformat the raw digit string against the current country code, then restore the caret), and add an updateTitleText that sets self.title to the formatted number while the phone step has a code and digits, reverting to \"Your Phone\" when either is empty."
+    },
+    {
+      "kind": "layout",
+      "visibility": "obvious",
+      "ours": "The registration (\"Your Info\") step is two full-width 290pt LoginInput plates separated by a 6pt gap (43 tall at top, next at +49), fields inset 12pt, text boldSystemFontOfSize:18, and no avatar control at all. src/TGLoginViewController.m:520-543.",
+      "theirs": "Info screen is a 71x71 LoginAddPhoto button on the left with the two name plates to its right: total width 288, first-name plate x = photo.right + 14 and width = offsetX + 288 - fieldX + 17, height 43, and the last-name plate sits flush at y + 43 (no gap) using the separate LoginInput_Top.png / LoginInput_Bottom.png art. Fields are inset 15pt, boldSystemFontOfSize:15.0, width -20, y offset 11.5 / 10.5 on retina.",
+      "citation": "TGLoginProfileController.m:145-151 (add-photo button), 195-206 (LoginInput_Top/Bottom), 290-302 (updateInterface metrics), 209 & 219 (font 15)",
+      "fix": "Copy LoginInput_Top@2x.png, LoginInput_Bottom@2x.png, LoginAddPhoto@2x.png and LoginAddPhoto_Highlighted@2x.png into images/ (they are referenced in Telegraph.xcodeproj but absent from our images/), then rebuild the info step as: total width 288, add-photo button 71x71 at left, first-name plate x = button.right + 14 with width = leftInset + 288 - x + 17 and height 43, last-name plate flush beneath at +43, both fields inset 15pt with boldSystemFontOfSize:15 and heights 22 at +11.5 / +10.5."
+    },
+    {
+      "kind": "wording",
+      "visibility": "obvious",
+      "ours": "Code step notice reads \"We have sent you an SMS with the code\" (src/TGLoginViewController.m:846).",
+      "theirs": "\"We've sent an SMS with an activation code to your phone. Please enter the code below.\"",
+      "citation": "en.lproj/Localizable.strings:177 (\"Login.CodeHelp\"), used at TGLoginCodeController.m:135",
+      "fix": "Set self.noticeLabel.text to \"We've sent an SMS with an activation code to your phone. Please enter the code below.\" in -showCodeStepWithPhoneNumber: (keep the server 'description' override that follows)."
+    },
+    {
+      "kind": "behaviour",
+      "visibility": "obvious",
+      "ours": "Next is disabled and dimmed to 0.6 alpha until the input passes a length check; tapping it with an empty field does nothing but re-focus (src/TGLoginViewController.m:708-712, 736-740).",
+      "theirs": "Next is always enabled. Pressing it with an empty phone or a code shorter than 2 chars shakes the phone field, the input plate and the country-code field (four 0.05s autoreversing 4pt horizontal steps) and moves first responder to whichever field is empty.",
+      "citation": "TGLoginPhoneController.m:705-735 (shakeView) and :742-752 (nextButtonPressed); same shake in TGLoginCodeController.m:420-467",
+      "fix": "Keep the Next button enabled at full alpha at all times, and in -actionButtonTapped when [self hasSubmittableInput] is false run the original shake (dx +4/-4, duration 0.05, UIViewAnimationOptionAutoreverse then repeat count 3) on inputField, inputBackgroundView and countryCodeField before focusing the empty field."
+    },
+    {
+      "kind": "state",
+      "visibility": "obvious",
+      "ours": "The code step shows \"You can request the code again in m:ss\" and then a \"Send the code again\" plate button (src/TGLoginViewController.m:1542-1551, 378-390).",
+      "theirs": "Three crossfading labels and no button: \"Telegram will call you in %d:%.2d\" counting down from exactly 1 minute, fading (0.2s, 0.1s delay) into \"Requesting a call from Telegram...\" when it hits zero, then into \"Telegram dialed your number\" when the call request succeeds. All three are systemFontOfSize:14, colour 0xc4c9d2, shadow 0x25272b offset (0,1), positioned at inputBackground.bottom + 14.",
+      "citation": "TGLoginCodeController.m:157-196 (three labels), :245-280 (updateCountdown, timeout = 1*60), Localizable.strings:179-181",
+      "fix": "Replace the countdown wording with \"Telegram will call you in %d:%.2d\" and add the two follow-up states (\"Requesting a call from Telegram...\", \"Telegram dialed your number\") as 0.2s crossfades at the same y; if the resend button must stay for modern code types, hide it while the countdown is running instead of showing both."
+    },
+    {
+      "kind": "wording",
+      "visibility": "noticeable",
+      "ours": "Country button falls back to \"Country\" at full 0xf0f0f0 opacity when the dial code matches nothing (src/TGLoginViewController.m:444, 461).",
+      "theirs": "Two distinct strings, both dimmed: \"Country Code\" when the field holds only \"+\", \"Invalid Country Code\" when digits are present but unknown — and the title colour drops to UIColorRGBA(0xf0f0f0, 0.7f) in both cases, returning to solid 0xf0f0f0 on a match.",
+      "citation": "TGLoginPhoneController.m:664-679; Localizable.strings:195-196",
+      "fix": "In -updateCountryNameForDialCode set the title to \"Country Code\" when countryCodeField.text.length <= 1 and \"Invalid Country Code\" otherwise, and setTitleColor tgRGBA(0xf0f0f0, 0.7f) for those two cases, restoring tgRGB(0xf0f0f0) when a country is matched."
+    },
+    {
+      "kind": "behaviour",
+      "visibility": "noticeable",
+      "ours": "Tapping anywhere on the phone input plate focuses the phone field (src/TGLoginViewController.m:660-662).",
+      "theirs": "The tap location decides: a hit left of the country-code field's right edge focuses the country-code field, anything else focuses the phone field.",
+      "citation": "TGLoginPhoneController.m:694-703",
+      "fix": "Change -inputBackgroundTapped to take the UITapGestureRecognizer, and when [recognizer locationInView:inputBackgroundView].x < countryCodeField.frame.origin.x + countryCodeField.frame.size.width (converted into plate coordinates) focus countryCodeField, else inputField."
+    },
+    {
+      "kind": "behaviour",
+      "visibility": "noticeable",
+      "ours": "The country picker is pushed onto the login navigation stack (src/TGLoginViewController.m:482-483).",
+      "theirs": "It is presented modally inside its own TGNavigationController, with the login nav bar's dark portrait/landscape background images copied over and shadow mode enabled, and dismissed on selection.",
+      "citation": "TGLoginPhoneController.m:764-779 (presentViewController) and :819-832 (dismiss on countryCodeSelected)",
+      "fix": "Wrap TGCountryPickerViewController in a UINavigationController whose bar carries the same LoginHeader.png background and present it with -presentViewController:animated:completion:, dismissing it from the onPick block."
+    },
+    {
+      "kind": "wording",
+      "visibility": "noticeable",
+      "ours": "Phone placeholder is \"Phone number\"; registration placeholders are \"First Name\" / \"Last Name\" (src/TGLoginViewController.m:336, 356, 965).",
+      "theirs": "\"Your phone number\", \"First name\", \"Last name\" (sentence case).",
+      "citation": "Localizable.strings:194 (Login.PhonePlaceholder), :202-203 (Login.InfoFirstNamePlaceholder / InfoLastNamePlaceholder)",
+      "fix": "Set inputField.placeholder = @\"Your phone number\" on the phone step, @\"First name\" on the registration step, and lastNameField.placeholder = @\"Last name\"."
+    },
+    {
+      "kind": "colour",
+      "visibility": "noticeable",
+      "ours": "No placeholder colour or font is set on any field, so iOS draws its default 70% grey at the field's own font (src/TGLoginViewController.m:333-343, 353-364).",
+      "theirs": "Every login placeholder is explicitly styled: phone field placeholder systemFontOfSize:17 in 0x999999; code field placeholder systemFontOfSize:18 in 0xadb0b6; first/last name placeholders in 0x999da4.",
+      "citation": "TGLoginPhoneController.m:207 & 212; TGLoginCodeController.m:148 & 154; TGLoginProfileController.m:215 & 225",
+      "fix": "Add a placeholder-styling helper (attributedPlaceholder on iOS 6) and apply systemFontOfSize:17 / 0x999999 to the phone field, systemFontOfSize:18 / 0xadb0b6 to the code field, and 0x999da4 to the two name fields."
+    },
+    {
+      "kind": "state",
+      "visibility": "noticeable",
+      "ours": "While a request is in flight only the Next button swaps to a spinner; the rest of the screen stays live and tappable (src/TGLoginViewController.m:664-671).",
+      "theirs": "The phone controller also unhides a full-bounds shadeView that covers the whole view for the duration of the request, blocking the country button and the fields.",
+      "citation": "TGLoginPhoneController.m:242-245 (shadeView creation) and :332-350 (shown/hidden with inProgress)",
+      "fix": "Add a full-bounds UIView with FlexibleWidth|FlexibleHeight added last in setupUI, hidden by default, and unhide it in -setBusy: while busy."
+    },
+    {
+      "kind": "behaviour",
+      "visibility": "subtle",
+      "ours": "Backspacing at the start of the phone field does nothing (plain UITextField, src/TGLoginViewController.m:333).",
+      "theirs": "The phone field is a TGBackspaceTextField; a backspace on an already-empty field moves first responder back to the country-code field.",
+      "citation": "TGLoginPhoneController.m:204 and :356-359 (textFieldDidHitLastBackspace)",
+      "fix": "Subclass UITextField overriding -deleteBackward to notify the controller when the field is empty, and in that callback call [self.countryCodeField becomeFirstResponder]."
+    },
+    {
+      "kind": "metric",
+      "visibility": "subtle",
+      "ours": "Numeric code entry accepts up to 8 digits and auto-submits at 5 or more (src/TGLoginViewController.m:717-720, 1626).",
+      "theirs": "The code field is hard-capped at 5 characters and submits automatically the moment the 5th digit lands.",
+      "citation": "TGLoginCodeController.m:385-392",
+      "fix": "Cap non-text codes at 5 characters and trigger the submit on exactly 5 (keep the longer cap only for the word/phrase code types that did not exist in 2013)."
+    },
+    {
+      "kind": "layout",
+      "visibility": "subtle",
+      "ours": "The registration step shows a notice label \"Enter your name so your friends know who is writing to them.\" 16pt above the plates (src/TGLoginViewController.m:961, 545-549), and allows 64-character names (line 1619).",
+      "theirs": "The Info screen has no notice label at all — the add-photo button occupies that visual weight — and both name fields are capped at 30 characters.",
+      "citation": "TGLoginProfileController.m:118-230 (loadView adds no notice label) and :323-337 (30-character cap)",
+      "fix": "Hide noticeLabel on the registration step and lower the name length cap from 64 to 30."
+    },
+    {
+      "kind": "colour",
+      "visibility": "subtle",
+      "ours": "The Back button on the registration step reuses the phone/code shadow tgRGBA(0x050608, 0.4f) (src/TGLoginViewController.m:1450).",
+      "theirs": "TGLoginProfileController's back button uses shadow UIColorRGBA(0x07080a, 0.35f) and its Next button minWidth is 51, not 52.",
+      "citation": "TGLoginProfileController.m:131 (shadow) and :135 (minWidth 51)",
+      "fix": "When installing the back button on the registration step pass shadowColour tgRGBA(0x07080a, 0.35f), and size the Next button with minWidth 51 on that step."
+    },
+    {
+      "kind": "wording",
+      "visibility": "subtle",
+      "ours": "Rulebook docs/design-language/components.md:104-106 states images/ contains only HeaderButton, HeaderButton_Pressed, HeaderButton_Login_Blue(+_Pressed), BackButton, BackButton_Pressed and that there is no other login plate.",
+      "theirs": "images/ actually also holds HeaderButton_Login@2x.png, HeaderButton_Login_Pressed@2x.png, BackButton_Login@2x.png, BackButton_Login_Pressed@2x.png, LoginHeader, LoginCountry(+_Highlighted), LoginCountryArrow(+_Highlighted), LoginInput, LoginInputDivider, LoginShadow, HeaderLoginShadow.",
+      "citation": "ls of /Users/alexanderhavrysh/Git/iOS/iTgLegacy/images/ versus docs/design-language/components.md:104-106",
+      "fix": "Correct the bundled-assets list in components.md §1 (and the §9 summary at line 300) to include the login plates that are present, so other agents stop hand-drawing them; note separately that LoginInput_Top, LoginInput_Bottom, LoginAddPhoto and LoginAddPhoto_Highlighted are the ones genuinely missing."
+    }
+  ]
+}

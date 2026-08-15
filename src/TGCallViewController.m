@@ -1,4 +1,6 @@
 #import "TGCallViewController.h"
+#import <AVFoundation/AVFoundation.h>
+#import <AudioToolbox/AudioToolbox.h>
 #import "TGCall.h"
 #import "TGClient.h"
 #import "TGClient+Calls.h"
@@ -13,6 +15,11 @@
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UIImageView *avatarView;
 @property (nonatomic, strong) UIButton *muteButton;
+@property (nonatomic, strong) UIButton *speakerButton;
+@property (nonatomic, assign) BOOL speakerOn;
+@property (nonatomic, strong) AVAudioPlayer *tonePlayer;
+@property (nonatomic, strong) NSTimer *vibrateTimer;
+@property (nonatomic, assign) BOOL tonesFinished;
 @property (nonatomic, strong) UIButton *endButton;
 @property (nonatomic, strong) UIButton *acceptButton;
 @property (nonatomic, strong) NSTimer *ticker;
@@ -122,7 +129,13 @@
 	CGFloat baseline = b.size.height - 20;
 	CGRect leftFrame = CGRectMake(9, baseline - 43, buttonWidth, 43);
 	CGRect rightFrame = CGRectMake(b.size.width - 9 - buttonWidth, baseline - 45, buttonWidth, 45);
+	CGRect speakerFrame = CGRectMake(9, baseline - 43 - 51, b.size.width - 18, 43);
 
+	self.speakerButton = [self buttonWithTitle:@"Speaker"
+										 asset:@"GroupedActionButton"
+										 frame:speakerFrame
+										action:@selector(toggleSpeaker)];
+	self.speakerButton.hidden = YES;
 	self.muteButton = [self buttonWithTitle:@"Mute"
 									  asset:@"GroupedActionButton"
 									  frame:leftFrame
@@ -181,6 +194,12 @@
 - (void)teardown {
 	[self.ticker invalidate];
 	self.ticker = nil;
+	[self stopTone];
+	if (self.speakerOn){
+		self.speakerOn = NO;
+		[[AVAudioSession sharedInstance] overrideOutputAudioPort:AVAudioSessionPortOverrideNone
+														   error:nil];
+	}
 	[self setProximityEnabled:NO];
 	[UIApplication sharedApplication].idleTimerDisabled = self.idleTimerWasDisabled;
 	if ([TGCall shared].onStateChanged != nil)
@@ -256,6 +275,141 @@
 	return button;
 }
 
+#pragma mark - call tones
+
+static void TGCallToneAppend(NSMutableData *samples, double freqA, double freqB,
+		double seconds, double rate) {
+	NSUInteger count = (NSUInteger)(seconds * rate);
+	int16_t *buffer = (int16_t *)malloc(count * sizeof(int16_t));
+	if (buffer == NULL)
+		return;
+	for (NSUInteger i = 0; i < count; i++){
+		double t = (double)i / rate;
+		double value = 0.0;
+		if (freqA > 0.0)
+			value += sin(2.0 * M_PI * freqA * t);
+		if (freqB > 0.0)
+			value += sin(2.0 * M_PI * freqB * t);
+		if (freqA > 0.0 && freqB > 0.0)
+			value *= 0.5;
+		double fade = 1.0;
+		double fadeSamples = rate * 0.005;
+		if (i < fadeSamples)
+			fade = (double)i / fadeSamples;
+		else if (count > (NSUInteger)fadeSamples && i > count - (NSUInteger)fadeSamples)
+			fade = (double)(count - i) / fadeSamples;
+		buffer[i] = (int16_t)(value * fade * 9000.0);
+	}
+	[samples appendBytes:buffer length:count * sizeof(int16_t)];
+	free(buffer);
+}
+
+static void TGCallToneAppendSilence(NSMutableData *samples, double seconds, double rate) {
+	NSUInteger count = (NSUInteger)(seconds * rate);
+	NSUInteger bytes = count * sizeof(int16_t);
+	[samples increaseLengthBy:bytes];
+}
+
+static NSData *TGCallToneWrap(NSData *samples, double rate) {
+	uint32_t sampleRate = (uint32_t)rate;
+	uint32_t dataSize = (uint32_t)[samples length];
+	uint32_t byteRate = sampleRate * 2;
+	NSMutableData *wav = [NSMutableData dataWithCapacity:dataSize + 44];
+	uint32_t chunkSize = dataSize + 36;
+	uint32_t sixteen = 16;
+	uint16_t one = 1;
+	uint16_t bits = 16;
+	uint16_t align = 2;
+	[wav appendBytes:"RIFF" length:4];
+	[wav appendBytes:&chunkSize length:4];
+	[wav appendBytes:"WAVEfmt " length:8];
+	[wav appendBytes:&sixteen length:4];
+	[wav appendBytes:&one length:2];
+	[wav appendBytes:&one length:2];
+	[wav appendBytes:&sampleRate length:4];
+	[wav appendBytes:&byteRate length:4];
+	[wav appendBytes:&align length:2];
+	[wav appendBytes:&bits length:2];
+	[wav appendBytes:"data" length:4];
+	[wav appendBytes:&dataSize length:4];
+	[wav appendData:samples];
+	return wav;
+}
+
+- (void)playToneData:(NSData *)data loop:(BOOL)loop volume:(float)volume {
+	[self stopTone];
+	if (data == nil)
+		return;
+	AVAudioSession *session = [AVAudioSession sharedInstance];
+	if ([TGCall shared].state != TGCallStateEstablished){
+		[session setCategory:AVAudioSessionCategoryPlayback error:nil];
+		[session setActive:YES error:nil];
+	}
+	NSError *error = nil;
+	AVAudioPlayer *player = [[AVAudioPlayer alloc] initWithData:data error:&error];
+	if (player == nil)
+		return;
+	player.numberOfLoops = loop ? -1 : 0;
+	player.volume = volume;
+	[player prepareToPlay];
+	[player play];
+	self.tonePlayer = player;
+}
+
+- (void)startRingingTone {
+	if (self.tonePlayer != nil || self.tonesFinished || self.dismissing)
+		return;
+
+	double rate = 8000.0;
+	NSMutableData *samples = [NSMutableData data];
+	if (self.outgoing){
+		TGCallToneAppend(samples, 425.0, 0.0, 1.0, rate);
+		TGCallToneAppendSilence(samples, 3.0, rate);
+	} else {
+		TGCallToneAppend(samples, 440.0, 480.0, 1.2, rate);
+		TGCallToneAppendSilence(samples, 2.4, rate);
+	}
+	[self playToneData:TGCallToneWrap(samples, rate) loop:YES volume:self.outgoing ? 0.5f : 1.0f];
+
+	if (!self.outgoing && self.vibrateTimer == nil){
+		AudioServicesPlaySystemSound(kSystemSoundID_Vibrate);
+		self.vibrateTimer = [NSTimer scheduledTimerWithTimeInterval:3.6
+															 target:self
+														   selector:@selector(vibrate)
+														   userInfo:nil
+															repeats:YES];
+	}
+}
+
+- (void)vibrate {
+	if (self.dismissing || self.tonePlayer == nil)
+		return;
+	AudioServicesPlaySystemSound(kSystemSoundID_Vibrate);
+}
+
+- (void)playEndTone {
+	if (self.tonesFinished)
+		return;
+	[self stopTone];
+	self.tonesFinished = YES;
+	double rate = 8000.0;
+	NSMutableData *samples = [NSMutableData data];
+	for (NSInteger i = 0; i < 3; i++){
+		TGCallToneAppend(samples, 425.0, 0.0, 0.2, rate);
+		TGCallToneAppendSilence(samples, 0.2, rate);
+	}
+	[self playToneData:TGCallToneWrap(samples, rate) loop:NO volume:0.6f];
+}
+
+- (void)stopTone {
+	[self.vibrateTimer invalidate];
+	self.vibrateTimer = nil;
+	if (self.tonePlayer != nil){
+		[self.tonePlayer stop];
+		self.tonePlayer = nil;
+	}
+}
+
 - (void)applyState:(TGCallState)state {
 	if (self.dismissing)
 		return;
@@ -266,9 +420,11 @@
 	switch (state){
 		case TGCallStateNone:
 			self.statusLabel.text = self.outgoing ? @"Waiting..." : @"Incoming call";
+			[self startRingingTone];
 			break;
 		case TGCallStatePending:
 			self.statusLabel.text = self.outgoing ? @"Calling..." : @"Incoming call";
+			[self startRingingTone];
 			self.acceptButton.hidden = self.outgoing;
 			self.muteButton.hidden = !self.outgoing;
 			break;
@@ -276,33 +432,42 @@
 			self.statusLabel.text = @"Exchanging keys...";
 			self.acceptButton.hidden = YES;
 			self.muteButton.hidden = NO;
+			[self stopTone];
 			break;
 		case TGCallStateConnecting:
 			self.statusLabel.text = @"Connecting...";
 			self.acceptButton.hidden = YES;
 			self.muteButton.hidden = NO;
+			[self stopTone];
 			break;
 		case TGCallStateEstablished:
 			self.acceptButton.hidden = YES;
 			self.muteButton.hidden = NO;
 			self.wasEstablished = YES;
-			[self setProximityEnabled:YES];
+			[self stopTone];
+			[self setProximityEnabled:!self.speakerOn];
 			[self tick];
 			break;
 		case TGCallStateFailed:
 			self.statusLabel.text = [self endText:@"Call failed"];
+			[self playEndTone];
 			[self finish];
 			break;
 		case TGCallStateEnded:
 			self.statusLabel.text = [self endText:@"Call ended"];
+			[self playEndTone];
 			[self finish];
 			break;
 		default:
 			break;
 	}
 
-	if (state != TGCallStateEnded && state != TGCallStateFailed)
+	if (state != TGCallStateEnded && state != TGCallStateFailed){
 		[self syncMuteTitle];
+		self.speakerButton.hidden = self.muteButton.hidden;
+	} else {
+		self.speakerButton.hidden = YES;
+	}
 }
 
 - (NSString *)endText:(NSString *)fallback {
@@ -342,11 +507,33 @@
 	[self syncMuteTitle];
 }
 
+- (void)toggleSpeaker {
+	if (self.dismissing)
+		return;
+	self.speakerOn = !self.speakerOn;
+	[self applySpeakerRoute];
+}
+
+- (void)applySpeakerRoute {
+	AVAudioSession *session = [AVAudioSession sharedInstance];
+	[session overrideOutputAudioPort:(self.speakerOn
+			? AVAudioSessionPortOverrideSpeaker
+			: AVAudioSessionPortOverrideNone) error:nil];
+	[self.speakerButton setTitle:(self.speakerOn ? @"Earpiece" : @"Speaker")
+						forState:UIControlStateNormal];
+	if ([TGCall shared].state == TGCallStateEstablished)
+		[self setProximityEnabled:!self.speakerOn];
+	else
+		[self setProximityEnabled:NO];
+}
+
 - (void)answer {
 	if (self.dismissing)
 		return;
+	[self stopTone];
 	self.acceptButton.hidden = YES;
 	self.muteButton.hidden = NO;
+	self.speakerButton.hidden = NO;
 	self.statusLabel.text = @"Connecting...";
 	[[TGCall shared] accept];
 }
@@ -356,6 +543,7 @@
 		return;
 	[[TGCall shared] hangUp];
 	self.statusLabel.text = [self endText:@"Call ended"];
+	[self playEndTone];
 	[self finish];
 }
 
@@ -363,6 +551,7 @@
 	if (self.dismissing)
 		return;
 	self.dismissing = YES;
+	self.speakerButton.hidden = YES;
 	self.muteButton.enabled = NO;
 	self.acceptButton.enabled = NO;
 	self.endButton.enabled = NO;

@@ -98,52 +98,6 @@ static NSDictionary *TGASBackgroundRow(id object){
 	return out;
 }
 
-static id TGASJsonValue(id object){
-	NSDictionary *value = TGASDict(object);
-	if (!value)
-		return [NSNull null];
-	NSString *type = value[@"@type"];
-	if ([type isEqualToString:@"jsonValueBoolean"])
-		return @([value[@"value"] boolValue]);
-	if ([type isEqualToString:@"jsonValueNumber"])
-		return @([value[@"value"] doubleValue]);
-	if ([type isEqualToString:@"jsonValueString"]){
-		NSString *string = value[@"value"];
-		return [string isKindOfClass:NSString.class] ? string : @"";
-	}
-	if ([type isEqualToString:@"jsonValueArray"]){
-		NSMutableArray *out = [NSMutableArray array];
-		NSArray *values = value[@"values"];
-		if ([values isKindOfClass:NSArray.class]){
-			for (id item in values)
-				[out addObject:TGASJsonValue(item)];
-		}
-		return out;
-	}
-	if ([type isEqualToString:@"jsonValueObject"]){
-		NSMutableDictionary *out = [NSMutableDictionary dictionary];
-		NSArray *members = value[@"members"];
-		if ([members isKindOfClass:NSArray.class]){
-			for (id item in members){
-				NSDictionary *member = TGASDict(item);
-				NSString *key = member[@"key"];
-				if ([key isKindOfClass:NSString.class])
-					out[key] = TGASJsonValue(member[@"value"]);
-			}
-		}
-		return out;
-	}
-	return [NSNull null];
-}
-
-static NSDictionary *TGASAutosaveScopeObject(NSString *scope){
-	if ([scope isEqualToString:@"groups"])
-		return @{@"@type" : @"autosaveSettingsScopeGroupChats"};
-	if ([scope isEqualToString:@"channels"])
-		return @{@"@type" : @"autosaveSettingsScopeChannelChats"};
-	return @{@"@type" : @"autosaveSettingsScopePrivateChats"};
-}
-
 static NSDictionary *TGASBackgroundTypeForKind(NSString *kind){
 	if ([kind isEqualToString:@"pattern"])
 		return @{ @"@type"       : @"backgroundTypePattern",
@@ -283,25 +237,6 @@ static NSDictionary *TGASBackgroundTypeForKind(NSString *kind){
 				  @"for_dark_theme" : @(forDarkTheme) }];
 }
 
-- (void)searchBackgroundNamed:(NSString *)name
-				   completion:(void (^)(NSDictionary *background))completion {
-	if (name.length == 0){
-		if (completion)
-			completion(nil);
-		return;
-	}
-	[self request:@{ @"@type" : @"searchBackground", @"name" : name }
-	   completion:^(NSDictionary *result){
-		if (!completion)
-			return;
-		if (TGASIsError(result)){
-			completion(nil);
-			return;
-		}
-		completion(TGASBackgroundRow(result));
-	}];
-}
-
 - (void)shareUrlForBackgroundNamed:(NSString *)name
 							  kind:(NSString *)kind
 						completion:(void (^)(NSString *url))completion {
@@ -335,15 +270,6 @@ static NSDictionary *TGASBackgroundTypeForKind(NSString *kind){
 
 #pragma mark - per-chat theme
 
-- (void)setChatThemeEmoji:(NSString *)emoji forChat:(int64_t)chatId {
-	NSMutableDictionary *request = [NSMutableDictionary dictionary];
-	request[@"@type"] = @"setChatTheme";
-	request[@"chat_id"] = @(chatId);
-	if (emoji.length > 0)
-		request[@"theme"] = @{ @"@type" : @"inputChatThemeEmoji", @"name" : emoji };
-	[self send:request];
-}
-
 - (void)chatThemeEmojiForChat:(int64_t)chatId
 				   completion:(void (^)(NSString *emoji))completion {
 	[self request:@{ @"@type" : @"getChat", @"chat_id" : @(chatId) }
@@ -362,59 +288,6 @@ static NSDictionary *TGASBackgroundTypeForKind(NSString *kind){
 			return;
 		}
 		completion(nil);
-	}];
-}
-
-#pragma mark - save to camera roll
-
-- (void)setAutosaveScope:(NSString *)scope
-				  photos:(BOOL)photos
-				  videos:(BOOL)videos
-			maxVideoSize:(long long)maxVideoSize {
-	[self send:@{ @"@type"    : @"setAutosaveSettings",
-				  @"scope"    : TGASAutosaveScopeObject(scope),
-				  @"settings" : @{ @"@type"               : @"scopeAutosaveSettings",
-								   @"autosave_photos"     : @(photos),
-								   @"autosave_videos"     : @(videos),
-								   @"max_video_file_size" : @(maxVideoSize) } }];
-}
-
-- (void)setAutosaveForChat:(int64_t)chatId
-					photos:(BOOL)photos
-					videos:(BOOL)videos
-			  maxVideoSize:(long long)maxVideoSize {
-	[self send:@{ @"@type"    : @"setAutosaveSettings",
-				  @"scope"    : @{ @"@type"   : @"autosaveSettingsScopeChat",
-								   @"chat_id" : @(chatId) },
-				  @"settings" : @{ @"@type"               : @"scopeAutosaveSettings",
-								   @"autosave_photos"     : @(photos),
-								   @"autosave_videos"     : @(videos),
-								   @"max_video_file_size" : @(maxVideoSize) } }];
-}
-
-#pragma mark - application configuration
-
-- (void)applicationConfigValueForKey:(NSString *)key
-						  completion:(void (^)(id value))completion {
-	if (key.length == 0){
-		if (completion)
-			completion(nil);
-		return;
-	}
-	[self request:@{@"@type" : @"getApplicationConfig"} completion:^(NSDictionary *result){
-		if (!completion)
-			return;
-		if (TGASIsError(result)){
-			completion(nil);
-			return;
-		}
-		id tree = TGASJsonValue(result);
-		if (![tree isKindOfClass:NSDictionary.class]){
-			completion(nil);
-			return;
-		}
-		id value = ((NSDictionary *)tree)[key];
-		completion([value isKindOfClass:NSNull.class] ? nil : value);
 	}];
 }
 

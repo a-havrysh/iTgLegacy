@@ -176,11 +176,21 @@ static NSDictionary *TGUSFlatEmojiStatusIcon(NSDictionary *sticker,
 	}];
 }
 
+static const NSUInteger TGUSOnlineProbeLimit = 20;
+static const NSTimeInterval TGUSOnlineCacheTtl = 60.0;
+
+static NSMutableDictionary *TGUSOnlineCache(void){
+	static NSMutableDictionary *cache = nil;
+	if (!cache)
+		cache = [[NSMutableDictionary alloc] init];
+	return cache;
+}
+
 - (void)countOnlineAmong:(NSArray *)userIds
                    index:(NSUInteger)index
                  running:(NSInteger)running
               completion:(void (^)(NSInteger online))completion {
-	if (index >= userIds.count){
+	if (index >= userIds.count || index >= TGUSOnlineProbeLimit){
 		completion(running);
 		return;
 	}
@@ -204,6 +214,16 @@ static NSDictionary *TGUSFlatEmojiStatusIcon(NSDictionary *sticker,
 		return;
 	__weak typeof(self) weakSelf = self;
 
+	NSDictionary *cached = TGUSDict(TGUSOnlineCache()[@(chatId)]);
+	if (cached &&
+		[[NSDate date] timeIntervalSinceReferenceDate] -
+		[cached[@"at"] doubleValue] < TGUSOnlineCacheTtl){
+		completion(TGUSString(cached[@"text"]),
+				   [cached[@"members"] integerValue],
+				   [cached[@"online"] integerValue]);
+		return;
+	}
+
 	void (^answer)(NSInteger, NSArray *) = ^(NSInteger members, NSArray *memberIds){
 		[weakSelf countOnlineAmong:(memberIds ?: @[])
 							 index:0
@@ -213,6 +233,12 @@ static NSDictionary *TGUSFlatEmojiStatusIcon(NSDictionary *sticker,
 			NSString *text = online > 0
 				? [NSString stringWithFormat:@"%d %@, %d online", (int)members, unit, (int)online]
 				: [NSString stringWithFormat:@"%d %@", (int)members, unit];
+			TGUSOnlineCache()[@(chatId)] = @{
+				@"text"    : text,
+				@"members" : @(members),
+				@"online"  : @(online),
+				@"at"      : @([[NSDate date] timeIntervalSinceReferenceDate]),
+			};
 			completion(text, members, online);
 		}];
 	};
@@ -230,6 +256,10 @@ static NSDictionary *TGUSFlatEmojiStatusIcon(NSDictionary *sticker,
 			[weakSelf request:@{@"@type" : @"getBasicGroupFullInfo",
 								@"basic_group_id" : type[@"basic_group_id"] ?: @(0)}
 				   completion:^(NSDictionary *full){
+				if (TGUSIsError(full)){
+					completion(@"", 0, 0);
+					return;
+				}
 				NSArray *members = TGUSArray(TGUSDict(full)[@"members"]);
 				NSMutableArray *ids = [NSMutableArray array];
 				for (id member in members ?: @[]){
@@ -247,6 +277,10 @@ static NSDictionary *TGUSFlatEmojiStatusIcon(NSDictionary *sticker,
 			[weakSelf request:@{@"@type" : @"getSupergroupFullInfo",
 								@"supergroup_id" : supergroupId}
 				   completion:^(NSDictionary *full){
+				if (TGUSIsError(full)){
+					completion(@"", 0, 0);
+					return;
+				}
 				NSInteger members = [TGUSDict(full)[@"member_count"] integerValue];
 				[weakSelf request:@{@"@type" : @"getSupergroupMembers",
 									@"supergroup_id" : supergroupId,

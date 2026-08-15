@@ -10,6 +10,7 @@
 #import "UIView+SafeTint.h"
 #import <QuartzCore/QuartzCore.h>
 #import <AddressBook/AddressBook.h>
+#import <dlfcn.h>
 
 static const CGFloat kContactAvatar = 40.0f;
 static const CGFloat kContactRowHeight = 51.0f;
@@ -248,6 +249,184 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 
 @end
 
+static NSString *TGContactString(NSDictionary *u, NSString *key);
+
+@interface TGMessageComposerShim : UIViewController
++ (BOOL)canSendText;
+- (void)setRecipients:(NSArray *)recipients;
+- (void)setBody:(NSString *)body;
+- (void)setMessageComposeDelegate:(id)delegate;
+@end
+
+static Class TGMessageComposerClass(void) {
+	Class cls = NSClassFromString(@"MFMessageComposeViewController");
+	if (cls)
+		return cls;
+	dlopen("/System/Library/Frameworks/MessageUI.framework/MessageUI", RTLD_LAZY);
+	return NSClassFromString(@"MFMessageComposeViewController");
+}
+
+static BOOL TGCanSendSMS(void) {
+	Class cls = TGMessageComposerClass();
+	if (!cls || ![cls respondsToSelector:@selector(canSendText)])
+		return NO;
+	NSMethodSignature *signature = [cls methodSignatureForSelector:@selector(canSendText)];
+	if (!signature)
+		return NO;
+	NSInvocation *invocation = [NSInvocation invocationWithMethodSignature:signature];
+	invocation.selector = @selector(canSendText);
+	invocation.target = cls;
+	[invocation invoke];
+	BOOL result = NO;
+	[invocation getReturnValue:&result];
+	return result;
+}
+
+@interface TGInviteFriendsViewController : UITableViewController
+@property (nonatomic, strong) NSArray *entries;
+@property (nonatomic, strong) NSMutableSet *selected;
+@property (nonatomic, copy) NSString *inviteText;
+@property (nonatomic, strong) UIButton *inviteButton;
+@property (nonatomic, strong) UILabel *inviteLabel;
+@end
+
+@implementation TGInviteFriendsViewController
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
+		self.edgesForExtendedLayout = UIRectEdgeNone;
+	self.title = @"Invite Friends";
+	self.selected = [NSMutableSet set];
+	self.tableView.rowHeight = kContactRowHeight;
+	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	self.tableView.separatorColor = [[TGTheme shared] separatorColour];
+	self.inviteButton = [UIButton buttonWithType:UIButtonTypeCustom];
+	[TGIcons styleHeaderButton:self.inviteButton];
+	[self.inviteButton addTarget:self action:@selector(inviteTapped)
+				forControlEvents:UIControlEventTouchUpInside];
+	self.inviteLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	self.inviteLabel.textColor = [UIColor whiteColor];
+	self.inviteLabel.textAlignment = NSTextAlignmentCenter;
+	self.inviteLabel.backgroundColor = [UIColor clearColor];
+	self.inviteLabel.font = [UIFont boldSystemFontOfSize:12];
+	self.inviteLabel.userInteractionEnabled = NO;
+	[self.inviteButton addSubview:self.inviteLabel];
+	self.navigationItem.rightBarButtonItem =
+			[[UIBarButtonItem alloc] initWithCustomView:self.inviteButton];
+	[self updateInviteButton];
+}
+
+- (void)updateInviteButton {
+	if (!self.inviteButton)
+		return;
+	NSString *title = self.selected.count
+			? [NSString stringWithFormat:@"Invite (%d)", (int)self.selected.count]
+			: @"Invite";
+	self.inviteLabel.text = title;
+	CGSize size = [title sizeWithFont:self.inviteLabel.font];
+	self.inviteButton.frame = CGRectMake(0, 0, size.width + 16, 30);
+	self.inviteLabel.frame = self.inviteButton.bounds;
+	self.inviteButton.enabled = self.selected.count > 0;
+	self.inviteButton.alpha = self.selected.count ? 1.0f : 0.5f;
+}
+
+- (NSString *)nameForEntry:(NSDictionary *)entry {
+	NSString *first = TGContactString(entry, @"first_name");
+	NSString *last = TGContactString(entry, @"last_name");
+	NSString *name = [[NSString stringWithFormat:@"%@ %@", first, last]
+			stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+	return name.length ? name : [NSString stringWithFormat:@"+%@", TGContactString(entry, @"phone")];
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	return self.entries.count;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	static NSString *reuse = @"TGInviteEntryCell";
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
+	if (!cell)
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+									  reuseIdentifier:reuse];
+	if (indexPath.row >= (NSInteger)self.entries.count)
+		return cell;
+	NSDictionary *entry = self.entries[indexPath.row];
+	NSString *phone = TGContactString(entry, @"phone");
+	cell.textLabel.font = [UIFont systemFontOfSize:19];
+	cell.textLabel.text = [self nameForEntry:entry];
+	cell.detailTextLabel.font = [UIFont systemFontOfSize:13.5f];
+	cell.detailTextLabel.textColor = [UIColor colorWithWhite:0.0f alpha:0.53f];
+	cell.detailTextLabel.text = phone.length ? [NSString stringWithFormat:@"+%@", phone] : @"";
+	cell.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	cell.accessoryType = [self.selected containsObject:phone]
+			? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+	return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	if (indexPath.row >= (NSInteger)self.entries.count)
+		return;
+	NSString *phone = TGContactString(self.entries[indexPath.row], @"phone");
+	if (!phone.length)
+		return;
+	if ([self.selected containsObject:phone])
+		[self.selected removeObject:phone];
+	else
+		[self.selected addObject:phone];
+	[tableView reloadRowsAtIndexPaths:@[indexPath]
+					 withRowAnimation:UITableViewRowAnimationNone];
+	[self updateInviteButton];
+}
+
+- (void)shareFallback {
+	NSString *text = self.inviteText.length ? self.inviteText : @"";
+	if (!text.length)
+		return;
+	UIActivityViewController *sheet = [[UIActivityViewController alloc]
+			initWithActivityItems:@[text] applicationActivities:nil];
+	[self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)inviteTapped {
+	if (!self.selected.count)
+		return;
+	NSMutableArray *recipients = [NSMutableArray array];
+	for (NSDictionary *entry in self.entries){
+		NSString *phone = TGContactString(entry, @"phone");
+		if (phone.length && [self.selected containsObject:phone])
+			[recipients addObject:[NSString stringWithFormat:@"+%@", phone]];
+	}
+	if (!recipients.count)
+		return;
+
+	Class composerClass = TGCanSendSMS() ? TGMessageComposerClass() : nil;
+	if (!composerClass){
+		[self shareFallback];
+		return;
+	}
+	TGMessageComposerShim *composer = [[composerClass alloc] init];
+	if (!composer){
+		[self shareFallback];
+		return;
+	}
+	if ([composer respondsToSelector:@selector(setRecipients:)])
+		[composer setRecipients:recipients];
+	if (self.inviteText.length && [composer respondsToSelector:@selector(setBody:)])
+		[composer setBody:self.inviteText];
+	if ([composer respondsToSelector:@selector(setMessageComposeDelegate:)])
+		[composer setMessageComposeDelegate:self];
+	[self presentModalViewController:composer animated:YES];
+}
+
+- (void)messageComposeViewController:(id)controller didFinishWithResult:(int)result {
+	[self dismissModalViewControllerAnimated:YES];
+	[self.navigationController popViewControllerAnimated:YES];
+}
+
+@end
+
 @interface TGContactsViewController () <UISearchBarDelegate, UIActionSheetDelegate, UIAlertViewDelegate>
 @property (nonatomic, strong) NSArray *users;
 @property (nonatomic, strong) NSArray *filteredUsers;
@@ -273,6 +452,11 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 @property (nonatomic, strong) TGContactsProgressWindow *progress;
 @property (nonatomic, assign) BOOL importing;
 @property (nonatomic, strong) NSDictionary *pendingDeleteUser;
+@property (nonatomic, copy) NSString *contactLink;
+@property (nonatomic, assign) NSInteger contactLinkExpiresIn;
+@property (nonatomic, strong) NSDate *contactLinkFetchedAt;
+@property (nonatomic, assign) BOOL contactLinkRequested;
+@property (nonatomic, assign) BOOL buildingInviteList;
 @end
 
 @implementation TGContactsViewController
@@ -380,6 +564,66 @@ static NSString *TGContactName(NSDictionary *u) {
 	else
 		self.importLabel.text = [NSString stringWithFormat:
 				@"%d contacts synced from your address book", (int)self.importedCount];
+}
+
+- (NSInteger)contactLinkSecondsRemaining {
+	if (!self.contactLink.length || !self.contactLinkFetchedAt || self.contactLinkExpiresIn <= 0)
+		return 0;
+	NSInteger elapsed = (NSInteger)(-[self.contactLinkFetchedAt timeIntervalSinceNow]);
+	NSInteger left = self.contactLinkExpiresIn - elapsed;
+	return left > 0 ? left : 0;
+}
+
+- (NSString *)contactLinkSubtitle {
+	NSString *display = self.contactLink;
+	for (NSString *prefix in @[@"https://", @"http://"]){
+		if ([display hasPrefix:prefix])
+			display = [display substringFromIndex:prefix.length];
+	}
+	NSInteger left = [self contactLinkSecondsRemaining];
+	if (left <= 0)
+		return display;
+	if (left < 60)
+		return [NSString stringWithFormat:@"%@ · %ds left", display, (int)left];
+	return [NSString stringWithFormat:@"%@ · %d min left", display, (int)(left / 60)];
+}
+
+- (void)reloadContactLink {
+	if (self.isPickerMode || self.contactLinkRequested)
+		return;
+	self.contactLinkRequested = YES;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] myContactLinkWithCompletion:^(NSString *url, NSInteger expiresIn){
+		TGContactsViewController *me = weakSelf;
+		if (!me)
+			return;
+		me.contactLinkRequested = NO;
+		if (![url isKindOfClass:NSString.class] || !url.length)
+			return;
+		BOOL appeared = (me.contactLink.length == 0);
+		me.contactLink = url;
+		me.contactLinkExpiresIn = expiresIn;
+		me.contactLinkFetchedAt = [NSDate date];
+		if (appeared)
+			[me.tableView reloadData];
+		else
+			[me reloadTableSoon];
+	}];
+}
+
+- (void)contactLinkTapped {
+	if (!self.contactLink.length)
+		return;
+	if ([self contactLinkSecondsRemaining] <= 0 && self.contactLinkExpiresIn > 0)
+		[self reloadContactLink];
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:self.contactLink
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:@"Copy Link", @"Share Link", nil];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = 4;
+	[self presentSheet:sheet];
 }
 
 - (void)presentSheet:(UIActionSheet *)sheet {
@@ -543,7 +787,7 @@ static NSString *TGContactName(NSDictionary *u) {
 		return;
 	CGPoint point = [gesture locationInView:self.tableView];
 	NSIndexPath *indexPath = [self.tableView indexPathForRowAtPoint:point];
-	if (!indexPath || [self isInviteRowAtIndexPath:indexPath])
+	if (!indexPath || [self extraRowIndexAtIndexPath:indexPath] >= 0)
 		return;
 	NSDictionary *u = [self userAtIndexPath:indexPath];
 	if (!u)
@@ -720,6 +964,20 @@ static NSString *TGContactName(NSDictionary *u) {
 		}
 		if ([[sheet buttonTitleAtIndex:index] isEqualToString:@"Sync Contacts"])
 			[self startAddressBookImport];
+		return;
+	}
+	if (sheet.tag == 4){
+		if (!self.contactLink.length)
+			return;
+		if (index == 0){
+			[UIPasteboard generalPasteboard].string = self.contactLink;
+			return;
+		}
+		if (index == 1){
+			UIActivityViewController *share = [[UIActivityViewController alloc]
+					initWithActivityItems:@[self.contactLink] applicationActivities:nil];
+			[self presentViewController:share animated:YES completion:nil];
+		}
 	}
 }
 
@@ -1016,27 +1274,142 @@ static NSString *TGContactName(NSDictionary *u) {
 	if (!self.isPickerMode){
 		[self reloadCloseFriends];
 		[self reloadImportedCount];
+		[self reloadContactLink];
 	}
 }
 
-- (void)inviteFriendsTapped {
-	NSDictionary *me = [TGClient shared].me;
-	NSDictionary *usernameBox = [me isKindOfClass:NSDictionary.class] ? me[@"usernames"] : nil;
-	NSArray *usernames = [usernameBox isKindOfClass:NSDictionary.class]
-			? usernameBox[@"active_usernames"] : nil;
-	NSString *username = ([usernames isKindOfClass:NSArray.class] && usernames.count)
-			? usernames[0] : nil;
-	if (![username isKindOfClass:NSString.class])
-		username = nil;
-	NSString *link = username.length
-			? [NSString stringWithFormat:@"https://t.me/%@", username]
-			: @"https://telegram.org";
-	NSString *text = [NSString stringWithFormat:
+- (NSString *)inviteMessageText {
+	NSString *link = self.contactLink.length ? self.contactLink : nil;
+	if (!link){
+		NSDictionary *me = [TGClient shared].me;
+		NSDictionary *usernameBox = [me isKindOfClass:NSDictionary.class] ? me[@"usernames"] : nil;
+		NSArray *usernames = [usernameBox isKindOfClass:NSDictionary.class]
+				? usernameBox[@"active_usernames"] : nil;
+		NSString *username = ([usernames isKindOfClass:NSArray.class] && usernames.count)
+				? usernames[0] : nil;
+		if ([username isKindOfClass:NSString.class] && username.length)
+			link = [NSString stringWithFormat:@"https://t.me/%@", username];
+	}
+	if (!link)
+		link = @"https://telegram.org";
+	return [NSString stringWithFormat:
 			@"Hey, I'm using Telegram to chat. You can join me here: %@", link];
+}
 
+- (NSArray *)dedupedInviteEntries:(NSArray *)entries {
+	NSMutableSet *seen = [NSMutableSet set];
+	NSMutableArray *out = [NSMutableArray array];
+	for (NSDictionary *entry in entries){
+		NSString *first = TGContactString(entry, @"first_name");
+		NSString *last = TGContactString(entry, @"last_name");
+		NSString *phone = TGContactString(entry, @"phone");
+		if (!phone.length)
+			continue;
+		NSString *key = (first.length || last.length)
+				? [[NSString stringWithFormat:@"%@|%@", first, last] lowercaseString]
+				: [@"#" stringByAppendingString:phone];
+		if ([seen containsObject:key])
+			continue;
+		[seen addObject:key];
+		[out addObject:entry];
+	}
+	return [out sortedArrayUsingComparator:^NSComparisonResult(id a, id b){
+		NSString *nameA = [[NSString stringWithFormat:@"%@ %@",
+				TGContactString(a, @"first_name"), TGContactString(a, @"last_name")]
+				stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+		NSString *nameB = [[NSString stringWithFormat:@"%@ %@",
+				TGContactString(b, @"first_name"), TGContactString(b, @"last_name")]
+				stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+		if (!nameA.length)
+			nameA = TGContactString(a, @"phone");
+		if (!nameB.length)
+			nameB = TGContactString(b, @"phone");
+		return [nameA localizedCaseInsensitiveCompare:nameB];
+	}];
+}
+
+- (void)finishInviteListWithEntries:(NSArray *)entries userIds:(NSArray *)userIds {
+	self.buildingInviteList = NO;
+	[self.progress dismiss];
+	self.progress = nil;
+
+	NSMutableArray *missing = [NSMutableArray array];
+	BOOL haveIds = ([userIds isKindOfClass:NSArray.class] && userIds.count == entries.count);
+	for (NSUInteger i = 0; i < entries.count; i++){
+		if (haveIds){
+			NSNumber *userId = userIds[i];
+			if ([userId isKindOfClass:NSNumber.class] && userId.longLongValue != 0)
+				continue;
+		}
+		[missing addObject:entries[i]];
+	}
+	NSArray *list = [self dedupedInviteEntries:missing];
+	if (!list.count){
+		[[[UIAlertView alloc] initWithTitle:nil
+								   message:@"Everyone in your address book is already on Telegram."
+								  delegate:nil
+						 cancelButtonTitle:@"OK"
+						 otherButtonTitles:nil] show];
+		return;
+	}
+	TGInviteFriendsViewController *vc = [[TGInviteFriendsViewController alloc] init];
+	vc.entries = list;
+	vc.inviteText = [self inviteMessageText];
+	[self.navigationController pushViewController:vc animated:YES];
+	[self reloadImportedCount];
+}
+
+- (void)shareInviteLinkDirectly {
 	UIActivityViewController *sheet = [[UIActivityViewController alloc]
-			initWithActivityItems:@[text] applicationActivities:nil];
+			initWithActivityItems:@[[self inviteMessageText]] applicationActivities:nil];
 	[self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)inviteFriendsTapped {
+	if (self.buildingInviteList || self.importing)
+		return;
+	ABAddressBookRef book = ABAddressBookCreateWithOptions(NULL, NULL);
+	if (!book){
+		[self shareInviteLinkDirectly];
+		return;
+	}
+	self.buildingInviteList = YES;
+	self.progress = [[TGContactsProgressWindow alloc] init];
+	[self.progress show];
+
+	__weak typeof(self) weakSelf = self;
+	ABAddressBookRequestAccessWithCompletion(book, ^(bool granted, CFErrorRef error){
+		dispatch_async(dispatch_get_main_queue(), ^{
+			TGContactsViewController *me = weakSelf;
+			if (!me){
+				CFRelease(book);
+				return;
+			}
+			if (!granted){
+				CFRelease(book);
+				me.buildingInviteList = NO;
+				[me.progress dismiss];
+				me.progress = nil;
+				[me shareInviteLinkDirectly];
+				return;
+			}
+			NSArray *entries = [me addressBookEntriesFrom:book];
+			CFRelease(book);
+			if (!entries.count){
+				me.buildingInviteList = NO;
+				[me.progress dismiss];
+				me.progress = nil;
+				[me shareInviteLinkDirectly];
+				return;
+			}
+			[[TGClient shared] importContacts:entries completion:^(NSArray *userIds){
+				TGContactsViewController *inner = weakSelf;
+				if (!inner)
+					return;
+				[inner finishInviteListWithEntries:entries userIds:userIds];
+			}];
+		});
+	});
 }
 
 - (void)addContactTapped {
@@ -1194,15 +1567,24 @@ static NSString *TGContactName(NSDictionary *u) {
 	return self.filteredUsers ?: self.users;
 }
 
-- (BOOL)isInviteRowAtIndexPath:(NSIndexPath *)indexPath {
-	return indexPath.section == 0 && [self showsInviteRow] && indexPath.row == 0;
+- (NSInteger)extraRowCount {
+	if (self.isPickerMode || self.filteredUsers)
+		return 0;
+	return self.contactLink.length ? 2 : 1;
+}
+
+- (NSInteger)extraRowIndexAtIndexPath:(NSIndexPath *)indexPath {
+	if (indexPath.section != 0)
+		return -1;
+	NSInteger extra = [self extraRowCount];
+	return indexPath.row < extra ? indexPath.row : -1;
 }
 
 - (NSDictionary *)userAtIndexPath:(NSIndexPath *)indexPath {
-	if ([self isInviteRowAtIndexPath:indexPath])
+	if ([self extraRowIndexAtIndexPath:indexPath] >= 0)
 		return nil;
 	NSInteger row = indexPath.row
-			- ((indexPath.section == 0 && [self showsInviteRow]) ? 1 : 0);
+			- ((indexPath.section == 0) ? [self extraRowCount] : 0);
 	NSArray *rows = [self rowsForSection:indexPath.section];
 	if (row < 0 || row >= (NSInteger)rows.count)
 		return nil;
@@ -1210,16 +1592,12 @@ static NSString *TGContactName(NSDictionary *u) {
 	return [u isKindOfClass:NSDictionary.class] ? u : nil;
 }
 
-- (BOOL)showsInviteRow {
-	return !self.isPickerMode && !self.filteredUsers;
-}
-
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
 	return self.sections ? self.sections.count : 1;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-	NSInteger extra = (section == 0 && [self showsInviteRow]) ? 1 : 0;
+	NSInteger extra = (section == 0) ? [self extraRowCount] : 0;
 	return [self rowsForSection:section].count + extra;
 }
 
@@ -1280,20 +1658,34 @@ static NSString *TGContactName(NSDictionary *u) {
 	static NSString *reuse = @"TGContactCell";
 	static NSString *inviteReuse = @"TGInviteCell";
 
-	if ([self isInviteRowAtIndexPath:indexPath]){
+	NSInteger extraRow = [self extraRowIndexAtIndexPath:indexPath];
+	if (extraRow >= 0){
 		TGContactRowCell *cell = (TGContactRowCell *)
 				[tableView dequeueReusableCellWithIdentifier:inviteReuse];
 		if (!cell)
 			cell = [[TGContactRowCell alloc] initWithStyle:UITableViewCellStyleDefault
 										   reuseIdentifier:inviteReuse];
-		cell.titleLabel.text = @"Invite Friends";
+		cell.titleLabel.attributedText = nil;
+		cell.titleLabel.font = [UIFont systemFontOfSize:19];
 		cell.titleLabel.textColor = [[TGTheme shared] accentColour];
-		cell.subtitleLabel.text = @"";
-		cell.avatarView.image = [TGIcons inviteFriendsAvatarOfSide:kContactAvatar];
+		if (extraRow == 0){
+			cell.titleLabel.text = @"Invite Friends";
+			cell.subtitleLabel.text = @"";
+			cell.avatarView.image = [TGIcons inviteFriendsAvatarOfSide:kContactAvatar];
+		} else {
+			cell.titleLabel.text = @"My Invite Link";
+			cell.subtitleLabel.text = [self contactLinkSubtitle];
+			cell.subtitleLabel.textColor = [UIColor colorWithWhite:0.0f alpha:0.53f];
+			cell.avatarView.image = [TGIcons avatarWithInitials:@"@"
+														   size:kContactAvatar
+													   colourId:0];
+		}
+		cell.avatarView.layer.cornerRadius = kContactAvatar * 0.12f;
 		cell.accessoryType = UITableViewCellAccessoryNone;
 		cell.premiumView.hidden = YES;
 		cell.verifiedLabel.hidden = YES;
 		cell.closeFriendLabel.hidden = YES;
+		[cell setNeedsLayout];
 		return cell;
 	}
 
@@ -1380,8 +1772,13 @@ static NSString *TGContactName(NSDictionary *u) {
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
 
-	if ([self isInviteRowAtIndexPath:indexPath]){
+	NSInteger extraRow = [self extraRowIndexAtIndexPath:indexPath];
+	if (extraRow == 0){
 		[self inviteFriendsTapped];
+		return;
+	}
+	if (extraRow > 0){
+		[self contactLinkTapped];
 		return;
 	}
 	NSDictionary *u = [self userAtIndexPath:indexPath];

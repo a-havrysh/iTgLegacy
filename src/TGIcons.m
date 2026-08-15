@@ -2,11 +2,22 @@
 #import "TGTheme.h"
 
 static NSMutableDictionary *sCache = nil;
+static NSCache *sAvatarCache = nil;
+
+static NSCache *TGAvatarCache(void) {
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		sAvatarCache = [[NSCache alloc] init];
+		sAvatarCache.countLimit = 64;
+	});
+	return sAvatarCache;
+}
 
 @implementation TGIcons
 
 + (void)flush {
 	[sCache removeAllObjects];
+	[TGAvatarCache() removeAllObjects];
 }
 
 + (void)styleHeaderButton:(UIButton *)button {
@@ -49,7 +60,8 @@ static NSMutableDictionary *sCache = nil;
 		sCache = [NSMutableDictionary dictionary];
 
 	BOOL flat = [TGTheme shared].isFlat;
-	NSString *key = [NSString stringWithFormat:@"%@-%d", name, (int)flat];
+	BOOL dark = [TGTheme shared].isDark;
+	NSString *key = [NSString stringWithFormat:@"%@-%d-%d", name, (int)flat, (int)dark];
 	UIImage *cached = sCache[key];
 	if (cached)
 		return cached;
@@ -58,7 +70,7 @@ static NSMutableDictionary *sCache = nil;
 	UIGraphicsBeginImageContextWithOptions(CGSizeMake(side, side), NO, 0);
 	CGContextRef ctx = UIGraphicsGetCurrentContext();
 
-	if (!flat){
+	if (!flat && !dark){
 		// Skeuomorphic glyphs sit on the surface: a soft shadow under, a white
 		// highlight one pixel up. Flat ones are the shape and nothing else.
 		CGContextSaveGState(ctx);
@@ -69,8 +81,9 @@ static NSMutableDictionary *sCache = nil;
 		CGContextRestoreGState(ctx);
 	}
 
-	CGContextSetRGBFillColor(ctx, 0, 0, 0, 1);
-	CGContextSetRGBStrokeColor(ctx, 0, 0, 0, 1);
+	CGFloat ink = dark ? 1.0f : 0.0f;
+	CGContextSetRGBFillColor(ctx, ink, ink, ink, 1);
+	CGContextSetRGBStrokeColor(ctx, ink, ink, ink, 1);
 	draw(ctx, side);
 
 	UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
@@ -677,15 +690,17 @@ static NSMutableDictionary *sCache = nil;
 
 + (UIImage *)waveform:(NSData *)waveform size:(CGSize)size
                played:(CGFloat)played colour:(UIColor *)colour {
-	UIGraphicsBeginImageContextWithOptions(size, NO, 0);
-	CGContextRef ctx = UIGraphicsGetCurrentContext();
-
-	const uint8_t *bytes = (const uint8_t *)waveform.bytes;
-	NSUInteger bits = waveform.length * 8 / 5;      // five bits per sample
 	CGFloat barW = 2, gap = 1;
+	if (size.width <= 0 || size.height <= 0)
+		return nil;
 	NSUInteger bars = (NSUInteger)(size.width / (barW + gap));
 	if (bars == 0)
 		return nil;
+
+	UIGraphicsBeginImageContextWithOptions(size, NO, 0);
+
+	const uint8_t *bytes = (const uint8_t *)waveform.bytes;
+	NSUInteger bits = waveform.length * 8 / 5;      // five bits per sample
 
 	for (NSUInteger i = 0; i < bars; i++){
 		CGFloat value = 0.35f;                       // a flat line when there
@@ -851,7 +866,7 @@ static UIImage *TGGlyphAvatar(CGFloat side, void (^draw)(CGContextRef ctx, CGFlo
                        colourId:(int64_t)colourId
 {
 	// Telegram's own placeholder colours, and its own mapping: the palette is
-	// indexed through [0,7,4,1,6,3,5] so that the same person gets the same
+	// indexed through [0,4,1,6,3,5,2] so that the same person gets the same
 	// colour here as in every other client.
 	static NSArray *palette = nil;
 	if (!palette)
@@ -861,10 +876,17 @@ static UIImage *TGGlyphAvatar(CGFloat side, void (^draw)(CGContextRef ctx, CGFlo
 					@[@0.482f, @0.784f, @0.384f],   // green
 					@[@0.431f, @0.788f, @0.796f],   // cyan
 					@[@0.396f, @0.667f, @0.867f],   // blue
-					@[@0.933f, @0.478f, @0.682f],   // pink
-					@[@0.882f, @0.443f, @0.463f]];  // the 8th slot repeats red
-	static const NSUInteger order[7] = {0, 7, 4, 1, 6, 3, 5};
-	NSArray *c = palette[order[(NSUInteger)llabs(colourId) % 7]];
+					@[@0.933f, @0.478f, @0.682f]];  // pink
+	static const NSUInteger order[7] = {0, 4, 1, 6, 3, 5, 2};
+	NSUInteger slot = (NSUInteger)(llabs(colourId) % 7);
+	NSArray *c = palette[order[slot]];
+
+	NSString *cacheKey = [NSString stringWithFormat:@"%@-%d-%u-%d",
+			initials.length ? initials : @"?", (int)(size * 100),
+			(unsigned)slot, (int)[TGTheme shared].isFlat];
+	UIImage *cachedAvatar = [TGAvatarCache() objectForKey:cacheKey];
+	if (cachedAvatar)
+		return cachedAvatar;
 
 	UIGraphicsBeginImageContextWithOptions(CGSizeMake(size, size), NO, 0);
 	CGContextRef ctx = UIGraphicsGetCurrentContext();
@@ -897,6 +919,8 @@ static UIImage *TGGlyphAvatar(CGFloat side, void (^draw)(CGContextRef ctx, CGFlo
 
 	UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
 	UIGraphicsEndImageContext();
+	if (image)
+		[TGAvatarCache() setObject:image forKey:cacheKey];
 	return image;
 }
 

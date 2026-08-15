@@ -31,18 +31,6 @@
                  tone:(NSString *)tone
            completion:(void (^)(NSString *text))completion;
 
-/// Translate several messages of one chat in a single go, for the
-/// "translate this chat" bar over the visible rows. Completion gets a
-/// dictionary keyed by message id (NSNumber) with the translated NSString as
-/// value; messages that failed are simply absent, so an all-failed batch
-/// arrives as an empty dictionary rather than nil. Always on the main queue,
-/// once, after every individual call has answered.
-- (void)translateMessages:(NSArray *)messageIds
-                   inChat:(int64_t)chatId
-               toLanguage:(NSString *)languageCode
-                     tone:(NSString *)tone
-               completion:(void (^)(NSDictionary *textsByMessageId))completion;
-
 /// Server-side flag behind the per-chat "Translate this chat" bar. TDLib
 /// answers with updateChatIsTranslatable; nothing else is needed locally.
 - (void)setChat:(int64_t)chatId translatable:(BOOL)translatable;
@@ -58,20 +46,6 @@
 /// Completion gets an empty array (never nil) if there is nothing at all.
 - (void)languagePacksWithCompletion:(void (^)(NSArray *packs,
                                               NSString *current))completion;
-
-/// One pack by id, in the same dictionary shape as -languagePacksWithCompletion:,
-/// or nil if the id is unknown. Used by the t.me/setlanguage confirmation
-/// alert, which must name the pack before applying it.
-- (void)languagePackInfo:(NSString *)packId
-              completion:(void (^)(NSDictionary *pack))completion;
-
-/// Apply a language pack: resolves it, registers it as a custom server pack
-/// when it is not an official one (which is what a t.me/setlanguage link
-/// gives you), sets the language_pack_id option and kicks off a
-/// synchronisation. Completion gets the pack dictionary on success, nil if
-/// the pack could not be resolved.
-- (void)applyLanguagePack:(NSString *)packId
-               completion:(void (^)(NSDictionary *pack))completion;
 
 /// Pull the newest strings of a pack from the server. Fire and forget.
 - (void)synchronizeLanguagePack:(NSString *)packId;
@@ -92,25 +66,12 @@
 
 #pragma mark - speech recognition
 
-/// Ask the server to transcribe the voice or video note of a message, then
-/// read back the state of the transcription. Completion gets a dictionary:
+/// Current transcription state of a message. Completion gets a dictionary:
 /// "state" is "pending", "text" or "error"; "text" is the partial or final
 /// transcript ("" while nothing is available); "error" is a human-readable
-/// message when state is "error". Completion is nil-safe and gets nil only
-/// when the call itself could not be made at all.
-///
-/// A pending result finishes asynchronously and TDLib reports it through
-/// updateMessageContent, so the cell should re-ask with
-/// -speechTranscriptForMessage:inChat:completion: when the chat's message
-/// callback fires.
-- (void)recognizeSpeechForMessage:(int64_t)messageId
-                           inChat:(int64_t)chatId
-                       completion:(void (^)(NSDictionary *transcript))completion;
-
-/// Current transcription state of a message without asking for a new one,
-/// in the same shape as -recognizeSpeechForMessage:inChat:completion:.
-/// Completion gets nil when the message has no voice or video note, or has
-/// never been transcribed - that is the "show the transcribe glyph" case.
+/// message when state is "error". Completion gets nil when the message has no
+/// voice or video note, or has never been transcribed - that is the
+/// "show the transcribe glyph" case.
 - (void)speechTranscriptForMessage:(int64_t)messageId
                             inChat:(int64_t)chatId
                         completion:(void (^)(NSDictionary *transcript))completion;

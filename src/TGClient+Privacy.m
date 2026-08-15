@@ -141,11 +141,16 @@ static NSDictionary *TGPrivacyPasswordState(NSDictionary *state) {
 			else if ([type isEqualToString:@"userPrivacySettingRuleRestrictChatMembers"])
 				[restrictedChats addObjectsFromArray:TGPrivacyArray(rule[@"chat_ids"])];
 			else if (!haveBase){
-				haveBase = YES;
-				if ([type isEqualToString:@"userPrivacySettingRuleAllowAll"])
+				if ([type isEqualToString:@"userPrivacySettingRuleAllowAll"]){
 					value = @"everybody";
-				else if ([type isEqualToString:@"userPrivacySettingRuleAllowContacts"])
+					haveBase = YES;
+				} else if ([type isEqualToString:@"userPrivacySettingRuleAllowContacts"]){
 					value = @"contacts";
+					haveBase = YES;
+				} else if ([type isEqualToString:@"userPrivacySettingRuleRestrictAll"]){
+					value = @"nobody";
+					haveBase = YES;
+				}
 			}
 		}
 
@@ -549,7 +554,7 @@ static NSDictionary *TGPrivacyPasswordState(NSDictionary *state) {
 	[self request:@{
 		@"@type"                     : @"setDefaultMessageAutoDeleteTime",
 		@"message_auto_delete_time"  : @{@"@type" : @"messageAutoDeleteTime",
-										 @"time"  : @(seconds)},
+										 @"time"  : @(seconds < 0 ? 0 : seconds)},
 	} completion:^(NSDictionary *result){
 		if (completion)
 			completion(!TGPrivacyIsError(result));

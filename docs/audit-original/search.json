@@ -1,0 +1,94 @@
+{
+  "screen": "Search (TGSearchViewController)",
+  "originalCounterpart": "telegram_iphone.src/TelegraphKit/TelegraphKit/TGDialogListController.mm (search paths), TGDialogListSearchCell.m, TGDialogListCell.m (message-scope rows), TGSearchBar.m, TGSearchDisplayMixin.m",
+  "findings": [
+    {
+      "kind": "asset",
+      "visibility": "obvious",
+      "ours": "src/TGSearchViewController.m:640-646 paints the scope bar with SearchBarBackground.png (a 4x44pt search-bar texture) squashed into a 36pt-tall view.",
+      "theirs": "The scope bar has its own artwork, SearchBarScopeBarBackground.png, set via setScopeBarBackgroundImage:; SearchBarBackground.png is only the search field's bar.",
+      "citation": "TGDialogListController.mm:502-504; asset present at Telegraph/Telegraph/Resources/SearchBarScopeBarBackground@2x.png",
+      "fix": "Copy SearchBarScopeBarBackground@2x.png from the original Resources into images/, and use it (not SearchBarBackground.png) as the scope bar background in buildScopeBar."
+    },
+    {
+      "kind": "metric",
+      "visibility": "obvious",
+      "ours": "kSearchScopeHeight = 36 (src/TGSearchViewController.m:23), buttons laid out at y=3, height 30 (line 808).",
+      "theirs": "Showing the scope control grows the search bar from 44 to 88, i.e. the scope strip is 44pt tall; the 30pt buttons (SearchBarScopeButton@2x is 74x60 = 37x30pt) sit centred, y=7.",
+      "citation": "TGSearchBar.m:129-141 (requiredHeight = 88 vs 44); Resources/SearchBarScopeButton@2x.png is 74x60px",
+      "fix": "Set kSearchScopeHeight to 44 and position the scope buttons at y=7 with height 30 in layoutScopeBar (and the chat/sender scope buttons likewise)."
+    },
+    {
+      "kind": "asset",
+      "visibility": "noticeable",
+      "ours": "Scope buttons are drawn edge to edge with no divider art (src/TGSearchViewController.m:733-762, 804-809).",
+      "theirs": "The scope segments carry divider images between adjacent segments, differing by which side is selected.",
+      "citation": "TGDialogListController.mm:508-509 (SearchScopeBarScopeDividerLeft.png / SearchScopeBarScopeDividerRight.png)",
+      "fix": "Copy SearchScopeBarScopeDividerLeft@2x.png and SearchScopeBarScopeDividerRight@2x.png into images/ and draw a 1pt divider image between adjacent scope buttons, choosing left/right variant by which neighbour is selected."
+    },
+    {
+      "kind": "type",
+      "visibility": "noticeable",
+      "ours": "setTitleText:matching: bolds only the half of the name that matches the query and leaves an unmatched single-word name at systemFontOfSize:19 (src/TGSearchViewController.m:97-136).",
+      "theirs": "A result with no second name part is drawn entirely in titleLabelSecond, which is boldSystemFontOfSize:19; a first+last name is regular 19 for the first part and bold 19 for the last part, regardless of which one matched.",
+      "citation": "TGDialogListSearchCell.m:63,71,118-131 (resetView) and TGDialogListController.mm:1331-1348 (no setBoldMode call on this path)",
+      "fix": "Drop the query-match test: render single-part titles in boldSystemFontOfSize:19, and for two-part names render part one regular 19 and part two bold 19."
+    },
+    {
+      "kind": "layout",
+      "visibility": "noticeable",
+      "ours": "Every result title is split at its first space into two labels with a 5pt gap, including conversation/group titles (src/TGSearchViewController.m:107-135).",
+      "theirs": "Only user results are split, and only on firstName/lastName; conversations set titleTextSecond = nil so the whole title is one uninterrupted label.",
+      "citation": "TGDialogListController.mm:1314-1327 (conversation: titleTextSecond = nil) vs 1331-1345 (user: first/last)",
+      "fix": "Only split when the row is a contact/user and carry the first and last name separately from the row dictionary; for chat/channel rows put the whole title in one label."
+    },
+    {
+      "kind": "state",
+      "visibility": "noticeable",
+      "ours": "Chat hits carry the last message text and contacts carry \"@username\" as a subtitle, making the 51pt row two-line (src/TGSearchViewController.m:1342-1346, 1373-1378).",
+      "theirs": "Search rows never show a subtitle: cell.subtitleText = nil for both the conversation and the user branch, so the 19pt title is vertically centred in the 51pt row.",
+      "citation": "TGDialogListController.mm:1326 and 1347 (cell.subtitleText = nil); TGDialogListSearchCell.m:196-205",
+      "fix": "Leave subtitle empty for chat and contact hits so the row falls into the single-line centred branch; keep subtitles only for the newer global-search/link rows that have no 2013 counterpart."
+    },
+    {
+      "kind": "order",
+      "visibility": "noticeable",
+      "ours": "Results are split into headed sections \"Conversations\" / \"Contacts\" (src/TGSearchViewController.m:1750-1753).",
+      "theirs": "Scope-0 results are one flat, header-free list mixing conversations and users in the order the search actor returned them.",
+      "citation": "TGDialogListController.mm:1106-1116 (numberOfRows returns _searchResults.count, single section) and 1299 (one cell class for conversation or user); no titleForHeaderInSection on the search table",
+      "fix": "Merge chatHits and contactHits into one unheaded section for the plain query case; keep headers only for the sections that have no 2013 equivalent (Global Search, Hashtags, Messages)."
+    },
+    {
+      "kind": "layout",
+      "visibility": "subtle",
+      "ours": "Message-row title width = width - 73 - 10 - dateWidth - 6 (src/TGSearchViewController.m:281-286).",
+      "theirs": "titleLabelWidth = dateFrame.origin.x - 4 - 73 - 18, i.e. width - dateWidth - 104, so the title truncates 15pt earlier and never crowds the date.",
+      "citation": "TGDialogListCell.m:1309-1312",
+      "fix": "Compute titleWidth as (viewSize.width - dateWidth - 9) - 4 - kSearchMessageTextLeft - 18 in TGSearchMessageCell layoutSubviews."
+    },
+    {
+      "kind": "metric",
+      "visibility": "subtle",
+      "ours": "Message-row date frame is (width - 9 - dateWidth, 8, dateWidth, 16) with dateWidth padded by +4 (src/TGSearchViewController.m:272-279).",
+      "theirs": "dateFrame = CGRectMake(size.width - dateWidth - 9, 9, 75, 15) with dateWidth the exact measured text width, no padding.",
+      "citation": "TGDialogListCell.m:1306-1310",
+      "fix": "Drop the +4 padding, set y = 9 and height = 15 for _dateLabel in TGSearchMessageCell."
+    },
+    {
+      "kind": "colour",
+      "visibility": "subtle",
+      "ours": "For group results the sender is folded into the grey message text as \"Sender: text\" in systemFontOfSize:14 / 0x888888 (src/TGSearchViewController.m:1416-1417, 230-235).",
+      "theirs": "The author name is a separate run drawn in boldSystemFontOfSize:14 in 0x345f8f above/before the message text.",
+      "citation": "TGDialogListCell.m:196 (authorNameColor 0x345f8f), 373 (authorNameFont bold 14), 1357 (authorNameFrame at x=73, y=29)",
+      "fix": "Draw the sender prefix as a separate bold 14 label in #345F8F at x=73,y=29 and offset the message text after it, instead of concatenating into the grey string."
+    },
+    {
+      "kind": "asset",
+      "visibility": "subtle",
+      "ours": "docs/design-language/components.md:160 states the 51pt search variant uses DialogListSearchCell.png / …Highlighted.",
+      "theirs": "TGDialogListSearchCell loads Cell102.png and CellHighlighted102.png for its background and selected background; DialogListSearchCell.png exists in Resources but is not used by this cell.",
+      "citation": "TGDialogListSearchCell.m:48-57",
+      "fix": "Correct components.md:160 to name Cell102.png / CellHighlighted102.png for the search cell (our code at TGSearchViewController.m:41-46 is already right); other agents reading the rulebook would otherwise swap in the wrong plate."
+    }
+  ]
+}

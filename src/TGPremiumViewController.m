@@ -1,6 +1,7 @@
 #import "TGPremiumViewController.h"
 #import "TGClient.h"
 #import "TGClient+Premium.h"
+#import "TGClient+Network.h"
 #import "TGTheme.h"
 #import "TGIcons.h"
 #import "TGAlertView.h"
@@ -35,6 +36,10 @@ enum {
 @property (nonatomic, assign) BOOL limitsLoaded;
 @property (nonatomic, assign) BOOL featuresLoaded;
 @property (nonatomic, assign) BOOL slotsLoaded;
+@property (nonatomic, assign) NSInteger trialRemaining;
+@property (nonatomic, assign) NSInteger trialWeekly;
+@property (nonatomic, assign) NSTimeInterval trialCooldownUntil;
+@property (nonatomic, assign) NSInteger trialPending;
 @property (nonatomic, strong) UILabel *headerTitleLabel;
 @property (nonatomic, strong) UILabel *headerStatusLabel;
 @property (nonatomic, strong) UIImageView *headerBadgeView;
@@ -55,6 +60,7 @@ enum {
 	self.limits = @[];
 	self.features = @[];
 	self.slots = @[];
+	self.trialRemaining = -1;
 
 	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
 	self.tableView.separatorColor = [[TGTheme shared] separatorColour];
@@ -77,6 +83,10 @@ enum {
 	self.limitsLoaded = NO;
 	self.featuresLoaded = NO;
 	self.slotsLoaded = NO;
+	self.trialPending = 0;
+	self.trialRemaining = -1;
+	self.trialWeekly = 0;
+	self.trialCooldownUntil = 0;
 	[self.tableView reloadData];
 	[self load];
 }
@@ -188,11 +198,76 @@ enum {
 		[weakSelf.tableView reloadData];
 	}];
 
+	[self loadTranscriptionTrial];
+
 	[[TGClient shared] availableBoostSlotsWithCompletion:^(NSArray *slots){
 		weakSelf.slots = [slots isKindOfClass:[NSArray class]] ? slots : @[];
 		weakSelf.slotsLoaded = YES;
 		[weakSelf.tableView reloadData];
 	}];
+}
+
+- (void)loadTranscriptionTrial {
+	__weak typeof(self) weakSelf = self;
+	self.trialPending = 3;
+
+	[[TGClient shared] optionNamed:@"speech_recognition_trial_count"
+						completion:^(id value){
+		if ([value isKindOfClass:[NSNumber class]])
+			weakSelf.trialRemaining = [value integerValue];
+		[weakSelf trialPartArrived];
+	}];
+
+	[[TGClient shared] optionNamed:@"speech_recognition_trial_weekly_number"
+						completion:^(id value){
+		if ([value isKindOfClass:[NSNumber class]])
+			weakSelf.trialWeekly = [value integerValue];
+		[weakSelf trialPartArrived];
+	}];
+
+	[[TGClient shared] optionNamed:@"speech_recognition_trial_cooldown_until"
+						completion:^(id value){
+		if ([value isKindOfClass:[NSNumber class]])
+			weakSelf.trialCooldownUntil = [value doubleValue];
+		[weakSelf trialPartArrived];
+	}];
+}
+
+- (void)trialPartArrived {
+	if (self.trialPending > 0)
+		self.trialPending--;
+	if (self.trialPending == 0)
+		[self.tableView reloadData];
+}
+
+- (BOOL)showsTranscriptionRow {
+	return self.trialPending == 0 && (self.trialRemaining >= 0 || self.trialWeekly > 0);
+}
+
+- (NSString *)transcriptionTrialText {
+	if ([[TGClient shared] isPremiumAccount] || [self.options[@"isPremium"] boolValue])
+		return @"Unlimited";
+
+	NSInteger left = self.trialRemaining < 0 ? 0 : self.trialRemaining;
+	if (left > 0){
+		if (self.trialWeekly > 0)
+			return [NSString stringWithFormat:@"%d of %d left",
+					(int)left, (int)self.trialWeekly];
+		return [NSString stringWithFormat:@"%d left", (int)left];
+	}
+
+	NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+	if (self.trialCooldownUntil > now){
+		static NSDateFormatter *formatter = nil;
+		if (!formatter){
+			formatter = [[NSDateFormatter alloc] init];
+			formatter.dateStyle = NSDateFormatterShortStyle;
+			formatter.timeStyle = NSDateFormatterShortStyle;
+		}
+		NSDate *date = [NSDate dateWithTimeIntervalSince1970:self.trialCooldownUntil];
+		return [NSString stringWithFormat:@"Resets %@", [formatter stringFromDate:date]];
+	}
+	return @"None left";
 }
 
 #pragma mark - shape
@@ -221,7 +296,9 @@ enum {
 - (NSInteger)contentRowsInSection:(NSInteger)section {
 	switch (section){
 		case TGPremiumSectionAccount:
-			return self.optionsLoaded ? 4 : 1;
+			if (!self.optionsLoaded)
+				return 1;
+			return [self showsTranscriptionRow] ? 5 : 4;
 		case TGPremiumSectionLimits:
 			return self.limits.count ? (NSInteger)self.limits.count : 1;
 		case TGPremiumSectionFeatures:
@@ -451,9 +528,13 @@ enum {
 				cell.detailTextLabel.text = [self formattedSize:
 						[self.options[@"maxUploadFileSize"] longLongValue]];
 				break;
-			default:
+			case 3:
 				cell.textLabel.text = @"Stars";
 				cell.detailTextLabel.text = [self formattedNumber:self.options[@"starCount"]];
+				break;
+			default:
+				cell.textLabel.text = @"Voice transcription";
+				cell.detailTextLabel.text = [self transcriptionTrialText];
 				break;
 		}
 		return cell;

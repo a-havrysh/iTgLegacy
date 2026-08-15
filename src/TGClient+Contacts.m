@@ -415,7 +415,7 @@ static NSDictionary *TGBirthdateInfo(id value){
 	}
 	[self request:@{
 		@"@type"    : @"checkChatUsername",
-		@"chat_id"  : @(0),
+		@"chat_id"  : @([self savedMessagesChatId]),
 		@"username" : username,
 	} completion:^(NSDictionary *result){
 		if (!completion)

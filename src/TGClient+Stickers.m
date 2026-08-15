@@ -2,8 +2,10 @@
 #import "TGClient+Stickers.h"
 
 static BOOL TGIsError(NSDictionary *result){
-	return ![result isKindOfClass:[NSDictionary class]]
-		|| [result[@"@type"] isEqualToString:@"error"];
+	if (![result isKindOfClass:[NSDictionary class]])
+		return YES;
+	id type = result[@"@type"];
+	return [type isKindOfClass:[NSString class]] && [type isEqualToString:@"error"];
 }
 
 static NSArray *TGArray(id value){

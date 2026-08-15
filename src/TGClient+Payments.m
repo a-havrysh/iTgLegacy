@@ -800,9 +800,19 @@ static long long TGPayCachedStarBalance = 0;
 	[out setObject:TGPayPlainText(received[@"text"]) forKey:@"text"];
 
 	NSDictionary *sender = TGPayDict(received[@"sender_id"]);
-	NSNumber *senderId = sender[@"user_id"] ?: sender[@"chat_id"];
-	[out setObject:[senderId isKindOfClass:NSNumber.class] ? senderId : @0 forKey:@"senderId"];
-	NSString *senderName = senderId ? [self nameForUserId:[senderId longLongValue]] : nil;
+	BOOL senderIsChat = [TGPayString(sender[@"@type"])
+						 isEqualToString:@"messageSenderChat"];
+	NSNumber *senderId = senderIsChat ? sender[@"chat_id"] : sender[@"user_id"];
+	if (![senderId isKindOfClass:NSNumber.class])
+		senderId = @0;
+	[out setObject:senderId forKey:@"senderId"];
+	[out setObject:@(senderIsChat) forKey:@"senderIsChat"];
+	NSString *senderName = nil;
+	if ([senderId longLongValue] != 0){
+		senderName = senderIsChat
+				? TGPayString([self.chatsById[senderId] objectForKey:@"title"])
+				: [self nameForUserId:[senderId longLongValue]];
+	}
 	[out setObject:senderName ?: @"" forKey:@"senderName"];
 
 	if (isUnique){
@@ -1363,9 +1373,14 @@ static long long TGPayCachedStarBalance = 0;
 			return;
 		}
 		NSDictionary *creator = TGPayDict(result[@"creator_id"]);
-		NSNumber *creatorId = creator[@"user_id"] ?: creator[@"chat_id"];
+		BOOL creatorIsChat = [TGPayString(creator[@"@type"])
+							  isEqualToString:@"messageSenderChat"];
+		NSNumber *creatorId = creatorIsChat ? creator[@"chat_id"] : creator[@"user_id"];
+		if (![creatorId isKindOfClass:NSNumber.class])
+			creatorId = @0;
 		completion(@{
-			@"creatorId"      : [creatorId isKindOfClass:NSNumber.class] ? creatorId : @0,
+			@"creatorId"      : creatorId,
+			@"creatorIsChat"  : @(creatorIsChat),
 			@"creationDate"   : result[@"creation_date"] ?: @0,
 			@"monthCount"     : result[@"month_count"] ?: @0,
 			@"dayCount"       : result[@"day_count"] ?: @0,

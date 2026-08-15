@@ -366,6 +366,9 @@ static NSTimeInterval sLastHideTime = 0;
 	cardFrame.size.width = totalWidth;
 	_card.frame = cardFrame;
 
+	[_card bringSubviewToFront:_arrowTopView];
+	[_card bringSubviewToFront:_arrowBottomView];
+
 	[self positionCardFromRect:CGRectMake(point.x, point.y, 0, 0)];
 	[self layoutCard];
 }

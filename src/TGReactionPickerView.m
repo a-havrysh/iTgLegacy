@@ -2,6 +2,8 @@
 #import "TGClient.h"
 #import "TGClient+Reactions.h"
 #import "TGClient+ChatList.h"
+#import "TGClient+Payments.h"
+#import "TGSnackbar.h"
 #import "TGTheme.h"
 #import "TGIcons.h"
 #import "TGImageDecode.h"
@@ -24,6 +26,9 @@ static const CGFloat kChipCountFontSize = 11.0f;
 static const CGFloat kChipCountGap = 3.0f;
 
 static const CGFloat kReactionIconSide = 28.0f;
+
+static NSString *const kPaidStarGlyph = @"⭐";
+static const NSInteger kPaidUndoSeconds = 5;
 
 static const CGFloat kListRowHeight = 51.0f;
 static const CGFloat kListAvatarSide = 40.0f;
@@ -130,6 +135,7 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 @property (nonatomic, strong) UILabel *emojiLabel;
 @property (nonatomic, strong) UIImageView *iconView;
 @property (nonatomic, copy) NSString *emoji;
+@property (nonatomic, assign) BOOL paid;
 
 @end
 
@@ -213,6 +219,13 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 	CGSize _hostSize;
 	NSSet *_chosenEmoji;
 	BOOL _canAddMore;
+	BOOL _paidAllowed;
+	BOOL _paidAnonymous;
+	BOOL _paidPending;
+	long long _starBalance;
+	NSArray *_pendingEmoji;
+	NSArray *_pendingChosen;
+	BOOL _pendingCanAddMore;
 }
 
 + (void)dismiss {
@@ -303,6 +316,7 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 
 - (void)dealloc {
 	[[NSNotificationCenter defaultCenter] removeObserver:self];
+	[NSObject cancelPreviousPerformRequestsWithTarget:self];
 }
 
 #pragma mark loading
@@ -406,8 +420,63 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 		if (effective > 0 && usedCount >= effective)
 			room = NO;
 
-		[strongSelf setEmoji:emoji reason:nil chosen:chosenEmoji canAddMore:room];
+		[strongSelf preparePaidWithEmoji:emoji chosen:chosenEmoji canAddMore:room];
 	}];
+}
+
+- (void)preparePaidWithEmoji:(NSArray *)emoji chosen:(NSArray *)chosen canAddMore:(BOOL)room {
+	if (_chatId >= 0){
+		[self setEmoji:emoji reason:nil chosen:chosen canAddMore:room];
+		return;
+	}
+
+	_pendingEmoji = emoji;
+	_pendingChosen = chosen;
+	_pendingCanAddMore = room;
+	_paidPending = YES;
+	[self performSelector:@selector(paidLookupTimedOut) withObject:nil afterDelay:2.5];
+
+	__weak TGReactionPickerView *weakSelf = self;
+	[[TGClient shared] paidReactionSendersInChat:_chatId completion:^(NSArray *senders){
+		TGReactionPickerView *strongSelf = weakSelf;
+		if (strongSelf == nil || strongSelf->_dismissed || !strongSelf->_paidPending)
+			return;
+		if (senders.count == 0){
+			[strongSelf finishPaidLookupAllowed:NO balance:0];
+			return;
+		}
+		[[TGClient shared] starBalanceWithCompletion:^(long long stars){
+			TGReactionPickerView *innerSelf = weakSelf;
+			if (innerSelf == nil || innerSelf->_dismissed || !innerSelf->_paidPending)
+				return;
+			[innerSelf finishPaidLookupAllowed:(stars > 0) balance:stars];
+		}];
+	}];
+}
+
+- (void)paidLookupTimedOut {
+	if (!_paidPending)
+		return;
+	[self finishPaidLookupAllowed:NO balance:0];
+}
+
+- (void)finishPaidLookupAllowed:(BOOL)allowed balance:(long long)balance {
+	if (!_paidPending)
+		return;
+	_paidPending = NO;
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+	                                         selector:@selector(paidLookupTimedOut)
+	                                           object:nil];
+	_paidAllowed = allowed;
+	_starBalance = balance;
+
+	NSArray *emoji = _pendingEmoji;
+	NSArray *chosen = _pendingChosen;
+	BOOL room = _pendingCanAddMore;
+	_pendingEmoji = nil;
+	_pendingChosen = nil;
+
+	[self setEmoji:emoji reason:nil chosen:chosen canAddMore:room];
 }
 
 - (void)showSpinner {
@@ -471,13 +540,18 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 	UIImage *centerHighlighted = TGReactionStretch(@"MenuButtonCenter_Highlighted.png", -1);
 	UIImage *separatorImage = [UIImage imageNamed:@"MenuButtonSeparator.png"];
 
+	if (_paidAllowed)
+		[usable insertObject:kPaidStarGlyph atIndex:0];
+
 	CGFloat x = 0;
 	for (NSUInteger i = 0; i < usable.count; i++){
 		NSString *value = [usable objectAtIndex:i];
+		BOOL isPaid = (_paidAllowed && i == 0);
 
 		TGReactionStripButton *button = [[TGReactionStripButton alloc] initWithFrame:
 				CGRectMake(x, 0, kStripButtonWidth, kStripHeight)];
 		button.emoji = value;
+		button.paid = isPaid;
 		button.emojiLabel.text = value;
 		button.tag = (NSInteger)i;
 
@@ -500,27 +574,29 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 		if ([value isEqualToString:quick])
 			button.emojiLabel.font = [UIFont systemFontOfSize:kStripEmojiFontSize + 2];
 
-		BOOL isChosen = [_chosenEmoji containsObject:value];
+		BOOL isChosen = (!isPaid && [_chosenEmoji containsObject:value]);
 		if (isChosen){
 			button.centerView.image = centerHighlighted;
 			button.leftView.image = (i == 0) ? leftHighlighted : centerHighlighted;
 			button.rightView.image = (i == usable.count - 1) ? rightHighlighted : centerHighlighted;
 		}
-		else if (!_canAddMore){
+		else if (!_canAddMore && !isPaid){
 			button.enabled = NO;
 			button.alpha = 0.45f;
 		}
 
-		__weak TGReactionStripButton *weakButton = button;
-		TGReactionIconForEmoji(value, kReactionIconSide, ^(UIImage *icon){
-			TGReactionStripButton *strongButton = weakButton;
-			if (strongButton == nil || icon == nil)
-				return;
-			strongButton.iconView.image = icon;
-			strongButton.iconView.hidden = NO;
-			strongButton.emojiLabel.hidden = YES;
-			[strongButton setNeedsLayout];
-		});
+		if (!isPaid){
+			__weak TGReactionStripButton *weakButton = button;
+			TGReactionIconForEmoji(value, kReactionIconSide, ^(UIImage *icon){
+				TGReactionStripButton *strongButton = weakButton;
+				if (strongButton == nil || icon == nil)
+					return;
+				strongButton.iconView.image = icon;
+				strongButton.iconView.hidden = NO;
+				strongButton.emojiLabel.hidden = YES;
+				[strongButton setNeedsLayout];
+			});
+		}
 
 		[button addTarget:self action:@selector(emojiTapped:) forControlEvents:UIControlEventTouchUpInside];
 		[_scrollView addSubview:button];
@@ -681,6 +757,11 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 	if (emoji.length == 0)
 		return;
 
+	if (button.paid){
+		[self showPaidSheet];
+		return;
+	}
+
 	TGReactionPickedBlock picked = self.onReactionPicked;
 
 	if (sOpenPicker == self)
@@ -704,6 +785,93 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 	}];
 }
 
+- (void)showPaidSheet {
+	if (_dismissed || _starBalance <= 0)
+		return;
+
+	NSMutableArray *actions = [[NSMutableArray alloc] init];
+	long long amounts[3] = { 1, 10, 50 };
+	for (int i = 0; i < 3; i++){
+		long long amount = amounts[i];
+		if (amount > _starBalance)
+			continue;
+		NSString *title = (amount == 1)
+				? @"Send 1 Star"
+				: [NSString stringWithFormat:@"Send %d Stars", (int)amount];
+		[actions addObject:[[TGActionSheetAction alloc]
+				initWithTitle:title
+				       action:[NSString stringWithFormat:@"send%d", (int)amount]]];
+	}
+	if (actions.count == 0)
+		return;
+
+	[actions addObject:[[TGActionSheetAction alloc]
+			initWithTitle:(_paidAnonymous ? @"Show My Name" : @"Send Anonymously")
+			       action:@"anonymous"]];
+	[actions addObject:[[TGActionSheetAction alloc]
+			initWithTitle:@"Cancel" action:@"cancel" type:TGActionSheetActionTypeCancel]];
+
+	NSString *title = [NSString stringWithFormat:@"Your Balance: %d Stars", (int)_starBalance];
+	__weak TGReactionPickerView *weakSelf = self;
+	TGActionSheet *sheet = [[TGActionSheet alloc] initWithTitle:title
+	                                                   actions:actions
+	                                               actionBlock:^(id target, NSString *action)
+	{
+		TGReactionPickerView *strongSelf = weakSelf;
+		if (strongSelf == nil)
+			return;
+		[strongSelf handlePaidAction:action];
+	} target:self];
+	UIView *sheetHost = (self.window != nil) ? (UIView *)self.window : (UIView *)self;
+	[sheet showInView:sheetHost];
+}
+
+- (void)handlePaidAction:(NSString *)action {
+	if ([action isEqualToString:@"anonymous"]){
+		_paidAnonymous = !_paidAnonymous;
+		[self showPaidSheet];
+		return;
+	}
+	if (![action hasPrefix:@"send"])
+		return;
+	long long stars = [[action substringFromIndex:4] longLongValue];
+	if (stars <= 0)
+		return;
+	[self sendPaidStars:stars];
+}
+
+- (void)sendPaidStars:(long long)stars {
+	int64_t chatId = _chatId;
+	int64_t messageId = _messageId;
+	BOOL anonymous = _paidAnonymous;
+	UIView *host = self.superview;
+
+	if (sOpenPicker == self)
+		sOpenPicker = nil;
+	[self teardownAnimated:YES];
+
+	if (chatId == 0 || messageId == 0)
+		return;
+
+	void (^send)(void) = ^{
+		[[TGClient shared] addPaidReactionToMessage:messageId
+		                                     inChat:chatId
+		                                  starCount:stars
+		                                  anonymous:anonymous];
+		[[TGClient shared] commitPaidReactionsOnMessage:messageId inChat:chatId];
+	};
+
+	if (host == nil){
+		send();
+		return;
+	}
+
+	NSString *text = (stars == 1)
+			? @"Sending 1 Star"
+			: [NSString stringWithFormat:@"Sending %d Stars", (int)stars];
+	[TGSnackbar showInView:host text:text seconds:kPaidUndoSeconds onCommit:send];
+}
+
 - (void)touchesEnded:(NSSet *)touches withEvent:(UIEvent *)event {
 	[super touchesEnded:touches withEvent:event];
 	CGPoint point = [[touches anyObject] locationInView:self];
@@ -724,6 +892,10 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 	if (_dismissed)
 		return;
 	_dismissed = YES;
+	_paidPending = NO;
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+	                                         selector:@selector(paidLookupTimedOut)
+	                                           object:nil];
 	self.onReactionPicked = nil;
 	sLastHideTime = [NSDate timeIntervalSinceReferenceDate];
 	[[NSNotificationCenter defaultCenter] removeObserver:self];

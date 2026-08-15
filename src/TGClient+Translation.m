@@ -168,39 +168,6 @@ static id TGTrStringValue(id raw){
 	}];
 }
 
-- (void)translateMessages:(NSArray *)messageIds
-                   inChat:(int64_t)chatId
-               toLanguage:(NSString *)languageCode
-                     tone:(NSString *)tone
-               completion:(void (^)(NSDictionary *))completion {
-	NSMutableArray *ids = [NSMutableArray array];
-	for (id item in messageIds){
-		if ([item isKindOfClass:NSNumber.class])
-			[ids addObject:item];
-	}
-	if (!ids.count){
-		if (completion)
-			completion([NSDictionary dictionary]);
-		return;
-	}
-
-	NSMutableDictionary *texts = [NSMutableDictionary dictionary];
-	__block NSUInteger remaining = ids.count;
-	for (NSNumber *messageId in ids){
-		[self translateMessage:[messageId longLongValue]
-						inChat:chatId
-					toLanguage:languageCode
-						  tone:tone
-					completion:^(NSString *text){
-			if (text.length)
-				[texts setObject:text forKey:messageId];
-			remaining--;
-			if (remaining == 0 && completion)
-				completion(texts);
-		}];
-	}
-}
-
 - (void)setChat:(int64_t)chatId translatable:(BOOL)translatable {
 	[self send:@{
 		@"@type"          : @"toggleChatIsTranslatable",
@@ -240,61 +207,6 @@ static id TGTrStringValue(id raw){
 			   completion:^(NSDictionary *local){
 			answer(TGTrPacks(local));
 		}];
-	}];
-}
-
-- (void)languagePackInfo:(NSString *)packId
-              completion:(void (^)(NSDictionary *))completion {
-	if (!packId.length){
-		if (completion)
-			completion(nil);
-		return;
-	}
-
-	[self request:@{@"@type"            : @"getLanguagePackInfo",
-					@"language_pack_id" : packId}
-	   completion:^(NSDictionary *result){
-		if (!completion)
-			return;
-		completion(TGTrIsError(result) ? nil : TGTrPack(result));
-	}];
-}
-
-- (void)applyLanguagePack:(NSString *)packId
-               completion:(void (^)(NSDictionary *))completion {
-	if (!packId.length){
-		if (completion)
-			completion(nil);
-		return;
-	}
-
-	__weak typeof(self) weakSelf = self;
-	[self languagePackInfo:packId completion:^(NSDictionary *pack){
-		if (!pack){
-			if (completion)
-				completion(nil);
-			return;
-		}
-
-		typeof(self) strongSelf = weakSelf;
-		if (!strongSelf){
-			if (completion)
-				completion(nil);
-			return;
-		}
-
-		if (![pack[@"official"] boolValue]){
-			[strongSelf send:@{@"@type"            : @"addCustomServerLanguagePack",
-							   @"language_pack_id" : packId}];
-		}
-		[strongSelf send:@{
-			@"@type" : @"setOption",
-			@"name"  : @"language_pack_id",
-			@"value" : @{@"@type" : @"optionValueString", @"value" : packId},
-		}];
-		[strongSelf synchronizeLanguagePack:packId];
-		if (completion)
-			completion(pack);
 	}];
 }
 
@@ -354,36 +266,6 @@ static id TGTrStringValue(id raw){
 }
 
 #pragma mark - speech recognition
-
-- (void)recognizeSpeechForMessage:(int64_t)messageId
-                           inChat:(int64_t)chatId
-                       completion:(void (^)(NSDictionary *))completion {
-	__weak typeof(self) weakSelf = self;
-	[self request:@{@"@type"      : @"recognizeSpeech",
-					@"chat_id"    : @(chatId),
-					@"message_id" : @(messageId)}
-	   completion:^(NSDictionary *result){
-		if (TGTrIsError(result)){
-			if (completion){
-				NSString *message = TGTrString(TGTrDict(result)[@"message"]);
-				completion(@{@"state" : @"error",
-							 @"text"  : @"",
-							 @"error" : message.length ? message
-													   : @"Transcription failed"});
-			}
-			return;
-		}
-		[weakSelf speechTranscriptForMessage:messageId
-									  inChat:chatId
-								  completion:^(NSDictionary *transcript){
-			if (!completion)
-				return;
-			completion(transcript ?: @{@"state" : @"pending",
-									   @"text"  : @"",
-									   @"error" : @""});
-		}];
-	}];
-}
 
 - (void)speechTranscriptForMessage:(int64_t)messageId
                             inChat:(int64_t)chatId

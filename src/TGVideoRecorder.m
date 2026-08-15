@@ -520,6 +520,20 @@ static const long long TGVideoRecorderNoteDiskFloor    = 12ll * 1024ll * 1024ll;
 didFinishRecordingToOutputFileAtURL:(NSURL *)outputFileURL
 	  fromConnections:(NSArray *)connections
 				error:(NSError *)error {
+	if (![NSThread isMainThread]){
+		__weak typeof(self) weakSelf = self;
+		dispatch_async(dispatch_get_main_queue(), ^{
+			TGVideoRecorder *me = weakSelf;
+			if (!me)
+				return;
+			[me captureOutput:output
+					didFinishRecordingToOutputFileAtURL:outputFileURL
+					fromConnections:connections
+					error:error];
+		});
+		return;
+	}
+
 	self.recording = NO;
 	[self stopTimer];
 

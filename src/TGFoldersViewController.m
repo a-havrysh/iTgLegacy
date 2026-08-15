@@ -1,6 +1,7 @@
 #import "TGFoldersViewController.h"
 #import "TGClient.h"
 #import "TGClient+ChatList.h"
+#import "TGClient+Premium.h"
 #import "TGTheme.h"
 #import "TGIcons.h"
 #import "TGAlertView.h"
@@ -16,7 +17,24 @@ static inline UIColor *TGFoldersRGB(unsigned int value) {
 						   alpha:1.0f];
 }
 
-@interface TGFoldersViewController () <UITextFieldDelegate, UIAlertViewDelegate>
+static const NSInteger kColourSheetTag = 200;
+static const NSInteger kLinkSheetTag = 201;
+static const NSInteger kRenameLinkAlertTag = 202;
+
+static const unsigned int kFolderTagColours[7] = {
+	0xe15052, 0xe0802b, 0xa05ff3, 0x27a910, 0x27acce, 0x3391d4, 0xdd4371
+};
+
+@interface TGFoldersViewController () <UITextFieldDelegate, UIAlertViewDelegate,
+		UIActionSheetDelegate>
+
+@property (nonatomic, assign) NSInteger mainListPosition;
+@property (nonatomic, assign) NSInteger folderLimit;
+@property (nonatomic, assign) NSInteger chosenChatLimit;
+@property (nonatomic, assign) NSInteger pickerLimit;
+@property (nonatomic, strong) NSMutableArray *inviteLinks;
+@property (nonatomic, assign) BOOL linksLoaded;
+@property (nonatomic, assign) NSInteger activeLinkIndex;
 
 @property (nonatomic, strong) NSMutableArray *folders;
 @property (nonatomic, strong) NSMutableDictionary *counts;
@@ -54,6 +72,8 @@ static inline UIColor *TGFoldersRGB(unsigned int value) {
 		_page = TGFoldersPageList;
 		_folderId = 0;
 		_pendingDeleteIndex = -1;
+		_activeLinkIndex = -1;
+		_mainListPosition = 0;
 	}
 	return self;
 }
@@ -74,6 +94,7 @@ static inline UIColor *TGFoldersRGB(unsigned int value) {
 	self.icons = [NSMutableDictionary dictionary];
 	self.recommended = [NSMutableArray array];
 	self.pickerChats = [NSMutableArray array];
+	self.inviteLinks = [NSMutableArray array];
 
 	[self applyTheme];
 	[self buildStatusLabel];
@@ -83,6 +104,9 @@ static inline UIColor *TGFoldersRGB(unsigned int value) {
 			self.title = self.folderId ? @"Edit Folder" : @"New Folder";
 			[self buildEditorButtons];
 			[self loadDraft];
+			[self loadChosenChatLimit];
+			if (self.folderId)
+				[self loadInviteLinks];
 			break;
 		case TGFoldersPageChatPicker:
 			if (!self.title.length)
@@ -98,6 +122,7 @@ static inline UIColor *TGFoldersRGB(unsigned int value) {
 			self.title = @"Folders";
 			[self buildListButtons];
 			[self observeFolderChanges];
+			[self loadFolderLimit];
 			[self loadFolders];
 			[self loadRecommended];
 			break;
@@ -237,6 +262,8 @@ static inline UIColor *TGFoldersRGB(unsigned int value) {
 			[self.folders addObject:folder];
 	}
 	self.listLoaded = YES;
+	if (self.mainListPosition > (NSInteger)self.folders.count)
+		self.mainListPosition = self.folders.count;
 
 	if (![TGClient shared].available && self.folders.count == 0)
 		[self showStatus:@"Not connected.\nFolders will appear once the app is online."];
@@ -279,7 +306,8 @@ static inline UIColor *TGFoldersRGB(unsigned int value) {
 	NSInteger row = NSNotFound;
 	for (NSUInteger index = 0; index < self.folders.count; index++) {
 		if ([self.folders[index][@"id"] isEqual:identifier]) {
-			row = (NSInteger)index;
+			row = (NSInteger)index
+					+ ((NSInteger)index >= self.mainListPosition ? 1 : 0);
 			break;
 		}
 	}
@@ -347,6 +375,74 @@ static inline UIColor *TGFoldersRGB(unsigned int value) {
 	}];
 }
 
+- (void)loadFolderLimit {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] effectivePremiumLimit:@"chatFolderCount"
+								  completion:^(NSInteger value) {
+		typeof(self) strongSelf = weakSelf;
+		if (!strongSelf || value <= 0 || strongSelf.folderLimit == value)
+			return;
+		strongSelf.folderLimit = value;
+		[strongSelf.tableView reloadData];
+	}];
+}
+
+- (void)loadChosenChatLimit {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] effectivePremiumLimit:@"chatFolderChosenChatCount"
+								  completion:^(NSInteger value) {
+		if (value > 0)
+			weakSelf.chosenChatLimit = value;
+	}];
+}
+
+- (BOOL)folderLimitReached {
+	return self.folderLimit > 0 && (NSInteger)self.folders.count >= self.folderLimit;
+}
+
+- (void)showFolderLimitAlert {
+	NSString *message = [NSString stringWithFormat:
+			@"This account can keep %d folders. Delete one to make room for another.",
+			(int)self.folderLimit];
+	TGAlertView *alert = [[TGAlertView alloc] initWithTitle:@"Folder Limit"
+													message:message
+										  cancelButtonTitle:@"OK"
+											  okButtonTitle:nil
+											completionBlock:nil];
+	[alert show];
+}
+
+- (NSInteger)listRowCount {
+	return (NSInteger)self.folders.count + 1;
+}
+
+- (NSInteger)folderIndexForRow:(NSInteger)row {
+	if (row == self.mainListPosition)
+		return -1;
+	return row < self.mainListPosition ? row : row - 1;
+}
+
+- (NSMutableArray *)combinedListRows {
+	NSMutableArray *combined = [NSMutableArray arrayWithArray:self.folders];
+	NSInteger position = MIN(MAX(self.mainListPosition, 0), (NSInteger)self.folders.count);
+	[combined insertObject:[NSNull null] atIndex:position];
+	return combined;
+}
+
+- (void)adoptCombinedListRows:(NSArray *)combined {
+	NSMutableArray *ordered = [NSMutableArray array];
+	NSInteger position = 0;
+	for (NSUInteger index = 0; index < combined.count; index++) {
+		id entry = combined[index];
+		if (entry == [NSNull null])
+			position = (NSInteger)ordered.count;
+		else
+			[ordered addObject:entry];
+	}
+	self.folders = ordered;
+	self.mainListPosition = position;
+}
+
 - (void)commitOrder {
 	if (!self.orderDirty || self.folders.count == 0)
 		return;
@@ -357,7 +453,8 @@ static inline UIColor *TGFoldersRGB(unsigned int value) {
 		if ([identifier isKindOfClass:[NSNumber class]])
 			[ids addObject:identifier];
 	}
-	[[TGClient shared] reorderFolders:ids mainListPosition:0];
+	NSInteger position = MIN(MAX(self.mainListPosition, 0), (NSInteger)ids.count);
+	[[TGClient shared] reorderFolders:ids mainListPosition:position];
 }
 
 - (void)openFolder:(NSInteger)identifier {
@@ -581,6 +678,7 @@ static inline UIColor *TGFoldersRGB(unsigned int value) {
 	for (NSNumber *identifier in self.draft[key])
 		[selection addObject:identifier];
 	picker.pickerSelection = selection;
+	picker.pickerLimit = self.chosenChatLimit;
 	__weak typeof(self) weakSelf = self;
 	picker.pickerCompletion = ^(NSArray *chatIds) {
 		typeof(self) strongSelf = weakSelf;
@@ -696,6 +794,211 @@ static inline UIColor *TGFoldersRGB(unsigned int value) {
 	[self.navigationController pushViewController:picker animated:YES];
 }
 
+#pragma mark - tag colour
+
+- (NSArray *)colourTitles {
+	return @[@"Red", @"Orange", @"Violet", @"Green", @"Cyan", @"Blue", @"Pink"];
+}
+
+- (NSInteger)draftColourId {
+	NSNumber *value = self.draft[@"colorId"];
+	if (![value isKindOfClass:[NSNumber class]])
+		return -1;
+	NSInteger colourId = value.integerValue;
+	return (colourId >= 0 && colourId < 7) ? colourId : -1;
+}
+
+- (UIImage *)swatchForColourId:(NSInteger)colourId {
+	if (colourId < 0 || colourId >= 7)
+		return nil;
+	CGSize size = CGSizeMake(22, 22);
+	UIGraphicsBeginImageContextWithOptions(size, NO, [UIScreen mainScreen].scale);
+	CGContextRef context = UIGraphicsGetCurrentContext();
+	CGContextSetFillColorWithColor(context,
+			TGFoldersRGB(kFolderTagColours[colourId]).CGColor);
+	CGContextFillEllipseInRect(context, CGRectMake(1, 1, size.width - 2, size.height - 2));
+	UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return image;
+}
+
+- (void)chooseColour {
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Folder Colour"
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:nil];
+	[sheet addButtonWithTitle:@"No Colour"];
+	for (NSString *title in [self colourTitles])
+		[sheet addButtonWithTitle:title];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = kColourSheetTag;
+	[sheet showInView:self.view];
+}
+
+#pragma mark - invite links
+
+- (void)loadInviteLinks {
+	if (!self.folderId)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] inviteLinksForFolder:self.folderId completion:^(NSArray *links) {
+		typeof(self) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		NSMutableArray *kept = [NSMutableArray array];
+		if ([links isKindOfClass:[NSArray class]]) {
+			for (NSDictionary *link in links) {
+				if ([link isKindOfClass:[NSDictionary class]]
+						&& [link[@"link"] isKindOfClass:[NSString class]])
+					[kept addObject:link];
+			}
+		}
+		strongSelf.inviteLinks = kept;
+		strongSelf.linksLoaded = YES;
+		if (strongSelf.draftLoaded)
+			[strongSelf.tableView reloadData];
+	}];
+}
+
+- (void)createInviteLink {
+	if (!self.folderId)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] shareableChatsInFolder:self.folderId completion:^(NSArray *chats) {
+		typeof(self) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		NSMutableArray *chatIds = [NSMutableArray array];
+		if ([chats isKindOfClass:[NSArray class]]) {
+			for (NSDictionary *row in chats) {
+				if (![row isKindOfClass:[NSDictionary class]])
+					continue;
+				NSNumber *chatId = row[@"id"];
+				if ([chatId isKindOfClass:[NSNumber class]])
+					[chatIds addObject:chatId];
+			}
+		}
+		if (chatIds.count == 0) {
+			TGAlertView *alert = [[TGAlertView alloc]
+					initWithTitle:@"No Chats to Share"
+						  message:@"Only groups and channels you can invite people to "
+								   "can go into a folder link."
+				cancelButtonTitle:@"OK" okButtonTitle:nil completionBlock:nil];
+			[alert show];
+			return;
+		}
+		[[TGClient shared] createInviteLinkForFolder:strongSelf.folderId
+												name:@""
+											 chatIds:chatIds
+										  completion:^(NSDictionary *link) {
+			if (![link isKindOfClass:[NSDictionary class]]) {
+				TGAlertView *alert = [[TGAlertView alloc]
+						initWithTitle:@"Link Not Created"
+							  message:@"Telegram refused this invite link."
+					cancelButtonTitle:@"OK" okButtonTitle:nil completionBlock:nil];
+				[alert show];
+				return;
+			}
+			[weakSelf loadInviteLinks];
+		}];
+	}];
+}
+
+- (NSDictionary *)activeLink {
+	if (self.activeLinkIndex < 0 || self.activeLinkIndex >= (NSInteger)self.inviteLinks.count)
+		return nil;
+	return self.inviteLinks[self.activeLinkIndex];
+}
+
+- (void)openLinkActionsAtIndex:(NSInteger)index {
+	self.activeLinkIndex = index;
+	NSDictionary *link = [self activeLink];
+	if (!link)
+		return;
+	UIActionSheet *sheet = [[UIActionSheet alloc]
+			initWithTitle:link[@"link"]
+				 delegate:self
+		cancelButtonTitle:nil
+   destructiveButtonTitle:nil
+		otherButtonTitles:@"Copy Link", @"Rename Link", nil];
+	sheet.destructiveButtonIndex = [sheet addButtonWithTitle:@"Delete Link"];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = kLinkSheetTag;
+	[sheet showInView:self.view];
+}
+
+- (void)renameActiveLink {
+	NSDictionary *link = [self activeLink];
+	if (!link)
+		return;
+	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Link Name"
+													message:nil
+												   delegate:self
+										  cancelButtonTitle:@"Cancel"
+										  otherButtonTitles:@"Save", nil];
+	alert.alertViewStyle = UIAlertViewStylePlainTextInput;
+	alert.tag = kRenameLinkAlertTag;
+	NSString *name = link[@"name"];
+	if ([name isKindOfClass:[NSString class]])
+		[alert textFieldAtIndex:0].text = name;
+	[alert show];
+}
+
+- (void)deleteLinkAtIndex:(NSInteger)index {
+	if (index < 0 || index >= (NSInteger)self.inviteLinks.count)
+		return;
+	NSDictionary *link = self.inviteLinks[index];
+	[[TGClient shared] deleteInviteLink:link[@"link"] forFolder:self.folderId];
+	[self.inviteLinks removeObjectAtIndex:index];
+	self.activeLinkIndex = -1;
+	[self.tableView reloadData];
+}
+
+- (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {
+	if (alertView.tag != kRenameLinkAlertTag || buttonIndex == alertView.cancelButtonIndex)
+		return;
+	NSDictionary *link = [self activeLink];
+	if (!link)
+		return;
+	NSString *name = [alertView textFieldAtIndex:0].text ?: @"";
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] editInviteLink:link[@"link"]
+							forFolder:self.folderId
+								 name:name
+							  chatIds:link[@"chatIds"]
+						   completion:^(NSDictionary *updated) {
+		[weakSelf loadInviteLinks];
+	}];
+}
+
+- (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
+	if (index == sheet.cancelButtonIndex)
+		return;
+
+	if (sheet.tag == kColourSheetTag) {
+		self.draft[@"colorId"] = @(index - 1);
+		[self.tableView reloadData];
+		return;
+	}
+
+	if (sheet.tag == kLinkSheetTag) {
+		NSDictionary *link = [self activeLink];
+		if (!link)
+			return;
+		if (index == sheet.destructiveButtonIndex) {
+			[self deleteLinkAtIndex:self.activeLinkIndex];
+			return;
+		}
+		if (index == 0) {
+			[UIPasteboard generalPasteboard].string = link[@"link"];
+			return;
+		}
+		if (index == 1)
+			[self renameActiveLink];
+	}
+}
+
 #pragma mark - table structure
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
@@ -703,7 +1006,7 @@ static inline UIColor *TGFoldersRGB(unsigned int value) {
 		case TGFoldersPageEditor:
 			if (!self.draftLoaded)
 				return 0;
-			return self.folderId ? 4 : 3;
+			return self.folderId ? 5 : 3;
 		case TGFoldersPageChatPicker:
 		case TGFoldersPageIconPicker:
 			return 1;
@@ -719,28 +1022,41 @@ static inline UIColor *TGFoldersRGB(unsigned int value) {
 		return self.iconNames.count + 1;
 	if (self.page == TGFoldersPageEditor) {
 		if (section == 0)
-			return 2;
+			return 3;
 		if (section == 1)
 			return [self includeKeys].count + [self.draft[@"includedChatIds"] count] + 1;
 		if (section == 2)
 			return [self excludeKeys].count + [self.draft[@"excludedChatIds"] count] + 1;
+		if (section == 3)
+			return self.inviteLinks.count + 1;
 		return 1;
 	}
 	if (section == 0)
-		return self.folders.count;
+		return [self listRowCount];
 	if (section == 2)
 		return self.recommended.count;
 	return 1;
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
-	return self.page == TGFoldersPageChatPicker ? kChatRowHeight : kRowHeight;
+	if (self.page == TGFoldersPageChatPicker)
+		return kChatRowHeight;
+	if (self.page == TGFoldersPageEditor && indexPath.section == 3
+			&& indexPath.row < (NSInteger)self.inviteLinks.count)
+		return kChatRowHeight;
+	return kRowHeight;
 }
 
 - (NSString *)captionForSection:(NSInteger)section {
 	if (self.page == TGFoldersPageList) {
-		if (section == 1)
-			return @"Folders let you group chats and switch between them from the chat list.";
+		if (section == 1) {
+			NSString *base = @"Folders let you group chats and switch between them "
+					"from the chat list. Drag All Chats to change which tab opens first.";
+			if (self.folderLimit > 0)
+				return [NSString stringWithFormat:@"%@\n\nYou have created %d of %d folders.",
+						base, (int)self.folders.count, (int)self.folderLimit];
+			return base;
+		}
 		if (section == 2)
 			return @"Recommended folders.";
 		return nil;
@@ -750,6 +1066,9 @@ static inline UIColor *TGFoldersRGB(unsigned int value) {
 			return @"Choose chats and types of chats that will appear in this folder.";
 		if (section == 2)
 			return @"Choose chats and types of chats that will never appear in this folder.";
+		if (section == 3)
+			return @"Invite links let other people join the groups and channels "
+					"of this folder in one step.";
 	}
 	return nil;
 }
@@ -894,9 +1213,21 @@ static inline UIColor *TGFoldersRGB(unsigned int value) {
 		return cell;
 	}
 
+	NSInteger folderIndex = [self folderIndexForRow:indexPath.row];
+	if (folderIndex < 0) {
+		UITableViewCell *cell = [self plainCellFor:tableView identifier:@"TGFolderAllChats"
+											 style:UITableViewCellStyleValue1];
+		cell.textLabel.text = @"All Chats";
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		return cell;
+	}
+	if (folderIndex >= (NSInteger)self.folders.count)
+		return [self plainCellFor:tableView identifier:@"TGFolderRow"
+							style:UITableViewCellStyleValue1];
+
 	UITableViewCell *cell = [self plainCellFor:tableView identifier:@"TGFolderRow"
 										 style:UITableViewCellStyleValue1];
-	NSDictionary *folder = self.folders[indexPath.row];
+	NSDictionary *folder = self.folders[folderIndex];
 	NSString *title = folder[@"title"];
 	if (![title isKindOfClass:[NSString class]] || !title.length)
 		title = @"Folder";
@@ -937,6 +1268,24 @@ static inline UIColor *TGFoldersRGB(unsigned int value) {
 		return cell;
 	}
 
+	if (indexPath.section == 0 && indexPath.row == 2) {
+		UITableViewCell *cell = [self plainCellFor:tableView identifier:@"TGFolderColour"
+											 style:UITableViewCellStyleValue1];
+		cell.textLabel.text = @"Colour";
+		NSInteger colourId = [self draftColourId];
+		UIImage *swatch = [self swatchForColourId:colourId];
+		if (swatch) {
+			UIImageView *view = [[UIImageView alloc] initWithImage:swatch];
+			view.frame = CGRectMake(0, 0, swatch.size.width, swatch.size.height);
+			cell.accessoryView = view;
+			cell.detailTextLabel.text = [self colourTitles][colourId];
+		} else {
+			cell.detailTextLabel.text = @"None";
+			[self markDisclosure:cell];
+		}
+		return cell;
+	}
+
 	if (indexPath.section == 0) {
 		UITableViewCell *cell = [self plainCellFor:tableView identifier:@"TGFolderIcon"
 											 style:UITableViewCellStyleValue1];
@@ -956,6 +1305,32 @@ static inline UIColor *TGFoldersRGB(unsigned int value) {
 	}
 
 	if (indexPath.section == 3) {
+		if (indexPath.row < (NSInteger)self.inviteLinks.count) {
+			UITableViewCell *cell = [self plainCellFor:tableView identifier:@"TGFolderLink"
+												 style:UITableViewCellStyleSubtitle];
+			NSDictionary *link = self.inviteLinks[indexPath.row];
+			NSString *name = link[@"name"];
+			NSString *url = link[@"link"];
+			cell.textLabel.font = [UIFont systemFontOfSize:17];
+			cell.textLabel.text = ([name isKindOfClass:[NSString class]] && name.length)
+					? name : url;
+			NSArray *chatIds = link[@"chatIds"];
+			NSInteger count = [chatIds isKindOfClass:[NSArray class]]
+					? (NSInteger)chatIds.count : 0;
+			cell.detailTextLabel.font = [UIFont systemFontOfSize:13];
+			cell.detailTextLabel.text = count == 1
+					? @"1 chat" : [NSString stringWithFormat:@"%d chats", (int)count];
+			[self markDisclosure:cell];
+			return cell;
+		}
+		UITableViewCell *cell = [self plainCellFor:tableView identifier:@"TGFolderAddLink"
+											 style:UITableViewCellStyleDefault];
+		cell.textLabel.text = @"Create an Invite Link";
+		cell.textLabel.textColor = TGFoldersRGB(0x0779d0);
+		return cell;
+	}
+
+	if (indexPath.section == 4) {
 		UITableViewCell *cell = [self plainCellFor:tableView identifier:@"TGFolderDelete"
 											 style:UITableViewCellStyleDefault];
 		cell.textLabel.text = @"Delete Folder";
@@ -1047,13 +1422,18 @@ static inline UIColor *TGFoldersRGB(unsigned int value) {
 			return;
 		}
 		if (indexPath.section == 1) {
+			if ([self folderLimitReached]) {
+				[self showFolderLimitAlert];
+				return;
+			}
 			TGFoldersViewController *editor = [[TGFoldersViewController alloc] init];
 			editor.page = TGFoldersPageEditor;
 			[self.navigationController pushViewController:editor animated:YES];
 			return;
 		}
-		if (indexPath.row < (NSInteger)self.folders.count) {
-			NSNumber *identifier = self.folders[indexPath.row][@"id"];
+		NSInteger folderIndex = [self folderIndexForRow:indexPath.row];
+		if (folderIndex >= 0 && folderIndex < (NSInteger)self.folders.count) {
+			NSNumber *identifier = self.folders[folderIndex][@"id"];
 			[self openFolder:identifier.integerValue];
 		}
 		return;
@@ -1061,6 +1441,17 @@ static inline UIColor *TGFoldersRGB(unsigned int value) {
 
 	if (self.page == TGFoldersPageChatPicker) {
 		NSNumber *identifier = self.pickerChats[indexPath.row][@"id"];
+		if (![self.pickerSelection containsObject:identifier] && self.pickerLimit > 0
+				&& (NSInteger)self.pickerSelection.count >= self.pickerLimit) {
+			TGAlertView *alert = [[TGAlertView alloc]
+					initWithTitle:@"Chat Limit"
+						  message:[NSString stringWithFormat:
+								  @"A folder can name %d chats directly.",
+								  (int)self.pickerLimit]
+				cancelButtonTitle:@"OK" okButtonTitle:nil completionBlock:nil];
+			[alert show];
+			return;
+		}
 		if ([self.pickerSelection containsObject:identifier])
 			[self.pickerSelection removeObject:identifier];
 		else
@@ -1084,7 +1475,20 @@ static inline UIColor *TGFoldersRGB(unsigned int value) {
 		[self pushIconPicker];
 		return;
 	}
+	if (indexPath.section == 0 && indexPath.row == 2) {
+		[self.nameField resignFirstResponder];
+		[self chooseColour];
+		return;
+	}
 	if (indexPath.section == 3) {
+		[self.nameField resignFirstResponder];
+		if (indexPath.row < (NSInteger)self.inviteLinks.count)
+			[self openLinkActionsAtIndex:indexPath.row];
+		else
+			[self createInviteLink];
+		return;
+	}
+	if (indexPath.section == 4) {
 		[self confirmDeleteFolder];
 		return;
 	}
@@ -1104,7 +1508,9 @@ static inline UIColor *TGFoldersRGB(unsigned int value) {
 
 - (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
 	if (self.page == TGFoldersPageList)
-		return indexPath.section == 0 && indexPath.row < (NSInteger)self.folders.count;
+		return indexPath.section == 0 && [self folderIndexForRow:indexPath.row] >= 0;
+	if (self.page == TGFoldersPageEditor && indexPath.section == 3)
+		return indexPath.row < (NSInteger)self.inviteLinks.count;
 	if (self.page == TGFoldersPageEditor
 			&& (indexPath.section == 1 || indexPath.section == 2)) {
 		BOOL included = (indexPath.section == 1);
@@ -1118,17 +1524,19 @@ static inline UIColor *TGFoldersRGB(unsigned int value) {
 
 - (BOOL)tableView:(UITableView *)tableView canMoveRowAtIndexPath:(NSIndexPath *)indexPath {
 	return self.page == TGFoldersPageList && indexPath.section == 0
-			&& indexPath.row < (NSInteger)self.folders.count;
+			&& indexPath.row < [self listRowCount];
 }
 
 - (void)tableView:(UITableView *)tableView
 		moveRowAtIndexPath:(NSIndexPath *)from toIndexPath:(NSIndexPath *)to {
-	if (from.row >= (NSInteger)self.folders.count || to.section != 0)
+	if (to.section != 0 || from.row >= [self listRowCount])
 		return;
-	NSDictionary *folder = self.folders[from.row];
-	[self.folders removeObjectAtIndex:from.row];
-	NSInteger target = MIN(to.row, (NSInteger)self.folders.count);
-	[self.folders insertObject:folder atIndex:target];
+	NSMutableArray *combined = [self combinedListRows];
+	id entry = combined[from.row];
+	[combined removeObjectAtIndex:from.row];
+	NSInteger target = MIN(to.row, (NSInteger)combined.count);
+	[combined insertObject:entry atIndex:target];
+	[self adoptCombinedListRows:combined];
 	self.orderDirty = YES;
 }
 
@@ -1136,7 +1544,7 @@ static inline UIColor *TGFoldersRGB(unsigned int value) {
 targetIndexPathForMoveFromRowAtIndexPath:(NSIndexPath *)from
 	   toProposedIndexPath:(NSIndexPath *)proposed {
 	if (proposed.section != 0)
-		return [NSIndexPath indexPathForRow:self.folders.count - 1 inSection:0];
+		return [NSIndexPath indexPathForRow:[self listRowCount] - 1 inSection:0];
 	return proposed;
 }
 
@@ -1145,6 +1553,11 @@ targetIndexPathForMoveFromRowAtIndexPath:(NSIndexPath *)from
 		 forRowAtIndexPath:(NSIndexPath *)indexPath {
 	if (style != UITableViewCellEditingStyleDelete)
 		return;
+
+	if (self.page == TGFoldersPageEditor && indexPath.section == 3) {
+		[self deleteLinkAtIndex:indexPath.row];
+		return;
+	}
 
 	if (self.page == TGFoldersPageEditor) {
 		BOOL included = (indexPath.section == 1);
@@ -1160,10 +1573,11 @@ targetIndexPathForMoveFromRowAtIndexPath:(NSIndexPath *)from
 		return;
 	}
 
-	if (indexPath.row >= (NSInteger)self.folders.count)
+	NSInteger folderIndex = [self folderIndexForRow:indexPath.row];
+	if (folderIndex < 0 || folderIndex >= (NSInteger)self.folders.count)
 		return;
-	self.pendingDeleteIndex = indexPath.row;
-	NSDictionary *folder = self.folders[indexPath.row];
+	self.pendingDeleteIndex = folderIndex;
+	NSDictionary *folder = self.folders[folderIndex];
 	NSString *title = folder[@"title"];
 	__weak typeof(self) weakSelf = self;
 	TGAlertView *alert = [[TGAlertView alloc]
@@ -1185,6 +1599,8 @@ targetIndexPathForMoveFromRowAtIndexPath:(NSIndexPath *)from
 		[[TGClient shared] deleteFolder:identifier.integerValue leavingChats:nil];
 		[strongSelf.folders removeObjectAtIndex:index];
 		[strongSelf.counts removeObjectForKey:identifier];
+		if (strongSelf.mainListPosition > (NSInteger)strongSelf.folders.count)
+			strongSelf.mainListPosition = strongSelf.folders.count;
 		[strongSelf.tableView reloadData];
 		if (strongSelf.folders.count == 0)
 			[strongSelf showStatus:@"No folders yet.\nCreate one to group your chats."];
@@ -1194,6 +1610,8 @@ targetIndexPathForMoveFromRowAtIndexPath:(NSIndexPath *)from
 
 - (NSString *)tableView:(UITableView *)tableView
 titleForDeleteConfirmationButtonForRowAtIndexPath:(NSIndexPath *)indexPath {
+	if (self.page == TGFoldersPageEditor && indexPath.section == 3)
+		return @"Delete";
 	return self.page == TGFoldersPageEditor ? @"Remove" : @"Delete";
 }
 

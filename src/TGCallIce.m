@@ -87,7 +87,9 @@
 }
 
 - (void)sendChecks {
-	if (!self.peerPwd.length || self.socketHandle < 0)
+	if (!self.peerPwd.length)
+		return;
+	if (!self.transport && self.socketHandle < 0)
 		return;
 
 	// The username is the peer's fragment first: it names who is being asked.

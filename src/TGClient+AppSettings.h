@@ -1,6 +1,6 @@
 //
-// TGClient (AppSettings) - wallpapers, per-chat themes, autosave-to-gallery,
-// application config and the suggested-actions banner.
+// TGClient (AppSettings) - wallpapers, per-chat themes and the
+// suggested-actions banner.
 //
 // Everything here returns plain Foundation objects. Background ids are int64
 // and TDLib sends them as JSON strings, so they travel through this API as
@@ -61,12 +61,6 @@
 /// completely.
 - (void)resetDefaultBackgroundForDarkTheme:(BOOL)forDarkTheme;
 
-/// Look up a background by the slug in a t.me/bg/<name> link, or by a colour
-/// spec TDLib understands ("e6ebee", "008000-00ff00" and the like).
-/// `completion` gets the same dictionary shape as the list, or nil.
-- (void)searchBackgroundNamed:(NSString *)name
-				   completion:(void (^)(NSDictionary *background))completion;
-
 /// Shareable https://t.me/bg/... link for a background. `name` and `kind` come
 /// from a list entry; `kind` decides which BackgroundType is described.
 /// `completion` gets the url, or nil.
@@ -80,10 +74,6 @@
 
 #pragma mark - per-chat theme
 
-/// Apply one of Telegram's emoji themes to a chat. `emoji` is the theme name
-/// ("🏝", "🌅", ...); pass nil to go back to the default theme.
-- (void)setChatThemeEmoji:(NSString *)emoji forChat:(int64_t)chatId;
-
 /// The emoji theme currently applied to a chat, or nil when it uses the
 /// default one.
 - (void)chatThemeEmojiForChat:(int64_t)chatId
@@ -91,32 +81,9 @@
 
 #pragma mark - save to camera roll
 
-/// Reading the current autosave settings lives in TGClient+Storage
-/// (-autosaveSettingsWithCompletion:, three-dictionary callback).
-///
-/// Change one scope. `scope` is "private", "groups" or "channels".
-/// `maxVideoSize` is in bytes and only limits video autosave.
-- (void)setAutosaveScope:(NSString *)scope
-				  photos:(BOOL)photos
-				  videos:(BOOL)videos
-			maxVideoSize:(long long)maxVideoSize;
-
-/// Same, for one specific chat, overriding its scope.
-- (void)setAutosaveForChat:(int64_t)chatId
-					photos:(BOOL)photos
-					videos:(BOOL)videos
-			  maxVideoSize:(long long)maxVideoSize;
-
-#pragma mark - application configuration
-
-/// The whole application config is TGClient+Network's
-/// -applicationConfigWithCompletion:. Clearing per-chat autosave overrides is
-/// TGClient+Storage's -clearAutosaveExceptions.
-///
-/// One top-level value of the application config, already unwrapped.
-/// Handy for a single flag without walking the whole tree.
-- (void)applicationConfigValueForKey:(NSString *)key
-						  completion:(void (^)(id value))completion;
+/// Reading and writing autosave settings lives entirely in TGClient+Storage
+/// (-autosaveSettingsWithCompletion:, -setAutosavePhotos:videos:maxVideoBytes:forScope:
+/// and -setAutosavePhotos:videos:maxVideoBytes:forChat:).
 
 #pragma mark - suggested actions
 

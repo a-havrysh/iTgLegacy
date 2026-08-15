@@ -10,9 +10,6 @@ static __strong NSString *value_weekdayNamesShort[] = {
 	@"Mon", @"Tue", @"Wed", @"Thu", @"Fri", @"Sat", @"Sun"
 };
 
-static bool value_dialogTimeMonthNameFirst = false;
-static NSString *value_dialogTimeFormat = @"%@ %d";
-
 static NSString *value_today = @"today";
 static NSString *value_yesterday = @"yesterday";
 static NSString *value_tomorrow = @"tomorrow";
@@ -76,18 +73,6 @@ static inline NSString *monthNameGenShort(int number) {
 	return value_monthNamesGenShort[number];
 }
 
-static inline bool dialogTimeMonthNameFirst() {
-	if (!TGDateUtilsInitialized)
-		initializeTGDateUtils();
-	return value_dialogTimeMonthNameFirst;
-}
-
-static inline NSString *dialogTimeFormat() {
-	if (!TGDateUtilsInitialized)
-		initializeTGDateUtils();
-	return value_dialogTimeFormat;
-}
-
 static NSString *shortAbsoluteDate(struct tm timeinfo) {
 	if (value_monthFirst)
 		return [[NSString alloc] initWithFormat:@"%d%c%d%c%02d", timeinfo.tm_mon + 1, value_date_separator, timeinfo.tm_mday, value_date_separator, timeinfo.tm_year - 100];
@@ -114,9 +99,7 @@ static NSString *shortAbsoluteDate(struct tm timeinfo) {
 	struct tm timeinfo;
 	localtime_r(&t, &timeinfo);
 
-	if (dialogTimeMonthNameFirst())
-		return [[NSString alloc] initWithFormat:dialogTimeFormat(), monthNameGenShort(timeinfo.tm_mon), timeinfo.tm_mday];
-	return [[NSString alloc] initWithFormat:dialogTimeFormat(), monthNameGenShort(timeinfo.tm_mon), timeinfo.tm_mday];
+	return [[NSString alloc] initWithFormat:@"%@ %d", monthNameGenShort(timeinfo.tm_mon), timeinfo.tm_mday];
 }
 
 + (NSString *)stringForDayOfMonth:(int)date dayOfMonth:(int *)dayOfMonth {
@@ -125,8 +108,6 @@ static NSString *shortAbsoluteDate(struct tm timeinfo) {
 	localtime_r(&t, &timeinfo);
 	if (dayOfMonth != NULL)
 		*dayOfMonth = timeinfo.tm_mday;
-	if (dialogTimeMonthNameFirst())
-		return [[NSString alloc] initWithFormat:@"%@ %d", monthNameGenShort(timeinfo.tm_mon), timeinfo.tm_mday];
 	return [[NSString alloc] initWithFormat:@"%d %@", timeinfo.tm_mday, monthNameGenShort(timeinfo.tm_mon)];
 }
 

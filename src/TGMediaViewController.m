@@ -5,6 +5,9 @@
 
 #import "TGClient.h"
 #import "TGClient+Files.h"
+#import "TGClient+Messages.h"
+#import "TGClient+Search.h"
+#import "TGForwardPicker.h"
 #import "TGIcons.h"
 #import "TGImageDecode.h"
 #import "TGRemoteImageView.h"
@@ -17,6 +20,15 @@ static const CGFloat TGMediaRowHeight   = 79.0f;
 static const CGFloat TGMediaBannerHeight = 44.0f;
 static const NSInteger TGMediaPageSize  = 50;
 static const CGFloat TGMediaPageGap     = 20.0f;
+static const CGFloat TGMediaScopeHeight = 36.0f;
+static const CGFloat TGMediaListRowHeight = 56.0f;
+
+enum {
+	TGMediaScopeMedia = 0,
+	TGMediaScopeFiles = 1,
+	TGMediaScopeLinks = 2,
+	TGMediaScopeMusic = 3,
+};
 
 static NSString *const TGMediaTileIdentifier = @"TGMediaTile";
 
@@ -111,6 +123,155 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 		@"isVideo"   : @(isVideo),
 		@"caption"   : caption,
 		@"date"      : message[@"date"] ?: @(0),
+	};
+}
+
+static NSArray *TGMediaScopeTitles(void) {
+	static NSArray *titles = nil;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		titles = @[@"Media", @"Files", @"Links", @"Music"];
+	});
+	return titles;
+}
+
+static NSString *TGMediaFilterForScope(NSInteger scope) {
+	switch (scope){
+		case TGMediaScopeFiles: return @"searchMessagesFilterDocument";
+		case TGMediaScopeLinks: return @"searchMessagesFilterUrl";
+		case TGMediaScopeMusic: return @"searchMessagesFilterAudio";
+		default: return @"searchMessagesFilterPhotoAndVideo";
+	}
+}
+
+static BOOL TGMediaScopeIsGrid(NSInteger scope) {
+	return scope == TGMediaScopeMedia;
+}
+
+static NSString *TGMediaEmptyTextForScope(NSInteger scope) {
+	switch (scope){
+		case TGMediaScopeFiles: return @"No shared files";
+		case TGMediaScopeLinks: return @"No shared links";
+		case TGMediaScopeMusic: return @"No shared music";
+		default: return @"No shared media";
+	}
+}
+
+static NSString *TGMediaMonthForDate(NSInteger date) {
+	if (date <= 0)
+		return @"";
+	static NSDateFormatter *formatter = nil;
+	if (!formatter){
+		formatter = [[NSDateFormatter alloc] init];
+		[formatter setDateFormat:@"LLLL yyyy"];
+	}
+	return [formatter stringFromDate:[NSDate dateWithTimeIntervalSince1970:date]];
+}
+
+static NSString *TGMediaDayForDate(NSInteger date) {
+	if (date <= 0)
+		return @"";
+	return [NSDateFormatter localizedStringFromDate:
+			[NSDate dateWithTimeIntervalSince1970:date]
+										  dateStyle:NSDateFormatterMediumStyle
+										  timeStyle:NSDateFormatterShortStyle];
+}
+
+static NSString *TGMediaFirstUrlInText(NSString *text, NSDictionary *content) {
+	NSString *pageUrl = content[@"web_page"][@"url"];
+	if ([pageUrl isKindOfClass:NSString.class] && pageUrl.length)
+		return pageUrl;
+
+	if (![text isKindOfClass:NSString.class] || text.length == 0)
+		return nil;
+
+	static NSDataDetector *detector = nil;
+	if (!detector){
+		detector = [NSDataDetector dataDetectorWithTypes:NSTextCheckingTypeLink error:NULL];
+	}
+	NSTextCheckingResult *match = [detector firstMatchInString:text
+													   options:0
+														 range:NSMakeRange(0, text.length)];
+	if (match && match.URL)
+		return [match.URL absoluteString];
+	return nil;
+}
+
+static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger scope) {
+	if (![message isKindOfClass:NSDictionary.class])
+		return nil;
+
+	NSDictionary *content = message[@"content"];
+	NSString *kind = content[@"@type"];
+	if (![kind isKindOfClass:NSString.class])
+		return nil;
+
+	NSString *title = @"";
+	NSString *detail = @"";
+	NSString *url = @"";
+	NSNumber *fileId = nil;
+	long long size = 0;
+	NSInteger duration = 0;
+
+	if (scope == TGMediaScopeFiles){
+		if (![kind isEqualToString:@"messageDocument"])
+			return nil;
+		NSDictionary *document = content[@"document"];
+		NSString *name = document[@"file_name"];
+		title = [name isKindOfClass:NSString.class] && name.length ? name : @"File";
+		NSDictionary *file = document[@"document"];
+		fileId = file[@"id"];
+		size = [file[@"size"] longLongValue];
+		if (size <= 0)
+			size = [file[@"expected_size"] longLongValue];
+		detail = TGMediaFormatBytes(size);
+
+	} else if (scope == TGMediaScopeMusic){
+		if (![kind isEqualToString:@"messageAudio"])
+			return nil;
+		NSDictionary *audio = content[@"audio"];
+		NSString *name = audio[@"title"];
+		if (![name isKindOfClass:NSString.class] || name.length == 0)
+			name = audio[@"file_name"];
+		title = [name isKindOfClass:NSString.class] && name.length ? name : @"Audio";
+		NSString *performer = audio[@"performer"];
+		duration = [audio[@"duration"] integerValue];
+		NSDictionary *file = audio[@"audio"];
+		fileId = file[@"id"];
+		size = [file[@"size"] longLongValue];
+		if (size <= 0)
+			size = [file[@"expected_size"] longLongValue];
+		detail = [performer isKindOfClass:NSString.class] && performer.length
+				? [NSString stringWithFormat:@"%@ · %@", performer,
+						TGMediaFormatDuration(duration)]
+				: TGMediaFormatDuration(duration);
+
+	} else {
+		NSString *body = content[@"text"][@"text"];
+		if (![body isKindOfClass:NSString.class])
+			body = content[@"caption"][@"text"];
+		NSString *found = TGMediaFirstUrlInText(body, content);
+		if (!found.length)
+			return nil;
+		url = found;
+		NSString *pageTitle = content[@"web_page"][@"title"];
+		title = [pageTitle isKindOfClass:NSString.class] && pageTitle.length ? pageTitle : found;
+		detail = found;
+	}
+
+	if (scope != TGMediaScopeLinks && ![fileId isKindOfClass:NSNumber.class])
+		return nil;
+
+	return @{
+		@"messageId" : message[@"id"] ?: @(0),
+		@"title"     : title,
+		@"detail"    : detail,
+		@"url"       : url,
+		@"fileId"    : [fileId isKindOfClass:NSNumber.class] ? fileId : @(0),
+		@"size"      : @(size),
+		@"duration"  : @(duration),
+		@"date"      : message[@"date"] ?: @(0),
+		@"list"      : @(YES),
 	};
 }
 
@@ -421,9 +582,11 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 #pragma mark - fullscreen viewer
 
 @interface TGMediaFullscreenController : UIViewController
-		<UIScrollViewDelegate, UIGestureRecognizerDelegate>
+		<UIScrollViewDelegate, UIGestureRecognizerDelegate, UIActionSheetDelegate>
 
-@property (nonatomic, strong) NSArray *items;
+@property (nonatomic, assign) int64_t chatId;
+@property (nonatomic, copy) void (^onMessageDeleted)(int64_t messageId);
+@property (nonatomic, strong) NSMutableArray *items;
 @property (nonatomic, assign) NSInteger startIndex;
 @property (nonatomic, assign) NSInteger currentIndex;
 
@@ -434,10 +597,16 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 
 @property (nonatomic, strong) UIView *topBar;
 @property (nonatomic, strong) UILabel *counterLabel;
+@property (nonatomic, strong) UILabel *dateLabel;
 @property (nonatomic, strong) UIView *bottomBar;
 @property (nonatomic, strong) UILabel *captionLabel;
 @property (nonatomic, strong) UIButton *playButton;
+@property (nonatomic, strong) UIButton *actionButton;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
+@property (nonatomic, strong) UIButton *retryButton;
+@property (nonatomic, strong) NSMutableSet *failedPages;
+@property (nonatomic, strong) NSMutableSet *prefetchedFiles;
+@property (nonatomic, strong) NSArray *sheetActions;
 
 @property (nonatomic, assign) BOOL chromeHidden;
 @property (nonatomic, assign) BOOL dismissing;
@@ -452,12 +621,14 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 - (instancetype)initWithItems:(NSArray *)items index:(NSInteger)index {
 	self = [super init];
 	if (self){
-		_items = items ?: @[];
+		_items = [NSMutableArray arrayWithArray:items ?: @[]];
 		_startIndex = index;
 		_currentIndex = index;
 		_visiblePages = [[NSMutableDictionary alloc] init];
 		_pagePool = [[NSMutableArray alloc] init];
 		_imageCache = [[NSMutableDictionary alloc] init];
+		_failedPages = [[NSMutableSet alloc] init];
+		_prefetchedFiles = [[NSMutableSet alloc] init];
 		self.modalPresentationStyle = UIModalPresentationFullScreen;
 	}
 	return self;
@@ -497,7 +668,7 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 	[done addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
 	[_topBar addSubview:done];
 
-	_counterLabel = [[UILabel alloc] initWithFrame:CGRectMake(70, 0, bounds.size.width - 140, 44)];
+	_counterLabel = [[UILabel alloc] initWithFrame:CGRectMake(70, 3, bounds.size.width - 140, 20)];
 	_counterLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	_counterLabel.backgroundColor = [UIColor clearColor];
 	_counterLabel.textColor = [UIColor whiteColor];
@@ -505,13 +676,30 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 	_counterLabel.textAlignment = NSTextAlignmentCenter;
 	[_topBar addSubview:_counterLabel];
 
+	_dateLabel = [[UILabel alloc] initWithFrame:CGRectMake(70, 22, bounds.size.width - 140, 16)];
+	_dateLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	_dateLabel.backgroundColor = [UIColor clearColor];
+	_dateLabel.textColor = [UIColor colorWithWhite:0.8f alpha:1.0f];
+	_dateLabel.font = [UIFont systemFontOfSize:11];
+	_dateLabel.textAlignment = NSTextAlignmentCenter;
+	[_topBar addSubview:_dateLabel];
+
 	_bottomBar = [[UIView alloc] initWithFrame:
 			CGRectMake(0, bounds.size.height - 60, bounds.size.width, 60)];
 	_bottomBar.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.6f];
 	_bottomBar.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin;
 	[self.view addSubview:_bottomBar];
 
-	_captionLabel = [[UILabel alloc] initWithFrame:CGRectMake(10, 0, bounds.size.width - 100, 60)];
+	_actionButton = [UIButton buttonWithType:UIButtonTypeCustom];
+	_actionButton.frame = CGRectMake(4, 10, 66, 40);
+	_actionButton.titleLabel.font = [UIFont boldSystemFontOfSize:15];
+	[_actionButton setTitle:@"Actions" forState:UIControlStateNormal];
+	[_actionButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+	[_actionButton addTarget:self action:@selector(actionsTapped)
+			forControlEvents:UIControlEventTouchUpInside];
+	[_bottomBar addSubview:_actionButton];
+
+	_captionLabel = [[UILabel alloc] initWithFrame:CGRectMake(74, 0, bounds.size.width - 164, 60)];
 	_captionLabel.backgroundColor = [UIColor clearColor];
 	_captionLabel.textColor = [UIColor whiteColor];
 	_captionLabel.font = [UIFont systemFontOfSize:13];
@@ -533,6 +721,22 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 	_spinner.center = CGPointMake(bounds.size.width / 2, bounds.size.height / 2);
 	_spinner.hidesWhenStopped = YES;
 	[self.view addSubview:_spinner];
+
+	_retryButton = [UIButton buttonWithType:UIButtonTypeCustom];
+	_retryButton.frame = CGRectMake((bounds.size.width - 160) / 2,
+									bounds.size.height / 2 - 22, 160, 44);
+	_retryButton.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin
+			| UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin
+			| UIViewAutoresizingFlexibleBottomMargin;
+	_retryButton.titleLabel.font = [UIFont boldSystemFontOfSize:15];
+	_retryButton.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.6f];
+	_retryButton.layer.cornerRadius = 6.0f;
+	[_retryButton setTitle:@"Tap to retry" forState:UIControlStateNormal];
+	[_retryButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+	[_retryButton addTarget:self action:@selector(retryTapped)
+		   forControlEvents:UIControlEventTouchUpInside];
+	_retryButton.hidden = YES;
+	[self.view addSubview:_retryButton];
 
 	UITapGestureRecognizer *doubleTap = [[UITapGestureRecognizer alloc]
 			initWithTarget:self action:@selector(handleDoubleTap:)];
@@ -648,6 +852,7 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 			if (_pagePool.count < 3)
 				[_pagePool addObject:page];
 			[_imageCache removeObjectForKey:key];
+			[_failedPages removeObject:key];
 		}
 	}
 
@@ -691,21 +896,39 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 	if ([page.loadingFileId isEqual:fileId])
 		return;
 	page.loadingFileId = fileId;
+	[_failedPages removeObject:key];
+	[self updateLoadingChrome];
+
+	NSNumber *thumbId = item[@"thumbId"];
+	if ([thumbId isKindOfClass:NSNumber.class] && ![thumbId isEqual:fileId] &&
+		!page.imageView.image)
+		[self loadThumbnailForPageAtIndex:index fileId:thumbId];
 
 	CGFloat maxSide = MAX(self.view.bounds.size.width, self.view.bounds.size.height)
 			* [UIScreen mainScreen].scale;
 	if (maxSide > 960.0f)
 		maxSide = 960.0f;
 
+	[[TGClient shared] startDownloadingFile:[fileId integerValue]
+								   priority:(index == _currentIndex ? 32 : 8)
+								 completion:nil];
+
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] downloadFile:[fileId integerValue] completion:^(NSString *path){
 		typeof(self) me = weakSelf;
-		if (!me || path.length == 0)
+		if (!me)
 			return;
+		if (path.length == 0){
+			TGMediaPageView *failedPage = me.visiblePages[key];
+			if (failedPage && [failedPage.loadingFileId isEqual:fileId]){
+				failedPage.loadingFileId = nil;
+				[me.failedPages addObject:key];
+				[me updateLoadingChrome];
+			}
+			return;
+		}
 		dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
 			UIImage *image = TGDecodeThumbnail(path, maxSide);
-			if (!image)
-				return;
 			dispatch_async(dispatch_get_main_queue(), ^{
 				typeof(self) strongMe = weakSelf;
 				if (!strongMe)
@@ -713,11 +936,98 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 				TGMediaPageView *target = strongMe.visiblePages[key];
 				if (!target || ![target.loadingFileId isEqual:fileId])
 					return;
+				if (!image){
+					target.loadingFileId = nil;
+					[strongMe.failedPages addObject:key];
+					[strongMe updateLoadingChrome];
+					return;
+				}
 				strongMe.imageCache[key] = image;
+				[target setPageImage:image];
+				[strongMe updateLoadingChrome];
+			});
+		});
+	}];
+
+	[self prefetchNeighboursOfIndex:index];
+}
+
+- (void)loadThumbnailForPageAtIndex:(NSInteger)index fileId:(NSNumber *)thumbId {
+	NSNumber *key = @(index);
+	CGFloat side = TGMediaTileSide * 4.0f;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] downloadFile:[thumbId integerValue] completion:^(NSString *path){
+		if (path.length == 0)
+			return;
+		dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+			UIImage *image = TGDecodeThumbnail(path, side);
+			if (!image)
+				return;
+			dispatch_async(dispatch_get_main_queue(), ^{
+				typeof(self) me = weakSelf;
+				if (!me)
+					return;
+				TGMediaPageView *target = me.visiblePages[key];
+				if (!target || target.imageView.image || me.imageCache[key])
+					return;
 				[target setPageImage:image];
 			});
 		});
 	}];
+}
+
+- (void)prefetchNeighboursOfIndex:(NSInteger)index {
+	NSInteger neighbours[2] = {index - 1, index + 1};
+	for (NSInteger i = 0; i < 2; i++){
+		NSInteger at = neighbours[i];
+		if (at < 0 || at >= (NSInteger)_items.count)
+			continue;
+
+		NSDictionary *item = _items[at];
+		if ([item[@"isVideo"] boolValue])
+			continue;
+
+		NSNumber *fileId = item[@"fullId"];
+		if (![fileId isKindOfClass:NSNumber.class] || [fileId integerValue] <= 0)
+			continue;
+		if ([_prefetchedFiles containsObject:fileId])
+			continue;
+
+		[_prefetchedFiles addObject:fileId];
+		[[TGClient shared] startDownloadingFile:[fileId integerValue]
+									   priority:1
+									 completion:nil];
+	}
+}
+
+- (void)updateLoadingChrome {
+	if (!_playButton.enabled)
+		return;
+
+	NSNumber *key = @(_currentIndex);
+	TGMediaPageView *page = _visiblePages[key];
+
+	if ([_failedPages containsObject:key]){
+		[_spinner stopAnimating];
+		_retryButton.hidden = NO;
+		return;
+	}
+
+	_retryButton.hidden = YES;
+	if (page && !_imageCache[key] && page.loadingFileId)
+		[_spinner startAnimating];
+	else
+		[_spinner stopAnimating];
+}
+
+- (void)retryTapped {
+	NSNumber *key = @(_currentIndex);
+	[_failedPages removeObject:key];
+	TGMediaPageView *page = _visiblePages[key];
+	page.loadingFileId = nil;
+	_retryButton.hidden = YES;
+	[self loadImageForPageAtIndex:_currentIndex];
 }
 
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView {
@@ -753,6 +1063,7 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 	NSDictionary *item = _items[_currentIndex];
 	NSString *caption = item[@"caption"];
 	_captionLabel.text = [caption isKindOfClass:NSString.class] ? caption : @"";
+	_dateLabel.text = TGMediaDayForDate([item[@"date"] integerValue]);
 
 	BOOL isVideo = [item[@"isVideo"] boolValue];
 	_playButton.hidden = !isVideo;
@@ -760,6 +1071,8 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 		[_playButton setTitle:[NSString stringWithFormat:@"▶ %@",
 				TGMediaFormatDuration([item[@"duration"] integerValue])]
 					 forState:UIControlStateNormal];
+
+	[self updateLoadingChrome];
 }
 
 - (void)setChromeHidden:(BOOL)hidden animated:(BOOL)animated {
@@ -874,6 +1187,192 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 	[self dismissViewControllerAnimated:YES completion:nil];
 }
 
+- (void)showMessage:(NSString *)message {
+	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@""
+													message:message
+												   delegate:nil
+										  cancelButtonTitle:@"OK"
+										  otherButtonTitles:nil];
+	[alert show];
+}
+
+- (NSDictionary *)currentItem {
+	if (_currentIndex < 0 || _currentIndex >= (NSInteger)_items.count)
+		return nil;
+	return _items[_currentIndex];
+}
+
+- (void)actionsTapped {
+	NSDictionary *item = [self currentItem];
+	if (!item)
+		return;
+
+	NSMutableArray *actions = [NSMutableArray array];
+	[actions addObject:@"save"];
+	if (self.chatId != 0 && [item[@"messageId"] longLongValue] != 0){
+		[actions addObject:@"forward"];
+		[actions addObject:@"delete"];
+	}
+	self.sheetActions = actions;
+
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:nil];
+	for (NSString *action in actions){
+		if ([action isEqualToString:@"save"])
+			[sheet addButtonWithTitle:[item[@"isVideo"] boolValue]
+					? @"Save Video" : @"Save Image"];
+		else if ([action isEqualToString:@"forward"])
+			[sheet addButtonWithTitle:@"Forward"];
+		else
+			[sheet addButtonWithTitle:@"Delete"];
+	}
+	if ([actions containsObject:@"delete"])
+		sheet.destructiveButtonIndex = (NSInteger)actions.count - 1;
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	[sheet showInView:self.view];
+}
+
+- (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
+	if (index < 0 || index >= (NSInteger)self.sheetActions.count)
+		return;
+
+	NSString *action = self.sheetActions[index];
+	if ([action isEqualToString:@"save"])
+		[self saveCurrentItem];
+	else if ([action isEqualToString:@"forward"])
+		[self forwardCurrentItem];
+	else if ([action isEqualToString:@"delete"])
+		[self deleteCurrentItem];
+}
+
+- (void)saveCurrentItem {
+	NSDictionary *item = [self currentItem];
+	NSNumber *fileId = item[@"fullId"];
+	if (![fileId isKindOfClass:NSNumber.class] || [fileId integerValue] <= 0)
+		return;
+
+	BOOL isVideo = [item[@"isVideo"] boolValue];
+	[_spinner startAnimating];
+	_playButton.enabled = NO;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] downloadFile:[fileId integerValue] completion:^(NSString *path){
+		typeof(self) me = weakSelf;
+		if (!me)
+			return;
+		[me.spinner stopAnimating];
+		me.playButton.enabled = YES;
+		if (path.length == 0){
+			[me showMessage:@"Could not save"];
+			return;
+		}
+		if (isVideo){
+			if (!UIVideoAtPathIsCompatibleWithSavedPhotosAlbum(path)){
+				[me showMessage:@"This video cannot be saved."];
+				return;
+			}
+			UISaveVideoAtPathToSavedPhotosAlbum(path, me,
+					@selector(media:didFinishSavingWithError:contextInfo:), NULL);
+			return;
+		}
+		UIImage *image = [UIImage imageWithContentsOfFile:path];
+		if (!image){
+			[me showMessage:@"Could not save"];
+			return;
+		}
+		UIImageWriteToSavedPhotosAlbum(image, me,
+				@selector(media:didFinishSavingWithError:contextInfo:), NULL);
+	}];
+}
+
+- (void)media:(id)item didFinishSavingWithError:(NSError *)error contextInfo:(void *)contextInfo {
+	[self showMessage:error ? @"Could not save" : @"Saved to Camera Roll"];
+}
+
+- (void)forwardCurrentItem {
+	NSDictionary *item = [self currentItem];
+	NSNumber *messageId = item[@"messageId"];
+	if (![messageId isKindOfClass:NSNumber.class] || [messageId longLongValue] == 0)
+		return;
+
+	int64_t fromChat = self.chatId;
+	TGForwardPicker *picker = [[TGForwardPicker alloc] init];
+	picker.onPicked = ^(int64_t targetChatId){
+		[[TGClient shared] forwardMessages:@[messageId]
+								  fromChat:fromChat
+									toChat:targetChatId
+									thread:0
+									asCopy:NO
+							removeCaptions:NO
+									silent:NO
+								completion:nil];
+	};
+
+	UINavigationController *wrapper = [[UINavigationController alloc]
+			initWithRootViewController:picker];
+	[self presentViewController:wrapper animated:YES completion:nil];
+}
+
+- (void)deleteCurrentItem {
+	NSDictionary *item = [self currentItem];
+	NSNumber *messageId = item[@"messageId"];
+	if (![messageId isKindOfClass:NSNumber.class] || [messageId longLongValue] == 0)
+		return;
+
+	int64_t identifier = [messageId longLongValue];
+	NSInteger index = _currentIndex;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] deleteMessages:@[messageId]
+							   inChat:self.chatId
+						  forEveryone:NO
+						   completion:^(BOOL ok){
+		typeof(self) me = weakSelf;
+		if (!me)
+			return;
+		if (!ok){
+			[me showMessage:@"Could not delete"];
+			return;
+		}
+		if (me.onMessageDeleted)
+			me.onMessageDeleted(identifier);
+		[me removeItemAtIndex:index];
+	}];
+}
+
+- (void)removeItemAtIndex:(NSInteger)index {
+	if (index < 0 || index >= (NSInteger)_items.count)
+		return;
+
+	[_items removeObjectAtIndex:index];
+	if (_items.count == 0){
+		[self closeTapped];
+		return;
+	}
+
+	for (NSNumber *key in _visiblePages.allKeys){
+		TGMediaPageView *page = _visiblePages[key];
+		[page setPageImage:nil];
+		page.loadingFileId = nil;
+		page.pageIndex = -1;
+		[page removeFromSuperview];
+		[_visiblePages removeObjectForKey:key];
+		if (_pagePool.count < 3)
+			[_pagePool addObject:page];
+	}
+	[_imageCache removeAllObjects];
+	[_failedPages removeAllObjects];
+
+	if (_currentIndex > (NSInteger)_items.count - 1)
+		_currentIndex = (NSInteger)_items.count - 1;
+
+	[self layoutPagesPreservingIndex:_currentIndex];
+	[self updateChromeForCurrentItem];
+}
+
 - (void)playTapped {
 	if (_currentIndex < 0 || _currentIndex >= (NSInteger)_items.count)
 		return;
@@ -885,6 +1384,9 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 
 	[_spinner startAnimating];
 	_playButton.enabled = NO;
+	[[TGClient shared] startDownloadingFile:[fileId integerValue]
+								   priority:32
+								 completion:nil];
 
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] downloadFile:[fileId integerValue] completion:^(NSString *path){
@@ -893,8 +1395,10 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 			return;
 		[me.spinner stopAnimating];
 		me.playButton.enabled = YES;
-		if (path.length == 0)
+		if (path.length == 0){
+			[me showMessage:@"Could not download"];
 			return;
+		}
 		MPMoviePlayerViewController *player = [[MPMoviePlayerViewController alloc]
 				initWithContentURL:[NSURL fileURLWithPath:path]];
 		[me presentMoviePlayerViewControllerAnimated:player];
@@ -921,8 +1425,15 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 
 #pragma mark - shared media
 
-@interface TGMediaViewController () <TGMediaGridCellDelegate>
+@interface TGMediaViewController ()
+		<TGMediaGridCellDelegate, UIDocumentInteractionControllerDelegate>
 
+@property (nonatomic, assign) NSInteger scope;
+@property (nonatomic, assign) NSInteger loadToken;
+@property (nonatomic, strong) UIView *scopeBar;
+@property (nonatomic, strong) NSMutableArray *scopeButtons;
+@property (nonatomic, strong) UILabel *dateIndicator;
+@property (nonatomic, strong) UIDocumentInteractionController *documentController;
 @property (nonatomic, strong) UITableView *tableView;
 @property (nonatomic, strong) TGViewRecycler *recycler;
 @property (nonatomic, strong) NSMutableArray *items;
@@ -973,6 +1484,36 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 	_tableView.delegate = self;
 	[self.view addSubview:_tableView];
 
+	_scopeBar = [[UIView alloc] initWithFrame:
+			CGRectMake(0, 0, self.view.bounds.size.width, TGMediaScopeHeight)];
+	_scopeBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	_scopeBar.clipsToBounds = YES;
+	_scopeBar.backgroundColor = [TGTheme shared].isFlat
+			? [[TGTheme shared] listBackgroundColour]
+			: [UIColor colorWithRed:0xc3 / 255.0f green:0xcb / 255.0f
+								blue:0xd4 / 255.0f alpha:1.0f];
+	[self.view addSubview:_scopeBar];
+
+	_scopeButtons = [NSMutableArray array];
+	NSArray *scopeTitles = TGMediaScopeTitles();
+	for (NSUInteger i = 0; i < scopeTitles.count; i++){
+		UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+		button.tag = (NSInteger)i;
+		button.titleLabel.font = [UIFont boldSystemFontOfSize:12];
+		[button setTitle:scopeTitles[i] forState:UIControlStateNormal];
+		[self styleScopeButton:button selected:(i == 0)];
+		[button addTarget:self action:@selector(scopeTapped:)
+		 forControlEvents:UIControlEventTouchDown];
+		[_scopeBar addSubview:button];
+		[_scopeButtons addObject:button];
+	}
+
+	UIView *scopeLine = [[UIView alloc] initWithFrame:
+			CGRectMake(0, TGMediaScopeHeight - 1, self.view.bounds.size.width, 1)];
+	scopeLine.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	scopeLine.backgroundColor = [[TGTheme shared] separatorColour];
+	[_scopeBar addSubview:scopeLine];
+
 	_banner = [[UIControl alloc] initWithFrame:
 			CGRectMake(0, 0, self.view.bounds.size.width, TGMediaBannerHeight)];
 	_banner.autoresizingMask = UIViewAutoresizingFlexibleWidth;
@@ -1022,6 +1563,86 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 	_emptyLabel.text = @"No shared media";
 	_emptyLabel.hidden = YES;
 	[self.view addSubview:_emptyLabel];
+
+	_dateIndicator = [[UILabel alloc] initWithFrame:
+			CGRectMake(self.view.bounds.size.width - 140, TGMediaScopeHeight + 8, 128, 22)];
+	_dateIndicator.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+	_dateIndicator.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.62f];
+	_dateIndicator.textColor = [UIColor whiteColor];
+	_dateIndicator.font = [UIFont boldSystemFontOfSize:12];
+	_dateIndicator.textAlignment = NSTextAlignmentCenter;
+	_dateIndicator.layer.cornerRadius = 4.0f;
+	_dateIndicator.clipsToBounds = YES;
+	_dateIndicator.alpha = 0.0f;
+	[self.view addSubview:_dateIndicator];
+}
+
+- (void)styleScopeButton:(UIButton *)button selected:(BOOL)selected {
+	UIImage *plate = [UIImage imageNamed:selected
+			? @"SearchBarScopeButton_Highlighted.png" : @"SearchBarScopeButton.png"];
+	if (plate){
+		plate = [plate stretchableImageWithLeftCapWidth:(int)(plate.size.width / 2)
+										   topCapHeight:0];
+		[button setBackgroundImage:plate forState:UIControlStateNormal];
+		button.backgroundColor = [UIColor clearColor];
+	} else {
+		button.backgroundColor = selected
+				? [[TGTheme shared] accentColour]
+				: [UIColor clearColor];
+	}
+
+	if (selected){
+		[button setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+	} else {
+		[button setTitleColor:([TGTheme shared].isFlat
+				? [[TGTheme shared] secondaryTextColour]
+				: [UIColor colorWithRed:0x5c / 255.0f green:0x70 / 255.0f
+									blue:0x8b / 255.0f alpha:1.0f])
+					 forState:UIControlStateNormal];
+	}
+}
+
+- (void)layoutScopeButtons {
+	CGFloat width = self.view.bounds.size.width;
+	NSUInteger count = _scopeButtons.count;
+	if (width < 1 || count == 0)
+		return;
+
+	CGFloat available = width - 12;
+	CGFloat each = (CGFloat)(int)(available / count);
+	for (NSUInteger i = 0; i < count; i++){
+		UIButton *button = _scopeButtons[i];
+		CGFloat buttonWidth = (i == count - 1) ? (available - each * (count - 1)) : each;
+		button.frame = CGRectMake(6 + each * i, 3, buttonWidth, 30);
+	}
+}
+
+- (void)scopeTapped:(UIButton *)button {
+	if (button.tag == _scope)
+		return;
+
+	_scope = button.tag;
+	_loadToken++;
+	for (UIButton *other in _scopeButtons)
+		[self styleScopeButton:other selected:(other.tag == _scope)];
+
+	[_items removeAllObjects];
+	_lastMessageId = 0;
+	_canLoadMore = YES;
+	_loadedOnce = NO;
+	_loading = NO;
+	_emptyLabel.hidden = YES;
+	_emptyLabel.text = TGMediaEmptyTextForScope(_scope);
+	_dateIndicator.alpha = 0.0f;
+	[_recycler removeAllViews];
+	_tableView.rowHeight = TGMediaScopeIsGrid(_scope)
+			? TGMediaRowHeight : TGMediaListRowHeight;
+	_tableView.separatorStyle = TGMediaScopeIsGrid(_scope)
+			? UITableViewCellSeparatorStyleNone : UITableViewCellSeparatorStyleSingleLine;
+	_tableView.separatorColor = [[TGTheme shared] separatorColour];
+	[_tableView reloadData];
+	[_tableView setContentOffset:CGPointZero animated:NO];
+	[self loadNextPage];
 }
 
 - (void)viewDidLoad {
@@ -1050,7 +1671,11 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 	CGFloat top = _bannerVisible ? TGMediaBannerHeight : 0.0f;
 	CGRect bounds = self.view.bounds;
 	_banner.frame = CGRectMake(0, 0, bounds.size.width, TGMediaBannerHeight);
+	_scopeBar.frame = CGRectMake(0, top, bounds.size.width, TGMediaScopeHeight);
+	[self layoutScopeButtons];
+	top += TGMediaScopeHeight;
 	_tableView.frame = CGRectMake(0, top, bounds.size.width, bounds.size.height - top);
+	_dateIndicator.frame = CGRectMake(bounds.size.width - 140, top + 8, 128, 22);
 
 	NSInteger perRow = [self itemsPerRowForWidth:bounds.size.width];
 	if (perRow != _itemsPerRow){
@@ -1078,6 +1703,9 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 	if (!_loadedOnce)
 		[_spinner startAnimating];
 
+	NSInteger token = _loadToken;
+	NSInteger scope = _scope;
+
 	__weak typeof(self) weakSelf = self;
 	NSDictionary *request = @{
 		@"@type"           : @"searchChatMessages",
@@ -1086,12 +1714,12 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 		@"from_message_id" : @(_lastMessageId),
 		@"offset"          : @(0),
 		@"limit"           : @(TGMediaPageSize),
-		@"filter"          : @{@"@type" : @"searchMessagesFilterPhotoAndVideo"},
+		@"filter"          : @{@"@type" : TGMediaFilterForScope(scope)},
 	};
 
 	[[TGClient shared] request:request completion:^(NSDictionary *result){
 		typeof(self) me = weakSelf;
-		if (!me)
+		if (!me || me.loadToken != token)
 			return;
 
 		me.loading = NO;
@@ -1108,7 +1736,11 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 
 		NSInteger added = 0;
 		for (NSDictionary *message in messages){
-			NSDictionary *item = TGMediaItemFromMessage(message);
+			if (![message isKindOfClass:NSDictionary.class])
+				continue;
+			NSDictionary *item = TGMediaScopeIsGrid(scope)
+					? TGMediaItemFromMessage(message)
+					: TGMediaListItemFromMessage(message, scope);
 			if (item){
 				[me.items addObject:item];
 				added++;
@@ -1179,6 +1811,8 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 #pragma mark - table
 
 - (NSInteger)numberOfRowsForItems {
+	if (!TGMediaScopeIsGrid(_scope))
+		return (NSInteger)_items.count;
 	NSInteger perRow = _itemsPerRow < 1 ? 1 : _itemsPerRow;
 	return ((NSInteger)_items.count + perRow - 1) / perRow;
 }
@@ -1189,7 +1823,9 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
-	return indexPath.row < [self numberOfRowsForItems] ? TGMediaRowHeight : 50.0f;
+	if (indexPath.row >= [self numberOfRowsForItems])
+		return 50.0f;
+	return TGMediaScopeIsGrid(_scope) ? TGMediaRowHeight : TGMediaListRowHeight;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -1212,6 +1848,29 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 		}
 		UIActivityIndicatorView *spinner = (UIActivityIndicatorView *)[cell.contentView viewWithTag:401];
 		[spinner startAnimating];
+		return cell;
+	}
+
+	if (!TGMediaScopeIsGrid(_scope)){
+		static NSString *listIdentifier = @"TGMediaList";
+		UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:listIdentifier];
+		if (!cell){
+			cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+										  reuseIdentifier:listIdentifier];
+			cell.textLabel.font = [UIFont boldSystemFontOfSize:15];
+			cell.detailTextLabel.font = [UIFont systemFontOfSize:12];
+		}
+		[[TGTheme shared] styleCell:cell];
+		cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
+		cell.detailTextLabel.textColor = [[TGTheme shared] secondaryTextColour];
+		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+		cell.accessoryType = UITableViewCellAccessoryNone;
+
+		if (indexPath.row < (NSInteger)_items.count){
+			NSDictionary *item = _items[indexPath.row];
+			cell.textLabel.text = item[@"title"];
+			cell.detailTextLabel.text = item[@"detail"];
+		}
 		return cell;
 	}
 
@@ -1256,7 +1915,147 @@ static NSDictionary *TGMediaItemFromMessage(NSDictionary *message) {
 
 	TGMediaFullscreenController *viewer = [[TGMediaFullscreenController alloc]
 			initWithItems:[_items copy] index:index];
+	viewer.chatId = self.chatId;
+
+	__weak typeof(self) weakSelf = self;
+	viewer.onMessageDeleted = ^(int64_t messageId){
+		[weakSelf removeItemWithMessageId:messageId];
+	};
+
 	[self presentViewController:viewer animated:YES completion:nil];
+}
+
+- (void)removeItemWithMessageId:(int64_t)messageId {
+	for (NSInteger i = 0; i < (NSInteger)_items.count; i++){
+		if ([_items[i][@"messageId"] longLongValue] != messageId)
+			continue;
+		[_items removeObjectAtIndex:i];
+		[_tableView reloadData];
+		_emptyLabel.hidden = _items.count != 0;
+		return;
+	}
+}
+
+#pragma mark - list rows
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	if (TGMediaScopeIsGrid(_scope) || indexPath.row >= (NSInteger)_items.count)
+		return;
+
+	NSDictionary *item = _items[indexPath.row];
+
+	if (_scope == TGMediaScopeLinks){
+		NSString *url = item[@"url"];
+		if (![url isKindOfClass:NSString.class] || url.length == 0)
+			return;
+		NSURL *target = [NSURL URLWithString:url];
+		if (!target.scheme.length)
+			target = [NSURL URLWithString:[@"http://" stringByAppendingString:url]];
+		if (target)
+			[[UIApplication sharedApplication] openURL:target];
+		return;
+	}
+
+	NSInteger fileId = [item[@"fileId"] integerValue];
+	if (fileId <= 0)
+		return;
+
+	[_spinner startAnimating];
+	[[TGClient shared] startDownloadingFile:fileId priority:32 completion:nil];
+
+	BOOL isMusic = (_scope == TGMediaScopeMusic);
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] downloadFile:fileId completion:^(NSString *path){
+		typeof(self) me = weakSelf;
+		if (!me || !me.isViewLoaded)
+			return;
+		[me.spinner stopAnimating];
+		if (path.length == 0){
+			[me showAlertMessage:@"Could not download"];
+			return;
+		}
+		if (isMusic){
+			MPMoviePlayerViewController *player = [[MPMoviePlayerViewController alloc]
+					initWithContentURL:[NSURL fileURLWithPath:path]];
+			[me presentMoviePlayerViewControllerAnimated:player];
+			return;
+		}
+		[me previewFileAtPath:path];
+	}];
+}
+
+- (void)showAlertMessage:(NSString *)message {
+	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@""
+													message:message
+												   delegate:nil
+										  cancelButtonTitle:@"OK"
+										  otherButtonTitles:nil];
+	[alert show];
+}
+
+- (void)previewFileAtPath:(NSString *)path {
+	self.documentController = [UIDocumentInteractionController
+			interactionControllerWithURL:[NSURL fileURLWithPath:path]];
+	self.documentController.delegate = self;
+	if ([self.documentController presentPreviewAnimated:YES])
+		return;
+	[self.documentController presentOpenInMenuFromRect:self.view.bounds
+												inView:self.view
+											  animated:YES];
+}
+
+- (UIViewController *)documentInteractionControllerViewControllerForPreview:
+		(UIDocumentInteractionController *)controller {
+	return self;
+}
+
+#pragma mark - fast scroll date
+
+- (void)scrollViewDidScroll:(UIScrollView *)scrollView {
+	if (scrollView != _tableView || _items.count == 0)
+		return;
+	if (!scrollView.isDragging && !scrollView.isDecelerating)
+		return;
+
+	NSArray *visible = [_tableView indexPathsForVisibleRows];
+	if (visible.count == 0)
+		return;
+
+	NSIndexPath *top = visible[0];
+	NSInteger perRow = TGMediaScopeIsGrid(_scope)
+			? (_itemsPerRow < 1 ? 1 : _itemsPerRow) : 1;
+	NSInteger index = top.row * perRow;
+	if (index >= (NSInteger)_items.count)
+		index = (NSInteger)_items.count - 1;
+
+	NSString *month = TGMediaMonthForDate([_items[index][@"date"] integerValue]);
+	if (month.length == 0)
+		return;
+
+	_dateIndicator.text = month;
+	if (_dateIndicator.alpha < 1.0f){
+		[UIView animateWithDuration:0.15 animations:^{
+			self.dateIndicator.alpha = 1.0f;
+		}];
+	}
+}
+
+- (void)hideDateIndicator {
+	if (_dateIndicator.alpha == 0.0f)
+		return;
+	[UIView animateWithDuration:0.25 animations:^{
+		self.dateIndicator.alpha = 0.0f;
+	}];
+}
+
+- (void)scrollViewDidEndDecelerating:(UIScrollView *)scrollView {
+	[self hideDateIndicator];
+}
+
+- (void)scrollViewDidEndDragging:(UIScrollView *)scrollView willDecelerate:(BOOL)decelerate {
+	if (!decelerate)
+		[self hideDateIndicator];
 }
 
 - (void)didReceiveMemoryWarning {

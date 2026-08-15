@@ -128,6 +128,7 @@ static double TGScalarAt(NSDictionary *prop, double frame, double fallback) {
 @interface TGLottieView ()
 @property (nonatomic, strong) NSDictionary *animation;
 @property (nonatomic, strong) NSArray *layers;
+@property (nonatomic, strong) NSArray *reversedLayers;
 @property (nonatomic, assign) double inPoint;
 @property (nonatomic, assign) double outPoint;
 @property (nonatomic, assign) double frameRate;
@@ -162,6 +163,7 @@ static double TGScalarAt(NSDictionary *prop, double frame, double fallback) {
 	self.loaded = NO;
 	self.animation = nil;
 	self.layers = nil;
+	self.reversedLayers = nil;
 	self.layersByIndex = nil;
 
 	if (!path.length || ![[NSFileManager defaultManager] fileExistsAtPath:path]){
@@ -213,6 +215,7 @@ static double TGScalarAt(NSDictionary *prop, double frame, double fallback) {
 
 	self.animation = anim;
 	self.layers    = layers;
+	self.reversedLayers = [[layers reverseObjectEnumerator] allObjects];
 	self.layersByIndex = byIndex;
 	self.inPoint   = ip;
 	self.outPoint  = (op > ip) ? op : (ip + 1.0);
@@ -304,7 +307,7 @@ static double TGScalarAt(NSDictionary *prop, double frame, double fallback) {
 	CGContextScaleCTM(ctx, scale, scale);
 
 	// Lottie paints the last layer first.
-	for (NSDictionary *layer in [[self.layers reverseObjectEnumerator] allObjects])
+	for (NSDictionary *layer in self.reversedLayers)
 		[self drawLottieLayer:layer inContext:ctx];
 
 	CGContextRestoreGState(ctx);
@@ -426,10 +429,14 @@ static double TGScalarAt(NSDictionary *prop, double frame, double fallback) {
 			double savedAlpha = _cumulativeAlpha;
 			CGContextSaveGState(ctx);
 			// a group carries its own transform, as the last item
-			for (NSDictionary *item in items)
-				if ([item isKindOfClass:NSDictionary.class] &&
-					[item[@"ty"] isEqualToString:@"tr"])
+			for (NSDictionary *item in items){
+				if (![item isKindOfClass:NSDictionary.class])
+					continue;
+				id ity = item[@"ty"];
+				if ([ity isKindOfClass:NSString.class] &&
+					[(NSString *)ity isEqualToString:@"tr"])
 					[self applyTransform:item atFrame:frame inContext:ctx];
+			}
 			[self drawShapes:items atFrame:frame inContext:ctx];
 			CGContextRestoreGState(ctx);
 			_cumulativeAlpha = savedAlpha;
@@ -563,11 +570,10 @@ static double TGScalarAt(NSDictionary *prop, double frame, double fallback) {
 								  [c[2] doubleValue], alpha);
 	CGContextAddPath(ctx, path);
 
-	// Lottie fills use even-odd, which is what makes holes work.
-	if ([shape[@"r"] intValue] == 1)
-		CGContextFillPath(ctx);
-	else
+	if ([shape[@"r"] intValue] == 2)
 		CGContextEOFillPath(ctx);
+	else
+		CGContextFillPath(ctx);
 }
 
 - (void)strokePath:(CGPathRef)path withShape:(NSDictionary *)shape

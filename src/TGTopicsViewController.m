@@ -3,6 +3,7 @@
 #import "TGClient.h"
 #import "TGClient+Forums.h"
 #import "TGClient+Notifications.h"
+#import "TGClient+ChatManagement.h"
 #import "TGTheme.h"
 #import "TGIcons.h"
 #import "TGActionSheet.h"
@@ -284,12 +285,162 @@ static UIImage *TGTopicAvatarImage(NSString *initials, CGFloat size, NSInteger r
 
 @end
 
-static const NSInteger kTopicNameAlertCreate = 91;
 static const NSInteger kTopicNameAlertEdit = 92;
 static const NSInteger kTopicDeleteAlert = 93;
 
-@interface TGTopicsViewController () <UIAlertViewDelegate>
+static UIImage *TGTopicSwatchImage(NSInteger rgb, BOOL selected, CGFloat size) {
+	UIGraphicsBeginImageContextWithOptions(CGSizeMake(size, size), NO, 0);
+	CGContextRef ctx = UIGraphicsGetCurrentContext();
+	CGFloat inset = 3.0f;
+	CGRect circle = CGRectMake(inset, inset, size - inset * 2, size - inset * 2);
+
+	CGContextSetRGBFillColor(ctx,
+			((rgb >> 16) & 0xff) / 255.0f,
+			((rgb >> 8) & 0xff) / 255.0f,
+			(rgb & 0xff) / 255.0f, 1.0f);
+	CGContextFillEllipseInRect(ctx, circle);
+
+	if (selected){
+		CGContextSetLineWidth(ctx, 2.0f);
+		CGContextSetRGBStrokeColor(ctx, 0.20f, 0.48f, 0.80f, 1.0f);
+		CGContextStrokeEllipseInRect(ctx, CGRectInset(circle, -2.0f, -2.0f));
+	}
+
+	UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return image;
+}
+
+@interface TGTopicComposeController : UIViewController <UITextFieldDelegate>
+@property (nonatomic, strong) NSArray *colours;
+@property (nonatomic, assign) NSInteger selectedColour;
+@property (nonatomic, strong) UITextField *nameField;
+@property (nonatomic, strong) NSMutableArray *swatches;
+@property (nonatomic, copy) void (^onCreate)(NSString *name, NSInteger colour);
+@end
+
+@implementation TGTopicComposeController
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+	self.title = @"New Topic";
+	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+	self.view.backgroundColor = [[TGTheme shared] listBackgroundColour];
+
+	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
+		self.edgesForExtendedLayout = UIRectEdgeNone;
+
+	CGFloat width = self.view.bounds.size.width;
+
+	UIView *plate = [[UIView alloc] initWithFrame:CGRectMake(0, 12, width, 44)];
+	plate.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	plate.backgroundColor = [TGTheme shared].isDark
+			? [UIColor colorWithWhite:0.16f alpha:1.0f]
+			: [UIColor whiteColor];
+	[self.view addSubview:plate];
+
+	self.nameField = [[UITextField alloc] initWithFrame:CGRectMake(12, 0, width - 24, 44)];
+	self.nameField.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	self.nameField.font = [UIFont systemFontOfSize:16];
+	self.nameField.textColor = [[TGTheme shared] primaryTextColour];
+	self.nameField.placeholder = @"Topic Name";
+	self.nameField.delegate = self;
+	self.nameField.returnKeyType = UIReturnKeyDone;
+	self.nameField.autocorrectionType = UITextAutocorrectionTypeNo;
+	self.nameField.clearButtonMode = UITextFieldViewModeWhileEditing;
+	[plate addSubview:self.nameField];
+
+	UILabel *caption = [[UILabel alloc] initWithFrame:CGRectMake(16, 68, width - 32, 16)];
+	caption.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	caption.backgroundColor = [UIColor clearColor];
+	caption.font = [UIFont boldSystemFontOfSize:13];
+	caption.textColor = [[TGTheme shared] sectionHeaderColour];
+	caption.text = @"TOPIC COLOUR";
+	[self.view addSubview:caption];
+
+	self.swatches = [NSMutableArray array];
+	CGFloat swatchSize = 40.0f;
+	CGFloat spacing = 6.0f;
+	NSUInteger count = self.colours.count;
+	CGFloat totalWidth = count * swatchSize + (count > 0 ? (count - 1) * spacing : 0);
+	CGFloat startX = (width - totalWidth) / 2.0f;
+	if (startX < 10)
+		startX = 10;
+
+	for (NSUInteger i = 0; i < count; i++){
+		UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+		button.frame = CGRectMake(startX + i * (swatchSize + spacing), 92, swatchSize, swatchSize);
+		button.tag = (NSInteger)i;
+		[button addTarget:self action:@selector(swatchPressed:)
+		 forControlEvents:UIControlEventTouchUpInside];
+		[self.view addSubview:button];
+		[self.swatches addObject:button];
+	}
+	[self refreshSwatches];
+
+	UIButton *create = [TGIcons headerButtonWithTitle:@"Create" bold:YES
+											   target:self action:@selector(createPressed)];
+	self.navigationItem.rightBarButtonItem =
+			[[UIBarButtonItem alloc] initWithCustomView:create];
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+	[super viewDidAppear:animated];
+	[self.nameField becomeFirstResponder];
+}
+
+- (void)refreshSwatches {
+	for (UIButton *button in self.swatches){
+		NSUInteger index = (NSUInteger)button.tag;
+		if (index >= self.colours.count)
+			continue;
+		NSInteger rgb = [self.colours[index] integerValue];
+		[button setImage:TGTopicSwatchImage(rgb, rgb == self.selectedColour, 40.0f)
+				forState:UIControlStateNormal];
+	}
+}
+
+- (void)swatchPressed:(UIButton *)button {
+	NSUInteger index = (NSUInteger)button.tag;
+	if (index >= self.colours.count)
+		return;
+	self.selectedColour = [self.colours[index] integerValue];
+	[self refreshSwatches];
+}
+
+- (BOOL)textFieldShouldReturn:(UITextField *)textField {
+	[textField resignFirstResponder];
+	return NO;
+}
+
+- (void)createPressed {
+	NSString *name = [self.nameField.text
+			stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+	if (name.length == 0){
+		[[[UIAlertView alloc] initWithTitle:nil message:@"The topic needs a name."
+								   delegate:nil cancelButtonTitle:@"OK"
+						  otherButtonTitles:nil] show];
+		return;
+	}
+	[self.nameField resignFirstResponder];
+	if (self.onCreate)
+		self.onCreate(name, self.selectedColour);
+}
+
+@end
+
+@interface TGTopicsViewController () <UIAlertViewDelegate, UISearchBarDelegate>
 @property (nonatomic, strong) NSArray *topics;
+@property (nonatomic, strong) UISearchBar *searchBar;
+@property (nonatomic, strong) NSArray *searchResults;
+@property (nonatomic, copy) NSString *searchQuery;
+@property (nonatomic, assign) BOOL searching;
+@property (nonatomic, assign) BOOL canCreateTopics;
+@property (nonatomic, assign) BOOL canManageTopics;
+@property (nonatomic, assign) BOOL canDeleteTopics;
+@property (nonatomic, assign) BOOL rightsLoaded;
+@property (nonatomic, assign) NSInteger pendingColour;
+@property (nonatomic, copy) NSString *pendingName;
 @property (nonatomic, strong) UILabel *emptyLabel;
 @property (nonatomic, strong) UILabel *emptyText;
 @property (nonatomic, strong) UILabel *subtitleLabel;
@@ -376,10 +527,19 @@ static const NSInteger kTopicDeleteAlert = 93;
 		self.refreshControl = refresh;
 	}
 
-	UIButton *create = [TGIcons headerButtonWithTitle:@"New" bold:NO
-											   target:self action:@selector(newTopicPressed)];
-	self.navigationItem.rightBarButtonItem =
-			[[UIBarButtonItem alloc] initWithCustomView:create];
+	self.searchBar = [[UISearchBar alloc] initWithFrame:
+			CGRectMake(0, 0, self.tableView.bounds.size.width, 44)];
+	self.searchBar.delegate = self;
+	self.searchBar.placeholder = @"Search";
+	self.searchBar.autocorrectionType = UITextAutocorrectionTypeNo;
+	self.searchBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	self.tableView.tableHeaderView = self.searchBar;
+
+	self.canCreateTopics = YES;
+	self.canManageTopics = YES;
+	self.canDeleteTopics = YES;
+	[self updateCreateButton];
+	[self loadRights];
 
 	UILongPressGestureRecognizer *hold = [[UILongPressGestureRecognizer alloc]
 			initWithTarget:self action:@selector(topicHeld:)];
@@ -399,6 +559,7 @@ static const NSInteger kTopicDeleteAlert = 93;
 }
 
 - (void)dealloc {
+	[NSObject cancelPreviousPerformRequestsWithTarget:self];
 	[[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
@@ -474,6 +635,137 @@ static const NSInteger kTopicDeleteAlert = 93;
 	[self.tableView reloadData];
 }
 
+#pragma mark - rights
+
+- (void)loadRights {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] myRightsInChat:self.chatId completion:^(NSDictionary *rights){
+		TGTopicsViewController *me = weakSelf;
+		if (!me)
+			return;
+
+		BOOL owner = TGTopicFlag(rights, @"isOwner");
+		BOOL manage = owner || TGTopicFlag(rights, @"canManageTopics");
+		me.canManageTopics = manage;
+		me.canDeleteTopics = owner || TGTopicFlag(rights, @"canDeleteMessages");
+
+		if (manage){
+			me.canCreateTopics = YES;
+			me.rightsLoaded = YES;
+			[me updateCreateButton];
+			return;
+		}
+
+		[[TGClient shared] permissionsForChat:me.chatId
+								   completion:^(NSDictionary *permissions){
+			TGTopicsViewController *inner = weakSelf;
+			if (!inner)
+				return;
+			inner.canCreateTopics = TGTopicFlag(permissions, @"createTopics");
+			inner.rightsLoaded = YES;
+			[inner updateCreateButton];
+		}];
+	}];
+}
+
+- (void)updateCreateButton {
+	if (self.reordering)
+		return;
+
+	if (!self.canCreateTopics){
+		self.navigationItem.rightBarButtonItem = nil;
+		return;
+	}
+
+	UIButton *create = [TGIcons headerButtonWithTitle:@"New" bold:NO
+											   target:self action:@selector(newTopicPressed)];
+	self.navigationItem.rightBarButtonItem =
+			[[UIBarButtonItem alloc] initWithCustomView:create];
+}
+
+- (BOOL)canEditTopic:(NSDictionary *)topic {
+	if (self.canManageTopics)
+		return YES;
+	return TGTopicFlag(topic, @"isOutgoing") && !TGTopicFlag(topic, @"isClosed");
+}
+
+#pragma mark - search
+
+- (NSArray *)displayedTopics {
+	return self.searchResults ? self.searchResults : self.topics;
+}
+
+- (void)searchBarTextDidBeginEditing:(UISearchBar *)searchBar {
+	[searchBar setShowsCancelButton:YES animated:YES];
+}
+
+- (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)text {
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+											 selector:@selector(runSearch)
+											   object:nil];
+
+	NSString *query = [text stringByTrimmingCharactersInSet:
+			[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+	if (query.length == 0){
+		self.searchQuery = nil;
+		self.searchResults = nil;
+		self.searching = NO;
+		[self.spinner stopAnimating];
+		[self updateEmptyState];
+		[self.tableView reloadData];
+		return;
+	}
+
+	self.searchQuery = query;
+	[self performSelector:@selector(runSearch) withObject:nil afterDelay:0.4];
+}
+
+- (void)runSearch {
+	NSString *query = self.searchQuery;
+	if (query.length == 0)
+		return;
+
+	self.searching = YES;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] searchForumTopicsInChat:self.chatId query:query
+									completion:^(NSArray *topics){
+		TGTopicsViewController *me = weakSelf;
+		if (!me || me.searchQuery.length == 0 || ![me.searchQuery isEqualToString:query])
+			return;
+		me.searching = NO;
+		me.searchResults = [me cleanedTopics:topics];
+		[me updateEmptyState];
+		[me.tableView reloadData];
+	}];
+}
+
+- (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+											 selector:@selector(runSearch)
+											   object:nil];
+	[self runSearch];
+	[searchBar resignFirstResponder];
+}
+
+- (void)searchBarCancelButtonClicked:(UISearchBar *)searchBar {
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+											 selector:@selector(runSearch)
+											   object:nil];
+	searchBar.text = @"";
+	self.searchQuery = nil;
+	self.searchResults = nil;
+	self.searching = NO;
+	[searchBar setShowsCancelButton:NO animated:YES];
+	[searchBar resignFirstResponder];
+	[self updateEmptyState];
+	[self.tableView reloadData];
+}
+
+- (void)searchBarTextDidEndEditing:(UISearchBar *)searchBar {
+	if (searchBar.text.length == 0)
+		[searchBar setShowsCancelButton:NO animated:YES];
+}
+
 - (void)reloadTopics {
 	if (self.loading || self.reordering)
 		return;
@@ -542,6 +834,15 @@ static const NSInteger kTopicDeleteAlert = 93;
 }
 
 - (void)updateEmptyState {
+	if (self.searchResults){
+		BOOL empty = (self.searchResults.count == 0);
+		self.emptyLabel.text = @"No Topics Found";
+		self.emptyLabel.hidden = !empty;
+		self.emptyText.hidden = YES;
+		return;
+	}
+
+	self.emptyLabel.text = @"No Topics Yet";
 	BOOL empty = (self.topics.count == 0 && self.loadedOnce);
 	self.emptyLabel.hidden = !empty;
 	self.emptyText.hidden = !empty;
@@ -607,12 +908,14 @@ static const NSInteger kTopicDeleteAlert = 93;
 - (void)tableView:(UITableView *)tableView
 		willDisplayCell:(UITableViewCell *)cell
 	  forRowAtIndexPath:(NSIndexPath *)indexPath {
+	if (self.searchResults)
+		return;
 	if (indexPath.row >= (NSInteger)self.topics.count - 3)
 		[self loadMoreTopics];
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-	return self.topics.count;
+	return [self displayedTopics].count;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -637,10 +940,11 @@ static const NSInteger kTopicDeleteAlert = 93;
 	cell.pinIcon.hidden = YES;
 	cell.muteIcon.hidden = YES;
 
-	if (indexPath.row >= (NSInteger)self.topics.count)
+	NSArray *rows = [self displayedTopics];
+	if (indexPath.row >= (NSInteger)rows.count)
 		return cell;
 
-	NSDictionary *t = self.topics[indexPath.row];
+	NSDictionary *t = rows[indexPath.row];
 	NSInteger unread = TGTopicInteger(t, @"unread");
 
 	NSString *name = TGTopicString(t, @"name");
@@ -709,10 +1013,13 @@ static const NSInteger kTopicDeleteAlert = 93;
 	if (self.reordering)
 		return;
 
-	if (indexPath.row >= (NSInteger)self.topics.count)
+	[self.searchBar resignFirstResponder];
+
+	NSArray *rows = [self displayedTopics];
+	if (indexPath.row >= (NSInteger)rows.count)
 		return;
 
-	NSDictionary *t = self.topics[indexPath.row];
+	NSDictionary *t = rows[indexPath.row];
 	long long threadId = TGTopicLongLong(t, @"threadId");
 	if (threadId == 0)
 		return;
@@ -765,10 +1072,11 @@ static const NSInteger kTopicDeleteAlert = 93;
 
 	NSIndexPath *path = [self.tableView indexPathForRowAtPoint:
 			[hold locationInView:self.tableView]];
-	if (!path || path.row >= (NSInteger)self.topics.count)
+	NSArray *rows = [self displayedTopics];
+	if (!path || path.row >= (NSInteger)rows.count)
 		return;
 
-	NSDictionary *t = self.topics[path.row];
+	NSDictionary *t = rows[path.row];
 	self.actionTopic = t;
 
 	BOOL general = TGTopicFlag(t, @"isGeneral");
@@ -776,23 +1084,27 @@ static const NSInteger kTopicDeleteAlert = 93;
 	BOOL pinned = TGTopicFlag(t, @"isPinned");
 	BOOL hidden = TGTopicFlag(t, @"isHidden");
 
+	BOOL canEdit = [self canEditTopic:t];
+
 	NSMutableArray *items = [NSMutableArray array];
 	NSMutableArray *keys = [NSMutableArray array];
 
-	if (!general){
+	if (!general && canEdit){
 		[items addObject:@{@"title" : @"Edit", @"icon" : @"edit"}];
 		[keys addObject:@"edit"];
 	}
-	[items addObject:@{@"title" : (pinned ? @"Unpin" : @"Pin"),
-					   @"icon"  : (pinned ? @"unpin" : @"pin")}];
-	[keys addObject:@"pin"];
+	if (self.canManageTopics){
+		[items addObject:@{@"title" : (pinned ? @"Unpin" : @"Pin"),
+						   @"icon"  : (pinned ? @"unpin" : @"pin")}];
+		[keys addObject:@"pin"];
+	}
 
-	if (!general){
+	if (!general && canEdit){
 		[items addObject:@{@"title" : (closed ? @"Reopen" : @"Close"),
 						   @"icon"  : (closed ? @"unmute" : @"mute")}];
 		[keys addObject:@"close"];
 	}
-	if (general){
+	if (general && self.canManageTopics){
 		[items addObject:@{@"title" : (hidden ? @"Show" : @"Hide"),
 						   @"icon"  : (hidden ? @"unmute" : @"mute")}];
 		[keys addObject:@"hide"];
@@ -812,12 +1124,12 @@ static const NSInteger kTopicDeleteAlert = 93;
 	[items addObject:@{@"title" : @"Copy Link", @"icon" : @"copy"}];
 	[keys addObject:@"link"];
 
-	if (pinned && [self pinnedCount] > 1){
+	if (pinned && !self.searchResults && self.canManageTopics && [self pinnedCount] > 1){
 		[items addObject:@{@"title" : @"Reorder Pins", @"icon" : @"pin"}];
 		[keys addObject:@"reorder"];
 	}
 
-	if (!general){
+	if (!general && self.canDeleteTopics){
 		[items addObject:@{@"title"       : @"Delete",
 						   @"icon"        : @"delete",
 						   @"destructive" : @YES}];
@@ -977,11 +1289,7 @@ static const NSInteger kTopicDeleteAlert = 93;
 - (void)finishReordering {
 	self.reordering = NO;
 	[self.tableView setEditing:NO animated:YES];
-
-	UIButton *create = [TGIcons headerButtonWithTitle:@"New" bold:NO
-											   target:self action:@selector(newTopicPressed)];
-	self.navigationItem.rightBarButtonItem =
-			[[UIBarButtonItem alloc] initWithCustomView:create];
+	[self updateCreateButton];
 
 	if (!self.orderDirty){
 		[self reloadTopics];
@@ -1012,7 +1320,7 @@ static const NSInteger kTopicDeleteAlert = 93;
 }
 
 - (BOOL)tableView:(UITableView *)tableView canMoveRowAtIndexPath:(NSIndexPath *)indexPath {
-	return self.reordering && indexPath.row < [self pinnedCount];
+	return self.reordering && !self.searchResults && indexPath.row < [self pinnedCount];
 }
 
 - (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -1058,15 +1366,29 @@ targetIndexPathForMoveFromRowAtIndexPath:(NSIndexPath *)from
 #pragma mark - create and rename
 
 - (void)newTopicPressed {
-	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"New Topic"
-													message:@"Name the topic."
-												   delegate:self
-										  cancelButtonTitle:@"Cancel"
-										  otherButtonTitles:@"Create", nil];
-	alert.tag = kTopicNameAlertCreate;
-	if ([alert respondsToSelector:@selector(setAlertViewStyle:)])
-		alert.alertViewStyle = UIAlertViewStylePlainTextInput;
-	[alert show];
+	if (!self.canCreateTopics)
+		return;
+
+	NSArray *colours = [[TGClient shared] forumTopicIconColors];
+	if (![colours isKindOfClass:[NSArray class]])
+		colours = @[];
+
+	TGTopicComposeController *compose = [[TGTopicComposeController alloc] init];
+	compose.colours = colours;
+	compose.selectedColour = colours.count ? [colours[0] integerValue] : 0;
+
+	__weak typeof(self) weakSelf = self;
+	compose.onCreate = ^(NSString *name, NSInteger colour){
+		TGTopicsViewController *me = weakSelf;
+		if (!me)
+			return;
+		me.pendingColour = colour;
+		me.pendingName = name;
+		[me.navigationController popToViewController:me animated:YES];
+		[me performSelector:@selector(chooseIconForPendingName) withObject:nil afterDelay:0.35];
+	};
+
+	[self.navigationController pushViewController:compose animated:YES];
 }
 
 - (void)askTopicNameForEdit:(NSDictionary *)topic {
@@ -1116,9 +1438,7 @@ targetIndexPathForMoveFromRowAtIndexPath:(NSIndexPath *)from
 		return;
 	}
 
-	if (alertView.tag == kTopicNameAlertCreate)
-		[self chooseIconForName:name editing:NO];
-	else if (alertView.tag == kTopicNameAlertEdit)
+	if (alertView.tag == kTopicNameAlertEdit)
 		[self chooseIconForName:name editing:YES];
 }
 
@@ -1135,6 +1455,13 @@ targetIndexPathForMoveFromRowAtIndexPath:(NSIndexPath *)from
 			break;
 	}
 	return clean;
+}
+
+- (void)chooseIconForPendingName {
+	NSString *name = self.pendingName;
+	self.pendingName = nil;
+	if (name.length)
+		[self chooseIconForName:name editing:NO];
 }
 
 - (void)chooseIconForName:(NSString *)name editing:(BOOL)editing {
@@ -1199,10 +1526,15 @@ targetIndexPathForMoveFromRowAtIndexPath:(NSIndexPath *)from
 }
 
 - (void)commitCreateWithName:(NSString *)name iconEmojiId:(int64_t)emojiId {
+	NSInteger colour = self.pendingColour > 0
+			? self.pendingColour
+			: [self iconColourForName:name];
+	self.pendingColour = 0;
+
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] createForumTopicInChat:self.chatId
 										 name:name
-									iconColor:[self iconColourForName:name]
+									iconColor:colour
 								  iconEmojiId:emojiId
 								   completion:^(NSDictionary *topic){
 		if (!topic)

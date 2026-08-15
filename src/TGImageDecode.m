@@ -26,7 +26,7 @@ UIImage *TGDecodeSquareThumbnail(NSString *path, CGFloat side) {
 	CGFloat scale = MAX(side / size.width, side / size.height);
 	CGSize scaled = CGSizeMake(size.width * scale, size.height * scale);
 
-	UIGraphicsBeginImageContextWithOptions(CGSizeMake(side, side), NO, 0);
+	UIGraphicsBeginImageContextWithOptions(CGSizeMake(side, side), NO, 0.0f);
 	[source drawInRect:CGRectMake((side - scaled.width) / 2,
 								   (side - scaled.height) / 2,
 								   scaled.width, scaled.height)];

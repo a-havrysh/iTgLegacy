@@ -117,11 +117,8 @@ static void TGInstallCrypto(void) {
 @property (nonatomic, strong) NSString *localUfrag;
 @property (nonatomic, strong) NSString *localPwd;
 @property (nonatomic, strong) NSString *reflectorHost;
-@property (nonatomic, assign) uint16_t reflectorPort;
-@property (nonatomic, assign) int64_t reflectorId;
 @property (nonatomic, assign) uint32_t signallingSeq;
 @property (nonatomic, assign) BOOL sentCandidates;
-@property (nonatomic, assign) BOOL loggedHeader;
 @property (nonatomic, assign) uint32_t currentSenderTag;
 @property (nonatomic, strong) TGCallReflector *currentReflector;
 @property (nonatomic, strong) NSString *peerUfrag;
@@ -535,8 +532,6 @@ static void TGInstallCrypto(void) {
 		if (!self.reflector){
 			self.reflector = reflector;
 			self.reflectorHost = server[@"ip_address"];
-			self.reflectorPort = (uint16_t)[server[@"port"] intValue];
-			self.reflectorId = index;
 		}
 	}
 	[self sendOurCandidates];
@@ -546,6 +541,10 @@ static void TGInstallCrypto(void) {
 /// decrypts, the crypto port is right and the packet is real call traffic.
 - (void)inspectReflectorPacket:(NSData *)packet {
 	const uint8_t *bytes = (const uint8_t *)packet.bytes;
+	if (packet.length < 4){
+		NSLog(@"TGCall: %lu-byte reflector packet", (unsigned long)packet.length);
+		return;
+	}
 	if (packet.length <= 32){
 		NSLog(@"TGCall: reflector service packet, %lu bytes, first %02x%02x%02x%02x",
 				(unsigned long)packet.length, bytes[0], bytes[1], bytes[2], bytes[3]);
@@ -595,6 +594,16 @@ static void TGInstallCrypto(void) {
 }
 
 - (void)teardown {
+	self.sentCandidates = NO;
+	self.callKey = nil;
+	self.signallingSeq = 0;
+	self.currentSenderTag = 0;
+	self.currentReflector = nil;
+	self.peerUfrag = nil;
+	self.peerPwd = nil;
+	self.localUfrag = nil;
+	self.localPwd = nil;
+	self.reflectorHost = nil;
 	[self.ice stop];
 	self.ice = nil;
 	for (TGCallReflector *reflector in self.reflectors)

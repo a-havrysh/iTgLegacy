@@ -241,8 +241,7 @@ static NSDictionary *TGMCMediaInfo(NSDictionary *message) {
 
 	if (threadId != 0){
 		request[@"topic_id"] = @{@"@type" : @"messageTopicForum",
-								 @"forum_topic_id" : @(threadId)};
-		request[@"message_thread_id"] = @(threadId);
+								 @"forum_topic_id" : @((int32_t)threadId)};
 	}
 	if (replyToId != 0)
 		request[@"reply_to"] = @{@"@type" : @"inputMessageReplyToMessage",
@@ -577,8 +576,7 @@ static NSDictionary *TGMCMediaInfo(NSDictionary *message) {
 		} mutableCopy];
 		if (threadId != 0){
 			request[@"topic_id"] = @{@"@type" : @"messageTopicForum",
-									 @"forum_topic_id" : @(threadId)};
-			request[@"message_thread_id"] = @(threadId);
+									 @"forum_topic_id" : @((int32_t)threadId)};
 		}
 		[strongSelf request:request completion:^(NSDictionary *result){
 			if (!completion)

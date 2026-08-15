@@ -105,11 +105,13 @@ static NSDictionary *TGCMEventFilterFields(void) {
 			@"memberInvites"      : @"member_invites",
 			@"memberPromotions"   : @"member_promotions",
 			@"memberRestrictions" : @"member_restrictions",
+			@"memberTagChanges"   : @"member_tag_changes",
 			@"infoChanges"        : @"info_changes",
 			@"settingChanges"     : @"setting_changes",
 			@"inviteLinkChanges"  : @"invite_link_changes",
 			@"videoChatChanges"   : @"video_chat_changes",
 			@"forumChanges"       : @"forum_changes",
+			@"subscriptionExtensions" : @"subscription_extensions",
 		};
 	return fields;
 }
@@ -459,10 +461,39 @@ static NSDictionary *TGCMEventFilterFields(void) {
 
 - (void)reportNotSpamMessages:(NSArray *)messageIds inChat:(int64_t)chatId
                    completion:(void (^)(BOOL ok))completion {
-	[self cm_toggleSupergroup:@"reportSupergroupSpam"
-						 chat:chatId
-					   fields:@{@"message_ids" : messageIds ?: @[]}
-				   completion:completion];
+	NSMutableArray *ids = [NSMutableArray array];
+	for (id raw in TGCMArray(messageIds)){
+		if ([raw isKindOfClass:NSNumber.class])
+			[ids addObject:raw];
+	}
+	if (!ids.count){
+		if (completion)
+			completion(NO);
+		return;
+	}
+	__weak typeof(self) weakSelf = self;
+	[self cm_supergroupForChat:chatId completion:^(int64_t supergroupId, NSDictionary *chat){
+		if (!supergroupId){
+			if (completion)
+				completion(NO);
+			return;
+		}
+		__block NSInteger remaining = (NSInteger)ids.count;
+		__block BOOL allOk = YES;
+		for (NSNumber *messageId in ids){
+			[weakSelf cm_run:@{
+				@"@type"         : @"reportSupergroupAntiSpamFalsePositive",
+				@"supergroup_id" : [NSNumber numberWithLongLong:supergroupId],
+				@"message_id"    : [NSNumber numberWithLongLong:[messageId longLongValue]],
+			} completion:^(BOOL ok){
+				if (!ok)
+					allOk = NO;
+				remaining--;
+				if (remaining <= 0 && completion)
+					completion(allOk);
+			}];
+		}
+	}];
 }
 
 - (void)reportAntiSpamFalsePositiveForMessage:(int64_t)messageId
@@ -532,7 +563,7 @@ static NSDictionary *TGCMEventFilterFields(void) {
 		}
 		NSDictionary *status = TGCMDict(result[@"status"]);
 		NSString *type = TGCMString(status[@"@type"]);
-		NSString *title = TGCMString(status[@"custom_title"]);
+		NSString *title = TGCMString(result[@"tag"]);
 		if ([type isEqualToString:@"chatMemberStatusCreator"]){
 			completion(TGCMFlatRights(status, YES, YES, title));
 			return;

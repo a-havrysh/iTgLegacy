@@ -2,6 +2,8 @@
 #import "TGClient.h"
 #import "TGClient+Premium.h"
 #import "TGClient+Payments.h"
+#import "TGClient+ChatList.h"
+#import "TGAlertView.h"
 #import "TGTheme.h"
 #import "TGIcons.h"
 
@@ -34,6 +36,22 @@ static UIView *TGStarsSectionHeaderWithTitle(NSString *title) {
 	container.backgroundColor = [UIColor clearColor];
 	[container addSubview:label];
 	return container;
+}
+
+static NSDictionary *TGStarsAction(NSString *title,
+								   NSString *value,
+								   BOOL destructive,
+								   void (^block)(void))
+{
+	NSMutableDictionary *action = [NSMutableDictionary dictionary];
+	action[@"title"] = title ?: @"";
+	if (value.length)
+		action[@"value"] = value;
+	if (destructive)
+		action[@"destructive"] = @YES;
+	if (block)
+		action[@"block"] = [block copy];
+	return action;
 }
 
 static UIFont *TGStarsCommentFont(void) {
@@ -80,11 +98,12 @@ static UIView *TGStarsCommentViewWithText(NSString *comment, CGFloat width) {
 			  pairs:(NSArray *)pairs
 			comment:(NSString *)comment;
 
-@end
-
-@interface TGStarsDetailViewController ()
 @property (nonatomic, strong) NSArray *pairs;
 @property (nonatomic, strong) NSString *comment;
+@property (nonatomic, strong) NSArray *actions;
+@property (nonatomic, strong) NSString *actionsComment;
+@property (nonatomic, assign) BOOL busy;
+
 @end
 
 @implementation TGStarsDetailViewController
@@ -113,11 +132,13 @@ static UIView *TGStarsCommentViewWithText(NSString *comment, CGFloat width) {
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-	return 1;
+	return self.actions.count ? 2 : 1;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-	return (NSInteger)self.pairs.count;
+	if (section == 0)
+		return (NSInteger)self.pairs.count;
+	return (NSInteger)self.actions.count;
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -128,17 +149,68 @@ static UIView *TGStarsCommentViewWithText(NSString *comment, CGFloat width) {
 	return 8;
 }
 
+- (NSString *)commentForSection:(NSInteger)section {
+	if (section == 0)
+		return self.comment;
+	return self.actionsComment;
+}
+
 - (CGFloat)tableView:(UITableView *)tableView heightForFooterInSection:(NSInteger)section {
-	return TGStarsCommentHeight(self.comment, self.tableView.bounds.size.width ?: 320);
+	NSString *comment = [self commentForSection:section];
+	if (!comment.length)
+		return (section == 0 && self.actions.count) ? 1 : 8;
+	return TGStarsCommentHeight(comment, self.tableView.bounds.size.width ?: 320);
 }
 
 - (UIView *)tableView:(UITableView *)tableView viewForFooterInSection:(NSInteger)section {
-	return TGStarsCommentViewWithText(self.comment, self.tableView.bounds.size.width ?: 320);
+	return TGStarsCommentViewWithText([self commentForSection:section],
+			self.tableView.bounds.size.width ?: 320);
+}
+
+- (UITableViewCell *)actionCellInTable:(UITableView *)tableView row:(NSInteger)row {
+	static NSString *reuseId = @"TGStarsDetailAction";
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuseId];
+	if (!cell)
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
+									  reuseIdentifier:reuseId];
+	NSDictionary *action = self.actions[row];
+	cell.textLabel.text = action[@"title"];
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+	cell.textLabel.textAlignment = UITextAlignmentLeft;
+	cell.detailTextLabel.text = action[@"value"];
+	cell.detailTextLabel.font = [UIFont systemFontOfSize:16];
+	cell.detailTextLabel.textColor = [[TGTheme shared] isDark]
+			? [[TGTheme shared] cellDetailColour] : TGStarsRGB(0x356596);
+	cell.accessoryType = UITableViewCellAccessoryNone;
+	[[TGTheme shared] styleCell:cell];
+	if (self.busy){
+		cell.textLabel.textColor = [[TGTheme shared] secondaryTextColour];
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+	} else {
+		cell.textLabel.textColor = [action[@"destructive"] boolValue]
+				? TGStarsRGB(0xd12b1f) : TGStarsRGB(0x0779d0);
+		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+	}
+	return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	if (indexPath.section != 1 || self.busy)
+		return;
+	if (indexPath.row >= (NSInteger)self.actions.count)
+		return;
+	void (^block)(void) = self.actions[indexPath.row][@"block"];
+	if (block)
+		block();
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
 		 cellForRowAtIndexPath:(NSIndexPath *)indexPath
 {
+	if (indexPath.section == 1)
+		return [self actionCellInTable:tableView row:indexPath.row];
+
 	static NSString *reuseId = @"TGStarsDetailPair";
 	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuseId];
 	if (!cell)
@@ -163,11 +235,15 @@ static UIView *TGStarsCommentViewWithText(NSString *comment, CGFloat width) {
 enum {
 	TGStarsSectionBalance = 0,
 	TGStarsSectionTransactions,
+	TGStarsSectionSubscriptions,
 	TGStarsSectionGifts,
 	TGStarsSectionCount
 };
 
 @interface TGStarsViewController ()
+@property (nonatomic, strong) NSMutableArray *subscriptions;
+@property (nonatomic, assign) BOOL subscriptionsLoaded;
+@property (nonatomic, assign) BOOL subscriptionsLoading;
 @property (nonatomic, strong) NSMutableArray *transactions;
 @property (nonatomic, strong) NSMutableArray *gifts;
 @property (nonatomic, strong) NSString *transactionsOffset;
@@ -197,6 +273,7 @@ enum {
 	self.title = @"Telegram Stars";
 	self.transactions = [NSMutableArray array];
 	self.gifts = [NSMutableArray array];
+	self.subscriptions = [NSMutableArray array];
 	self.transactionsOffset = @"";
 	self.giftsOffset = @"";
 	self.balance = [[TGClient shared] cachedStarBalance];
@@ -227,15 +304,21 @@ enum {
 	NSString *giftsTitle = self.giftTotal > 0
 			? [NSString stringWithFormat:@"Gifts Received (%d)", (int)self.giftTotal]
 			: @"Gifts Received";
+	id subscriptionsHeader = self.subscriptions.count
+			? TGStarsSectionHeaderWithTitle(@"Subscriptions") : (id)[NSNull null];
 	self.sectionHeaderViews = [NSArray arrayWithObjects:
 			[NSNull null],
 			TGStarsSectionHeaderWithTitle(@"Transactions"),
+			subscriptionsHeader,
 			TGStarsSectionHeaderWithTitle(giftsTitle), nil];
 }
 
 - (void)reloadTapped {
 	[self.transactions removeAllObjects];
 	[self.gifts removeAllObjects];
+	[self.subscriptions removeAllObjects];
+	self.subscriptionsLoaded = NO;
+	self.subscriptionsLoading = NO;
 	self.transactionsOffset = @"";
 	self.giftsOffset = @"";
 	self.transactionsLoaded = NO;
@@ -254,6 +337,41 @@ enum {
 - (void)loadFirstPages {
 	[self loadMoreTransactions];
 	[self loadMoreGifts];
+	[self loadSubscriptions];
+}
+
+- (void)loadSubscriptions {
+	if (self.subscriptionsLoading)
+		return;
+	self.subscriptionsLoading = YES;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] starSubscriptionsOnlyExpiring:NO
+											  offset:@""
+										  completion:^(NSDictionary *page)
+	{
+		typeof(self) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		strongSelf.subscriptionsLoading = NO;
+		strongSelf.subscriptionsLoaded = YES;
+		[strongSelf.subscriptions removeAllObjects];
+		if ([page isKindOfClass:[NSDictionary class]]){
+			NSArray *rows = page[@"subscriptions"];
+			if ([rows isKindOfClass:[NSArray class]]){
+				for (id row in rows){
+					if ([row isKindOfClass:[NSDictionary class]])
+						[strongSelf.subscriptions addObject:row];
+				}
+			}
+			NSNumber *balance = page[@"balance"];
+			if ([balance isKindOfClass:[NSNumber class]] && [balance longLongValue]){
+				strongSelf.balance = [balance longLongValue];
+				strongSelf.balanceKnown = YES;
+			}
+		}
+		[strongSelf generateSectionHeaders];
+		[strongSelf.tableView reloadData];
+	}];
 }
 
 - (void)loadMoreTransactions {
@@ -429,6 +547,8 @@ enum {
 			return 1;
 		return (NSInteger)self.transactions.count + ([self hasMoreTransactions] ? 1 : 0);
 	}
+	if (section == TGStarsSectionSubscriptions)
+		return (NSInteger)self.subscriptions.count;
 	if (!self.gifts.count)
 		return 1;
 	return (NSInteger)self.gifts.count + ([self hasMoreGifts] ? 1 : 0);
@@ -454,6 +574,11 @@ enum {
 			return @"Everything this account earns or spends will be listed here.";
 		return nil;
 	}
+	if (section == TGStarsSectionSubscriptions){
+		if (self.subscriptions.count)
+			return @"Canceled subscriptions stay active until the paid period ends.";
+		return nil;
+	}
 	if (self.giftsLoaded && !self.gifts.count)
 		return @"Gifts friends send you appear here.";
 	return nil;
@@ -475,6 +600,8 @@ enum {
 	if (indexPath.section == TGStarsSectionTransactions && self.transactions.count)
 		return 51;
 	if (indexPath.section == TGStarsSectionGifts && self.gifts.count)
+		return 51;
+	if (indexPath.section == TGStarsSectionSubscriptions)
 		return 51;
 	return 44;
 }
@@ -624,9 +751,80 @@ enum {
 	return cell;
 }
 
+- (NSString *)periodTextForSeconds:(long long)seconds {
+	if (seconds >= 31000000)
+		return @"year";
+	if (seconds >= 2500000)
+		return @"month";
+	if (seconds >= 600000)
+		return @"week";
+	if (seconds >= 86400)
+		return [NSString stringWithFormat:@"%lld days", seconds / 86400];
+	return @"period";
+}
+
+- (NSString *)titleForSubscription:(NSDictionary *)subscription {
+	NSString *title = subscription[@"title"];
+	if ([title isKindOfClass:[NSString class]] && title.length)
+		return title;
+	int64_t chatId = [subscription[@"chatId"] longLongValue];
+	if (chatId){
+		NSString *chatTitle = [[TGClient shared] cachedTitleForChatId:chatId];
+		if (chatTitle.length)
+			return chatTitle;
+	}
+	return @"Subscription";
+}
+
+- (NSString *)subtitleForSubscription:(NSDictionary *)subscription {
+	NSString *date = [self dateTextFromValue:subscription[@"expirationDate"]];
+	if ([subscription[@"isCanceled"] boolValue])
+		return date.length ? [NSString stringWithFormat:@"Ends %@", date] : @"Canceled";
+	if ([subscription[@"isExpiring"] boolValue])
+		return date.length ? [NSString stringWithFormat:@"Expires %@", date] : @"Expiring";
+	return date.length ? [NSString stringWithFormat:@"Renews %@", date] : @"Active";
+}
+
+- (UITableViewCell *)subscriptionCellInTable:(UITableView *)tableView row:(NSInteger)row {
+	NSDictionary *subscription = self.subscriptions[row];
+	UITableViewCell *cell = [self plainCellInTable:tableView
+											 style:UITableViewCellStyleSubtitle
+										   reuseId:@"TGStarsSubscription"];
+	NSString *title = [self titleForSubscription:subscription];
+	cell.textLabel.text = title;
+	cell.textLabel.font = [UIFont systemFontOfSize:16];
+	cell.detailTextLabel.text = [self subtitleForSubscription:subscription];
+	if ([subscription[@"isCanceled"] boolValue] || [subscription[@"isExpiring"] boolValue])
+		cell.detailTextLabel.textColor = TGStarsRGB(0xee4928);
+
+	int64_t chatId = [subscription[@"chatId"] longLongValue];
+	if (chatId < 0)
+		chatId = -chatId;
+	cell.imageView.image = [TGIcons avatarWithInitials:[self initialsForName:title]
+												  size:40
+											  colourId:chatId];
+
+	long long stars = [subscription[@"stars"] longLongValue];
+	if (stars > 0){
+		UILabel *label = [[UILabel alloc] init];
+		label.text = [self starsText:stars signed:NO];
+		label.font = [UIFont boldSystemFontOfSize:16];
+		label.backgroundColor = [UIColor clearColor];
+		label.textAlignment = UITextAlignmentRight;
+		label.textColor = [[TGTheme shared] secondaryTextColour];
+		CGSize size = [label.text sizeWithFont:label.font];
+		label.frame = CGRectMake(0, 0, ceilf(size.width) + 2, 20);
+		cell.accessoryView = label;
+	}
+	return cell;
+}
+
 - (UITableViewCell *)tableView:(UITableView *)tableView
 		 cellForRowAtIndexPath:(NSIndexPath *)indexPath
 {
+	if (indexPath.section == TGStarsSectionSubscriptions)
+		return [self subscriptionCellInTable:tableView row:indexPath.row];
+
 	if (indexPath.section == TGStarsSectionBalance)
 		return [self balanceCellInTable:tableView];
 
@@ -688,6 +886,317 @@ enum {
 	[self.navigationController pushViewController:controller animated:YES];
 }
 
+- (void)finishAction:(TGStarsDetailViewController *)controller
+			 success:(BOOL)success
+			 failure:(NSString *)failureMessage
+{
+	controller.busy = NO;
+	if (!success){
+		[controller.tableView reloadData];
+		TGAlertView *alert = [[TGAlertView alloc] initWithTitle:@"Telegram Stars"
+														message:failureMessage
+											  cancelButtonTitle:@"OK"
+												  okButtonTitle:nil
+												completionBlock:nil];
+		[alert show];
+		return;
+	}
+	if (controller.navigationController == self.navigationController)
+		[self.navigationController popToViewController:self animated:YES];
+	[self reloadTapped];
+}
+
+- (void)confirmWithTitle:(NSString *)title
+				 message:(NSString *)message
+				  action:(NSString *)actionTitle
+				   block:(void (^)(void))block
+{
+	TGAlertView *alert = [[TGAlertView alloc] initWithTitle:title
+													message:message
+										  cancelButtonTitle:@"Cancel"
+											  okButtonTitle:actionTitle
+											completionBlock:^(bool okButtonPressed)
+	{
+		if (okButtonPressed && block)
+			block();
+	}];
+	[alert show];
+}
+
+- (NSArray *)giftActionsFor:(NSDictionary *)gift
+				 controller:(TGStarsDetailViewController *)controller
+{
+	NSString *giftId = gift[@"giftId"];
+	if (![giftId isKindOfClass:[NSString class]] || !giftId.length)
+		return nil;
+
+	NSMutableArray *actions = [NSMutableArray array];
+	__weak typeof(self) weakSelf = self;
+	__weak TGStarsDetailViewController *weakController = controller;
+
+	BOOL saved = [gift[@"isSaved"] boolValue];
+	[actions addObject:TGStarsAction(@"On My Profile", saved ? @"Shown" : @"Hidden", NO, ^{
+		typeof(self) strongSelf = weakSelf;
+		TGStarsDetailViewController *strongController = weakController;
+		if (!strongSelf || !strongController)
+			return;
+		[[TGClient shared] setReceivedGift:giftId saved:!saved];
+		NSMutableDictionary *updated = [NSMutableDictionary dictionaryWithDictionary:gift];
+		updated[@"isSaved"] = @(!saved);
+		[strongSelf configureGiftDetail:strongController withGift:updated];
+	})];
+
+	long long sell = [gift[@"sellStarCount"] longLongValue];
+	if (sell > 0 && ![gift[@"isUnique"] boolValue]){
+		NSString *value = [self starsText:sell signed:NO];
+		[actions addObject:TGStarsAction(@"Convert to Stars", value, YES, ^{
+			typeof(self) strongSelf = weakSelf;
+			TGStarsDetailViewController *strongController = weakController;
+			if (!strongSelf || !strongController)
+				return;
+			[strongSelf confirmWithTitle:@"Convert to Stars"
+								 message:[NSString stringWithFormat:
+										@"This gift will be removed and %@ added to your balance.",
+										value]
+								  action:@"Convert"
+								   block:^{
+				typeof(self) innerSelf = weakSelf;
+				if (!innerSelf)
+					return;
+				strongController.busy = YES;
+				[strongController.tableView reloadData];
+				[[TGClient shared] sellReceivedGift:giftId completion:^(BOOL ok){
+					typeof(self) doneSelf = weakSelf;
+					if (!doneSelf)
+						return;
+					[doneSelf finishAction:strongController
+								   success:ok
+								   failure:@"This gift can no longer be converted."];
+				}];
+			}];
+		})];
+	}
+
+	long long upgrade = [gift[@"upgradeStarCount"] longLongValue];
+	if ([gift[@"canUpgrade"] boolValue] && ![gift[@"isUnique"] boolValue]){
+		NSString *value = upgrade > 0 ? [self starsText:upgrade signed:NO] : @"Free";
+		[actions addObject:TGStarsAction(@"Upgrade to Unique", value, NO, ^{
+			typeof(self) strongSelf = weakSelf;
+			TGStarsDetailViewController *strongController = weakController;
+			if (!strongSelf || !strongController)
+				return;
+			[strongSelf confirmWithTitle:@"Upgrade Gift"
+								 message:upgrade > 0
+										? [NSString stringWithFormat:
+												@"Turn this gift into a unique collectible for %@?", value]
+										: @"Turn this gift into a unique collectible?"
+								  action:@"Upgrade"
+								   block:^{
+				strongController.busy = YES;
+				[strongController.tableView reloadData];
+				[[TGClient shared] upgradeReceivedGift:giftId
+								   keepOriginalDetails:YES
+											 starCount:upgrade
+											completion:^(NSDictionary *upgraded)
+				{
+					typeof(self) innerSelf = weakSelf;
+					if (!innerSelf)
+						return;
+					[innerSelf finishAction:strongController
+									success:[upgraded isKindOfClass:[NSDictionary class]]
+									failure:@"The upgrade could not be completed."];
+				}];
+			}];
+		})];
+	}
+
+	if ([gift[@"isUnique"] boolValue]){
+		long long resale = [gift[@"resaleStarCount"] longLongValue];
+		[actions addObject:TGStarsAction(resale > 0 ? @"Change Sale Price" : @"Sell This Gift",
+				resale > 0 ? [self starsText:resale signed:NO] : nil, NO, ^{
+			typeof(self) strongSelf = weakSelf;
+			TGStarsDetailViewController *strongController = weakController;
+			if (!strongSelf || !strongController)
+				return;
+			[strongSelf askResalePriceForGift:giftId controller:strongController];
+		})];
+		if (resale > 0){
+			[actions addObject:TGStarsAction(@"Remove From Sale", nil, YES, ^{
+				typeof(self) strongSelf = weakSelf;
+				TGStarsDetailViewController *strongController = weakController;
+				if (!strongSelf || !strongController)
+					return;
+				strongController.busy = YES;
+				[strongController.tableView reloadData];
+				[[TGClient shared] setResalePrice:0
+								  forReceivedGift:giftId
+									   completion:^(BOOL ok)
+				{
+					typeof(self) innerSelf = weakSelf;
+					if (!innerSelf)
+						return;
+					[innerSelf finishAction:strongController
+									success:ok
+									failure:@"The listing could not be removed."];
+				}];
+			})];
+		}
+	}
+
+	return actions;
+}
+
+- (void)askResalePriceForGift:(NSString *)giftId
+				   controller:(TGStarsDetailViewController *)controller
+{
+	__weak typeof(self) weakSelf = self;
+	__weak TGStarsDetailViewController *weakController = controller;
+	__block TGAlertView *alert = nil;
+	alert = [[TGAlertView alloc] initWithTitle:@"Sale Price"
+									   message:@"How many stars should this gift cost?"
+							 cancelButtonTitle:@"Cancel"
+								 okButtonTitle:@"Set"
+							   completionBlock:^(bool okButtonPressed)
+	{
+		typeof(self) strongSelf = weakSelf;
+		TGStarsDetailViewController *strongController = weakController;
+		TGAlertView *strongAlert = alert;
+		alert = nil;
+		if (!okButtonPressed || !strongSelf || !strongController || !strongAlert)
+			return;
+		NSString *text = [[strongAlert textFieldAtIndex:0] text];
+		long long price = [text longLongValue];
+		if (price <= 0)
+			return;
+		strongController.busy = YES;
+		[strongController.tableView reloadData];
+		[[TGClient shared] setResalePrice:price
+						  forReceivedGift:giftId
+							   completion:^(BOOL ok)
+		{
+			typeof(self) innerSelf = weakSelf;
+			if (!innerSelf)
+				return;
+			[innerSelf finishAction:strongController
+							success:ok
+							failure:@"The price could not be set."];
+		}];
+	}];
+	if ([alert respondsToSelector:@selector(setAlertViewStyle:)])
+		alert.alertViewStyle = UIAlertViewStylePlainTextInput;
+	UITextField *field = [alert textFieldAtIndex:0];
+	field.keyboardType = UIKeyboardTypeNumberPad;
+	field.placeholder = @"Stars";
+	[alert show];
+}
+
+- (void)pushSubscriptionDetails:(NSDictionary *)subscription {
+	NSString *subscriptionId = subscription[@"id"];
+	if (![subscriptionId isKindOfClass:[NSString class]])
+		subscriptionId = nil;
+
+	NSMutableArray *pairs = [NSMutableArray array];
+	long long stars = [subscription[@"stars"] longLongValue];
+	long long period = [subscription[@"period"] longLongValue];
+	if (stars > 0){
+		[pairs addObject:@[@"Price", [self starsText:stars signed:NO]]];
+		if (period > 0)
+			[pairs addObject:@[@"Billed", [NSString stringWithFormat:@"every %@",
+					[self periodTextForSeconds:period]]]];
+	}
+
+	NSString *date = [self dateTextFromValue:subscription[@"expirationDate"]];
+	if (date.length)
+		[pairs addObject:@[[subscription[@"isCanceled"] boolValue] ? @"Ends" : @"Next Charge",
+				date]];
+
+	NSString *kind = subscription[@"kind"];
+	if ([kind isKindOfClass:[NSString class]] && kind.length)
+		[pairs addObject:@[@"Type", [kind isEqualToString:@"bot"] ? @"Bot" : @"Channel"]];
+
+	[pairs addObject:@[@"Status", [subscription[@"isCanceled"] boolValue] ? @"Canceled"
+			: ([subscription[@"isExpiring"] boolValue] ? @"Expiring" : @"Active")]];
+
+	TGStarsDetailViewController *controller =
+			[[TGStarsDetailViewController alloc] initWithTitle:
+					[self titleForSubscription:subscription]
+														 pairs:pairs
+													   comment:nil];
+
+	if (subscriptionId.length){
+		NSMutableArray *actions = [NSMutableArray array];
+		__weak typeof(self) weakSelf = self;
+		__weak TGStarsDetailViewController *weakController = controller;
+
+		if ([subscription[@"canReuse"] boolValue]){
+			[actions addObject:TGStarsAction(@"Rejoin Channel", nil, NO, ^{
+				typeof(self) strongSelf = weakSelf;
+				TGStarsDetailViewController *strongController = weakController;
+				if (!strongSelf || !strongController)
+					return;
+				strongController.busy = YES;
+				[strongController.tableView reloadData];
+				[[TGClient shared] reuseStarSubscription:subscriptionId
+											  completion:^(BOOL ok)
+				{
+					typeof(self) innerSelf = weakSelf;
+					if (!innerSelf)
+						return;
+					[innerSelf finishAction:strongController
+									success:ok
+									failure:@"The channel could not be rejoined."];
+				}];
+			})];
+		}
+
+		BOOL canceled = [subscription[@"isCanceled"] boolValue];
+		[actions addObject:TGStarsAction(
+				canceled ? @"Renew Subscription" : @"Cancel Subscription",
+				nil, !canceled, ^{
+			typeof(self) strongSelf = weakSelf;
+			TGStarsDetailViewController *strongController = weakController;
+			if (!strongSelf || !strongController)
+				return;
+			void (^apply)(void) = ^{
+				strongController.busy = YES;
+				[strongController.tableView reloadData];
+				[[TGClient shared] setStarSubscription:subscriptionId
+											  canceled:!canceled
+											completion:^(BOOL ok)
+				{
+					typeof(self) innerSelf = weakSelf;
+					if (!innerSelf)
+						return;
+					[innerSelf finishAction:strongController
+									success:ok
+									failure:@"The subscription could not be changed."];
+				}];
+			};
+			if (canceled){
+				apply();
+				return;
+			}
+			[strongSelf confirmWithTitle:@"Cancel Subscription"
+								 message:@"Stars will stop being charged. Access stays until the paid period ends."
+								  action:@"Cancel Subscription"
+								   block:apply];
+		})];
+
+		controller.actions = actions;
+	}
+
+	[self.navigationController pushViewController:controller animated:YES];
+}
+
+- (void)configureGiftDetail:(TGStarsDetailViewController *)controller
+				   withGift:(NSDictionary *)gift
+{
+	controller.actions = [self giftActionsFor:gift controller:controller];
+	controller.actionsComment = controller.actions.count
+			? @"Hidden gifts are visible only to you." : nil;
+	[controller.tableView reloadData];
+}
+
 - (void)pushGiftDetails:(NSDictionary *)gift {
 	NSMutableArray *pairs = [NSMutableArray array];
 
@@ -714,13 +1223,6 @@ enum {
 					[number longLongValue]]]];
 	}
 
-	long long sell = [gift[@"sellStarCount"] longLongValue];
-	if (sell > 0)
-		[pairs addObject:@[@"If Converted", [self starsText:sell signed:NO]]];
-
-	[pairs addObject:@[@"On My Profile",
-			[gift[@"isSaved"] boolValue] ? @"Shown" : @"Hidden"]];
-
 	NSString *comment = gift[@"text"];
 	if ([comment isKindOfClass:[NSString class]] && comment.length)
 		comment = [NSString stringWithFormat:@"“%@”", comment];
@@ -735,6 +1237,9 @@ enum {
 			[[TGStarsDetailViewController alloc] initWithTitle:title
 														 pairs:pairs
 													   comment:comment];
+	controller.actions = [self giftActionsFor:gift controller:controller];
+	controller.actionsComment = controller.actions.count
+			? @"Hidden gifts are visible only to you." : nil;
 	[self.navigationController pushViewController:controller animated:YES];
 }
 
@@ -755,6 +1260,12 @@ enum {
 			return;
 		}
 		[self pushTransactionDetails:self.transactions[indexPath.row]];
+		return;
+	}
+
+	if (indexPath.section == TGStarsSectionSubscriptions){
+		if (indexPath.row < (NSInteger)self.subscriptions.count)
+			[self pushSubscriptionDetails:self.subscriptions[indexPath.row]];
 		return;
 	}
 

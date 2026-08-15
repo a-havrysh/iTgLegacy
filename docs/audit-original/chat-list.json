@@ -1,0 +1,102 @@
+{
+  "screen": "Chat list (dialog list) — TGChatListViewController.m",
+  "originalCounterpart": "telegram-original-sources/extracted/telegram_iphone.src/TelegraphKit/TelegraphKit/TGDialogListController.mm, TGDialogListCell.m; strings in Telegraph/Telegraph/en.lproj/Localizable.strings",
+  "findings": [
+    {
+      "kind": "state",
+      "visibility": "obvious",
+      "ours": "src/TGChatListViewController.m:994-1002,1137-1169 — one 2-line centred UILabel, systemFontOfSize:15, theme secondary colour, text \"No chats yet.\\nTap the pencil to start one.\", placed inside the tableView 40pt above centre.",
+      "theirs": "A 250pt-wide container centred in self.view (inserted BELOW the table) holding NoMessages.png, then a bold 15pt title #8b97a5 \"You have no conversations yet\", then a wrapped system 14pt #8b97a5 body \"Start messaging by pressing the pencil button in the top right corner or go to the Contacts section.\" (icon → +21pt → title → +8pt → body, body constrained to 232pt).",
+      "citation": "TGDialogListController.mm:889-919 (updateEmptyListContainer); Localizable.strings \"DialogList.NoMessagesTitle\", \"DialogList.NoMessagesText\"",
+      "fix": "Replace emptyLabel with a 250pt container inserted below the table view: icon view (NoMessages.png — art not in images/, needs adding), title UILabel boldSystemFontOfSize:15 colour rgb(0x8b,0x97,0xa5) text \"You have no conversations yet\" at y = iconBottom+21, body UILabel systemFontOfSize:14 same colour, numberOfLines 0, sized to fit 232pt wide, at titleBottom+8; container centred at floorf((view.width-250)/2), floorf((view.height-containerHeight)/2)."
+    },
+    {
+      "kind": "behaviour",
+      "visibility": "obvious",
+      "ours": "src/TGChatListViewController.m:924-926,1903-1944 — left bar button titled \"Edit\" opens a TGActionsMenu popup (Select list / Add story / Mark all read / Edit folders).",
+      "theirs": "Left button \"Edit\" (Common.Edit) puts the table into editing mode: each cell slides in a 30x30 ListEditingSwitch minus button at x 4, y (int)((73-30)/2)=21, and the button itself is replaced by a Done button (Common.Done, TGToolbarButtonTypeDone, minWidth 51, padding 10/10). Compose button fades to alpha 0 while editing.",
+      "citation": "TGDialogListController.mm:292-330 (controllerLeftBarButtonItem), :406-424 (_composeButton.alpha = _editingMode ? 0 : 1); TGDialogListCell.m:465-474, 1390-1430 (setEditing)",
+      "fix": "Make the left button toggle self.tableView editing and swap the title to \"Done\" while editing, hiding the compose button (alpha 0) meanwhile; move the folder/mark-read menu somewhere that is not the Edit slot."
+    },
+    {
+      "kind": "colour",
+      "visibility": "noticeable",
+      "ours": "src/TGChatListViewController.m:2645-2646 — cellForRow overwrites the cell's own colours with theme values: primaryTextColour = rgb(0x22,0x22,0x22) (TGTheme.m:223) for the title and secondaryTextColour = rgb(0x8D,0x8E,0x90) (TGTheme.m:224) for the preview.",
+      "theirs": "Title #111111, message preview #888888.",
+      "citation": "TGDialogListCell.m:193 (titleColor = UIColorRGB(0x111111)); TGDialogListCell.m:791 (normalTextColor = UIColorRGB(0x888888))",
+      "fix": "For the default (non-imported, light) theme make primaryTextColour rgb(0x11,0x11,0x11) and the chat-list preview colour rgb(0x88,0x88,0x88), or stop overriding the cell's own 0x111111/0x888888 in cellForRowAtIndexPath for that theme. Note the cell's init already has 0x111111/0x888888 (lines 135, 142) — the override is what breaks it."
+    },
+    {
+      "kind": "colour",
+      "visibility": "noticeable",
+      "ours": "src/TGChatListViewController.m:2699 uses [theme typingColour] = TG_BLUE_BLURPLE3 rgb(0x70,0xAA,0xEA) (TGTheme.m:230,402) for the typing/action line.",
+      "theirs": "Action / media preview text is #536c8c (a desaturated slate blue, not a light blue).",
+      "citation": "TGDialogListCell.m:792-793 (actionTextColor = UIColorRGB(0x536c8c); mediaTextColor = UIColorRGB(0x536c8c))",
+      "fix": "Set typingColour (light theme) to rgb(0x53,0x6c,0x8c); use the same colour for media-kind previews (photo/video/etc.), which the original also draws in 0x536c8c rather than grey."
+    },
+    {
+      "kind": "asset",
+      "visibility": "noticeable",
+      "ours": "src/TGChatListViewController.m:2711-2713 — a single tick, always DialogListSent.png, for any outgoing chat; no read state, no pending state.",
+      "theirs": "Two distinct images: DialogListSent.png (13x11) at dateX-15 for delivered, DialogListRead.png (18x11, double tick) at dateX-20 for read, plus a 12x12 pending indicator at dateX-16 for unsent. images/ already contains DialogListSent@2x.png, DialogListRead@2x.png and their _Highlighted variants — DialogListRead is sitting unused.",
+      "citation": "TGDialogListCell.m:102-121 (readCheckmark/deliveredCheckmark), :1329-1333 (frames)",
+      "fix": "Add a second image view for the read tick: DialogListRead at CGRectMake(dateX - 20, 11 + retinaPixel, 18, 11) when the last outgoing message is read, DialogListSent at CGRectMake(dateX - 15, 11 + retinaPixel, 13, 11) when only delivered."
+    },
+    {
+      "kind": "state",
+      "visibility": "noticeable",
+      "ours": "src/TGChatListViewController.m:61-72 computes TGDialogListBadgeImage(YES) from DialogListUnreadBadge_Highlighted.png but never assigns it; badge label has no highlightedTextColor, and the arrow (line 206) has no highlighted image. On tap the row plate inverts to blue while badge and arrow keep their normal art.",
+      "theirs": "Every right-hand element carries a highlighted counterpart: unread badge uses initWithImage:…highlightedImage:…, its label switches text to #2371c2 with a clear shadow (from white text + #8091a6 shadow), and the arrow is initWithImage:arrowImage() highlightedImage:arrowHighlightedImage(). The title/preview/date text is also redrawn in white while highlighted.",
+      "citation": "TGDialogListCell.m:409-424 (badge + label highlighted colours), :429-431 (arrowView highlighted image), :195,:229-236 (white text when highlighted)",
+      "fix": "Use initWithImage:highlightedImage: for badgeBackground (DialogListUnreadBadge / _Highlighted) and arrow (DialogListArrow / DialogListArrow_Highlighted), set badge.highlightedTextColor = rgb(0x23,0x71,0xc2) with shadowColor clear when highlighted, and set highlightedTextColor = white on titleLabel, previewLabel and dateLabel."
+    },
+    {
+      "kind": "layout",
+      "visibility": "noticeable",
+      "ours": "The group-chat row shows only the message text — there is no author line (src/TGChatListViewController.m:2694-2708 has no authorName branch, and TGChatCell has no author label).",
+      "theirs": "In a group chat the sender's name is drawn on its own frame CGRectMake(73, 29, width - 73 - 10 - rightPadding, 20) in bold system 14, colour #345f8f, and the message rect is pushed down by 9 (and shortened by 12) to sit beneath it.",
+      "citation": "TGDialogListCell.m:196 (authorNameColor = UIColorRGB(0x345f8f)), :372 (authorNameFont = boldSystemFontOfSize:14), :1355-1361 (author frame and message offset)",
+      "fix": "Add an author UILabel: boldSystemFontOfSize:14, rgb(0x34,0x5f,0x8f), frame (73, 29, w-73-10-rightPadding, 20) for group chats; when it is shown move previewLabel to y 38 and reduce its height by 12."
+    },
+    {
+      "kind": "wording",
+      "visibility": "subtle",
+      "ours": "src/TGChatListViewController.m:1154-1163 invents \"No results\", \"Connecting…\", \"No archived chats\", \"No chats in this folder\", \"No chats yet.\\nTap the pencil to start one.\"",
+      "theirs": "The dialog list has exactly one empty string pair: \"You have no conversations yet\" / \"Start messaging by pressing the pencil button in the top right corner or go to the Contacts section.\" Connection state is not an empty-list message at all — it goes in the navigation title, next to a spinner (titleStateUpdated:isLoading:).",
+      "citation": "Localizable.strings \"DialogList.NoMessagesTitle\"/\"DialogList.NoMessagesText\"; TGDialogListController.mm:262-268, 340-347 (_titleStatusLabel + _titleStatusIndicator in the title view)",
+      "fix": "Use the two original strings for the main empty state, and show connection state as a title-view label plus a UIActivityIndicatorView 5pt to its left (label centred with the indicator width+5 accounted for, y offset -1), which is where the original puts \"Connecting…\"."
+    },
+    {
+      "kind": "metric",
+      "visibility": "subtle",
+      "ours": "src/TGChatListViewController.m:33 kSwipeEdgeDistance = 10.0f; buttons collapse to x = width - 10 - 2 and expand right-edge at width - 10.",
+      "theirs": "static const float edgeDistance = 6; the delete button collapses to CGRectMake(width - 6 - 2, y, 2, 31) and expands to CGRectMake(width - 6 - 61, y, 61, 31), i.e. 6pt from the right edge, and its y is a literal 20 (not the centred 21).",
+      "citation": "TGDialogListCell.m:29 (edgeDistance = 6), :489 and :1522-1528 (editingButton frames)",
+      "fix": "Change kSwipeEdgeDistance to 6 and the swipe-button top to 20 (matching _editingButton.frame y) instead of (int)((73-31)/2)."
+    },
+    {
+      "kind": "state",
+      "visibility": "subtle",
+      "ours": "Every row is drawn on the same white plate; unread rows differ only by the badge (src/TGChatListViewController.m:2642-2644, 2718-2730).",
+      "theirs": "The cell keeps a distinct unread palette: background #ebf0f5 and message text #5b646e for an unread conversation versus white / #888888 for a read one.",
+      "citation": "TGDialogListCell.m:1093-1098 (normalBackground/unreadBackground = UIColorRGB(0xebf0f5); normalMessage 0x888888 / unreadMessage 0x5b646e)",
+      "fix": "When unread > 0, tint the cell plate rgb(0xeb,0xf0,0xf5) and draw the preview text in rgb(0x5b,0x64,0x6e); keep white / 0x888888 otherwise."
+    },
+    {
+      "kind": "type",
+      "visibility": "subtle",
+      "ours": "src/TGChatListViewController.m:156-159 — one plain UILabel, systemFontOfSize:13, right-aligned, for the whole date string.",
+      "theirs": "TGDateLabel with a three-font scale: dateFont system 13, dateTextFont bold system 13 (for the day word, e.g. \"Mon\"), dateLabelFont system 11 (for the AM/PM suffix, amWidth/pmWidth 19, dstOffset 2), drawn left-aligned inside a fixed 75x15 frame.",
+      "citation": "TGDialogListCell.m:388-397 (dateLabel font scale and widths), :1309 (dateFrame 75x15 at y 9)",
+      "fix": "Render the date in parts: bold system 13 for a weekday/date token, system 13 for the time digits, system 11 for the AM/PM suffix laid out in a 19pt slot — or at minimum use bold system 13 when the date collapses to a weekday, which is the visible half of the difference."
+    },
+    {
+      "kind": "behaviour",
+      "visibility": "subtle",
+      "ours": "src/TGChatListViewController.m:1662-1666 — tapping the search bar refuses to begin editing and pushes a separate TGSearchViewController.",
+      "theirs": "The search bar is the table header and searching happens in place through TGSearchDisplayMixin, with a scope bar (\"Conversations\" / \"Messages\") drawn with SearchBarScopeButton art; result rows are 51pt for conversations and 73pt for messages.",
+      "citation": "TGDialogListController.mm:499-536 (searchBar as tableHeaderView, scope titles), :1129 (51 / 73 search row heights)",
+      "fix": "If in-place search is not being restored, at least keep the two scopes and the 51/73 row heights in the pushed search page so the results look like the original's; the placeholder string \"Search\" (DialogList.SearchLabel) is already correct."
+    }
+  ]
+}

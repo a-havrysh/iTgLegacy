@@ -441,12 +441,9 @@ static TGActionsMenuView *sOpenMenu = nil;
 	frame.origin.y = rect.origin.y + rect.size.height + kMenuGapBelow;
 	if (frame.origin.y + frame.size.height > self.bounds.size.height - kMenuGapAbove){
 		frame.origin.y = rect.origin.y - frame.size.height - kMenuGapAbove;
-		if (frame.origin.y < 2.0f){
+		if (frame.origin.y < 2.0f)
 			frame.origin.y = floorf((self.bounds.size.height - frame.size.height) / 2);
-			_arrowOnTop = NO;
-		}
-		else
-			_arrowOnTop = NO;
+		_arrowOnTop = NO;
 	}
 	else
 		_arrowOnTop = YES;

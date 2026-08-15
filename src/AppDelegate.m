@@ -20,6 +20,10 @@
 #import <QuartzCore/QuartzCore.h>
 #include <stdio.h>
 
+@protocol TGTabBarHitTesting <NSObject>
+- (int)indexForLocation:(CGPoint)location;
+@end
+
 @implementation AppDelegate
 
 /// An incoming call is the one thing that takes over the screen on its own.
@@ -108,10 +112,16 @@ static void TGWatchForIncomingCalls(void) {
 				[me.loginVC setBusy:NO];
 				break;
 			case TGAuthStateWaitCode:
+				[me showLoginUI];
 				[me.loginVC showCodeStepWithPhoneNumber:me.currentPhoneNumber];
 				break;
 			case TGAuthStateWaitPassword:
+				[me showLoginUI];
 				[me.loginVC showPasswordStep];
+				break;
+			case TGAuthStateWaitRegistration:
+				[me showLoginUI];
+				[me.loginVC setBusy:NO];
 				break;
 			case TGAuthStateReady:
 				NSLog(@"TDLIB AUTH: READY");
@@ -222,14 +232,13 @@ static void TGWatchForIncomingCalls(void) {
  *
  *   itglegacy://                 just launch
  *   itglegacy://screenshot       write Caches/screen.png
- *   itglegacy://tab/N            select a tab
  *   itglegacy://chatindex/N      open the Nth chat in the list
  *   itglegacy://profile          open the profile of the chat on screen
  *   itglegacy://holdrow/N        hold the Nth row, for the menus behind it
  *   itglegacy://theme/NAME       apply a theme file from Documents ("none" clears,
  *                                "skeuomorphic"/"flat"/"dark" pick a built-in)
  *   itglegacy://stickers         open the sticker strip in the chat on screen
- *   itglegacy://tab/N            switch to tab N (0 chats, 1 contacts, 2 settings)
+ *   itglegacy://tab/N            switch to tab N (0 contacts, 1 chats, 2 settings)
  *   itglegacy://device           open the Device screen
  *   itglegacy://call/USERID      place a call, for testing without a tap
  *   itglegacy://callindex/N      call the other side of the Nth chat
@@ -292,13 +301,15 @@ static void TGWatchForIncomingCalls(void) {
 						(long)idx, (unsigned long)chats.count);
 				return;
 			}
-			NSDictionary *c = chats[idx];
+			if (![chats[idx] isKindOfClass:[NSDictionary class]])
+				return;
+			NSDictionary *c = (NSDictionary *)chats[idx];
 
 			UITabBarController *tabs = (UITabBarController *)self.rootViewController;
 			if (![tabs isKindOfClass:UITabBarController.class])
 				return;
-			tabs.selectedIndex = 0;
-			UINavigationController *nc = tabs.viewControllers[0];
+			tabs.selectedIndex = 1;
+			UINavigationController *nc = tabs.viewControllers[1];
 			[nc popToRootViewControllerAnimated:NO];
 
 			if ([c[@"isForum"] boolValue]){
@@ -359,7 +370,10 @@ static void TGWatchForIncomingCalls(void) {
 			Class tabBarClass = NSClassFromString(@"TGTabBar");
 			for (UIView *view = hit; view; view = view.superview){
 				if (tabBarClass && [view isKindOfClass:tabBarClass]){
-					int index = MAX(0, MIN((int)3 - 1, (int)(point.x / (view.frame.size.width / 3))));
+					int index = [(id<TGTabBarHitTesting>)view
+							indexForLocation:[view convertPoint:point fromView:nil]];
+					if (index < 0)
+						return;
 					if ([view respondsToSelector:@selector(setSelectedIndex:)])
 						[view setValue:@(index) forKey:@"selectedIndex"];
 					id delegate = [view valueForKey:@"tabDelegate"];
@@ -567,17 +581,6 @@ static void TGWatchForIncomingCalls(void) {
 			UINavigationController *nc = tabs.viewControllers[tabs.selectedIndex];
 			[nc popToRootViewControllerAnimated:NO];
 			[nc pushViewController:[[TGDeviceViewController alloc] init] animated:NO];
-		});
-		return YES;
-	}
-
-	// itglegacy://tab/N - switch tabs, so screens behind them can be checked.
-	if ([host isEqualToString:@"tab"]){
-		dispatch_async(dispatch_get_main_queue(), ^{
-			UITabBarController *tabs = (UITabBarController *)self.rootViewController;
-			if ([tabs isKindOfClass:UITabBarController.class])
-				tabs.selectedIndex = MIN((NSUInteger)[arg integerValue],
-										 tabs.viewControllers.count - 1);
 		});
 		return YES;
 	}

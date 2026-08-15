@@ -7,6 +7,8 @@
 #import "TGClient+Messages.h"
 #import "TGClient+Stories.h"
 #import "TGClient+Files.h"
+#import "TGClient+SecretChats.h"
+#import "TGClient+Privacy.h"
 #import "TGFoldersViewController.h"
 #import "TGTheme.h"
 #import "TGIcons.h"
@@ -75,6 +77,7 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 @property (nonatomic, strong) UIImageView *avatar;
 @property (nonatomic, strong) UILabel *titleLabel;
 @property (nonatomic, strong) UILabel *previewLabel;
+@property (nonatomic, strong) UILabel *draftLabel;
 @property (nonatomic, strong) UILabel *dateLabel;
 @property (nonatomic, strong) UIImageView *badgeBackground;
 @property (nonatomic, strong) UILabel *badge;
@@ -140,6 +143,15 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 	self.previewLabel.numberOfLines = 2;
 	self.previewLabel.lineBreakMode = NSLineBreakByTruncatingTail;
 	[self.contentView addSubview:self.previewLabel];
+
+	self.draftLabel = [[UILabel alloc] init];
+	self.draftLabel.font = [UIFont systemFontOfSize:14];
+	self.draftLabel.backgroundColor = [UIColor clearColor];
+	self.draftLabel.textColor = [UIColor colorWithRed:0xC4 / 255.0f green:0x2B / 255.0f
+												 blue:0x1E / 255.0f alpha:1.0f];
+	self.draftLabel.text = @"Draft:";
+	self.draftLabel.hidden = YES;
+	[self.contentView addSubview:self.draftLabel];
 
 	self.dateLabel = [[UILabel alloc] init];
 	self.dateLabel.font = [UIFont systemFontOfSize:13];
@@ -316,6 +328,7 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 	self.pin.alpha = alpha;
 	self.arrow.alpha = alpha;
 	self.previewLabel.alpha = alpha;
+	self.draftLabel.alpha = alpha;
 }
 
 - (void)setSwipeActionsVisible:(BOOL)visible animated:(BOOL)animated {
@@ -438,7 +451,14 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 		self.muteIcon.frame = CGRectMake(titleX + titleWidth + 3, 12,
 				self.muteIcon.image.size.width, self.muteIcon.image.size.height);
 
-	self.previewLabel.frame = CGRectMake(left, 29, w - left - 10 - rightPadding, 40);
+	CGFloat previewLeft = left;
+	if (!self.draftLabel.hidden){
+		CGFloat draftWidth = (int)[self.draftLabel.text sizeWithFont:self.draftLabel.font].width;
+		self.draftLabel.frame = CGRectMake(left, 29, draftWidth, 18);
+		previewLeft += draftWidth + 4;
+	}
+	self.previewLabel.frame = CGRectMake(previewLeft, 29,
+			w - previewLeft - 10 - rightPadding, 40);
 
 	// Your own last message is marked, the way it is in their chat item.
 	if (!self.tick.hidden)
@@ -468,6 +488,7 @@ static const CGFloat kStoryTrayHeight = 82.0f;
 static const CGFloat kStoryCellWidth = 68.0f;
 static const CGFloat kStoryAvatar = 56.0f;
 static const CGFloat kFolderStripHeight = 36.0f;
+static const CGFloat kLoginBannerHeight = 76.0f;
 
 static BOOL TGStoriesTrayEnabled(void) {
 	id stored = [[NSUserDefaults standardUserDefaults] objectForKey:TGChatListStoriesTrayKey];
@@ -885,6 +906,13 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 @property (nonatomic, assign) NSTimeInterval lastStorySweep;
 @property (nonatomic, strong) UILabel *titleLabelView;
 @property (nonatomic, weak) TGChatCell *openSwipeCell;
+@property (nonatomic, strong) NSMutableDictionary *secretStatuses;
+@property (nonatomic, strong) NSMutableSet *secretStatusesRequested;
+@property (nonatomic, strong) NSMutableDictionary *muteRemaining;
+@property (nonatomic, strong) NSDictionary *unconfirmedSession;
+@property (nonatomic, strong) NSArray *folderSheetItems;
+@property (nonatomic, strong) NSArray *rowActionKinds;
+@property (nonatomic, assign) int64_t chatPendingCustomMute;
 @end
 
 @implementation TGChatListViewController
@@ -902,6 +930,9 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	self.listUnread = [NSMutableDictionary dictionary];
 	self.sponsoredSeen = [NSMutableSet set];
 	self.storyPostersById = [NSMutableDictionary dictionary];
+	self.secretStatuses = [NSMutableDictionary dictionary];
+	self.secretStatusesRequested = [NSMutableSet set];
+	self.muteRemaining = [NSMutableDictionary dictionary];
 	self.folderLimit = 60;
 	if (!self.showsArchive && TGStoriesTrayEnabled())
 		[[TGClient shared] loadActiveStoriesArchived:NO];
@@ -1159,19 +1190,24 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	BOOL showArchive = !self.showsArchive && self.folderId == 0 && archivedCount > 0;
 	BOOL showTray = !self.showsArchive && TGStoriesTrayEnabled() && self.storyPosters.count > 0;
 	BOOL showStrip = [self usesFolderStrip];
+	BOOL showLogin = !self.showsArchive && self.unconfirmedSession != nil;
+	CGFloat loginHeight = showLogin ? kLoginBannerHeight : 0;
 	CGFloat trayHeight = showTray ? kStoryTrayHeight : 0;
 	CGFloat stripHeight = showStrip ? kFolderStripHeight : 0;
-	CGFloat rowsTop = 44 + trayHeight + stripHeight;
+	CGFloat rowsTop = 44 + loginHeight + trayHeight + stripHeight;
 	CGFloat height = rowsTop + (showArchive ? kRowHeight : 0);
 
 	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, height)];
 	self.searchBar.frame = CGRectMake(0, 0, width, 44);
 	[header addSubview:self.searchBar];
 
+	if (showLogin)
+		[header addSubview:[self loginBannerWithWidth:width top:44]];
 	if (showTray)
-		[header addSubview:[self storyTrayWithWidth:width top:44]];
+		[header addSubview:[self storyTrayWithWidth:width top:44 + loginHeight]];
 	if (showStrip)
-		[header addSubview:[self folderStripWithWidth:width top:44 + trayHeight]];
+		[header addSubview:[self folderStripWithWidth:width
+												  top:44 + loginHeight + trayHeight]];
 
 	if (showArchive){
 		TGChatCell *row = [[TGChatCell alloc] initWithStyle:UITableViewCellStyleDefault
@@ -1224,6 +1260,152 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	if (y > 0.5f && fabs(y - MIN(44.0f, previousHeight)) > 0.5f)
 		return;   // the user has scrolled somewhere of their own; leave it
 	self.tableView.contentOffset = CGPointMake(0, hidden);
+}
+
+- (UIView *)loginBannerWithWidth:(CGFloat)width top:(CGFloat)top {
+	NSDictionary *session = self.unconfirmedSession;
+	UIView *banner = [[UIView alloc] initWithFrame:
+			CGRectMake(0, top, width, kLoginBannerHeight)];
+	banner.backgroundColor = [UIColor colorWithRed:0xFF / 255.0f green:0xF9 / 255.0f
+											  blue:0xD8 / 255.0f alpha:1.0f];
+
+	NSString *device = TGReplyString(session[@"deviceModel"]);
+	if (!device.length)
+		device = TGReplyString(session[@"appName"]) ?: @"a new device";
+
+	UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(10, 7, width - 20, 18)];
+	title.backgroundColor = [UIColor clearColor];
+	title.font = [UIFont boldSystemFontOfSize:15];
+	title.textColor = [UIColor colorWithRed:0x33 / 255.0f green:0x2C / 255.0f
+									   blue:0x0A / 255.0f alpha:1.0f];
+	title.lineBreakMode = NSLineBreakByTruncatingTail;
+	title.text = [NSString stringWithFormat:@"New login from %@", device];
+	[banner addSubview:title];
+
+	NSMutableArray *detail = [NSMutableArray array];
+	NSString *location = TGReplyString(session[@"location"]);
+	NSString *ip = TGReplyString(session[@"ip"]);
+	if (location.length)
+		[detail addObject:location];
+	if (ip.length)
+		[detail addObject:ip];
+
+	UILabel *subtitle = [[UILabel alloc] initWithFrame:CGRectMake(10, 25, width - 20, 15)];
+	subtitle.backgroundColor = [UIColor clearColor];
+	subtitle.font = [UIFont systemFontOfSize:12];
+	subtitle.textColor = [UIColor colorWithRed:0x6B / 255.0f green:0x62 / 255.0f
+										  blue:0x35 / 255.0f alpha:1.0f];
+	subtitle.lineBreakMode = NSLineBreakByTruncatingTail;
+	subtitle.text = detail.count ? [detail componentsJoinedByString:@" · "]
+								 : @"Was this you?";
+	[banner addSubview:subtitle];
+
+	CGFloat buttonWidth = (int)((width - 30) / 2);
+	UIButton *mine = [self bannerButtonWithTitle:@"It's Me"
+										   frame:CGRectMake(10, 44, buttonWidth, 26)
+										  action:@selector(confirmNewLogin)
+									 destructive:NO];
+	[banner addSubview:mine];
+	UIButton *not = [self bannerButtonWithTitle:@"Not Me"
+										  frame:CGRectMake(width - 10 - buttonWidth, 44,
+														   buttonWidth, 26)
+										 action:@selector(terminateNewLogin)
+									destructive:YES];
+	[banner addSubview:not];
+
+	UIView *hair = [[UIView alloc] initWithFrame:
+			CGRectMake(0, kLoginBannerHeight - 0.5f, width, 0.5f)];
+	hair.backgroundColor = [[TGTheme shared] separatorColour];
+	[banner addSubview:hair];
+	return banner;
+}
+
+- (UIButton *)bannerButtonWithTitle:(NSString *)title
+							  frame:(CGRect)frame
+							 action:(SEL)action
+						destructive:(BOOL)destructive {
+	UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+	button.frame = frame;
+	button.titleLabel.font = [UIFont boldSystemFontOfSize:14];
+	[button setTitle:title forState:UIControlStateNormal];
+	UIImage *plate = TGSwipePlateImage(destructive, NO);
+	UIImage *pressed = TGSwipePlateImage(destructive, YES);
+	if (plate){
+		[button setBackgroundImage:plate forState:UIControlStateNormal];
+		[button setBackgroundImage:(pressed ?: plate) forState:UIControlStateHighlighted];
+	} else {
+		button.backgroundColor = destructive
+				? [UIColor colorWithRed:0xC4 / 255.0f green:0x2B / 255.0f
+								   blue:0x1E / 255.0f alpha:1.0f]
+				: [UIColor colorWithRed:0x8E / 255.0f green:0x9C / 255.0f
+								   blue:0xAE / 255.0f alpha:1.0f];
+		button.layer.cornerRadius = 4;
+	}
+	[button setTitleColor:(destructive ? [UIColor whiteColor]
+									   : [UIColor colorWithRed:0x4a / 255.0f green:0x65 / 255.0f
+														  blue:0x87 / 255.0f alpha:1.0f])
+				 forState:UIControlStateNormal];
+	[button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
+	return button;
+}
+
+- (void)refreshUnconfirmedSession {
+	if (self.showsArchive)
+		return;
+	static NSTimeInterval lastSweep = 0;
+	NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+	if (now - lastSweep < 30.0)
+		return;
+	lastSweep = now;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] unconfirmedSessionsWithCompletion:^(NSArray *sessions){
+		TGChatListViewController *me = weakSelf;
+		if (!me)
+			return;
+		NSDictionary *first = nil;
+		for (id entry in (TGReplyArray(sessions) ?: @[])){
+			NSDictionary *session = TGReplyDictionary(entry);
+			if ([session[@"id"] longLongValue]){
+				first = session;
+				break;
+			}
+		}
+		NSNumber *wasId = me.unconfirmedSession[@"id"];
+		NSNumber *nowId = first[@"id"];
+		BOOL changed = (wasId == nil) != (nowId == nil) ||
+					   (nowId != nil && ![nowId isEqualToNumber:wasId]);
+		me.unconfirmedSession = first;
+		if (changed)
+			[me rebuildTableHeader];
+	}];
+}
+
+- (void)confirmNewLogin {
+	long long sessionId = [self.unconfirmedSession[@"id"] longLongValue];
+	self.unconfirmedSession = nil;
+	[self rebuildTableHeader];
+	if (sessionId)
+		[[TGClient shared] confirmSession:sessionId completion:nil];
+}
+
+- (void)terminateNewLogin {
+	long long sessionId = [self.unconfirmedSession[@"id"] longLongValue];
+	self.unconfirmedSession = nil;
+	[self rebuildTableHeader];
+	if (!sessionId)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] terminateSession:sessionId completion:^(BOOL ok){
+		if (ok || !weakSelf)
+			return;
+		UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"New Login"
+														message:@"Could not end that session."
+													   delegate:nil
+											  cancelButtonTitle:@"OK"
+											  otherButtonTitles:nil];
+		[alert show];
+	}];
 }
 
 /// The strip of folders under the search bar, drawn with the search bar's own
@@ -1518,6 +1700,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 
 - (void)reload {
 	self.openSwipeCell = nil;
+	[self refreshUnconfirmedSession];
 	if (self.showsArchive){
 		self.chats = TGChatRows([TGClient shared].archivedChats);
 		[self.tableView reloadData];
@@ -1903,6 +2086,64 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	}
 }
 
+- (void)describeCell:(TGChatCell *)cell unread:(NSInteger)unread muted:(BOOL)muted {
+	NSMutableArray *parts = [NSMutableArray array];
+	if (cell.titleLabel.text.length)
+		[parts addObject:cell.titleLabel.text];
+	if (!cell.draftLabel.hidden)
+		[parts addObject:@"draft"];
+	if (cell.previewLabel.text.length)
+		[parts addObject:cell.previewLabel.text];
+	if (cell.dateLabel.text.length)
+		[parts addObject:cell.dateLabel.text];
+	if (unread == 1)
+		[parts addObject:@"1 unread message"];
+	else if (unread > 1)
+		[parts addObject:[NSString stringWithFormat:@"%ld unread messages", (long)unread]];
+	if (muted)
+		[parts addObject:@"muted"];
+
+	cell.isAccessibilityElement = YES;
+	cell.accessibilityLabel = [parts componentsJoinedByString:@", "];
+	cell.accessibilityTraits = UIAccessibilityTraitButton;
+}
+
+static UIColor *TGSecretChatColour(void) {
+	static UIColor *colour = nil;
+	if (!colour)
+		colour = [UIColor colorWithRed:0x00 / 255.0f green:0xA6 / 255.0f
+								  blue:0x2A / 255.0f alpha:1.0f];
+	return colour;
+}
+
+- (NSString *)secretHandshakeTextForChat:(NSDictionary *)chat {
+	if (self.searchResults)
+		return nil;
+	int64_t chatId = [chat[@"id"] longLongValue];
+	if (!chatId || [[TGClient shared] secretChatIdForChat:chatId] == 0)
+		return nil;
+
+	NSNumber *key = @(chatId);
+	NSString *cached = self.secretStatuses[key];
+	if (cached)
+		return cached.length ? cached : nil;
+	if ([self.secretStatusesRequested containsObject:key])
+		return nil;
+	[self.secretStatusesRequested addObject:key];
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] secretChatStatusForChat:chatId completion:^(NSString *status){
+		TGChatListViewController *me = weakSelf;
+		if (!me)
+			return;
+		NSString *line = TGReplyString(status) ?: @"";
+		me.secretStatuses[key] = line;
+		if (line.length)
+			[me.tableView reloadData];
+	}];
+	return nil;
+}
+
 /// Today shows the time, this week the weekday, older the date - as clients do.
 static NSString *TGChatDate(NSTimeInterval unix) {
 	if (unix <= 0)
@@ -1956,17 +2197,32 @@ static const NSInteger kChatActionsTag = 77;
 	BOOL pinned = [self.actionChat[@"isPinned"] boolValue];
 	BOOL muted  = [self.actionChat[@"isMuted"] boolValue];
 	BOOL unread = [self chatIsUnread:self.actionChat];
-	NSArray *items = @[
-		@{@"title" : (pinned ? @"Unpin" : @"Pin"),
-		  @"icon"  : (pinned ? @"unpin" : @"pin")},
-		@{@"title" : (unread ? @"Mark as Read" : @"Mark as Unread"),
-		  @"icon"  : @"chat"},
-		@{@"title" : (muted ? @"Unmute" : @"Mute"),
-		  @"icon"  : (muted ? @"unmute" : @"mute")},
-		@{@"title" : (self.showsArchive ? @"Unarchive" : @"Archive"),
-		  @"icon"  : (self.showsArchive ? @"unarchive" : @"archive")},
-		@{@"title" : @"Delete and Leave", @"icon" : @"delete", @"destructive" : @YES},
-	];
+	int64_t heldChatId = [self.actionChat[@"id"] longLongValue];
+	if (muted)
+		[self refreshMuteRemainingForChat:heldChatId];
+
+	NSMutableArray *items = [NSMutableArray array];
+	NSMutableArray *kinds = [NSMutableArray array];
+	[items addObject:@{@"title" : (pinned ? @"Unpin" : @"Pin"),
+					   @"icon"  : (pinned ? @"unpin" : @"pin")}];
+	[kinds addObject:@"pin"];
+	[items addObject:@{@"title" : (unread ? @"Mark as Read" : @"Mark as Unread"),
+					   @"icon"  : @"chat"}];
+	[kinds addObject:@"read"];
+	[items addObject:@{@"title" : (muted ? [self unmuteTitleForChat:heldChatId] : @"Mute"),
+					   @"icon"  : (muted ? @"unmute" : @"mute")}];
+	[kinds addObject:@"mute"];
+	[items addObject:@{@"title" : (self.showsArchive ? @"Unarchive" : @"Archive"),
+					   @"icon"  : (self.showsArchive ? @"unarchive" : @"archive")}];
+	[kinds addObject:@"archive"];
+	if ([self folderList].count){
+		[items addObject:@{@"title" : @"Add to Folder", @"icon" : @"folder"}];
+		[kinds addObject:@"folder"];
+	}
+	[items addObject:@{@"title" : @"Delete and Leave", @"icon" : @"delete",
+					   @"destructive" : @YES}];
+	[kinds addObject:@"delete"];
+	self.rowActionKinds = kinds;
 
 	CGRect rect = [self.tableView rectForRowAtIndexPath:
 			[NSIndexPath indexPathForRow:row inSection:0]];
@@ -1985,24 +2241,107 @@ static const NSInteger kChatActionsTag = 77;
 	NSDictionary *chat = self.actionChat;
 	int64_t chatId = [chat[@"id"] longLongValue];
 	BOOL unread = [self chatIsUnread:chat];
+	if (choice < 0 || choice >= (NSInteger)self.rowActionKinds.count)
+		return;
+	NSString *kind = self.rowActionKinds[choice];
 
-	if (choice == 0){
+	if ([kind isEqualToString:@"pin"]){
 		[[TGClient shared] setChat:chatId
 							pinned:![chat[@"isPinned"] boolValue]
 							inList:[self currentListId]];
-	} else if (choice == 1){
+	} else if ([kind isEqualToString:@"read"]){
 		[self setChat:chatId read:unread];
-	} else if (choice == 2){
-		if ([chat[@"isMuted"] boolValue])
+	} else if ([kind isEqualToString:@"mute"]){
+		if ([chat[@"isMuted"] boolValue]){
 			[[TGClient shared] setChat:chatId muteForSeconds:0];
-		else
+			[self.muteRemaining removeObjectForKey:@(chatId)];
+		} else {
 			[self showMuteDurationsForChat:chatId];
-		return;
-	} else if (choice == 3){
+			return;
+		}
+	} else if ([kind isEqualToString:@"archive"]){
 		[self setChat:chatId archived:!self.showsArchive];
+	} else if ([kind isEqualToString:@"folder"]){
+		[self showFoldersForChat:chatId];
+		return;
 	} else {
 		[self confirmDeleteChat:chatId];
 	}
+	self.actionChat = nil;
+}
+
+- (void)showFoldersForChat:(int64_t)chatId {
+	NSArray *folders = [self folderList];
+	if (!folders.count){
+		[self openFolderManagement];
+		return;
+	}
+
+	NSMutableArray *items = [NSMutableArray array];
+	NSMutableArray *ids = [NSMutableArray array];
+	for (id entry in folders){
+		NSDictionary *folder = TGReplyDictionary(entry);
+		NSInteger listId = [folder[@"id"] integerValue];
+		if (!listId)
+			continue;
+		[items addObject:@{@"title" : (TGReplyString(folder[@"title"]) ?: @"Folder"),
+						   @"icon"  : @"folder"}];
+		[ids addObject:@(listId)];
+	}
+	if (!items.count){
+		[self openFolderManagement];
+		return;
+	}
+	self.folderSheetItems = ids;
+
+	__weak typeof(self) weakSelf = self;
+	[TGPopupMenu showItems:items atPoint:self.menuPoint inView:self.navigationController.view
+				  onChoice:^(NSInteger choice, NSString *title){
+		TGChatListViewController *me = weakSelf;
+		if (!me || choice < 0 || choice >= (NSInteger)me.folderSheetItems.count)
+			return;
+		[me toggleChat:chatId inFolder:[me.folderSheetItems[choice] integerValue]];
+	}];
+}
+
+- (void)toggleChat:(int64_t)chatId inFolder:(NSInteger)folderId {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] folderWithId:folderId completion:^(NSDictionary *reply){
+		TGChatListViewController *me = weakSelf;
+		NSDictionary *folder = TGReplyDictionary(reply);
+		if (!me || !folder)
+			return;
+
+		NSMutableDictionary *edited = [folder mutableCopy];
+		NSMutableArray *included = [(TGReplyArray(folder[@"includedChatIds"]) ?: @[]) mutableCopy];
+		NSMutableArray *excluded = [(TGReplyArray(folder[@"excludedChatIds"]) ?: @[]) mutableCopy];
+		NSNumber *key = @(chatId);
+
+		BOOL wasIn = NO;
+		for (NSNumber *entry in [included copy]){
+			if ([entry longLongValue] == chatId){
+				wasIn = YES;
+				[included removeObject:entry];
+			}
+		}
+		for (NSNumber *entry in [excluded copy]){
+			if ([entry longLongValue] == chatId)
+				[excluded removeObject:entry];
+		}
+		if (!wasIn)
+			[included addObject:key];
+
+		edited[@"includedChatIds"] = included;
+		edited[@"excludedChatIds"] = excluded;
+		[[TGClient shared] saveFolder:edited completion:^(NSInteger saved){
+			TGChatListViewController *inner = weakSelf;
+			if (!inner)
+				return;
+			if (!saved)
+				return;
+			[inner reload];
+		}];
+	}];
 	self.actionChat = nil;
 }
 
@@ -2040,9 +2379,12 @@ static const NSInteger kChatActionsTag = 77;
 		@{@"title" : @"Mute for 1 hour",  @"icon" : @"mute"},
 		@{@"title" : @"Mute for 8 hours", @"icon" : @"mute"},
 		@{@"title" : @"Mute for 2 days",  @"icon" : @"mute"},
+		@{@"title" : @"Mute for 1 week",  @"icon" : @"mute"},
+		@{@"title" : @"Mute for…",        @"icon" : @"mute"},
 		@{@"title" : @"Mute forever",     @"icon" : @"mute"},
 	];
-	NSArray *seconds = @[@(3600), @(8 * 3600), @(2 * 24 * 3600), @(TGNotificationMuteForever)];
+	NSArray *seconds = @[@(3600), @(8 * 3600), @(2 * 24 * 3600), @(7 * 24 * 3600),
+						 @(-1), @(TGNotificationMuteForever)];
 
 	__weak typeof(self) weakSelf = self;
 	[TGPopupMenu showItems:items atPoint:self.menuPoint inView:self.navigationController.view
@@ -2050,10 +2392,75 @@ static const NSInteger kChatActionsTag = 77;
 		TGChatListViewController *me = weakSelf;
 		if (!me || choice < 0 || choice >= (NSInteger)seconds.count)
 			return;
-		[[TGClient shared] setChat:chatId muteForSeconds:[seconds[choice] integerValue]];
+		NSInteger value = [seconds[choice] integerValue];
+		if (value < 0){
+			[me askCustomMuteForChat:chatId];
+			return;
+		}
+		[[TGClient shared] setChat:chatId muteForSeconds:value];
+		me.muteRemaining[@(chatId)] = @(value);
 		me.actionChat = nil;
 		[me reload];
 	}];
+}
+
+- (void)askCustomMuteForChat:(int64_t)chatId {
+	self.chatPendingCustomMute = chatId;
+	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Mute for"
+													message:@"Hours"
+												   delegate:self
+										  cancelButtonTitle:@"Cancel"
+										  otherButtonTitles:@"Mute", nil];
+	alert.alertViewStyle = UIAlertViewStylePlainTextInput;
+	UITextField *field = [alert textFieldAtIndex:0];
+	field.keyboardType = UIKeyboardTypeNumberPad;
+	field.text = @"12";
+	alert.tag = 20;
+	[alert show];
+}
+
+- (void)alertView:(UIAlertView *)alertView didDismissWithButtonIndex:(NSInteger)buttonIndex {
+	if (alertView.tag != 20 || buttonIndex == alertView.cancelButtonIndex)
+		return;
+	int64_t chatId = self.chatPendingCustomMute;
+	self.chatPendingCustomMute = 0;
+	if (!chatId)
+		return;
+
+	NSInteger hours = [[alertView textFieldAtIndex:0].text integerValue];
+	if (hours <= 0)
+		return;
+	if (hours > 24 * 365)
+		hours = 24 * 365;
+	NSInteger value = hours * 3600;
+	[[TGClient shared] setChat:chatId muteForSeconds:value];
+	self.muteRemaining[@(chatId)] = @(value);
+	self.actionChat = nil;
+	[self reload];
+}
+
+- (void)refreshMuteRemainingForChat:(int64_t)chatId {
+	if (!chatId)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] notificationSettingsForChat:chatId completion:^(NSDictionary *settings){
+		TGChatListViewController *me = weakSelf;
+		NSDictionary *values = TGReplyDictionary(settings);
+		if (!me || !values)
+			return;
+		me.muteRemaining[@(chatId)] = @([values[@"muteFor"] integerValue]);
+	}];
+}
+
+- (NSString *)unmuteTitleForChat:(int64_t)chatId {
+	NSInteger left = [self.muteRemaining[@(chatId)] integerValue];
+	if (left <= 0 || left >= TGNotificationMuteForever)
+		return @"Unmute";
+	if (left < 3600)
+		return [NSString stringWithFormat:@"Unmute (%ldm left)", (long)(left / 60)];
+	if (left < 24 * 3600)
+		return [NSString stringWithFormat:@"Unmute (%ldh left)", (long)(left / 3600)];
+	return [NSString stringWithFormat:@"Unmute (%ldd left)", (long)(left / (24 * 3600))];
 }
 
 /// Archiving is a move between two chat lists, which is what TDLib calls it.
@@ -2243,6 +2650,7 @@ static const NSInteger kChatActionsTag = 77;
 	cell.muteIcon.hidden = YES;
 	cell.groupIcon.hidden = YES;
 	cell.pin.hidden = YES;
+	cell.draftLabel.hidden = YES;
 	cell.badge.hidden = YES;
 	cell.badgeBackground.hidden = YES;
 	cell.badge.text = @"";
@@ -2268,6 +2676,7 @@ static const NSInteger kChatActionsTag = 77;
 				? [TGIcons archiveAvatarOfSide:kAvatar]
 				: [TGIcons savedMessagesAvatarOfSide:kAvatar];
 		cell.avatar.backgroundColor = [UIColor clearColor];
+		[self describeCell:cell unread:0 muted:NO];
 		[cell setNeedsLayout];
 		return cell;
 	}
@@ -2283,9 +2692,17 @@ static const NSInteger kChatActionsTag = 77;
 	// Someone typing takes the preview over for as long as it lasts, in their
 	// blurple rather than the grey the preview uses.
 	NSString *action = TGReplyString(c[@"action"]);
+	NSString *draft = TGReplyString(c[@"draft"]);
+	NSString *handshake = [self secretHandshakeTextForChat:c];
 	if (action.length){
 		cell.previewLabel.text = action;
 		cell.previewLabel.textColor = [theme typingColour];
+	} else if (handshake.length){
+		cell.previewLabel.text = handshake;
+		cell.previewLabel.textColor = TGSecretChatColour();
+	} else if (draft.length && !self.searchResults){
+		cell.draftLabel.hidden = NO;
+		cell.previewLabel.text = draft;
 	} else {
 		cell.previewLabel.text = TGReplyString(c[@"text"]) ?: @"";
 	}
@@ -2337,6 +2754,7 @@ static const NSInteger kChatActionsTag = 77;
 		[weakSelf runSwipeAction:kind forCell:weakCell];
 	};
 
+	[self describeCell:cell unread:unread muted:[c[@"isMuted"] boolValue]];
 	[cell setNeedsLayout];
 	return cell;
 }

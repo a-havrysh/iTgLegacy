@@ -1,9 +1,12 @@
 #import "TGClient+Private.h"
 #import "TGClient+Stories.h"
+#import "TGClient+Storage.h"
 
 static BOOL TGStoryIsError(NSDictionary *result) {
-	return ![result isKindOfClass:NSDictionary.class] ||
-	       [result[@"@type"] isEqualToString:@"error"];
+	if (![result isKindOfClass:NSDictionary.class])
+		return YES;
+	id type = result[@"@type"];
+	return [type isKindOfClass:NSString.class] && [type isEqualToString:@"error"];
 }
 
 static NSArray *TGStoryArray(id value) {
@@ -39,6 +42,26 @@ static int64_t TGStorySenderId(NSDictionary *sender) {
 	if ([s[@"@type"] isEqualToString:@"messageSenderChat"])
 		return [TGStoryNumber(s[@"chat_id"]) longLongValue];
 	return [TGStoryNumber(s[@"user_id"]) longLongValue];
+}
+
+static NSString *TGStorySenderName(TGClient *client, int64_t senderId) {
+	if (!client || senderId == 0)
+		return @"";
+	if (senderId > 0)
+		return [client nameForUserId:senderId] ?: @"";
+	NSDictionary *known = TGStoryDict(client.chatsById[@(senderId)]);
+	NSString *title = TGStoryString(known[@"title"]);
+	if (title.length)
+		return title;
+	for (NSDictionary *c in client.chats){
+		if ([TGStoryDict(c)[@"id"] longLongValue] == senderId)
+			return TGStoryString(c[@"title"]);
+	}
+	for (NSDictionary *c in client.archivedChats){
+		if ([TGStoryDict(c)[@"id"] longLongValue] == senderId)
+			return TGStoryString(c[@"title"]);
+	}
+	return @"";
 }
 
 static NSDictionary *TGStoryPrivacyRules(NSString *privacy, NSArray *userIds) {
@@ -251,9 +274,34 @@ static NSDictionary *TGStoryAlbumFlattened(NSDictionary *raw) {
 }
 
 static NSString *TGStoryNetworkType(NSString *type) {
-	if ([type isEqualToString:@"wifi"])
+	NSString *lower = [(type ?: @"") lowercaseString];
+	if ([lower isEqualToString:@"wifi"])
 		return @"networkTypeWiFi";
+	if ([lower isEqualToString:@"roaming"] || [lower isEqualToString:@"mobileroaming"])
+		return @"networkTypeMobileRoaming";
+	if ([lower isEqualToString:@"other"])
+		return @"networkTypeOther";
+	if ([lower isEqualToString:@"none"])
+		return @"networkTypeNone";
 	return @"networkTypeMobile";
+}
+
+static NSDictionary *TGStoryAutoDownloadFromMirror(NSDictionary *values) {
+	NSDictionary *source = TGStoryDict(values);
+	if (!source)
+		return nil;
+	return @{
+		@"@type"                    : @"autoDownloadSettings",
+		@"is_auto_download_enabled" : source[@"enabled"] ?: @NO,
+		@"max_photo_file_size"      : source[@"maxPhotoSize"] ?: @(1024 * 1024),
+		@"max_video_file_size"      : source[@"maxVideoSize"] ?: @(0),
+		@"max_other_file_size"      : source[@"maxOtherSize"] ?: @(0),
+		@"video_upload_bitrate"     : source[@"videoUploadBitrate"] ?: @(0),
+		@"preload_large_videos"     : source[@"preloadLargeVideos"] ?: @NO,
+		@"preload_next_audio"       : source[@"preloadNextAudio"] ?: @NO,
+		@"preload_stories"          : @NO,
+		@"use_less_data_for_calls"  : source[@"useLessDataForCalls"] ?: @YES,
+	};
 }
 
 @interface TGClient (StoriesInternal)
@@ -438,7 +486,7 @@ static NSString *TGStoryNetworkType(NSString *type) {
 		BOOL blocked = [TGStoryDict(one[@"block_list"])[@"@type"] length] > 0;
 		[out addObject:@{
 			@"id"      : @(actorId),
-			@"name"    : [self nameForUserId:actorId] ?: @"",
+			@"name"    : TGStorySenderName(self, actorId),
 			@"date"    : TGStoryNumber(one[@"interaction_date"]) ?: @(0),
 			@"emoji"   : TGStoryReactionEmoji(type[@"chosen_reaction_type"]),
 			@"kind"    : kind,
@@ -618,7 +666,7 @@ static NSString *TGStoryNetworkType(NSString *type) {
 			NSNumber *chatId = TGStoryNumber(one);
 			if (!chatId)
 				continue;
-			NSString *title = [weakSelf nameForUserId:chatId.longLongValue] ?: @"";
+			NSString *title = TGStorySenderName(weakSelf, chatId.longLongValue);
 			[out addObject:@{@"id" : chatId, @"title" : title}];
 		}
 		completion(out);
@@ -798,7 +846,7 @@ static NSString *TGStoryNetworkType(NSString *type) {
 				continue;
 			[out addObject:@{
 				@"id"   : @(senderId),
-				@"name" : [weakSelf nameForUserId:senderId] ?: @"",
+				@"name" : TGStorySenderName(weakSelf, senderId),
 			}];
 		}
 		completion(out);
@@ -1180,7 +1228,7 @@ static NSString *TGStoryNetworkType(NSString *type) {
 				continue;
 			[out addObject:@{
 				@"id"    : chatId,
-				@"title" : [weakSelf nameForUserId:chatId.longLongValue] ?: @"",
+				@"title" : TGStorySenderName(weakSelf, chatId.longLongValue),
 			}];
 		}
 		completion(out);
@@ -1207,6 +1255,18 @@ static NSString *TGStoryNetworkType(NSString *type) {
 }
 
 - (void)setStoryPreloading:(BOOL)preload onNetwork:(NSString *)type {
+	NSDictionary *current =
+			TGStoryAutoDownloadFromMirror([self autoDownloadSettingsForNetworkType:type]);
+	if (current){
+		NSMutableDictionary *settings = [current mutableCopy];
+		settings[@"preload_stories"] = @(preload);
+		[self send:@{
+			@"@type"    : @"setAutoDownloadSettings",
+			@"settings" : settings,
+			@"type"     : @{@"@type" : TGStoryNetworkType(type)},
+		}];
+		return;
+	}
 	__weak typeof(self) weakSelf = self;
 	[self request:@{@"@type" : @"getAutoDownloadSettingsPresets"}
 	   completion:^(NSDictionary *presets){

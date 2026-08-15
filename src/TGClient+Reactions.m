@@ -9,6 +9,13 @@
 static NSString *const TGReactionPlaceholder = @"\U00002B50";
 static NSString *TGQuickReaction = nil;
 
+static BOOL TGReactionIsError(NSDictionary *result) {
+	if (![result isKindOfClass:NSDictionary.class])
+		return YES;
+	id type = result[@"@type"];
+	return [type isKindOfClass:NSString.class] && [type isEqualToString:@"error"];
+}
+
 static NSDictionary *TGReactionTypeEmoji(NSString *emoji) {
 	return @{@"@type" : @"reactionTypeEmoji", @"emoji" : emoji ?: @""};
 }
@@ -259,8 +266,7 @@ static NSString *TGReactionSenderName(TGClient *client, int64_t senderId) {
 	} completion:^(NSDictionary *result){
 		if (!completion)
 			return;
-		if (![result isKindOfClass:NSDictionary.class] ||
-		    [result[@"@type"] isEqualToString:@"error"]){
+		if (TGReactionIsError(result)){
 			completion(@[]);
 			return;
 		}
@@ -279,8 +285,7 @@ static NSString *TGReactionSenderName(TGClient *client, int64_t senderId) {
 	} completion:^(NSDictionary *result){
 		if (!completion)
 			return;
-		if (![result isKindOfClass:NSDictionary.class] ||
-		    [result[@"@type"] isEqualToString:@"error"]){
+		if (TGReactionIsError(result)){
 			completion(nil);
 			return;
 		}
@@ -331,8 +336,7 @@ static NSString *TGReactionSenderName(TGClient *client, int64_t senderId) {
 		if (!completion)
 			return;
 		TGClient *me = weakSelf;
-		if (!me || ![result isKindOfClass:NSDictionary.class] ||
-		    [result[@"@type"] isEqualToString:@"error"]){
+		if (!me || TGReactionIsError(result)){
 			completion(@[], @"", 0);
 			return;
 		}
@@ -369,8 +373,7 @@ static NSString *TGReactionSenderName(TGClient *client, int64_t senderId) {
 	   completion:^(NSDictionary *result){
 		if (!completion)
 			return;
-		if (![result isKindOfClass:NSDictionary.class] ||
-		    [result[@"@type"] isEqualToString:@"error"]){
+		if (TGReactionIsError(result)){
 			completion(nil);
 			return;
 		}
@@ -638,8 +641,7 @@ static NSString *TGReactionSenderName(TGClient *client, int64_t senderId) {
 	} completion:^(NSDictionary *result){
 		if (!completion)
 			return;
-		if (![result isKindOfClass:NSDictionary.class] ||
-		    [result[@"@type"] isEqualToString:@"error"]){
+		if (TGReactionIsError(result)){
 			completion(NO, NO);
 			return;
 		}

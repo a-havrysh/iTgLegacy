@@ -3,6 +3,7 @@
 #import "TGClient.h"
 #import "TGClient+SavedMessages.h"
 #import "TGClient+Files.h"
+#import "TGClient+Messages.h"
 #import "TGTheme.h"
 #import "TGIcons.h"
 #import "TGPopupMenu.h"
@@ -19,6 +20,11 @@ static const NSInteger kSavedTopicPage = 40;
 static const NSInteger kSavedHistoryPage = 40;
 
 static const NSInteger kSavedDeleteAlertTag = 71;
+static const NSInteger kSavedRangeAlertTag = 72;
+static const NSInteger kSavedReminderAlertTag = 73;
+static const NSInteger kSavedRangeSheetTag = 74;
+static const NSInteger kSavedReminderSheetTag = 75;
+static const CGFloat kSavedBannerHeight = 42.0f;
 
 static NSString *TGSavedDate(NSTimeInterval unix) {
 	if (unix <= 0)
@@ -339,8 +345,15 @@ static NSString *TGSavedTopicTitle(NSDictionary *topic) {
 
 #pragma mark - the topics list
 
-@interface TGSavedMessagesViewController () <UIAlertViewDelegate>
+@interface TGSavedMessagesViewController () <UIAlertViewDelegate, UIActionSheetDelegate>
 @property (nonatomic, strong) NSArray *topics;
+@property (nonatomic, strong) NSArray *reminders;
+@property (nonatomic, strong) UIButton *reminderBanner;
+@property (nonatomic, strong) NSDictionary *pendingReminder;
+@property (nonatomic, assign) int64_t rangeTopicId;
+@property (nonatomic, copy)   NSString *rangeTopicTitle;
+@property (nonatomic, assign) NSInteger rangeMinDate;
+@property (nonatomic, assign) NSInteger rangeMaxDate;
 @property (nonatomic, strong) NSMutableDictionary *avatars;
 @property (nonatomic, strong) NSMutableSet *avatarsRequested;
 @property (nonatomic, strong) UIView *emptyContainer;
@@ -412,8 +425,117 @@ static NSString *TGSavedTopicTitle(NSDictionary *topic) {
 												 name:TGThemeChangedNotification
 											   object:nil];
 
+	[self buildReminderBanner];
+
 	[TGSavedMessagesViewController setShowsTopics:YES];
 	[self reloadTopics];
+}
+
+- (void)buildReminderBanner {
+	TGTheme *theme = [TGTheme shared];
+
+	UIButton *banner = [UIButton buttonWithType:UIButtonTypeCustom];
+	banner.frame = CGRectMake(0, 0, self.tableView.bounds.size.width, kSavedBannerHeight);
+	banner.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	banner.backgroundColor = [theme listBackgroundColour];
+	banner.titleLabel.font = [UIFont boldSystemFontOfSize:15];
+	banner.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
+	banner.contentEdgeInsets = UIEdgeInsetsMake(0, 12, 0, 12);
+	[banner setTitleColor:[theme accentColour] forState:UIControlStateNormal];
+	[banner addTarget:self action:@selector(showReminders)
+	 forControlEvents:UIControlEventTouchUpInside];
+
+	UIView *line = [[UIView alloc] initWithFrame:
+			CGRectMake(0, kSavedBannerHeight - 1, banner.bounds.size.width, 1)];
+	line.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	line.backgroundColor = [theme separatorColour];
+	[banner addSubview:line];
+
+	self.reminderBanner = banner;
+	self.reminders = @[];
+}
+
+#pragma mark - reminders
+
+- (void)reloadReminders {
+	int64_t chatId = [[TGClient shared] savedMessagesChatId];
+	if (!chatId)
+		return;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] scheduledMessagesInChat:chatId completion:^(NSArray *messages){
+		TGSavedMessagesViewController *me = weakSelf;
+		if (!me)
+			return;
+
+		NSMutableArray *clean = [NSMutableArray array];
+		if ([messages isKindOfClass:NSArray.class]){
+			for (id message in messages){
+				if ([message isKindOfClass:NSDictionary.class])
+					[clean addObject:message];
+			}
+		}
+		me.reminders = clean;
+		[me updateReminderBanner];
+	}];
+}
+
+- (void)updateReminderBanner {
+	if (self.reminders.count == 0){
+		self.tableView.tableHeaderView = nil;
+		return;
+	}
+
+	NSString *title = (self.reminders.count == 1)
+			? @"1 Reminder"
+			: [NSString stringWithFormat:@"%d Reminders", (int)self.reminders.count];
+	[self.reminderBanner setTitle:title forState:UIControlStateNormal];
+	self.reminderBanner.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	[self.reminderBanner setTitleColor:[[TGTheme shared] accentColour]
+							  forState:UIControlStateNormal];
+
+	if (self.tableView.tableHeaderView != self.reminderBanner)
+		self.tableView.tableHeaderView = self.reminderBanner;
+}
+
+- (NSString *)titleForReminder:(NSDictionary *)reminder {
+	NSString *text = reminder[@"text"];
+	if (![text isKindOfClass:NSString.class] || !text.length)
+		text = @"Media";
+	if (text.length > 24)
+		text = [[text substringToIndex:24] stringByAppendingString:@"…"];
+
+	NSTimeInterval when = [reminder[@"sendDate"] doubleValue];
+	if (when <= 0)
+		return text;
+
+	static NSDateFormatter *stamp = nil;
+	if (!stamp){
+		stamp = [[NSDateFormatter alloc] init];
+		[stamp setLocale:[[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"]];
+		[stamp setDateFormat:@"dd.MM HH:mm"];
+	}
+	return [NSString stringWithFormat:@"%@  %@",
+			[stamp stringFromDate:[NSDate dateWithTimeIntervalSince1970:when]], text];
+}
+
+- (void)showReminders {
+	if (self.reminders.count == 0)
+		return;
+
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Reminders"
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:nil];
+	NSInteger shown = MIN((NSInteger)self.reminders.count, 6);
+	for (NSInteger i = 0; i < shown; i++)
+		[sheet addButtonWithTitle:[self titleForReminder:self.reminders[i]]];
+
+	[sheet addButtonWithTitle:@"Cancel"];
+	sheet.cancelButtonIndex = shown;
+	sheet.tag = kSavedReminderSheetTag;
+	[sheet showInView:self.navigationController.view];
 }
 
 - (void)dealloc {
@@ -432,6 +554,8 @@ static NSString *TGSavedTopicTitle(NSDictionary *topic) {
 
 	if (self.loadedOnce)
 		[self applyCachedTopics];
+
+	[self reloadReminders];
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
@@ -446,6 +570,7 @@ static NSString *TGSavedTopicTitle(NSDictionary *topic) {
 	self.tableView.backgroundColor = [theme listBackgroundColour];
 	self.tableView.separatorColor = [theme separatorColour];
 	self.tableView.backgroundView.backgroundColor = [theme listBackgroundColour];
+	[self updateReminderBanner];
 
 	BOOL plainPlate = (!theme.isDark && theme.importedName == nil);
 	self.tableView.separatorStyle = plainPlate
@@ -759,6 +884,9 @@ static NSString *TGSavedTopicTitle(NSDictionary *topic) {
 		[keys addObject:@"reorder"];
 	}
 
+	[items addObject:@{@"title" : @"Clear by Date", @"icon" : @"delete"}];
+	[keys addObject:@"range"];
+
 	[items addObject:@{@"title"       : @"Delete",
 					   @"icon"        : @"delete",
 					   @"destructive" : @YES}];
@@ -804,6 +932,14 @@ static NSString *TGSavedTopicTitle(NSDictionary *topic) {
 		return;
 	}
 
+	if ([key isEqualToString:@"range"]){
+		self.actionTopic = nil;
+		self.rangeTopicId = topicId;
+		self.rangeTopicTitle = TGSavedTopicTitle(topic);
+		[self showRangeSheet];
+		return;
+	}
+
 	if ([key isEqualToString:@"delete"]){
 		UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Delete Topic"
 														message:[NSString stringWithFormat:
@@ -817,7 +953,138 @@ static NSString *TGSavedTopicTitle(NSDictionary *topic) {
 	}
 }
 
+#pragma mark - clearing a date range
+
+- (void)showRangeSheet {
+	if (!self.rangeTopicId)
+		return;
+
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Clear Messages"
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:nil];
+	[sheet addButtonWithTitle:@"Last 24 Hours"];
+	[sheet addButtonWithTitle:@"Last 7 Days"];
+	[sheet addButtonWithTitle:@"Last 30 Days"];
+	[sheet addButtonWithTitle:@"Older Than 30 Days"];
+	[sheet addButtonWithTitle:@"Cancel"];
+	sheet.cancelButtonIndex = 4;
+	sheet.tag = kSavedRangeSheetTag;
+	[sheet showInView:self.navigationController.view];
+}
+
+- (void)confirmRangeAtIndex:(NSInteger)index {
+	NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+	NSTimeInterval day = 24 * 3600;
+	NSString *what = nil;
+
+	if (index == 0){
+		self.rangeMinDate = (NSInteger)(now - day);
+		self.rangeMaxDate = (NSInteger)now;
+		what = @"from the last 24 hours";
+	} else if (index == 1){
+		self.rangeMinDate = (NSInteger)(now - 7 * day);
+		self.rangeMaxDate = (NSInteger)now;
+		what = @"from the last 7 days";
+	} else if (index == 2){
+		self.rangeMinDate = (NSInteger)(now - 30 * day);
+		self.rangeMaxDate = (NSInteger)now;
+		what = @"from the last 30 days";
+	} else if (index == 3){
+		self.rangeMinDate = 0;
+		self.rangeMaxDate = (NSInteger)(now - 30 * day);
+		what = @"older than 30 days";
+	} else {
+		return;
+	}
+
+	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Clear Messages"
+													message:[NSString stringWithFormat:
+															@"Delete the saved messages %@ in %@?",
+															what,
+															self.rangeTopicTitle.length
+																	? self.rangeTopicTitle
+																	: @"this topic"]
+												   delegate:self
+										  cancelButtonTitle:@"Cancel"
+										  otherButtonTitles:@"Delete", nil];
+	alert.tag = kSavedRangeAlertTag;
+	[alert show];
+}
+
+- (void)clearConfirmedRange {
+	int64_t topicId = self.rangeTopicId;
+	self.rangeTopicId = 0;
+	if (!topicId)
+		return;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] deleteSavedMessagesTopic:topicId
+								   messagesFrom:self.rangeMinDate
+											 to:self.rangeMaxDate
+									 completion:^(BOOL ok){
+		if (!ok)
+			[weakSelf showError:@"Could not clear those messages."];
+		[weakSelf applyCachedTopics];
+	}];
+}
+
+#pragma mark - sheets and alerts
+
+- (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
+	if (index == sheet.cancelButtonIndex)
+		return;
+
+	if (sheet.tag == kSavedRangeSheetTag){
+		[self confirmRangeAtIndex:index];
+		return;
+	}
+
+	if (sheet.tag == kSavedReminderSheetTag){
+		if (index < 0 || index >= (NSInteger)self.reminders.count)
+			return;
+		self.pendingReminder = self.reminders[index];
+		UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Reminder"
+														message:@"Send this reminder now?"
+													   delegate:self
+											  cancelButtonTitle:@"Cancel"
+											  otherButtonTitles:@"Send Now", nil];
+		alert.tag = kSavedReminderAlertTag;
+		[alert show];
+	}
+}
+
 - (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {
+	if (alertView.tag == kSavedRangeAlertTag){
+		if (buttonIndex != alertView.cancelButtonIndex)
+			[self clearConfirmedRange];
+		else
+			self.rangeTopicId = 0;
+		return;
+	}
+
+	if (alertView.tag == kSavedReminderAlertTag){
+		NSDictionary *reminder = self.pendingReminder;
+		self.pendingReminder = nil;
+		if (buttonIndex == alertView.cancelButtonIndex || !reminder)
+			return;
+
+		int64_t messageId = [reminder[@"id"] longLongValue];
+		int64_t chatId = [[TGClient shared] savedMessagesChatId];
+		if (!messageId || !chatId)
+			return;
+
+		__weak typeof(self) weakSelf = self;
+		[[TGClient shared] sendScheduledMessageNow:messageId inChat:chatId
+										completion:^(BOOL ok){
+			if (!ok)
+				[weakSelf showError:@"Could not send the reminder."];
+			[weakSelf reloadReminders];
+		}];
+		return;
+	}
+
 	NSDictionary *topic = self.actionTopic;
 	self.actionTopic = nil;
 

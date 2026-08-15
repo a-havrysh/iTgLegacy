@@ -22,6 +22,8 @@
 #import "TGClient+Storage.h"
 #import "TGClient+Notifications.h"
 #import "TGClient+AppSettings.h"
+#import "TGClient+Reactions.h"
+#import "TGClient+Stories.h"
 #import "TGCapabilities.h"
 #import "TGIcons.h"
 #import <QuartzCore/QuartzCore.h>
@@ -36,7 +38,28 @@ enum {
 	TGSettingsPageAutoDownload   = 100,
 	TGSettingsPageAutosave       = 101,
 	TGSettingsPageWallpaper      = 102,
-	TGSettingsPageChatListLayout = 103
+	TGSettingsPageChatListLayout = 103,
+	TGSettingsPageDataUsage      = 104,
+	TGSettingsPageNotificationExceptions = 110
+};
+
+enum {
+	TGSettingsUsageSectionTotal = 0,
+	TGSettingsUsageSectionMedia,
+	TGSettingsUsageSectionCalls,
+	TGSettingsUsageSectionReset,
+	TGSettingsUsageSectionCount
+};
+
+enum {
+	TGSettingsNotifSectionPrivate = 0,
+	TGSettingsNotifSectionGroups,
+	TGSettingsNotifSectionChannels,
+	TGSettingsNotifSectionReactions,
+	TGSettingsNotifSectionStories,
+	TGSettingsNotifSectionContacts,
+	TGSettingsNotifSectionReset,
+	TGSettingsNotifSectionCount
 };
 
 enum {
@@ -56,6 +79,12 @@ static NSString *const TGSettingsLessCallDataKey = @"TGUseLessDataForCalls";
 static NSString *const TGSettingsArchiveSuggestionKey = @"TGArchiveSuggestionDismissed";
 static NSString *const TGSettingsStoriesEnabledKey = @"TGStoriesEnabled";
 static NSString *const TGSettingsChatListLayoutKey = @"TGChatListLayout";
+static NSString *const TGSettingsReactionSourceKey = @"TGReactionNotificationSource";
+static NSString *const TGSettingsReactionPreviewKey = @"TGReactionNotificationPreview";
+static NSString *const TGSettingsContactRegisteredOption =
+		@"disable_contact_registered_notifications";
+static NSString *const TGSettingsStoriesExceptionsScope = @"stories";
+static NSString *const TGSettingsWallpaperBlurKey = @"TGWallpaperBlurred";
 
 NSString *const TGSettingsStoriesEnabledChangedNotification =
 		@"TGStoriesEnabledChanged";
@@ -67,6 +96,31 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 						   green:((value >> 8) & 0xff) / 255.0f
 							blue:(value & 0xff) / 255.0f
 						   alpha:1.0f];
+}
+
+static NSString *TGSettingsBytes(long long bytes) {
+	if (bytes <= 0)
+		return @"0 KB";
+	if (bytes < 1024)
+		return @"1 KB";
+	if (bytes < 1024 * 1024)
+		return [NSString stringWithFormat:@"%lld KB", bytes / 1024];
+	if (bytes < 1024LL * 1024LL * 1024LL)
+		return [NSString stringWithFormat:@"%.1f MB", bytes / (1024.0 * 1024.0)];
+	return [NSString stringWithFormat:@"%.2f GB",
+			bytes / (1024.0 * 1024.0 * 1024.0)];
+}
+
+static NSString *TGSettingsDuration(double seconds) {
+	long long total = (long long)seconds;
+	if (total <= 0)
+		return @"none";
+	if (total < 60)
+		return [NSString stringWithFormat:@"%llds", total];
+	if (total < 3600)
+		return [NSString stringWithFormat:@"%lldm %llds", total / 60, total % 60];
+	return [NSString stringWithFormat:@"%lldh %lldm", total / 3600,
+			(total % 3600) / 60];
 }
 
 // Declared here rather than in the header: nothing outside this file needs to
@@ -93,12 +147,40 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 @property (nonatomic, assign) BOOL backgroundsLoaded;
 @property (nonatomic, assign) BOOL lessCallData;
 @property (nonatomic, strong) NSArray *suggestions;
+@property (nonatomic, strong) NSMutableDictionary *scopeSettings;
+@property (nonatomic, strong) NSMutableDictionary *exceptionCounts;
+@property (nonatomic, strong) NSArray *exceptions;
+@property (nonatomic, assign) BOOL exceptionsLoaded;
+@property (nonatomic, strong) NSString *exceptionsScope;
+@property (nonatomic, assign) BOOL contactRegisteredMuted;
+@property (nonatomic, strong) NSArray *usageMedia;
+@property (nonatomic, strong) NSDictionary *usageCalls;
+@property (nonatomic, strong) NSArray *usageNetworks;
+@property (nonatomic, assign) long long usageSent;
+@property (nonatomic, assign) long long usageReceived;
+@property (nonatomic, assign) NSInteger usageSince;
+@property (nonatomic, assign) BOOL usageLoaded;
+@property (nonatomic, strong) NSArray *autosaveExceptions;
+@property (nonatomic, assign) BOOL autosaveExceptionsLoaded;
+@property (nonatomic, strong) NSMutableDictionary *chatTitles;
+@property (nonatomic, assign) BOOL wallpaperBlurred;
+@property (nonatomic, strong) UIImage *wallpaperOriginal;
 + (NSArray *)rootSettingsRows;
 + (NSArray *)telegramRows;
 + (NSArray *)groupToolRows;
 + (NSArray *)helpRows;
 + (NSArray *)privacySettings;
 + (NSArray *)privacyTitles;
++ (NSArray *)notificationScopes;
++ (NSArray *)notificationScopeTitles;
++ (NSArray *)notificationRowsForSection:(NSInteger)section;
++ (NSArray *)reactionSources;
++ (NSArray *)reactionSourceTitles;
++ (NSString *)reactionSource;
++ (BOOL)reactionPreview;
+- (void)writeReactionSource:(NSString *)source preview:(BOOL)preview;
+- (NSDictionary *)settingsForScopeAtSection:(NSInteger)section;
+- (void)openExceptionsForScope:(NSString *)scope;
 - (NSString *)displayName;
 - (NSString *)initialsForName:(NSString *)name;
 - (void)refreshHeader;
@@ -108,6 +190,13 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 - (void)markDisclosure:(UITableViewCell *)cell;
 - (void)markChecked:(BOOL)checked on:(UITableViewCell *)cell;
 - (UIImage *)wallpaperSizedImage:(UIImage *)image;
+- (void)loadUsage;
+- (void)loadTitlesForAutosaveExceptions;
+- (void)confirmResetUsage;
+- (void)installWallpaperFromOriginal;
+- (UIImage *)blurredWallpaper:(UIImage *)image;
++ (NSString *)usageNetworkTitle:(NSString *)name;
++ (NSString *)usageMediaTitle:(NSString *)kind;
 @end
 
 @implementation TGSettingsViewController
@@ -128,10 +217,15 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 	self.muted = [NSMutableDictionary dictionary];
 	self.archive = [NSMutableDictionary dictionary];
 	self.autosave = [NSMutableDictionary dictionary];
+	self.scopeSettings = [NSMutableDictionary dictionary];
+	self.exceptionCounts = [NSMutableDictionary dictionary];
+	self.chatTitles = [NSMutableDictionary dictionary];
 	self.suggestions = @[];
 	self.dataSaver = [[NSUserDefaults standardUserDefaults] boolForKey:@"TGDataSaver"];
 	self.lessCallData = [[NSUserDefaults standardUserDefaults]
 			boolForKey:TGSettingsLessCallDataKey];
+	self.wallpaperBlurred = [[NSUserDefaults standardUserDefaults]
+			boolForKey:TGSettingsWallpaperBlurKey];
 
 	if ((NSInteger)self.page == TGSettingsPageAutoDownload)
 		self.title = @"Auto-Download Media";
@@ -141,6 +235,11 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		self.title = @"Chat Wallpaper";
 	else if ((NSInteger)self.page == TGSettingsPageChatListLayout)
 		self.title = @"Chat List";
+	else if ((NSInteger)self.page == TGSettingsPageDataUsage)
+		self.title = @"Data Usage";
+	else if ((NSInteger)self.page == TGSettingsPageNotificationExceptions)
+		self.title = [self.exceptionsScope isEqualToString:TGSettingsStoriesExceptionsScope]
+				? @"Story Exceptions" : @"Exceptions";
 	else switch (self.page){
 		case TGSettingsPageAppearance:    self.title = @"Chat Settings"; break;
 		case TGSettingsPageData:          self.title = @"Data and Storage"; break;
@@ -407,6 +506,18 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 				weakSelf.autosave[@"channels"] = channels;
 			[weakSelf.tableView reloadData];
 		}];
+		[[TGClient shared] autosaveExceptionsWithCompletion:^(NSArray *exceptions){
+			weakSelf.autosaveExceptions = [exceptions isKindOfClass:[NSArray class]]
+					? exceptions : @[];
+			weakSelf.autosaveExceptionsLoaded = YES;
+			[weakSelf loadTitlesForAutosaveExceptions];
+			[weakSelf.tableView reloadData];
+		}];
+		return;
+	}
+
+	if ((NSInteger)self.page == TGSettingsPageDataUsage){
+		[self loadUsage];
 		return;
 	}
 
@@ -427,12 +538,49 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 	}
 
 	if (self.page == TGSettingsPageNotifications){
-		for (NSString *scope in @[@"private", @"groups", @"channels"])
-			[[TGClient shared] notificationsMutedForScope:scope
-											   completion:^(BOOL muted){
-				weakSelf.muted[scope] = @(muted);
+		for (NSString *scope in [TGSettingsViewController notificationScopes]){
+			[[TGClient shared] notificationSettingsForScope:scope
+												 completion:^(NSDictionary *settings){
+				if (![settings isKindOfClass:[NSDictionary class]])
+					return;
+				weakSelf.scopeSettings[scope] = settings;
+				weakSelf.muted[scope] = @([settings[@"muted"] boolValue]);
 				[weakSelf.tableView reloadData];
 			}];
+			[[TGClient shared] notificationExceptionsForScope:scope
+												 compareSound:NO
+												   completion:^(NSArray *chats){
+				weakSelf.exceptionCounts[scope] =
+						@([chats isKindOfClass:[NSArray class]] ? chats.count : 0);
+				[weakSelf.tableView reloadData];
+			}];
+		}
+		[[TGClient shared] storyNotificationExceptionsWithCompletion:^(NSArray *chats){
+			weakSelf.exceptionCounts[TGSettingsStoriesExceptionsScope] =
+					@([chats isKindOfClass:[NSArray class]] ? chats.count : 0);
+			[weakSelf.tableView reloadData];
+		}];
+		[[TGClient shared] optionNamed:TGSettingsContactRegisteredOption
+							completion:^(id value){
+			weakSelf.contactRegisteredMuted = [value respondsToSelector:@selector(boolValue)]
+					? [value boolValue] : NO;
+			[weakSelf.tableView reloadData];
+		}];
+		return;
+	}
+
+	if ((NSInteger)self.page == TGSettingsPageNotificationExceptions){
+		void (^received)(NSArray *) = ^(NSArray *chats){
+			weakSelf.exceptions = [chats isKindOfClass:[NSArray class]] ? chats : @[];
+			weakSelf.exceptionsLoaded = YES;
+			[weakSelf.tableView reloadData];
+		};
+		if ([self.exceptionsScope isEqualToString:TGSettingsStoriesExceptionsScope])
+			[[TGClient shared] storyNotificationExceptionsWithCompletion:received];
+		else
+			[[TGClient shared] notificationExceptionsForScope:self.exceptionsScope
+												 compareSound:NO
+												   completion:received];
 		return;
 	}
 
@@ -477,6 +625,122 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 			[weakSelf.tableView reloadData];
 		}];
 	}
+}
+
+- (void)loadTitlesForAutosaveExceptions {
+	__weak typeof(self) weakSelf = self;
+	for (NSDictionary *entry in self.autosaveExceptions){
+		if (![entry isKindOfClass:[NSDictionary class]])
+			continue;
+		int64_t chatId = [entry[@"chatId"] longLongValue];
+		if (!chatId || self.chatTitles[@(chatId)])
+			continue;
+		[[TGClient shared] titleForChatId:chatId completion:^(NSString *title){
+			if (![title isKindOfClass:[NSString class]] || !title.length)
+				return;
+			weakSelf.chatTitles[@(chatId)] = title;
+			[weakSelf.tableView reloadData];
+		}];
+	}
+}
+
+- (void)loadUsage {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] networkStatsOnlyCurrent:NO
+									completion:^(NSArray *entries, NSInteger sinceDate){
+		NSMutableDictionary *media = [NSMutableDictionary dictionary];
+		long long callsSent = 0, callsReceived = 0;
+		double callsDuration = 0;
+
+		for (NSDictionary *entry in entries){
+			if (![entry isKindOfClass:[NSDictionary class]])
+				continue;
+			NSString *kind = [entry[@"kind"] isKindOfClass:[NSString class]]
+					? entry[@"kind"] : @"other";
+			long long sent = [entry[@"sent"] longLongValue];
+			long long received = [entry[@"received"] longLongValue];
+			if ([kind isEqualToString:@"calls"]){
+				callsSent += sent;
+				callsReceived += received;
+				callsDuration += [entry[@"duration"] doubleValue];
+				continue;
+			}
+			long long running = [media[kind] longLongValue];
+			media[kind] = @(running + sent + received);
+		}
+
+		NSArray *kinds = [[media allKeys] sortedArrayUsingComparator:
+				^NSComparisonResult(NSString *a, NSString *b){
+			long long left = [media[a] longLongValue];
+			long long right = [media[b] longLongValue];
+			if (left == right)
+				return [a compare:b];
+			return left > right ? NSOrderedAscending : NSOrderedDescending;
+		}];
+		NSMutableArray *rows = [NSMutableArray array];
+		for (NSString *kind in kinds){
+			if ([media[kind] longLongValue] <= 0)
+				continue;
+			[rows addObject:@{@"kind" : kind, @"bytes" : media[kind]}];
+		}
+
+		weakSelf.usageMedia = rows;
+		weakSelf.usageCalls = @{@"sent"     : @(callsSent),
+								@"received" : @(callsReceived),
+								@"duration" : @(callsDuration)};
+		weakSelf.usageSince = sinceDate;
+		weakSelf.usageLoaded = YES;
+		[weakSelf.tableView reloadData];
+	}];
+
+	[[TGClient shared] networkTotalsOnlyCurrent:NO
+									 completion:^(long long sent, long long received,
+												  NSDictionary *byNetwork){
+		weakSelf.usageSent = sent;
+		weakSelf.usageReceived = received;
+		NSMutableArray *networks = [NSMutableArray array];
+		for (NSString *name in @[@"wifi", @"mobile", @"roaming", @"other"]){
+			NSDictionary *values = [byNetwork isKindOfClass:[NSDictionary class]]
+					? byNetwork[name] : nil;
+			if (![values isKindOfClass:[NSDictionary class]])
+				continue;
+			long long total = [values[@"sent"] longLongValue]
+					+ [values[@"received"] longLongValue];
+			if (total <= 0)
+				continue;
+			[networks addObject:@{@"name" : name, @"bytes" : @(total)}];
+		}
+		weakSelf.usageNetworks = networks;
+		[weakSelf.tableView reloadData];
+	}];
+}
+
++ (NSString *)usageNetworkTitle:(NSString *)name {
+	if ([name isEqualToString:@"wifi"])    return @"Wi-Fi";
+	if ([name isEqualToString:@"mobile"])  return @"Mobile data";
+	if ([name isEqualToString:@"roaming"]) return @"Roaming";
+	return @"Other";
+}
+
++ (NSString *)usageMediaTitle:(NSString *)kind {
+	static NSDictionary *names = nil;
+	if (!names)
+		names = @{@"photo"        : @"Photos",
+				  @"video"        : @"Videos",
+				  @"videoNote"    : @"Video messages",
+				  @"voiceNote"    : @"Voice messages",
+				  @"audio"        : @"Music",
+				  @"document"     : @"Files",
+				  @"sticker"      : @"Stickers",
+				  @"animation"    : @"GIFs",
+				  @"profilePhoto" : @"Profile photos",
+				  @"thumbnail"    : @"Thumbnails",
+				  @"wallpaper"    : @"Wallpapers",
+				  @"secret"       : @"Secret chat media"};
+	NSString *known = names[kind];
+	if (known)
+		return known;
+	return [kind capitalizedString];
 }
 
 - (void)loadSuggestions {
@@ -542,7 +806,7 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 	static NSArray *settings = nil;
 	if (!settings)
 		settings = @[@"ShowStatus", @"ShowProfilePhoto", @"ShowPhoneNumber",
-					 @"AllowCalls", @"AllowChatInvites",
+					 @"AllowCalls", @"AllowPeerToPeerCalls", @"AllowChatInvites",
 					 @"ShowLinkInForwardedMessages"];
 	return settings;
 }
@@ -551,8 +815,84 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 	static NSArray *titles = nil;
 	if (!titles)
 		titles = @[@"Last seen", @"Profile photo", @"Phone number",
-				   @"Calls", @"Group invites", @"Forwarded messages"];
+				   @"Calls", @"Peer-to-peer", @"Group invites",
+				   @"Forwarded messages"];
 	return titles;
+}
+
+#pragma mark - notifications
+
++ (NSArray *)notificationScopes {
+	static NSArray *scopes = nil;
+	if (!scopes)
+		scopes = @[@"private", @"groups", @"channels"];
+	return scopes;
+}
+
++ (NSArray *)notificationScopeTitles {
+	static NSArray *titles = nil;
+	if (!titles)
+		titles = @[@"Message Notifications", @"Group Notifications",
+				   @"Channel Notifications"];
+	return titles;
+}
+
++ (NSArray *)reactionSources {
+	static NSArray *sources = nil;
+	if (!sources)
+		sources = @[@"all", @"contacts", @"none"];
+	return sources;
+}
+
++ (NSArray *)reactionSourceTitles {
+	static NSArray *titles = nil;
+	if (!titles)
+		titles = @[@"Everybody", @"My Contacts", @"Nobody"];
+	return titles;
+}
+
++ (NSString *)reactionSource {
+	NSString *stored = [[NSUserDefaults standardUserDefaults]
+			objectForKey:TGSettingsReactionSourceKey];
+	if ([stored isKindOfClass:[NSString class]]
+			&& [[TGSettingsViewController reactionSources] containsObject:stored])
+		return stored;
+	return @"contacts";
+}
+
++ (BOOL)reactionPreview {
+	NSNumber *stored = [[NSUserDefaults standardUserDefaults]
+			objectForKey:TGSettingsReactionPreviewKey];
+	if (![stored isKindOfClass:[NSNumber class]])
+		return YES;
+	return [stored boolValue];
+}
+
+- (void)writeReactionSource:(NSString *)source preview:(BOOL)preview {
+	[[NSUserDefaults standardUserDefaults] setObject:source
+											  forKey:TGSettingsReactionSourceKey];
+	[[NSUserDefaults standardUserDefaults] setObject:@(preview)
+											  forKey:TGSettingsReactionPreviewKey];
+	[[NSUserDefaults standardUserDefaults] synchronize];
+	[[TGClient shared] setReactionNotificationSource:source
+										 showPreview:preview
+											 soundId:0];
+}
+
+- (NSDictionary *)settingsForScopeAtSection:(NSInteger)section {
+	NSArray *scopes = [TGSettingsViewController notificationScopes];
+	if ((NSUInteger)section >= scopes.count)
+		return nil;
+	NSDictionary *settings = self.scopeSettings[scopes[section]];
+	return [settings isKindOfClass:[NSDictionary class]] ? settings : nil;
+}
+
++ (NSArray *)notificationRowsForSection:(NSInteger)section {
+	if (section == TGSettingsNotifSectionGroups)
+		return @[@"alert", @"preview", @"pinned", @"mentions", @"exceptions"];
+	if (section == TGSettingsNotifSectionChannels)
+		return @[@"alert", @"preview", @"pinned", @"exceptions"];
+	return @[@"alert", @"preview", @"exceptions"];
 }
 
 #pragma mark - stories and chat list layout
@@ -700,17 +1040,21 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 	if ((NSInteger)self.page == TGSettingsPageAutoDownload)
 		return 2;
 	if ((NSInteger)self.page == TGSettingsPageAutosave)
-		return 4;
+		return 5;
+	if ((NSInteger)self.page == TGSettingsPageDataUsage)
+		return TGSettingsUsageSectionCount;
 	if ((NSInteger)self.page == TGSettingsPageWallpaper)
 		return 2;
 	if ((NSInteger)self.page == TGSettingsPageChatListLayout)
+		return 1;
+	if ((NSInteger)self.page == TGSettingsPageNotificationExceptions)
 		return 1;
 	if (self.page == TGSettingsPageRoot)
 		return [self showsSuggestions] ? 8 : 7;
 	switch (self.page){
 		case TGSettingsPageAppearance:    return 3;
 		case TGSettingsPageData:          return 3;
-		case TGSettingsPageNotifications: return 1;
+		case TGSettingsPageNotifications: return TGSettingsNotifSectionCount;
 		case TGSettingsPagePrivacy:       return 3;
 		case TGSettingsPageLanguage:      return 1;
 		case TGSettingsPageBlocked:       return 1;
@@ -721,25 +1065,46 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
 	if ((NSInteger)self.page == TGSettingsPageAutoDownload)
 		return section == 0 ? (NSInteger)[TGSettingsViewController networkKinds].count : 1;
-	if ((NSInteger)self.page == TGSettingsPageAutosave)
-		return section == 3 ? 1 : 2;
+	if ((NSInteger)self.page == TGSettingsPageAutosave){
+		if (section == 3)
+			return (NSInteger)MAX((NSUInteger)1, self.autosaveExceptions.count);
+		if (section == 4)
+			return 1;
+		return 2;
+	}
+	if ((NSInteger)self.page == TGSettingsPageDataUsage){
+		if (section == TGSettingsUsageSectionTotal)
+			return 2 + (NSInteger)self.usageNetworks.count;
+		if (section == TGSettingsUsageSectionMedia)
+			return (NSInteger)MAX((NSUInteger)1, self.usageMedia.count);
+		if (section == TGSettingsUsageSectionCalls)
+			return 3;
+		return 1;
+	}
 	if ((NSInteger)self.page == TGSettingsPageWallpaper){
 		if (section == 0)
-			return [TGTheme shared].wallpaper ? 2 : 1;
+			return [TGTheme shared].wallpaper ? 3 : 2;
 		return (NSInteger)MAX((NSUInteger)1, self.backgrounds.count);
 	}
 	if ((NSInteger)self.page == TGSettingsPageChatListLayout)
 		return (NSInteger)[TGSettingsViewController chatListLayouts].count;
+	if ((NSInteger)self.page == TGSettingsPageNotificationExceptions)
+		return (NSInteger)MAX((NSUInteger)1, self.exceptions.count);
 	switch (self.page){
 		case TGSettingsPageAppearance:
 			if (section == 0) return 3;                          // styles
 			if (section == 1) return 2;                          // wallpaper, size
 			return [TGTheme availableThemeFiles].count + 1;      // + "None"
 		case TGSettingsPageData:
-			if (section == 0) return 4;
+			if (section == 0) return 5;
 			if (section == 1) return 3;
 			return 1;
-		case TGSettingsPageNotifications: return 3;
+		case TGSettingsPageNotifications:
+			if (section <= TGSettingsNotifSectionChannels)
+				return (NSInteger)[TGSettingsViewController
+						notificationRowsForSection:section].count;
+			if (section == TGSettingsNotifSectionReactions) return 2;
+			return 1;
 		case TGSettingsPagePrivacy:
 			if (section == 0) return [[TGSettingsViewController privacySettings] count];
 			if (section == 1) return 1;                          // blocked users
@@ -773,8 +1138,16 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		return section == 0 ? @"Download automatically on" : @"Calls";
 	if ((NSInteger)self.page == TGSettingsPageAutosave){
 		if (section == 3)
+			return @"Exceptions";
+		if (section == 4)
 			return nil;
 		return [TGSettingsViewController autosaveTitles][section];
+	}
+	if ((NSInteger)self.page == TGSettingsPageDataUsage){
+		if (section == TGSettingsUsageSectionTotal) return @"Total";
+		if (section == TGSettingsUsageSectionMedia) return @"Media";
+		if (section == TGSettingsUsageSectionCalls) return @"Calls";
+		return nil;
 	}
 	if ((NSInteger)self.page == TGSettingsPageWallpaper)
 		return section == 1 ? @"From your account" : nil;
@@ -786,7 +1159,12 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		case TGSettingsPagePrivacy:
 			return section == 0 ? @"Who can see" : nil;
 		case TGSettingsPageNotifications:
-			return @"Show notifications for";
+			if (section <= TGSettingsNotifSectionChannels)
+				return [TGSettingsViewController notificationScopeTitles][section];
+			if (section == TGSettingsNotifSectionReactions) return @"Reactions";
+			if (section == TGSettingsNotifSectionStories)   return @"Stories";
+			if (section == TGSettingsNotifSectionContacts)  return @"Contacts";
+			return nil;
 		case TGSettingsPageData:
 			return section == 1 ? @"Archive" : nil;
 		default: break;
@@ -814,8 +1192,29 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 			: @"Voice calls send less audio, which sounds worse and costs less "
 			  @"data. It is written onto every network type at once.";
 	if ((NSInteger)self.page == TGSettingsPageAutosave && section == 3)
-		return @"Media arriving in these chats is copied into the camera roll. "
-			   @"Per-chat exceptions are set from the chat itself.";
+		return @"Chats with a setting of their own. Per-chat exceptions are set "
+			   @"from the chat itself.";
+	if ((NSInteger)self.page == TGSettingsPageAutosave && section == 4)
+		return @"Media arriving in these chats is copied into the camera roll.";
+	if ((NSInteger)self.page == TGSettingsPageDataUsage){
+		if (section == TGSettingsUsageSectionReset){
+			if (self.usageSince <= 0)
+				return nil;
+			NSDate *since = [NSDate dateWithTimeIntervalSince1970:self.usageSince];
+			NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+			formatter.dateStyle = NSDateFormatterMediumStyle;
+			formatter.timeStyle = NSDateFormatterShortStyle;
+			return [NSString stringWithFormat:@"Counting since %@.",
+					[formatter stringFromDate:since]];
+		}
+		if (section == TGSettingsUsageSectionCalls)
+			return @"Call traffic never reaches Telegram's own counters, so it is "
+				   @"added here as each call ends.";
+		return nil;
+	}
+	if ((NSInteger)self.page == TGSettingsPageWallpaper && section == 0)
+		return @"Blur softens a photographic wallpaper so message text stays "
+			   @"readable over it.";
 	if ((NSInteger)self.page == TGSettingsPageWallpaper && section == 1)
 		return [TGCapabilities canShowWallpaper]
 			? @"Colours and gradients cost nothing to draw. A photograph is held "
@@ -839,6 +1238,24 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		return (NSFoundationVersionNumber > 993.00)
 			? @"This system shipped flat, so that is the default here."
 			: @"This system shipped skeuomorphic, so that is the default here.";
+	if (self.page == TGSettingsPageNotifications){
+		if (section == TGSettingsNotifSectionReactions)
+			return @"Who may raise a notification when they react to your "
+				   @"messages or your stories.";
+		if (section == TGSettingsNotifSectionContacts)
+			return @"Telegram announces a phone-book contact the first time "
+				   @"they sign up. Turn this off to keep that quiet.";
+		if (section == TGSettingsNotifSectionReset)
+			return @"Every scope and every chat goes back to the settings a "
+				   @"fresh account has.";
+		return nil;
+	}
+	if ((NSInteger)self.page == TGSettingsPageNotificationExceptions)
+		return [self.exceptionsScope isEqualToString:TGSettingsStoriesExceptionsScope]
+			? @"These chats have a story setting of their own. Tap one to hand "
+			  @"it back to the default."
+			: @"These chats have notification settings of their own. Tap one to "
+			  @"hand it back to the scope default.";
 	if (self.page == TGSettingsPagePrivacy && section == 2)
 		return @"If you do not come online at least once within this period, "
 			   @"the account is deleted along with everything in it.";
@@ -882,6 +1299,7 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 	cell.detailTextLabel.text = @"";
 	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
 	cell.textLabel.textColor = [UIColor blackColor];
+	cell.textLabel.textAlignment = NSTextAlignmentLeft;
 	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
 	cell.detailTextLabel.font = [UIFont systemFontOfSize:15];
 	[[TGTheme shared] styleCell:cell];
@@ -890,10 +1308,14 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		return [self fillAutoDownloadCell:cell at:indexPath];
 	if ((NSInteger)self.page == TGSettingsPageAutosave)
 		return [self fillAutosaveCell:cell at:indexPath];
+	if ((NSInteger)self.page == TGSettingsPageDataUsage)
+		return [self fillUsageCell:cell at:indexPath];
 	if ((NSInteger)self.page == TGSettingsPageWallpaper)
 		return [self fillWallpaperCell:cell at:indexPath];
 	if ((NSInteger)self.page == TGSettingsPageChatListLayout)
 		return [self fillChatListLayoutCell:cell at:indexPath];
+	if ((NSInteger)self.page == TGSettingsPageNotificationExceptions)
+		return [self fillExceptionCell:cell at:indexPath];
 	if (self.page == TGSettingsPageRoot
 			&& [self rootKindForSection:indexPath.section] == TGSettingsRootKindStories)
 		return [self fillStoriesCell:cell];
@@ -1080,23 +1502,129 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 	return 44;
 }
 
-- (UITableViewCell *)fillNotificationCell:(UITableViewCell *)cell at:(NSIndexPath *)path {
-	static NSArray *scopes = nil, *titles = nil;
-	if (!scopes){
-		scopes = @[@"private", @"groups", @"channels"];
-		titles = @[@"Private chats", @"Groups", @"Channels"];
-	}
-	cell.textLabel.text = titles[path.row];
-	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
-
+- (UISwitch *)notificationSwitchOn:(BOOL)on tag:(NSInteger)tag {
 	UISwitch *toggle = [[UISwitch alloc] init];
-	// The row says "show notifications", TDLib stores "muted": the same fact
-	// the other way up.
-	toggle.on = ![self.muted[scopes[path.row]] boolValue];
-	toggle.tag = path.row;
+	toggle.on = on;
+	toggle.tag = tag;
 	[toggle addTarget:self action:@selector(notificationToggled:)
 	 forControlEvents:UIControlEventValueChanged];
-	cell.accessoryView = toggle;
+	return toggle;
+}
+
+- (UITableViewCell *)fillNotificationCell:(UITableViewCell *)cell at:(NSIndexPath *)path {
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+	cell.detailTextLabel.textColor = [[TGTheme shared] cellDetailColour];
+
+	if (path.section <= TGSettingsNotifSectionChannels)
+		return [self fillNotificationScopeCell:cell at:path];
+
+	if (path.section == TGSettingsNotifSectionReactions){
+		if (path.row == 0){
+			cell.textLabel.text = @"Notify About Reactions";
+			NSUInteger index = [[TGSettingsViewController reactionSources]
+					indexOfObject:[TGSettingsViewController reactionSource]];
+			if (index == NSNotFound)
+				index = 1;
+			cell.detailTextLabel.text =
+					[TGSettingsViewController reactionSourceTitles][index];
+			[self markDisclosure:cell];
+			return cell;
+		}
+		cell.textLabel.text = @"Reaction Preview";
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		cell.accessoryView = [self notificationSwitchOn:
+				[TGSettingsViewController reactionPreview]
+												   tag:path.section * 10 + path.row];
+		return cell;
+	}
+
+	if (path.section == TGSettingsNotifSectionStories){
+		cell.textLabel.text = @"Story Exceptions";
+		NSNumber *count = self.exceptionCounts[TGSettingsStoriesExceptionsScope];
+		cell.detailTextLabel.text = count ? [count stringValue] : @"";
+		[self markDisclosure:cell];
+		return cell;
+	}
+
+	if (path.section == TGSettingsNotifSectionContacts){
+		cell.textLabel.text = @"New Contacts";
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		cell.accessoryView = [self notificationSwitchOn:!self.contactRegisteredMuted
+													tag:path.section * 10 + path.row];
+		return cell;
+	}
+
+	cell.textLabel.text = @"Reset All Notifications";
+	cell.textLabel.textColor = TGSettingsRGB(0xc4362f);
+	cell.textLabel.textAlignment = NSTextAlignmentCenter;
+	return cell;
+}
+
+- (UITableViewCell *)fillNotificationScopeCell:(UITableViewCell *)cell
+											at:(NSIndexPath *)path {
+	NSArray *rows = [TGSettingsViewController
+			notificationRowsForSection:path.section];
+	if ((NSUInteger)path.row >= rows.count)
+		return cell;
+	NSString *row = rows[path.row];
+	NSDictionary *settings = [self settingsForScopeAtSection:path.section];
+	NSString *scope = [TGSettingsViewController notificationScopes][path.section];
+
+	if ([row isEqualToString:@"exceptions"]){
+		cell.textLabel.text = @"Exceptions";
+		NSNumber *count = self.exceptionCounts[scope];
+		cell.detailTextLabel.text = count ? [count stringValue] : @"";
+		[self markDisclosure:cell];
+		return cell;
+	}
+
+	BOOL on = NO;
+	if ([row isEqualToString:@"alert"]){
+		cell.textLabel.text = @"Alert";
+		on = ![settings[@"muted"] boolValue];
+	} else if ([row isEqualToString:@"preview"]){
+		cell.textLabel.text = @"Message Preview";
+		on = [settings[@"showPreview"] boolValue];
+	} else if ([row isEqualToString:@"pinned"]){
+		cell.textLabel.text = @"Pinned Messages";
+		on = ![settings[@"disablePinnedMessageNotifications"] boolValue];
+	} else {
+		cell.textLabel.text = @"Mentions";
+		on = ![settings[@"disableMentionNotifications"] boolValue];
+	}
+
+	cell.selectionStyle = UITableViewCellSelectionStyleNone;
+	cell.accessoryView = [self notificationSwitchOn:on
+												tag:path.section * 10 + path.row];
+	return cell;
+}
+
+- (UITableViewCell *)fillExceptionCell:(UITableViewCell *)cell at:(NSIndexPath *)path {
+	if (!self.exceptions.count){
+		cell.textLabel.text = self.exceptionsLoaded ? @"No exceptions" : @"Loading...";
+		cell.textLabel.font = [UIFont systemFontOfSize:15];
+		cell.textLabel.textColor = [[TGTheme shared] secondaryTextColour];
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		return cell;
+	}
+	NSDictionary *chat = self.exceptions[path.row];
+	if (![chat isKindOfClass:[NSDictionary class]])
+		return cell;
+	NSString *title = [chat[@"title"] isKindOfClass:[NSString class]]
+			? chat[@"title"] : nil;
+	cell.textLabel.text = title.length ? title : @"Chat";
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+	cell.detailTextLabel.textColor = [[TGTheme shared] secondaryTextColour];
+	if ([self.exceptionsScope isEqualToString:TGSettingsStoriesExceptionsScope]){
+		cell.detailTextLabel.text = @"Stories muted";
+		return cell;
+	}
+	NSMutableArray *parts = [NSMutableArray array];
+	[parts addObject:[chat[@"muted"] boolValue] ? @"Muted" : @"Unmuted"];
+	if (chat[@"showPreview"])
+		[parts addObject:[chat[@"showPreview"] boolValue] ? @"preview on"
+														  : @"preview off"];
+	cell.detailTextLabel.text = [parts componentsJoinedByString:@", "];
 	return cell;
 }
 
@@ -1278,10 +1806,103 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 	return cell;
 }
 
+- (UITableViewCell *)fillUsageCell:(UITableViewCell *)cell at:(NSIndexPath *)path {
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:15];
+	cell.detailTextLabel.textColor = [[TGTheme shared] cellDetailColour];
+	cell.selectionStyle = UITableViewCellSelectionStyleNone;
+
+	if (path.section == TGSettingsUsageSectionTotal){
+		if (path.row == 0){
+			cell.textLabel.text = @"Sent";
+			cell.detailTextLabel.text = TGSettingsBytes(self.usageSent);
+			return cell;
+		}
+		if (path.row == 1){
+			cell.textLabel.text = @"Received";
+			cell.detailTextLabel.text = TGSettingsBytes(self.usageReceived);
+			return cell;
+		}
+		NSUInteger index = (NSUInteger)(path.row - 2);
+		if (index >= self.usageNetworks.count)
+			return cell;
+		NSDictionary *entry = self.usageNetworks[index];
+		cell.textLabel.text = [TGSettingsViewController
+				usageNetworkTitle:entry[@"name"]];
+		cell.detailTextLabel.text =
+				TGSettingsBytes([entry[@"bytes"] longLongValue]);
+		return cell;
+	}
+
+	if (path.section == TGSettingsUsageSectionMedia){
+		if (!self.usageMedia.count){
+			cell.textLabel.text = self.usageLoaded ? @"Nothing counted yet"
+												   : @"Loading...";
+			cell.textLabel.font = [UIFont systemFontOfSize:15];
+			cell.textLabel.textColor = [[TGTheme shared] secondaryTextColour];
+			return cell;
+		}
+		NSDictionary *entry = self.usageMedia[path.row];
+		cell.textLabel.text = [TGSettingsViewController
+				usageMediaTitle:entry[@"kind"]];
+		cell.detailTextLabel.text =
+				TGSettingsBytes([entry[@"bytes"] longLongValue]);
+		return cell;
+	}
+
+	if (path.section == TGSettingsUsageSectionCalls){
+		if (path.row == 0){
+			cell.textLabel.text = @"Sent";
+			cell.detailTextLabel.text =
+					TGSettingsBytes([self.usageCalls[@"sent"] longLongValue]);
+		} else if (path.row == 1){
+			cell.textLabel.text = @"Received";
+			cell.detailTextLabel.text =
+					TGSettingsBytes([self.usageCalls[@"received"] longLongValue]);
+		} else {
+			cell.textLabel.text = @"Total time";
+			cell.detailTextLabel.text =
+					TGSettingsDuration([self.usageCalls[@"duration"] doubleValue]);
+		}
+		return cell;
+	}
+
+	cell.textLabel.text = @"Reset statistics";
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+	cell.textLabel.textColor = TGSettingsRGB(0xc4362f);
+	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+	return cell;
+}
+
 - (UITableViewCell *)fillAutosaveCell:(UITableViewCell *)cell at:(NSIndexPath *)path {
 	cell.textLabel.font = [UIFont boldSystemFontOfSize:15];
 
 	if (path.section == 3){
+		if (!self.autosaveExceptions.count){
+			cell.textLabel.text = self.autosaveExceptionsLoaded ? @"No exceptions"
+															   : @"Loading...";
+			cell.textLabel.textColor = [[TGTheme shared] secondaryTextColour];
+			cell.selectionStyle = UITableViewCellSelectionStyleNone;
+			return cell;
+		}
+		NSDictionary *entry = self.autosaveExceptions[path.row];
+		if (![entry isKindOfClass:[NSDictionary class]])
+			return cell;
+		int64_t chatId = [entry[@"chatId"] longLongValue];
+		NSString *title = self.chatTitles[@(chatId)];
+		cell.textLabel.text = title.length ? title : @"Chat";
+		cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+		NSMutableArray *parts = [NSMutableArray array];
+		if ([entry[@"photos"] boolValue]) [parts addObject:@"photos"];
+		if ([entry[@"videos"] boolValue]) [parts addObject:@"videos"];
+		cell.detailTextLabel.text = parts.count
+				? [[parts componentsJoinedByString:@", "] capitalizedString]
+				: @"Nothing saved";
+		cell.detailTextLabel.textColor = [[TGTheme shared] secondaryTextColour];
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		return cell;
+	}
+
+	if (path.section == 4){
 		cell.textLabel.text = @"Clear exceptions";
 		cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
 		cell.textLabel.textColor = [UIColor colorWithRed:0.8f green:0.1f blue:0.1f alpha:1.0f];
@@ -1346,6 +1967,16 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 			[self markDisclosure:cell];
 			return cell;
 		}
+		if (path.row == 1){
+			cell.textLabel.text = @"Blur";
+			UISwitch *toggle = [[UISwitch alloc] init];
+			toggle.on = self.wallpaperBlurred;
+			[toggle addTarget:self action:@selector(wallpaperBlurToggled:)
+			 forControlEvents:UIControlEventValueChanged];
+			cell.accessoryView = toggle;
+			cell.selectionStyle = UITableViewCellSelectionStyleNone;
+			return cell;
+		}
 		cell.textLabel.text = @"Remove wallpaper";
 		cell.textLabel.textColor = [UIColor colorWithRed:0.8f green:0.1f blue:0.1f alpha:1.0f];
 		return cell;
@@ -1402,11 +2033,16 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 			return cell;
 		}
 		if (indexPath.row == 1){
-			cell.textLabel.text = @"Auto-Download Media";
+			cell.textLabel.text = @"Data Usage";
 			[self markDisclosure:cell];
 			return cell;
 		}
 		if (indexPath.row == 2){
+			cell.textLabel.text = @"Auto-Download Media";
+			[self markDisclosure:cell];
+			return cell;
+		}
+		if (indexPath.row == 3){
 			cell.textLabel.text = @"Save to Camera Roll";
 			[self markDisclosure:cell];
 			return cell;
@@ -1528,11 +2164,120 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 #pragma mark - taps
 
 - (void)notificationToggled:(UISwitch *)toggle {
-	static NSArray *scopes = nil;
-	if (!scopes) scopes = @[@"private", @"groups", @"channels"];
-	NSString *scope = scopes[toggle.tag];
-	self.muted[scope] = @(!toggle.on);
-	[[TGClient shared] setScope:scope muted:!toggle.on];
+	NSInteger section = toggle.tag / 10;
+	NSInteger row = toggle.tag % 10;
+
+	if (section == TGSettingsNotifSectionReactions){
+		[self writeReactionSource:[TGSettingsViewController reactionSource]
+						  preview:toggle.on];
+		return;
+	}
+
+	if (section == TGSettingsNotifSectionContacts){
+		self.contactRegisteredMuted = !toggle.on;
+		[[TGClient shared] setOptionNamed:TGSettingsContactRegisteredOption
+									value:@(!toggle.on)
+								isBoolean:YES];
+		return;
+	}
+
+	NSArray *rows = [TGSettingsViewController notificationRowsForSection:section];
+	if ((NSUInteger)row >= rows.count)
+		return;
+	NSString *kind = rows[row];
+	NSString *scope = [TGSettingsViewController notificationScopes][section];
+
+	NSDictionary *changes = nil;
+	if ([kind isEqualToString:@"alert"])
+		changes = @{@"muteFor" : @(toggle.on ? 0 : TGNotificationMuteForever)};
+	else if ([kind isEqualToString:@"preview"])
+		changes = @{@"showPreview" : @(toggle.on)};
+	else if ([kind isEqualToString:@"pinned"])
+		changes = @{@"disablePinnedMessageNotifications" : @(!toggle.on)};
+	else if ([kind isEqualToString:@"mentions"])
+		changes = @{@"disableMentionNotifications" : @(!toggle.on)};
+	if (!changes)
+		return;
+
+	NSMutableDictionary *merged = [NSMutableDictionary dictionary];
+	NSDictionary *current = [self settingsForScopeAtSection:section];
+	if (current)
+		[merged addEntriesFromDictionary:current];
+	[merged addEntriesFromDictionary:changes];
+	if ([kind isEqualToString:@"alert"]){
+		merged[@"muted"] = @(!toggle.on);
+		self.muted[scope] = @(!toggle.on);
+	}
+	self.scopeSettings[scope] = merged;
+
+	[[TGClient shared] updateScope:scope values:changes completion:nil];
+}
+
+- (void)openExceptionsForScope:(NSString *)scope {
+	TGSettingsViewController *next = [[TGSettingsViewController alloc] init];
+	next.exceptionsScope = scope;
+	next.page = (TGSettingsPage)TGSettingsPageNotificationExceptions;
+	[self.navigationController pushViewController:next animated:YES];
+}
+
+- (void)tapNotifications:(NSIndexPath *)path {
+	if (path.section <= TGSettingsNotifSectionChannels){
+		NSArray *rows = [TGSettingsViewController
+				notificationRowsForSection:path.section];
+		if ((NSUInteger)path.row < rows.count
+				&& [rows[path.row] isEqualToString:@"exceptions"])
+			[self openExceptionsForScope:
+					[TGSettingsViewController notificationScopes][path.section]];
+		return;
+	}
+	if (path.section == TGSettingsNotifSectionStories){
+		[self openExceptionsForScope:TGSettingsStoriesExceptionsScope];
+		return;
+	}
+	if (path.section == TGSettingsNotifSectionReactions && path.row == 0){
+		UIActionSheet *sheet = [[UIActionSheet alloc]
+				initWithTitle:@"Notify about reactions from"
+					 delegate:self
+			cancelButtonTitle:nil
+	   destructiveButtonTitle:nil
+			otherButtonTitles:@"Everybody", @"My Contacts", @"Nobody", nil];
+		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+		sheet.tag = 141;
+		[sheet showInView:self.view];
+		return;
+	}
+	if (path.section == TGSettingsNotifSectionReset){
+		UIAlertView *confirm = [[UIAlertView alloc]
+				initWithTitle:@"Reset All Notifications"
+					  message:@"Every scope and every chat goes back to its "
+							  @"default notification settings."
+					 delegate:self
+			cancelButtonTitle:@"Cancel"
+			otherButtonTitles:@"Reset", nil];
+		confirm.tag = 404;
+		[confirm show];
+	}
+}
+
+- (void)tapException:(NSIndexPath *)path {
+	if ((NSUInteger)path.row >= self.exceptions.count)
+		return;
+	NSDictionary *chat = self.exceptions[path.row];
+	if (![chat isKindOfClass:[NSDictionary class]])
+		return;
+	int64_t chatId = [chat[@"id"] longLongValue];
+	if (chatId == 0)
+		return;
+
+	if ([self.exceptionsScope isEqualToString:TGSettingsStoriesExceptionsScope])
+		[[TGClient shared] setChat:chatId storiesMuted:NO];
+	else
+		[[TGClient shared] resetNotificationSettingsForChat:chatId];
+
+	NSMutableArray *rest = [self.exceptions mutableCopy];
+	[rest removeObjectAtIndex:path.row];
+	self.exceptions = rest;
+	[self.tableView reloadData];
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -1543,12 +2288,21 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		return;
 	}
 	if ((NSInteger)self.page == TGSettingsPageAutosave){
-		if (indexPath.section == 3)
+		if (indexPath.section == 4)
 			[self confirmClearAutosaveExceptions];
+		return;
+	}
+	if ((NSInteger)self.page == TGSettingsPageDataUsage){
+		if (indexPath.section == TGSettingsUsageSectionReset)
+			[self confirmResetUsage];
 		return;
 	}
 	if ((NSInteger)self.page == TGSettingsPageWallpaper){
 		[self tapWallpaper:indexPath];
+		return;
+	}
+	if ((NSInteger)self.page == TGSettingsPageNotificationExceptions){
+		[self tapException:indexPath];
 		return;
 	}
 	if ((NSInteger)self.page == TGSettingsPageChatListLayout){
@@ -1561,7 +2315,7 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 
 	switch (self.page){
 		case TGSettingsPageAppearance: [self tapAppearance:indexPath]; return;
-		case TGSettingsPageNotifications: return;   // the switch does the work
+		case TGSettingsPageNotifications: [self tapNotifications:indexPath]; return;
 		case TGSettingsPagePrivacy:    [self tapPrivacy:indexPath];    return;
 		case TGSettingsPageLanguage:   [self tapLanguage:indexPath];   return;
 		case TGSettingsPageBlocked:    [self tapBlocked:indexPath];    return;
@@ -1570,8 +2324,10 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 				TGStorageViewController *storage = [[TGStorageViewController alloc] init];
 				[self.navigationController pushViewController:storage animated:YES];
 			} else if (indexPath.section == 0 && indexPath.row == 1){
-				[self openPage:(TGSettingsPage)TGSettingsPageAutoDownload];
+				[self openPage:(TGSettingsPage)TGSettingsPageDataUsage];
 			} else if (indexPath.section == 0 && indexPath.row == 2){
+				[self openPage:(TGSettingsPage)TGSettingsPageAutoDownload];
+			} else if (indexPath.section == 0 && indexPath.row == 3){
 				[self openPage:(TGSettingsPage)TGSettingsPageAutosave];
 			} else if (indexPath.section == 2){
 				[self confirmClearDatabase];
@@ -1960,6 +2716,9 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 			[self presentWallpaperPicker];
 			return;
 		}
+		if (indexPath.row == 1)
+			return;
+		self.wallpaperOriginal = nil;
 		[[TGTheme shared] setWallpaperImage:nil];
 		[[TGClient shared] resetDefaultBackgroundForDarkTheme:[[TGTheme shared] isDark]];
 		[self.tableView reloadData];
@@ -1991,7 +2750,7 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 	BOOL dark = [[TGTheme shared] isDark];
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] setDefaultBackgroundId:background[@"id"]
-									  blurred:NO
+									  blurred:(!isFill && self.wallpaperBlurred)
 									   moving:NO
 								 forDarkTheme:dark
 								   completion:^(NSDictionary *applied){
@@ -2013,8 +2772,10 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		[[TGClient shared] downloadFile:fileId.integerValue
 							 completion:^(NSString *path){
 			UIImage *image = path.length ? [UIImage imageWithContentsOfFile:path] : nil;
-			if (image)
-				[[TGTheme shared] setWallpaperImage:[weakSelf wallpaperSizedImage:image]];
+			if (image){
+				weakSelf.wallpaperOriginal = [weakSelf wallpaperSizedImage:image];
+				[weakSelf installWallpaperFromOriginal];
+			}
 			[weakSelf.tableView reloadData];
 		}];
 		return;
@@ -2069,6 +2830,16 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		return;
 	}
 
+	if (sheet.tag == 141){
+		NSArray *sources = [TGSettingsViewController reactionSources];
+		if ((NSUInteger)index >= sources.count)
+			return;
+		[self writeReactionSource:sources[index]
+						  preview:[TGSettingsViewController reactionPreview]];
+		[self.tableView reloadData];
+		return;
+	}
+
 	if (sheet.tag >= 130 && sheet.tag <= 132){
 		[self applyPresetIndex:index toNetworkRow:sheet.tag - 130];
 		return;
@@ -2118,9 +2889,64 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		didFinishPickingMediaWithInfo:(NSDictionary *)info {
 	[picker dismissViewControllerAnimated:YES completion:nil];
 	UIImage *image = info[UIImagePickerControllerOriginalImage];
-	if (image)
-		[[TGTheme shared] setWallpaperImage:[self wallpaperSizedImage:image]];
+	if (image){
+		self.wallpaperOriginal = [self wallpaperSizedImage:image];
+		[self installWallpaperFromOriginal];
+	}
 	[self.tableView reloadData];
+}
+
+- (void)installWallpaperFromOriginal {
+	if (!self.wallpaperOriginal)
+		return;
+	[[TGTheme shared] setWallpaperImage:self.wallpaperBlurred
+			? [self blurredWallpaper:self.wallpaperOriginal]
+			: self.wallpaperOriginal];
+}
+
+- (UIImage *)blurredWallpaper:(UIImage *)image {
+	CGSize size = image.size;
+	if (size.width < 8 || size.height < 8)
+		return image;
+	CGSize small = CGSizeMake(floorf(size.width / 12.0f),
+							  floorf(size.height / 12.0f));
+	if (small.width < 1 || small.height < 1)
+		return image;
+
+	UIGraphicsBeginImageContextWithOptions(small, YES, 1.0f);
+	[image drawInRect:CGRectMake(0, 0, small.width, small.height)];
+	UIImage *shrunk = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	if (!shrunk)
+		return image;
+
+	UIGraphicsBeginImageContextWithOptions(size, YES, 1.0f);
+	CGContextRef context = UIGraphicsGetCurrentContext();
+	if (context)
+		CGContextSetInterpolationQuality(context, kCGInterpolationHigh);
+	[shrunk drawInRect:CGRectMake(0, 0, size.width, size.height)];
+	UIImage *blurred = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return blurred ?: image;
+}
+
+- (void)wallpaperBlurToggled:(UISwitch *)toggle {
+	self.wallpaperBlurred = toggle.on;
+	[[NSUserDefaults standardUserDefaults] setBool:toggle.on
+											forKey:TGSettingsWallpaperBlurKey];
+	[[NSUserDefaults standardUserDefaults] synchronize];
+	[self installWallpaperFromOriginal];
+}
+
+- (void)confirmResetUsage {
+	UIAlertView *confirm = [[UIAlertView alloc]
+			initWithTitle:@"Reset statistics"
+				  message:@"The counters go back to zero and start again from now."
+				 delegate:self
+		cancelButtonTitle:@"Cancel"
+		otherButtonTitles:@"Reset", nil];
+	confirm.tag = 405;
+	[confirm show];
 }
 
 - (UIImage *)wallpaperSizedImage:(UIImage *)image {
@@ -2151,8 +2977,36 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		[[TGClient shared] logOut];
 	else if (alertView.tag == 402)
 		[[TGClient shared] clearLocalDatabase];
-	else if (alertView.tag == 403)
+	else if (alertView.tag == 403){
 		[[TGClient shared] clearAutosaveExceptions];
+		self.autosaveExceptions = @[];
+		[self.tableView reloadData];
+	}
+	else if (alertView.tag == 405){
+		__weak typeof(self) weakSelf = self;
+		[[TGClient shared] resetNetworkStatisticsWithCompletion:^(BOOL ok){
+			if (!ok)
+				return;
+			weakSelf.usageMedia = @[];
+			weakSelf.usageNetworks = @[];
+			weakSelf.usageCalls = nil;
+			weakSelf.usageSent = 0;
+			weakSelf.usageReceived = 0;
+			[weakSelf loadUsage];
+			[weakSelf.tableView reloadData];
+		}];
+	}
+	else if (alertView.tag == 404){
+		__weak typeof(self) weakSelf = self;
+		[[TGClient shared] resetAllNotificationSettingsWithCompletion:^(BOOL ok){
+			if (!ok)
+				return;
+			[weakSelf.scopeSettings removeAllObjects];
+			[weakSelf.exceptionCounts removeAllObjects];
+			[weakSelf loadForPage];
+			[weakSelf.tableView reloadData];
+		}];
+	}
 }
 
 @end

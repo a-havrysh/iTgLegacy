@@ -873,17 +873,16 @@ static NSDictionary *TGWLLoginUrlInfo(NSDictionary *result){
 	}
 	[self instantViewForUrl:link onlyLocal:YES completion:^(NSDictionary *cached){
 		NSArray *blocks = TGWLArray(cached[@"blocks"]);
-		if (blocks.count && completion)
-			completion(cached);
 		BOOL isFull = [TGWLNumber(cached[@"isFull"]) boolValue];
-		if (blocks.count && isFull)
+		if (blocks.count && isFull){
+			if (completion)
+				completion(cached);
 			return;
+		}
 		[self instantViewForUrl:link onlyLocal:NO completion:^(NSDictionary *fresh){
 			if (!completion)
 				return;
-			if (!fresh && blocks.count)
-				return;
-			completion(fresh);
+			completion(fresh ? fresh : (blocks.count ? cached : nil));
 		}];
 	}];
 }

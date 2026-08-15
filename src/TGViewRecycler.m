@@ -62,13 +62,13 @@ static const NSUInteger TGViewRecyclerMaxPoolSize = 24;
 		self.reusableViews[reuseIdentifier] = views;
 	}
 
-	if ([views indexOfObjectIdenticalTo:view] != NSNotFound)
-		return;
-
 	[view prepareForRecycle:self];
 
 	if (view.superview != nil)
 		[view removeFromSuperview];
+
+	if ([views indexOfObjectIdenticalTo:view] != NSNotFound)
+		return;
 
 	if (views.count >= TGViewRecyclerMaxPoolSize)
 		return;

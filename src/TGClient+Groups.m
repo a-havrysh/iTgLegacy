@@ -1147,8 +1147,6 @@ static NSDictionary *TGFlattenInviteLink(NSDictionary *link) {
 			completion([result[@"chat_id"] longLongValue], NO);
 		else if ([type isEqualToString:@"chatJoinResultRequestSent"])
 			completion(0, YES);
-		else if ([type isEqualToString:@"chat"])
-			completion([result[@"id"] longLongValue], NO);
 		else
 			completion(0, NO);
 	}];
@@ -1213,9 +1211,15 @@ static NSDictionary *TGFlattenInviteLink(NSDictionary *link) {
 
 - (void)setGroup:(int64_t)chatId slowModeDelay:(NSInteger)seconds
       completion:(void (^)(BOOL))completion {
+	static const NSInteger allowedDelays[] = {0, 5, 10, 30, 60, 300, 900, 3600};
+	NSInteger allowed = 0;
+	for (NSUInteger i = 0; i < sizeof(allowedDelays) / sizeof(allowedDelays[0]); i++) {
+		if (seconds >= allowedDelays[i])
+			allowed = allowedDelays[i];
+	}
 	[self tg_send:@{@"@type" : @"setChatSlowModeDelay",
 					@"chat_id" : @(chatId),
-					@"slow_mode_delay" : @(seconds)}
+					@"slow_mode_delay" : @(allowed)}
 	   completion:completion];
 }
 

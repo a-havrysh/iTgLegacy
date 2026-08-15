@@ -77,6 +77,14 @@ static NSNumber *TGPremiumNumber(id value){
 	return [value isKindOfClass:[NSNumber class]] ? value : [NSNumber numberWithInt:0];
 }
 
+static NSNumber *TGPremiumInt64(id value){
+	if ([value isKindOfClass:[NSNumber class]])
+		return value;
+	if ([value isKindOfClass:[NSString class]])
+		return [NSNumber numberWithLongLong:[value longLongValue]];
+	return [NSNumber numberWithInt:0];
+}
+
 static NSString *TGPremiumFeatureSubtitle(NSString *tag){
 	static NSDictionary *table = nil;
 	if (!table)
@@ -210,25 +218,7 @@ static NSArray *TGPremiumDisplayLimitTypes(void){
 		NSDictionary *text = TGPremiumDict(state[@"state"]);
 		[out setObject:TGPremiumString(text[@"text"]) forKey:@"text"];
 
-		long long expires = [TGPremiumNumber(state[@"expiration_date"]) longLongValue];
-		if (!expires)
-			expires = [TGPremiumNumber(text[@"expiration_date"]) longLongValue];
-		[out setObject:[NSNumber numberWithLongLong:expires] forKey:@"expires"];
-
-		NSString *expiresText = @"";
-		if (active && expires > 0){
-			static NSDateFormatter *fmt = nil;
-			if (!fmt){
-				fmt = [[NSDateFormatter alloc] init];
-				[fmt setDateFormat:@"d MMM yyyy"];
-			}
-			expiresText = [NSString stringWithFormat:@"Until %@",
-						   [fmt stringFromDate:[NSDate dateWithTimeIntervalSince1970:
-												(NSTimeInterval)expires]]];
-		} else if (active){
-			expiresText = @"Active";
-		}
-		[out setObject:expiresText forKey:@"expiresText"];
+		[out setObject:(active ? @"Active" : @"") forKey:@"expiresText"];
 
 		NSMutableArray *options = [NSMutableArray array];
 		NSArray *raw = TGPremiumArray(state[@"payment_options"]);
@@ -239,7 +229,6 @@ static NSArray *TGPremiumDisplayLimitTypes(void){
 			NSDictionary *option = TGPremiumDict(wrapper[@"payment_option"]);
 			if (!option)
 				continue;
-			NSDictionary *link = TGPremiumDict(option[@"payment_link"]);
 			[options addObject:@{
 				@"currency"       : TGPremiumString(option[@"currency"]),
 				@"amount"         : TGPremiumNumber(option[@"amount"]),
@@ -247,8 +236,7 @@ static NSArray *TGPremiumDisplayLimitTypes(void){
 				@"discount"       : TGPremiumNumber(option[@"discount_percentage"]),
 				@"current"        : [NSNumber numberWithBool:[wrapper[@"is_current"] boolValue]],
 				@"upgrade"        : [NSNumber numberWithBool:[wrapper[@"is_upgrade"] boolValue]],
-				@"storeProductId" : TGPremiumString(option[@"store_product_id"]),
-				@"link"           : TGPremiumString(link[@"url"])
+				@"storeProductId" : TGPremiumString(option[@"store_product_id"])
 			}];
 		}
 		[out setObject:options forKey:@"options"];
@@ -694,7 +682,7 @@ static NSArray *TGPremiumDisplayLimitTypes(void){
 				continue;
 			NSDictionary *prize = TGPremiumDict(giveaway[@"prize"]);
 			[prepaid addObject:@{
-				@"id"          : TGPremiumNumber(giveaway[@"id"]),
+				@"id"          : TGPremiumInt64(giveaway[@"id"]),
 				@"winnerCount" : TGPremiumNumber(giveaway[@"winner_count"]),
 				@"boostCount"  : TGPremiumNumber(giveaway[@"boost_count"]),
 				@"paymentDate" : TGPremiumNumber(giveaway[@"payment_date"]),

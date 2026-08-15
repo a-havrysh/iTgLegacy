@@ -1,6 +1,7 @@
 #import "TGGroupMembersViewController.h"
 #import "TGClient.h"
 #import "TGClient+Groups.h"
+#import "TGClient+Privacy.h"
 #import "TGIcons.h"
 #import "TGTheme.h"
 #import "TGPopupMenu.h"
@@ -21,6 +22,18 @@ static const CGFloat kGroupButtonHeight  = 30.0f;
 static const CGFloat kGroupSeparatorWidth = 2.0f;
 static const CGFloat kGroupSideInset     = 8.0f;
 static const NSInteger kMemberPageSize   = 50;
+static const NSInteger kMemberDurationDay   = 86400;
+static const NSInteger kMemberDurationWeek  = 604800;
+static const NSInteger kMemberDurationMonth = 2592000;
+
+static NSString *TGMembersDurationText(NSInteger untilDate) {
+	if (untilDate <= 0)
+		return @"Forever";
+	return [NSDateFormatter localizedStringFromDate:
+			[NSDate dateWithTimeIntervalSince1970:untilDate]
+										  dateStyle:NSDateFormatterShortStyle
+										  timeStyle:NSDateFormatterShortStyle];
+}
 
 static UIImage *TGMembersStretch(NSString *name, int leftCap) {
 	UIImage *raw = [UIImage imageNamed:name];
@@ -48,7 +61,8 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 	return [value isKindOfClass:NSNumber.class] ? [value longLongValue] : 0;
 }
 
-@interface TGMemberRightsViewController : UIViewController <UITableViewDataSource, UITableViewDelegate> {
+@interface TGMemberRightsViewController : UIViewController <UITableViewDataSource,
+		UITableViewDelegate, UIActionSheetDelegate> {
 	int64_t _chatId;
 	int64_t _userId;
 	BOOL _restricting;
@@ -64,7 +78,9 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 @property (nonatomic, assign) BOOL editable;
 @property (nonatomic, assign) BOOL loaded;
 @property (nonatomic, assign) BOOL saving;
+@property (nonatomic, assign) BOOL canTransferOwnership;
 @property (nonatomic, copy) void (^onSaved)(void);
+@property (nonatomic, copy) void (^onTransferOwnership)(void);
 
 - (id)initWithChatId:(int64_t)chatId userId:(int64_t)userId
 				name:(NSString *)name restricting:(BOOL)restricting;
@@ -334,19 +350,37 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 	}
 }
 
+- (BOOL)hasExtraSection {
+	if (!self.loaded || !self.editable)
+		return NO;
+	return _restricting || self.canTransferOwnership;
+}
+
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-	return 1;
+	return [self hasExtraSection] ? 2 : 1;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	if (section == 1)
+		return 1;
 	return self.loaded ? (NSInteger)self.keys.count : 0;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
+	if (section == 1)
+		return _restricting ? @"How long?" : nil;
 	return _restricting ? @"What can this member do?" : @"What can this admin do?";
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+	if (section == 1){
+		if (_restricting)
+			return self.untilDate > 0
+					? @"The restrictions are lifted automatically when the time is up."
+					: @"The restrictions stay until you lift them.";
+		return [NSString stringWithFormat:@"%@ becomes the owner and you keep only admin rights.",
+				self.memberName];
+	}
 	if (!self.editable)
 		return @"You cannot change the rights of this member.";
 	if (_restricting)
@@ -358,6 +392,28 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
 		 cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	if (indexPath.section == 1){
+		static NSString *extraReuse = @"TGMemberExtraCell";
+		UITableViewCell *extra = [tableView dequeueReusableCellWithIdentifier:extraReuse];
+		if (!extra){
+			extra = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
+										   reuseIdentifier:extraReuse];
+			extra.textLabel.font = [UIFont systemFontOfSize:17];
+		}
+		if (_restricting){
+			extra.textLabel.text = @"Duration";
+			extra.textLabel.textColor = [[TGTheme shared] primaryTextColour];
+			extra.detailTextLabel.text = TGMembersDurationText(self.untilDate);
+			extra.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+		} else {
+			extra.textLabel.text = @"Transfer Ownership";
+			extra.textLabel.textColor = [UIColor colorWithRed:0.8f green:0.1f blue:0.1f alpha:1.0f];
+			extra.detailTextLabel.text = nil;
+			extra.accessoryType = UITableViewCellAccessoryNone;
+		}
+		return extra;
+	}
+
 	static NSString *reuse = @"TGMemberRightCell";
 	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
 	if (!cell){
@@ -387,6 +443,37 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 	toggle.on = [[self.values objectForKey:key] boolValue];
 	toggle.enabled = self.editable;
 	return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	if (indexPath.section != 1)
+		return;
+	if (_restricting){
+		UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Restrict for"
+														   delegate:self
+												  cancelButtonTitle:@"Cancel"
+											 destructiveButtonTitle:nil
+												  otherButtonTitles:@"1 Day", @"1 Week",
+								@"1 Month", @"Forever", nil];
+		[sheet showInView:self.view];
+		return;
+	}
+	if (self.onTransferOwnership)
+		self.onTransferOwnership();
+}
+
+- (void)actionSheet:(UIActionSheet *)actionSheet clickedButtonAtIndex:(NSInteger)buttonIndex {
+	if (buttonIndex == actionSheet.cancelButtonIndex)
+		return;
+	NSInteger now = (NSInteger)[[NSDate date] timeIntervalSince1970];
+	switch (buttonIndex){
+		case 0: self.untilDate = now + kMemberDurationDay; break;
+		case 1: self.untilDate = now + kMemberDurationWeek; break;
+		case 2: self.untilDate = now + kMemberDurationMonth; break;
+		default: self.untilDate = 0; break;
+	}
+	[self.tableView reloadData];
 }
 
 - (void)toggleChanged:(UISwitch *)sender {
@@ -446,10 +533,11 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 @end
 
 @interface TGGroupMembersViewController () <UITableViewDataSource, UITableViewDelegate,
-		UISearchBarDelegate> {
+		UISearchBarDelegate, UIActionSheetDelegate, UIAlertViewDelegate> {
 	UIView *_modeBar;
 	NSMutableArray *_groupButtons;
 	NSMutableArray *_groupSeparators;
+	int64_t _pendingUserId;
 }
 
 @property (nonatomic, strong) UITableView *tableView;
@@ -1300,6 +1388,10 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 	if ([action isEqualToString:@"dismiss"])
 		return [NSDictionary dictionaryWithObjectsAndKeys:
 				@"Dismiss Admin", @"title", @"edit", @"icon", nil];
+	if ([action isEqualToString:@"transferOwnership"])
+		return [NSDictionary dictionaryWithObjectsAndKeys:
+				@"Transfer Ownership", @"title", @"edit", @"icon",
+				[NSNumber numberWithBool:YES], @"destructive", nil];
 	if ([action isEqualToString:@"restrict"])
 		return [NSDictionary dictionaryWithObjectsAndKeys:
 				@"Restrict", @"title", @"mute", @"icon", nil];
@@ -1360,6 +1452,8 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 			[actions addObject:@"editRights"];
 			[actions addObject:@"dismiss"];
 		}
+		if ([self.myStatus isEqualToString:@"creator"])
+			[actions addObject:@"transferOwnership"];
 		if (mayRestrict)
 			[actions addObject:@"remove"];
 		return actions;
@@ -1385,6 +1479,16 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 		[me refreshRowForUser:userId];
 		[me loadGroupInfo];
 	};
+	if (!restricting && [self.myStatus isEqualToString:@"creator"]){
+		editor.canTransferOwnership = YES;
+		editor.onTransferOwnership = ^{
+			TGGroupMembersViewController *me = weakSelf;
+			if (!me)
+				return;
+			[me.navigationController popToViewController:me animated:YES];
+			[me beginTransferOwnershipToUser:userId name:name];
+		};
+	}
 	[self.navigationController pushViewController:editor animated:YES];
 }
 
@@ -1423,11 +1527,20 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 		[self runUnban:userId];
 		return;
 	}
+	if ([action isEqualToString:@"transferOwnership"]){
+		[self beginTransferOwnershipToUser:userId name:name];
+		return;
+	}
 	if ([action isEqualToString:@"ban"]){
-		[self confirm:[NSString stringWithFormat:@"Ban %@ from this group?", name]
-				   ok:@"Ban" destructive:YES run:^{
-			[weakSelf runBan:userId];
-		}];
+		_pendingUserId = userId;
+		UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:
+				[NSString stringWithFormat:@"Ban %@ from this group?", name]
+														   delegate:self
+												  cancelButtonTitle:@"Cancel"
+											 destructiveButtonTitle:nil
+												  otherButtonTitles:@"Ban for 1 Day",
+								@"Ban for 1 Week", @"Ban for 1 Month", @"Ban Forever", nil];
+		[sheet showInView:self.navigationController.view ?: self.view];
 		return;
 	}
 	if ([action isEqualToString:@"deleteMessages"]){
@@ -1585,11 +1698,94 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 	}];
 }
 
-- (void)runBan:(int64_t)userId {
+- (void)actionSheet:(UIActionSheet *)actionSheet clickedButtonAtIndex:(NSInteger)buttonIndex {
+	if (buttonIndex == actionSheet.cancelButtonIndex || _pendingUserId == 0)
+		return;
+	NSInteger now = (NSInteger)[[NSDate date] timeIntervalSince1970];
+	NSInteger untilDate = 0;
+	switch (buttonIndex){
+		case 0: untilDate = now + kMemberDurationDay; break;
+		case 1: untilDate = now + kMemberDurationWeek; break;
+		case 2: untilDate = now + kMemberDurationMonth; break;
+		default: untilDate = 0; break;
+	}
+	[self runBan:_pendingUserId untilDate:untilDate];
+	_pendingUserId = 0;
+}
+
+- (void)beginTransferOwnershipToUser:(int64_t)userId name:(NSString *)name {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] passwordStateWithCompletion:^(NSDictionary *state){
+		TGGroupMembersViewController *me = weakSelf;
+		if (!me)
+			return;
+		BOOL hasPassword = [state isKindOfClass:NSDictionary.class]
+				&& [[state objectForKey:@"hasPassword"] boolValue];
+		if (!hasPassword){
+			[[[UIAlertView alloc] initWithTitle:nil
+										message:@"Turn on Two-Step Verification in Settings, "
+					@"Privacy and Security, before you hand this group over."
+									   delegate:nil
+							  cancelButtonTitle:@"OK"
+							  otherButtonTitles:nil] show];
+			return;
+		}
+		[me confirm:[NSString stringWithFormat:
+				@"Make %@ the owner of this group? You keep only administrator rights.", name]
+				 ok:@"Transfer" destructive:YES run:^{
+			TGGroupMembersViewController *inner = weakSelf;
+			if (!inner)
+				return;
+			inner->_pendingUserId = userId;
+			UIAlertView *prompt = [[UIAlertView alloc]
+					initWithTitle:@"Two-Step Verification"
+						  message:@"Enter your password to confirm the transfer."
+						 delegate:inner
+				cancelButtonTitle:@"Cancel"
+				otherButtonTitles:@"Transfer", nil];
+			prompt.alertViewStyle = UIAlertViewStyleSecureTextInput;
+			[prompt show];
+		}];
+	}];
+}
+
+- (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {
+	if (buttonIndex == alertView.cancelButtonIndex || _pendingUserId == 0)
+		return;
+	NSString *password = [[alertView textFieldAtIndex:0] text] ?: @"";
+	int64_t userId = _pendingUserId;
+	_pendingUserId = 0;
+	if (!password.length)
+		return;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] transferOwnershipOfGroup:self.chatId
+										 toUser:userId
+									   password:password
+									 completion:^(BOOL ok){
+		TGGroupMembersViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (!ok){
+			[[[UIAlertView alloc] initWithTitle:nil
+										message:@"Could not transfer this group. Check the "
+					@"password and try again."
+									   delegate:nil
+							  cancelButtonTitle:@"OK"
+							  otherButtonTitles:nil] show];
+			return;
+		}
+		me.myStatus = @"administrator";
+		[me loadGroupInfo];
+		[me reload];
+	}];
+}
+
+- (void)runBan:(int64_t)userId untilDate:(NSInteger)untilDate {
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] banMember:userId
 						 inGroup:self.chatId
-					   untilDate:0
+					   untilDate:untilDate
 				  revokeMessages:NO
 					  completion:^(BOOL ok){
 		[weakSelf finishWithSuccess:ok

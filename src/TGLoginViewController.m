@@ -3,6 +3,7 @@
 #import "TGClient.h"
 #import "TGCountryPickerViewController.h"
 #import "TGClient+Account.h"
+#import "TGClient+Privacy.h"
 #import "TGActionSheet.h"
 #import <QuartzCore/QuartzCore.h>
 
@@ -14,10 +15,14 @@ typedef NS_ENUM(NSInteger, TGLoginStep) {
     TGLoginStepEmailCode,
     TGLoginStepRecoveryCode,
     TGLoginStepNewPassword,
-    TGLoginStepQrCode
+    TGLoginStepQrCode,
+    TGLoginStepRegistration
 };
 
-@interface TGLoginViewController ()
+static const NSInteger TGLoginAlertTerms = 101;
+static const NSInteger TGLoginAlertDeleteAccount = 102;
+
+@interface TGLoginViewController () <UIAlertViewDelegate>
 
 @property (nonatomic, assign) TGLoginStep currentStep;
 @property (nonatomic, strong) UILabel *noticeLabel;
@@ -44,6 +49,14 @@ typedef NS_ENUM(NSInteger, TGLoginStep) {
 @property (nonatomic, strong) NSTimer *qrTimer;
 @property (nonatomic, strong) TGActionSheet *currentActionSheet;
 @property (nonatomic, assign) BOOL suppressResendButton;
+@property (nonatomic, strong) UITextField *lastNameField;
+@property (nonatomic, strong) UIImageView *lastNameBackgroundView;
+@property (nonatomic, assign) BOOL codeIsText;
+@property (nonatomic, assign) BOOL codeIsPhrase;
+@property (nonatomic, copy) NSString *termsText;
+@property (nonatomic, assign) NSInteger termsMinUserAge;
+@property (nonatomic, strong) NSTimer *authPollTimer;
+@property (nonatomic, assign) BOOL passwordResetPending;
 
 @end
 
@@ -329,6 +342,27 @@ static NSDictionary *tgDialCodes(void) {
     [self.inputField addTarget:self action:@selector(inputChanged) forControlEvents:UIControlEventEditingChanged];
     [self.view addSubview:self.inputField];
 
+    self.lastNameBackgroundView = [[UIImageView alloc] initWithFrame:CGRectZero];
+    if (rawInputImage != nil)
+        self.lastNameBackgroundView.image = [rawInputImage stretchableImageWithLeftCapWidth:(int)(rawInputImage.size.width / 2) topCapHeight:(int)(rawInputImage.size.height / 2)];
+    self.lastNameBackgroundView.userInteractionEnabled = YES;
+    self.lastNameBackgroundView.hidden = YES;
+    [self.lastNameBackgroundView addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(lastNameBackgroundTapped)]];
+    [self.view addSubview:self.lastNameBackgroundView];
+
+    self.lastNameField = [[UITextField alloc] initWithFrame:CGRectZero];
+    self.lastNameField.font = [UIFont boldSystemFontOfSize:18];
+    self.lastNameField.backgroundColor = tgRGB(0xf5f5f5);
+    self.lastNameField.placeholder = @"Last Name";
+    self.lastNameField.keyboardType = UIKeyboardTypeDefault;
+    self.lastNameField.autocorrectionType = UITextAutocorrectionTypeNo;
+    self.lastNameField.autocapitalizationType = UITextAutocapitalizationTypeWords;
+    self.lastNameField.returnKeyType = UIReturnKeyDone;
+    self.lastNameField.delegate = self;
+    self.lastNameField.hidden = YES;
+    [self.lastNameField addTarget:self action:@selector(inputChanged) forControlEvents:UIControlEventEditingChanged];
+    [self.view addSubview:self.lastNameField];
+
     self.timeoutLabel = [[UILabel alloc] initWithFrame:CGRectZero];
     self.timeoutLabel.font = [UIFont systemFontOfSize:14];
     self.timeoutLabel.textColor = tgRGB(0xc4c9d2);
@@ -452,6 +486,7 @@ static NSDictionary *tgDialCodes(void) {
 - (CGFloat)plateWidthForCurrentStep {
     switch (self.currentStep) {
         case TGLoginStepCode:
+            return self.codeIsText ? 240 : 80;
         case TGLoginStepEmailCode:
         case TGLoginStepRecoveryCode:
             return 80;
@@ -460,10 +495,64 @@ static NSDictionary *tgDialCodes(void) {
     }
 }
 
+- (void)setNextButtonTitle:(NSString *)title {
+    if ([[self.nextButton titleForState:UIControlStateNormal] isEqualToString:title])
+        return;
+    [self.nextButton setTitle:title forState:UIControlStateNormal];
+    [self sizeLoginToolbarButton:self.nextButton paddingLeft:7 paddingRight:7 minWidth:52];
+    self.spinner.frame = CGRectMake(floorf((self.nextButton.frame.size.width - self.spinner.frame.size.width) / 2),
+                                    floorf((self.nextButton.frame.size.height - self.spinner.frame.size.height) / 2),
+                                    self.spinner.frame.size.width, self.spinner.frame.size.height);
+}
+
 - (void)layoutInterface {
     CGSize screenSize = [UIScreen mainScreen].bounds.size;
     BOOL keyboardUp = self.currentStep != TGLoginStepQrCode;
     CGSize viewSize = CGSizeMake(screenSize.width, screenSize.height - 20 - 44 - (keyboardUp ? 216 : 0));
+
+    [self setNextButtonTitle:self.currentStep == TGLoginStepRegistration ? @"Done" : @"Next"];
+
+    if (self.currentStep != TGLoginStepRegistration) {
+        self.lastNameBackgroundView.hidden = YES;
+        self.lastNameField.hidden = YES;
+    }
+
+    if (self.currentStep == TGLoginStepRegistration) {
+        CGFloat width = 290;
+        self.countryButton.hidden = YES;
+        self.countryCodeField.hidden = YES;
+        self.inputDivider.hidden = YES;
+        self.qrLinkLabel.hidden = YES;
+        self.inputBackgroundView.hidden = NO;
+        self.inputField.hidden = NO;
+        self.lastNameBackgroundView.hidden = NO;
+        self.lastNameField.hidden = NO;
+
+        CGFloat top = (int)((viewSize.height - 92) / 2);
+        self.inputBackgroundView.frame = CGRectIntegral(CGRectMake((viewSize.width - width) / 2, top, width, 43));
+        self.inputField.frame = CGRectMake(self.inputBackgroundView.frame.origin.x + 12,
+                                           self.inputBackgroundView.frame.origin.y + 10,
+                                           width - 24, 22);
+        self.inputField.textAlignment = NSTextAlignmentLeft;
+
+        self.lastNameBackgroundView.frame = CGRectIntegral(CGRectMake(self.inputBackgroundView.frame.origin.x,
+                                                                      self.inputBackgroundView.frame.origin.y + 49,
+                                                                      width, 43));
+        self.lastNameField.frame = CGRectMake(self.lastNameBackgroundView.frame.origin.x + 12,
+                                              self.lastNameBackgroundView.frame.origin.y + 10,
+                                              width - 24, 22);
+
+        CGSize registrationNoticeSize = [self.noticeLabel sizeThatFits:CGSizeMake(280, 1024)];
+        self.noticeLabel.frame = CGRectIntegral(CGRectMake((viewSize.width - registrationNoticeSize.width) / 2,
+                                                           top - 16 - registrationNoticeSize.height,
+                                                           registrationNoticeSize.width, registrationNoticeSize.height));
+        self.noticeLabel.alpha = self.noticeLabel.frame.origin.y < 0 ? 0.0f : 1.0f;
+
+        self.timeoutLabel.hidden = YES;
+        self.resendButton.hidden = YES;
+        self.extraButton.hidden = YES;
+        return;
+    }
 
     if (self.currentStep == TGLoginStepQrCode) {
         self.countryButton.hidden = YES;
@@ -543,13 +632,27 @@ static NSDictionary *tgDialCodes(void) {
     self.resendButton.frame = CGRectMake((int)((viewSize.width - self.resendButton.frame.size.width) / 2), resendY,
                                          self.resendButton.frame.size.width, self.resendButton.frame.size.height);
 
+    BOOL resetRow = self.currentStep == TGLoginStepPassword && self.passwordResetPending;
     BOOL countdownStep = self.currentStep == TGLoginStepCode || self.currentStep == TGLoginStepEmailCode;
-    self.timeoutLabel.hidden = !countdownStep || self.resendSeconds <= 0;
-    self.resendButton.hidden = !countdownStep || self.resendSeconds > 0 || self.suppressResendButton;
+
+    if (resetRow) {
+        self.timeoutLabel.hidden = NO;
+        self.resendButton.hidden = NO;
+        self.resendButton.frame = CGRectMake((int)((viewSize.width - self.resendButton.frame.size.width) / 2),
+                                             resendY + timeoutSize.height + 8,
+                                             self.resendButton.frame.size.width, self.resendButton.frame.size.height);
+    } else {
+        self.timeoutLabel.hidden = !countdownStep || self.resendSeconds <= 0;
+        self.resendButton.hidden = !countdownStep || self.resendSeconds > 0 || self.suppressResendButton;
+    }
 
     BOOL hasExtra = self.currentStep == TGLoginStepCode || self.currentStep == TGLoginStepPassword;
     self.extraButton.hidden = !hasExtra;
-    CGFloat extraY = resendY + (self.currentStep == TGLoginStepCode ? 38 : 0);
+    CGFloat extraY = resendY;
+    if (self.currentStep == TGLoginStepCode)
+        extraY += 38;
+    else if (resetRow)
+        extraY += timeoutSize.height + 8 + self.resendButton.frame.size.height + 8;
     self.extraButton.frame = CGRectMake((int)((viewSize.width - self.extraButton.frame.size.width) / 2), extraY,
                                         self.extraButton.frame.size.width, self.extraButton.frame.size.height);
 }
@@ -588,7 +691,9 @@ static NSDictionary *tgDialCodes(void) {
     if (self.currentStep == TGLoginStepPhone)
         return [self digitsOnly:text].length >= 4 && [self digitsOnly:self.countryCodeField.text].length >= 1;
     if (self.currentStep == TGLoginStepCode)
-        return [self digitsOnly:text].length >= 4;
+        return self.codeIsText ? text.length >= 2 : [self digitsOnly:text].length >= 4;
+    if (self.currentStep == TGLoginStepRegistration)
+        return text.length > 0;
     if (self.currentStep == TGLoginStepEmail)
         return [text rangeOfString:@"@"].location != NSNotFound && text.length >= 5;
     if (self.currentStep == TGLoginStepEmailCode)
@@ -609,7 +714,7 @@ static NSDictionary *tgDialCodes(void) {
 - (void)inputChanged {
     [self updateNextEnabled];
 
-    if (self.currentStep == TGLoginStepCode && !self.busy) {
+    if (self.currentStep == TGLoginStepCode && !self.codeIsText && !self.busy) {
         if ([self digitsOnly:[self trimmedInput]].length >= 5)
             [self actionButtonTapped];
     }
@@ -645,8 +750,19 @@ static NSDictionary *tgDialCodes(void) {
         }
     } else if (self.currentStep == TGLoginStepCode) {
         if (self.onCodeSubmitted) {
-            self.onCodeSubmitted([self digitsOnly:text]);
+            self.onCodeSubmitted(self.codeIsText ? text : [self digitsOnly:text]);
         }
+    } else if (self.currentStep == TGLoginStepRegistration) {
+        NSString *lastName = [self.lastNameField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        __weak TGLoginViewController *weakSelf = self;
+        [[TGClient shared] registerWithFirstName:text lastName:lastName.length > 0 ? lastName : nil completion:^(BOOL ok) {
+            TGLoginViewController *me = weakSelf;
+            if (me == nil)
+                return;
+            [me setBusy:NO];
+            if (!ok)
+                [me showLoginAlert:@"This name was not accepted. Please try again."];
+        }];
     } else if (self.currentStep == TGLoginStepPassword) {
         if (self.onPasswordSubmitted) {
             self.onPasswordSubmitted(text);
@@ -724,6 +840,8 @@ static NSDictionary *tgDialCodes(void) {
     [self stopQrRefresh];
     self.currentStep = TGLoginStepCode;
     self.suppressResendButton = NO;
+    self.codeIsText = NO;
+    self.codeIsPhrase = NO;
     self.title = phoneNumber.length > 0 ? phoneNumber : (self.savedPhoneNumber.length > 0 ? self.savedPhoneNumber : @"Enter Code");
     self.noticeLabel.text = @"We have sent you an SMS with the code";
 
@@ -731,6 +849,9 @@ static NSDictionary *tgDialCodes(void) {
     self.inputField.secureTextEntry = NO;
     self.inputField.placeholder = @"Code";
     self.inputField.keyboardType = UIKeyboardTypeNumberPad;
+    self.inputField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+
+    [self startAuthPoll];
 
     [self setLoginButton:self.resendButton title:@"Send the code again"];
     [self setLoginButton:self.extraButton title:@"Didn't get the code?"];
@@ -751,9 +872,40 @@ static NSDictionary *tgDialCodes(void) {
     }];
 }
 
+- (void)applyTextCodeType:(BOOL)isPhrase {
+    self.codeIsText = YES;
+    self.codeIsPhrase = isPhrase;
+
+    self.inputField.keyboardType = UIKeyboardTypeDefault;
+    self.inputField.autocorrectionType = UITextAutocorrectionTypeNo;
+    self.inputField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    self.inputField.placeholder = isPhrase ? @"Phrase" : @"Word";
+    if ([self.inputField isFirstResponder])
+        [self.inputField reloadInputViews];
+
+    self.noticeLabel.text = isPhrase
+        ? @"We have sent you an SMS with a secret phrase. Please enter it below."
+        : @"We have sent you an SMS with a secret word. Please enter it below.";
+}
+
 - (void)applyCodeInfo:(NSDictionary *)info {
+    NSString *type = [info objectForKey:@"type"];
+    BOOL isWordCode = [type isKindOfClass:[NSString class]] && [type isEqualToString:@"authenticationCodeTypeSmsWord"];
+    BOOL isPhraseCode = [type isKindOfClass:[NSString class]] && [type isEqualToString:@"authenticationCodeTypeSmsPhrase"];
+
+    if (isWordCode || isPhraseCode) {
+        [self applyTextCodeType:isPhraseCode];
+    } else if (self.codeIsText) {
+        self.codeIsText = NO;
+        self.codeIsPhrase = NO;
+        self.inputField.placeholder = @"Code";
+        self.inputField.keyboardType = UIKeyboardTypeNumberPad;
+        if ([self.inputField isFirstResponder])
+            [self.inputField reloadInputViews];
+    }
+
     NSString *description = [info objectForKey:@"description"];
-    if ([description isKindOfClass:[NSString class]] && description.length > 0)
+    if (!self.codeIsText && [description isKindOfClass:[NSString class]] && description.length > 0)
         self.noticeLabel.text = description;
 
     NSString *nextDescription = [info objectForKey:@"nextDescription"];
@@ -773,10 +925,106 @@ static NSDictionary *tgDialCodes(void) {
     [self layoutInterface];
 }
 
+- (void)startAuthPoll {
+    [self stopAuthPoll];
+    self.authPollTimer = [NSTimer scheduledTimerWithTimeInterval:1.0
+                                                          target:self
+                                                        selector:@selector(authPollTick)
+                                                        userInfo:nil
+                                                         repeats:YES];
+}
+
+- (void)stopAuthPoll {
+    [self.authPollTimer invalidate];
+    self.authPollTimer = nil;
+}
+
+- (void)authPollTick {
+    if (self.currentStep != TGLoginStepCode) {
+        [self stopAuthPoll];
+        return;
+    }
+    if ([TGClient shared].authState == TGAuthStateWaitRegistration) {
+        [self stopAuthPoll];
+        [self showRegistrationStep];
+    }
+}
+
+- (void)showRegistrationStep {
+    (void)self.view;
+    [self setBusy:NO];
+    [self stopAuthPoll];
+    [self stopResendCountdown];
+    [self stopQrRefresh];
+    self.currentStep = TGLoginStepRegistration;
+    self.title = @"Your Info";
+    self.noticeLabel.text = @"Enter your name so your friends know who is writing to them.";
+
+    self.inputField.text = @"";
+    self.inputField.secureTextEntry = NO;
+    self.inputField.placeholder = @"First Name";
+    self.inputField.keyboardType = UIKeyboardTypeDefault;
+    self.inputField.autocapitalizationType = UITextAutocapitalizationTypeWords;
+    self.inputField.returnKeyType = UIReturnKeyNext;
+    self.lastNameField.text = @"";
+
+    [self installBackButton];
+    [self layoutInterface];
+    [self updateNextEnabled];
+    [self.inputField becomeFirstResponder];
+
+    __weak TGLoginViewController *weakSelf = self;
+    [[TGClient shared] registrationTermsWithCompletion:^(NSDictionary *terms) {
+        TGLoginViewController *me = weakSelf;
+        if (me == nil || me.currentStep != TGLoginStepRegistration || terms == nil)
+            return;
+        [me applyRegistrationTerms:terms];
+    }];
+}
+
+- (void)applyRegistrationTerms:(NSDictionary *)terms {
+    NSString *text = [terms objectForKey:@"text"];
+    if (![text isKindOfClass:[NSString class]])
+        text = @"";
+    self.termsText = text;
+
+    NSNumber *minAge = [terms objectForKey:@"minUserAge"];
+    self.termsMinUserAge = [minAge isKindOfClass:[NSNumber class]] ? [minAge integerValue] : 0;
+
+    NSNumber *showPopup = [terms objectForKey:@"showPopup"];
+    if (![showPopup isKindOfClass:[NSNumber class]] || ![showPopup boolValue])
+        return;
+
+    NSMutableString *message = [NSMutableString string];
+    if (text.length > 0)
+        [message appendString:text];
+    if (self.termsMinUserAge > 0) {
+        if (message.length > 0)
+            [message appendString:@"\n\n"];
+        [message appendFormat:@"You must be at least %d years old to use Telegram.", (int)self.termsMinUserAge];
+    }
+    if (message.length == 0)
+        return;
+
+    [self.inputField resignFirstResponder];
+    UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Terms of Service"
+                                                    message:message
+                                                   delegate:self
+                                          cancelButtonTitle:@"Decline"
+                                          otherButtonTitles:@"Accept", nil];
+    alert.tag = TGLoginAlertTerms;
+    [alert show];
+}
+
+- (void)lastNameBackgroundTapped {
+    [self.lastNameField becomeFirstResponder];
+}
+
 - (void)showPasswordStep {
     (void)self.view;
     [self setBusy:NO];
     [self stopQrRefresh];
+    [self stopAuthPoll];
     self.currentStep = TGLoginStepPassword;
     self.title = @"Password";
     self.noticeLabel.text = @"Your account is protected with a password. Please enter it below.";
@@ -786,7 +1034,10 @@ static NSDictionary *tgDialCodes(void) {
     self.inputField.placeholder = @"Password";
     self.inputField.secureTextEntry = YES;
     self.inputField.keyboardType = UIKeyboardTypeDefault;
+    self.inputField.returnKeyType = UIReturnKeyDone;
+    self.inputField.autocapitalizationType = UITextAutocapitalizationTypeNone;
 
+    self.passwordResetPending = NO;
     [self stopResendCountdown];
     [self installBackButton];
     [self layoutInterface];
@@ -805,9 +1056,15 @@ static NSDictionary *tgDialCodes(void) {
     self.inputField.secureTextEntry = NO;
     self.inputField.placeholder = @"Phone number";
     self.inputField.keyboardType = UIKeyboardTypeNumberPad;
+    self.inputField.returnKeyType = UIReturnKeyDone;
+    self.inputField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    self.codeIsText = NO;
+    self.codeIsPhrase = NO;
+    self.passwordResetPending = NO;
 
     [self stopResendCountdown];
     [self stopQrRefresh];
+    [self stopAuthPoll];
     [self installOptionsButton];
     [self layoutInterface];
     [self updateNextEnabled];
@@ -1054,11 +1311,128 @@ static NSDictionary *tgDialCodes(void) {
                 return;
             [me setBusy:NO];
             if (!ok) {
-                [me showLoginAlert:@"Since you did not provide a recovery email when setting up your password, your remaining options are either to remember your password or to reset your account."];
+                [me showPasswordResetOptions];
                 return;
             }
             [me showRecoveryCodeStep];
         }];
+    }
+}
+
+- (void)showPasswordResetOptions {
+    [self.inputField resignFirstResponder];
+
+    NSArray *actions = @[ [[TGActionSheetAction alloc] initWithTitle:@"Reset Password" action:@"reset" type:TGActionSheetActionTypeDestructive],
+                          [[TGActionSheetAction alloc] initWithTitle:@"Delete Account" action:@"delete" type:TGActionSheetActionTypeDestructive],
+                          [[TGActionSheetAction alloc] initWithTitle:@"Cancel" action:@"cancel" type:TGActionSheetActionTypeCancel] ];
+
+    __weak TGLoginViewController *weakSelf = self;
+    TGActionSheet *sheet = [[TGActionSheet alloc] initWithTitle:@"No recovery email is attached to this password. You can reset the password after a waiting period, or delete the account."
+                                                        actions:actions
+                                                    actionBlock:^(__unused id target, NSString *action) {
+        TGLoginViewController *me = weakSelf;
+        if (me == nil)
+            return;
+        if ([action isEqualToString:@"reset"])
+            [me requestPasswordReset];
+        else if ([action isEqualToString:@"delete"])
+            [me confirmAccountDeletion];
+        else
+            [me.inputField becomeFirstResponder];
+    } target:self];
+    self.currentActionSheet = sheet;
+    [sheet showInView:self.view];
+}
+
+- (void)requestPasswordReset {
+    if (self.busy)
+        return;
+
+    [self setBusy:YES];
+    __weak TGLoginViewController *weakSelf = self;
+    [[TGClient shared] resetPasswordWithCompletion:^(NSString *result, NSInteger date) {
+        TGLoginViewController *me = weakSelf;
+        if (me == nil || me.currentStep != TGLoginStepPassword)
+            return;
+        [me setBusy:NO];
+        [me applyPasswordResetResult:result date:date];
+    }];
+}
+
+- (void)applyPasswordResetResult:(NSString *)result date:(NSInteger)date {
+    if ([result isEqualToString:@"ok"]) {
+        self.passwordResetPending = NO;
+        [self stopResendCountdown];
+        [self layoutInterface];
+        [self showLoginAlert:@"Your password has been reset."];
+        return;
+    }
+
+    if ([result isEqualToString:@"pending"] || [result isEqualToString:@"declined"]) {
+        NSTimeInterval remaining = (NSTimeInterval)date - [[NSDate date] timeIntervalSince1970];
+        if (remaining < 0)
+            remaining = 0;
+        self.passwordResetPending = [result isEqualToString:@"pending"];
+        [self stopResendCountdown];
+        self.resendSeconds = (NSInteger)remaining;
+        if (self.resendSeconds > 0)
+            [self startResendTimer];
+        if (self.passwordResetPending) {
+            [self setLoginButton:self.resendButton title:@"Cancel reset"];
+            [self updateResendTitle];
+            [self layoutInterface];
+        } else {
+            [self layoutInterface];
+            [self showLoginAlert:@"Telegram has declined this reset. Please try again later."];
+        }
+        return;
+    }
+
+    [self showLoginAlert:@"The password could not be reset. Please try again later."];
+}
+
+- (void)confirmAccountDeletion {
+    UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Delete Account"
+                                                    message:@"All your chats, messages and contacts on Telegram will be lost. This cannot be undone."
+                                                   delegate:self
+                                          cancelButtonTitle:@"Cancel"
+                                          otherButtonTitles:@"Delete", nil];
+    alert.tag = TGLoginAlertDeleteAccount;
+    [alert show];
+}
+
+- (void)deleteAccountNow {
+    [self setBusy:YES];
+    __weak TGLoginViewController *weakSelf = self;
+    [[TGClient shared] deleteAccountWithReason:@"Forgot password" password:nil completion:^(BOOL ok) {
+        TGLoginViewController *me = weakSelf;
+        if (me == nil)
+            return;
+        [me setBusy:NO];
+        if (ok)
+            [me showPhoneStep];
+        else
+            [me showLoginAlert:@"The account could not be deleted. Please try again later."];
+    }];
+}
+
+- (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {
+    if (alertView.tag == TGLoginAlertTerms) {
+        if (buttonIndex == alertView.cancelButtonIndex) {
+            [[TGClient shared] logOut];
+            [self showPhoneStep];
+            return;
+        }
+        if (self.currentStep == TGLoginStepRegistration)
+            [self.inputField becomeFirstResponder];
+        return;
+    }
+
+    if (alertView.tag == TGLoginAlertDeleteAccount) {
+        if (buttonIndex != alertView.cancelButtonIndex)
+            [self deleteAccountNow];
+        else
+            [self.inputField becomeFirstResponder];
     }
 }
 
@@ -1144,7 +1518,27 @@ static NSDictionary *tgDialCodes(void) {
     }
 }
 
+- (NSString *)longDurationString:(NSInteger)seconds {
+    NSInteger days = seconds / 86400;
+    NSInteger hours = (seconds % 86400) / 3600;
+    NSInteger minutes = (seconds % 3600) / 60;
+    if (days > 0)
+        return [NSString stringWithFormat:@"%d days %d hours", (int)days, (int)hours];
+    if (hours > 0)
+        return [NSString stringWithFormat:@"%d hours %d minutes", (int)hours, (int)minutes];
+    return [NSString stringWithFormat:@"%d:%02d", (int)minutes, (int)(seconds % 60)];
+}
+
 - (void)updateResendTitle {
+    if (self.currentStep == TGLoginStepPassword && self.passwordResetPending) {
+        self.timeoutLabel.text = self.resendSeconds > 0
+            ? [NSString stringWithFormat:@"You will be able to reset your password in %@", [self longDurationString:self.resendSeconds]]
+            : @"You can reset your password now.";
+        self.resendButton.enabled = YES;
+        [self layoutInterface];
+        return;
+    }
+
     if (self.resendSeconds > 0) {
         NSString *format = self.currentStep == TGLoginStepEmailCode
             ? @"You will be able to reset your email address in %d:%02d"
@@ -1159,10 +1553,32 @@ static NSDictionary *tgDialCodes(void) {
 }
 
 - (void)resendTapped {
-    if (self.busy || self.resendSeconds > 0)
+    if (self.busy)
         return;
 
     __weak TGLoginViewController *weakSelf = self;
+
+    if (self.currentStep == TGLoginStepPassword && self.passwordResetPending) {
+        [self setBusy:YES];
+        [[TGClient shared] cancelPasswordResetWithCompletion:^(BOOL ok) {
+            TGLoginViewController *me = weakSelf;
+            if (me == nil)
+                return;
+            [me setBusy:NO];
+            if (!ok) {
+                [me showLoginAlert:@"The reset could not be cancelled."];
+                return;
+            }
+            me.passwordResetPending = NO;
+            [me stopResendCountdown];
+            [me layoutInterface];
+            [me.inputField becomeFirstResponder];
+        }];
+        return;
+    }
+
+    if (self.resendSeconds > 0)
+        return;
 
     if (self.currentStep == TGLoginStepEmailCode) {
         [self setBusy:YES];
@@ -1198,8 +1614,15 @@ static NSDictionary *tgDialCodes(void) {
         return [self digitsOnly:result].length <= 4;
     }
 
+    if (self.currentStep == TGLoginStepRegistration) {
+        NSString *result = [textField.text stringByReplacingCharactersInRange:range withString:string];
+        return result.length <= 64;
+    }
+
     if (self.currentStep == TGLoginStepCode) {
         NSString *result = [textField.text stringByReplacingCharactersInRange:range withString:string];
+        if (self.codeIsText)
+            return result.length <= 64;
         return [self digitsOnly:result].length <= 8 && [[self digitsOnly:string] length] == string.length;
     }
 
@@ -1221,6 +1644,10 @@ static NSDictionary *tgDialCodes(void) {
         [self.inputField becomeFirstResponder];
         return NO;
     }
+    if (self.currentStep == TGLoginStepRegistration && textField == self.inputField) {
+        [self.lastNameField becomeFirstResponder];
+        return NO;
+    }
     [self actionButtonTapped];
     return YES;
 }
@@ -1238,7 +1665,10 @@ static NSDictionary *tgDialCodes(void) {
     _resendTimer = nil;
     [_qrTimer invalidate];
     _qrTimer = nil;
+    [_authPollTimer invalidate];
+    _authPollTimer = nil;
     _currentActionSheet.delegate = nil;
+    _lastNameField.delegate = nil;
     _inputField.delegate = nil;
     _countryCodeField.delegate = nil;
 }

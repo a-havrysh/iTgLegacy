@@ -13,7 +13,7 @@ static NSDictionary *TGMsgFormattedText(NSString *text) {
 static NSDictionary *TGMsgTopic(int64_t threadId) {
 	if (threadId == 0)
 		return nil;
-	return @{@"@type" : @"messageTopicThread", @"message_thread_id" : @(threadId)};
+	return @{@"@type" : @"messageTopicForum", @"forum_topic_id" : @((int32_t)threadId)};
 }
 
 static NSDictionary *TGMsgTextContent(NSString *text, BOOL clearDraft) {

@@ -29,6 +29,41 @@ static const NSInteger kTrendingPageSize = 20;
 static const CGFloat kBottomBarHeight = 45.0f;
 static const NSUInteger kCoverCacheLimit = 220;
 
+static const NSInteger TGStickersPageMasks = 5;
+
+static const NSInteger kRootSectionSettings = 0;
+static const NSInteger kRootSectionPages = 1;
+static const NSInteger kRootSectionSets = 2;
+static const NSInteger kRootSectionRecent = 3;
+
+static NSString *const TGStickerSuggestModeKey = @"TGStickerSuggestMode";
+static NSString *const TGStickerLoopAnimatedKey = @"TGStickerLoopAnimated";
+
+typedef NS_ENUM(NSInteger, TGStickerSuggestMode) {
+	TGStickerSuggestModeAll = 0,
+	TGStickerSuggestModeInstalled = 1,
+	TGStickerSuggestModeNone = 2
+};
+
+static TGStickerSuggestMode TGStickersSuggestMode(void) {
+	NSNumber *stored = [[NSUserDefaults standardUserDefaults]
+			objectForKey:TGStickerSuggestModeKey];
+	if (!stored)
+		return TGStickerSuggestModeAll;
+	NSInteger value = [stored integerValue];
+	if (value < TGStickerSuggestModeAll || value > TGStickerSuggestModeNone)
+		return TGStickerSuggestModeAll;
+	return (TGStickerSuggestMode)value;
+}
+
+static NSString *TGStickersSuggestModeName(TGStickerSuggestMode mode) {
+	switch (mode){
+		case TGStickerSuggestModeInstalled: return @"My Sets";
+		case TGStickerSuggestModeNone:      return @"None";
+		default:                            return @"All Sets";
+	}
+}
+
 static UIImage *TGStickersStretch(NSString *name, int leftCap) {
 	UIImage *raw = [UIImage imageNamed:name];
 	if (!raw)
@@ -191,6 +226,8 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 @property (nonatomic, assign) NSInteger trendingNewCount;
 @property (nonatomic, assign) NSInteger totalRemote;
 @property (nonatomic, assign) NSInteger trendingOffset;
+@property (nonatomic, assign) NSInteger maskCount;
+@property (nonatomic, strong) NSSet *archivedIdsBeforeInstall;
 
 @property (nonatomic, assign) BOOL loaded;
 @property (nonatomic, assign) BOOL failed;
@@ -221,7 +258,13 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	return self.page == TGStickersPageFavourites || self.page == TGStickersPageSet;
 }
 
+- (BOOL)isMaskPage {
+	return (NSInteger)self.page == TGStickersPageMasks;
+}
+
 - (NSString *)pageTitle {
+	if ([self isMaskPage])
+		return @"Masks";
 	switch (self.page){
 		case TGStickersPageTrending:   return @"Trending Stickers";
 		case TGStickersPageArchived:   return @"Archived Stickers";
@@ -256,7 +299,7 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	self.spinner.hidesWhenStopped = YES;
 	[self.view addSubview:self.spinner];
 
-	if (self.page == TGStickersPageRoot)
+	if (self.page == TGStickersPageRoot || [self isMaskPage])
 		[self installEditButton];
 	if (self.page == TGStickersPageSet){
 		[self refreshSetBarButton];
@@ -265,12 +308,76 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
 	[self reload];
+
+	if (self.page == TGStickersPageTrending || self.page == TGStickersPageSet)
+		[self captureArchivedSnapshot];
+}
+
+- (void)captureArchivedSnapshot {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] archivedStickerSetsFromSetId:0 limit:kArchivedPageSize
+										 completion:^(NSArray *sets, __unused NSInteger total){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf || !sets)
+			return;
+		NSMutableSet *ids = [NSMutableSet set];
+		for (NSDictionary *set in sets)
+			if (set[@"id"])
+				[ids addObject:set[@"id"]];
+		strongSelf.archivedIdsBeforeInstall = ids;
+	}];
+}
+
+- (void)checkAutoArchivedSets {
+	NSSet *before = self.archivedIdsBeforeInstall;
+	if (!before)
+		return;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] archivedStickerSetsFromSetId:0 limit:kArchivedPageSize
+										 completion:^(NSArray *sets, __unused NSInteger total){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf || !sets)
+			return;
+
+		NSMutableSet *ids = [NSMutableSet set];
+		NSMutableArray *titles = [NSMutableArray array];
+		for (NSDictionary *set in sets){
+			if (!set[@"id"])
+				continue;
+			[ids addObject:set[@"id"]];
+			if (![before containsObject:set[@"id"]] && [set[@"title"] length])
+				[titles addObject:set[@"title"]];
+		}
+		strongSelf.archivedIdsBeforeInstall = ids;
+		if (titles.count == 0)
+			return;
+
+		NSString *names;
+		if (titles.count == 1)
+			names = titles[0];
+		else if (titles.count == 2)
+			names = [NSString stringWithFormat:@"%@ and %@", titles[0], titles[1]];
+		else
+			names = [NSString stringWithFormat:@"%@, %@ and %d more", titles[0], titles[1],
+					(int)(titles.count - 2)];
+
+		NSString *title = [NSString stringWithFormat:
+				@"There was no room for another set, so %@ moved to the archive.", names];
+		NSArray *actions = @[
+			[[TGActionSheetAction alloc] initWithTitle:@"Show Archive" action:@"openArchive"],
+			[[TGActionSheetAction alloc] initWithTitle:@"OK" action:@"cancel"
+												  type:TGActionSheetActionTypeCancel]
+		];
+		[strongSelf presentSheetWithTitle:title actions:actions];
+	}];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
-	if (self.page == TGStickersPageRoot && self.loaded && !self.reordering)
+	if ((self.page == TGStickersPageRoot || [self isMaskPage]) && self.loaded &&
+			!self.reordering)
 		[self reload];
 	[self.table deselectRowAtIndexPath:[self.table indexPathForSelectedRow] animated:animated];
 }
@@ -544,6 +651,10 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 #pragma mark - loading
 
 - (void)reload {
+	if ([self isMaskPage]){
+		[self reloadMasks];
+		return;
+	}
 	switch (self.page){
 		case TGStickersPageTrending:   [self reloadTrending]; break;
 		case TGStickersPageArchived:   [self reloadArchived]; break;
@@ -604,12 +715,75 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		strongSelf.trendingNewCount = unseen;
 		[strongSelf reloadFirstSection];
 	}];
+
+	[[TGClient shared] installedMaskStickerSetsWithCompletion:^(NSArray *sets){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		NSInteger count = (NSInteger)sets.count;
+		if (count == strongSelf.maskCount)
+			return;
+		strongSelf.maskCount = count;
+		if (strongSelf.table.hidden || !strongSelf.loaded || strongSelf.reordering)
+			return;
+		[strongSelf.table reloadData];
+	}];
+
+	if (![[NSUserDefaults standardUserDefaults] objectForKey:TGStickerSuggestModeKey]){
+		[[TGClient shared] stickerSuggestionEnabledWithCompletion:^(BOOL enabled){
+			__strong typeof(weakSelf) strongSelf = weakSelf;
+			if (!strongSelf)
+				return;
+			if ([[NSUserDefaults standardUserDefaults] objectForKey:TGStickerSuggestModeKey])
+				return;
+			[[NSUserDefaults standardUserDefaults]
+					setInteger:(enabled ? TGStickerSuggestModeAll : TGStickerSuggestModeNone)
+						forKey:TGStickerSuggestModeKey];
+			[[NSUserDefaults standardUserDefaults] synchronize];
+			[strongSelf reloadSettingsSection];
+		}];
+	}
+}
+
+- (void)reloadSettingsSection {
+	if (self.page != TGStickersPageRoot || self.table.hidden || !self.loaded)
+		return;
+	[self.table reloadSections:[NSIndexSet indexSetWithIndex:kRootSectionSettings]
+			  withRowAnimation:UITableViewRowAnimationNone];
+}
+
+- (void)reloadMasks {
+	if (!self.loaded)
+		[self showLoading];
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] installedMaskStickerSetsWithCompletion:^(NSArray *sets){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		strongSelf.loaded = YES;
+		if (!sets && strongSelf.sets.count == 0){
+			[strongSelf showFailure];
+			return;
+		}
+		if (sets)
+			strongSelf.sets = [NSMutableArray arrayWithArray:sets];
+		strongSelf.maskCount = (NSInteger)strongSelf.sets.count;
+		if (strongSelf.sets.count == 0){
+			[strongSelf showTitle:@"No Masks"
+							 body:@"Mask sets you install show up here, ready to be reordered or removed."];
+			return;
+		}
+		[strongSelf showContent];
+		[strongSelf.table reloadData];
+		[strongSelf installEditButton];
+	}];
 }
 
 - (void)reloadFirstSection {
-	if (self.table.hidden || !self.loaded)
+	if (self.page != TGStickersPageRoot || self.table.hidden || !self.loaded)
 		return;
-	[self.table reloadSections:[NSIndexSet indexSetWithIndex:0]
+	[self.table reloadSections:[NSIndexSet indexSetWithIndex:kRootSectionPages]
 			  withRowAnimation:UITableViewRowAnimationNone];
 }
 
@@ -1003,6 +1177,36 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		[self clearRecent];
 	else if ([action isEqualToString:@"removeFavourite"])
 		[self removeCurrentFavourite];
+	else if ([action isEqualToString:@"openArchive"])
+		[self openPage:TGStickersPageArchived];
+	else if ([action isEqualToString:@"suggestAll"])
+		[self applySuggestMode:TGStickerSuggestModeAll];
+	else if ([action isEqualToString:@"suggestInstalled"])
+		[self applySuggestMode:TGStickerSuggestModeInstalled];
+	else if ([action isEqualToString:@"suggestNone"])
+		[self applySuggestMode:TGStickerSuggestModeNone];
+}
+
+- (void)applySuggestMode:(TGStickerSuggestMode)mode {
+	[[NSUserDefaults standardUserDefaults] setInteger:mode forKey:TGStickerSuggestModeKey];
+	[[NSUserDefaults standardUserDefaults] synchronize];
+	[self reloadSettingsSection];
+}
+
+- (void)presentSuggestModeSheet {
+	NSArray *actions = @[
+		[[TGActionSheetAction alloc] initWithTitle:@"All Sets" action:@"suggestAll"],
+		[[TGActionSheetAction alloc] initWithTitle:@"My Sets" action:@"suggestInstalled"],
+		[[TGActionSheetAction alloc] initWithTitle:@"None" action:@"suggestNone"],
+		[[TGActionSheetAction alloc] initWithTitle:@"Cancel" action:@"cancel"
+											  type:TGActionSheetActionTypeCancel]
+	];
+	[self presentSheetWithTitle:@"Suggest Stickers by Emoji" actions:actions];
+}
+
+- (void)loopAnimatedToggled:(UISwitch *)toggle {
+	[[NSUserDefaults standardUserDefaults] setBool:toggle.on forKey:TGStickerLoopAnimatedKey];
+	[[NSUserDefaults standardUserDefaults] synchronize];
 }
 
 #pragma mark - acts
@@ -1052,6 +1256,7 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 			[strongButton setTitle:[strongSelf addButtonTitle] forState:UIControlStateNormal];
 			return;
 		}
+		[strongSelf checkAutoArchivedSets];
 		if (row >= (NSInteger)strongSelf.sets.count)
 			return;
 		if (strongSelf.page == TGStickersPageArchived){
@@ -1116,8 +1321,12 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		if (!strongSelf)
 			return;
 		strongSelf.bottomButton.enabled = YES;
-		if (!ok)
+		if (!ok){
 			[strongSelf applyCurrentSetInstalled:installed];
+			return;
+		}
+		if (!installed)
+			[strongSelf checkAutoArchivedSets];
 	};
 
 	if (installed)
@@ -1181,13 +1390,17 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		return;
 
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] reorderInstalledStickerSets:ids completion:^(BOOL ok){
+	void (^done)(BOOL) = ^(BOOL ok){
 		__strong typeof(weakSelf) strongSelf = weakSelf;
 		if (!strongSelf || ok || !previous)
 			return;
 		strongSelf.sets = [NSMutableArray arrayWithArray:previous];
 		[strongSelf.table reloadData];
-	}];
+	};
+	if ([self isMaskPage])
+		[[TGClient shared] reorderInstalledMaskStickerSets:ids completion:done];
+	else
+		[[TGClient shared] reorderInstalledStickerSets:ids completion:done];
 }
 
 #pragma mark - navigation
@@ -1256,14 +1469,21 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 }
 
 - (NSString *)headerTitleForSection:(NSInteger)section {
-	if (self.page == TGStickersPageRoot && section == 1 && self.sets.count)
+	if (self.page == TGStickersPageRoot && section == kRootSectionSets && self.sets.count)
 		return @"Sticker Sets";
 	return nil;
 }
 
 - (NSString *)footerTitleForSection:(NSInteger)section {
+	if ([self isMaskPage]){
+		if (section == 0 && self.sets.count)
+			return @"The mask sets you have installed. Hold Edit to reorder, swipe to remove.";
+		return nil;
+	}
 	if (self.page == TGStickersPageRoot){
-		if (section != 1)
+		if (section == kRootSectionSettings)
+			return @"Type a single emoji and matching stickers are offered above the input.";
+		if (section != kRootSectionSets)
 			return nil;
 		if (self.sets.count == 0)
 			return self.loaded ? @"You have no sticker sets yet. Trending sets are a good place to start."
@@ -1280,7 +1500,11 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 #pragma mark - table data
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-	return self.page == TGStickersPageRoot ? 3 : 1;
+	return self.page == TGStickersPageRoot ? 4 : 1;
+}
+
+- (NSInteger)pageRowCount {
+	return self.maskCount > 0 ? 4 : 3;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
@@ -1288,9 +1512,11 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		return [self gridRowCount];
 	if (self.page != TGStickersPageRoot)
 		return (NSInteger)self.sets.count;
-	if (section == 0)
-		return 3;
-	if (section == 1)
+	if (section == kRootSectionSettings)
+		return 2;
+	if (section == kRootSectionPages)
+		return [self pageRowCount];
+	if (section == kRootSectionSets)
 		return (NSInteger)self.sets.count;
 	return 1;
 }
@@ -1302,7 +1528,7 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		return kTrendRowHeight;
 	if (self.page != TGStickersPageRoot)
 		return kSetRowHeight;
-	return indexPath.section == 1 ? kSetRowHeight : kPlainRowHeight;
+	return indexPath.section == kRootSectionSets ? kSetRowHeight : kPlainRowHeight;
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
@@ -1363,7 +1589,7 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 - (NSDictionary *)setAtIndexPath:(NSIndexPath *)indexPath {
 	if ([self isGridPage])
 		return nil;
-	if (self.page == TGStickersPageRoot && indexPath.section != 1)
+	if (self.page == TGStickersPageRoot && indexPath.section != kRootSectionSets)
 		return nil;
 	if (indexPath.row >= (NSInteger)self.sets.count)
 		return nil;
@@ -1476,7 +1702,7 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	}
 	cell.imageView.contentMode = UIViewContentModeScaleAspectFit;
 
-	if (self.page == TGStickersPageRoot){
+	if (self.page == TGStickersPageRoot || [self isMaskPage]){
 		cell.accessoryView = nil;
 		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 	} else {
@@ -1542,6 +1768,29 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	return cell;
 }
 
+- (UITableViewCell *)settingsCellForTable:(UITableView *)tableView row:(NSInteger)row {
+	UITableViewCell *cell = [self plainCellForTable:tableView];
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+
+	if (row == 0){
+		cell.textLabel.text = @"Suggest by Emoji";
+		cell.detailTextLabel.text = TGStickersSuggestModeName(TGStickersSuggestMode());
+		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+		return cell;
+	}
+
+	cell.textLabel.text = @"Loop Animated Stickers";
+	cell.detailTextLabel.text = @"";
+	cell.accessoryType = UITableViewCellAccessoryNone;
+	UISwitch *toggle = [[UISwitch alloc] init];
+	toggle.on = [[NSUserDefaults standardUserDefaults] boolForKey:TGStickerLoopAnimatedKey];
+	[toggle addTarget:self action:@selector(loopAnimatedToggled:)
+	 forControlEvents:UIControlEventValueChanged];
+	cell.accessoryView = toggle;
+	cell.selectionStyle = UITableViewCellSelectionStyleNone;
+	return cell;
+}
+
 - (UITableViewCell *)tableView:(UITableView *)tableView
 		 cellForRowAtIndexPath:(NSIndexPath *)indexPath {
 	if ([self isGridPage])
@@ -1551,13 +1800,20 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 	if (self.page != TGStickersPageRoot)
 		return [self setCellForTable:tableView indexPath:indexPath];
 
-	if (indexPath.section == 1)
+	if (indexPath.section == kRootSectionSets)
 		return [self setCellForTable:tableView indexPath:indexPath];
-	if (indexPath.section == 2)
+	if (indexPath.section == kRootSectionRecent)
 		return [self clearRecentCellForTable:tableView];
 
+	if (indexPath.section == kRootSectionSettings)
+		return [self settingsCellForTable:tableView row:indexPath.row];
+
 	UITableViewCell *cell = [self plainCellForTable:tableView];
-	if (indexPath.row == 0){
+	if (indexPath.row == 3){
+		cell.textLabel.text = @"Masks";
+		cell.detailTextLabel.text = self.maskCount
+				? [NSString stringWithFormat:@"%d", (int)self.maskCount] : @"";
+	} else if (indexPath.row == 0){
 		cell.textLabel.text = @"Trending Stickers";
 		cell.detailTextLabel.text = self.trendingNewCount
 				? [NSString stringWithFormat:@"%d new", (int)self.trendingNewCount] : @"";
@@ -1588,16 +1844,23 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 		return;
 	}
 
-	if (indexPath.section == 0){
+	if (indexPath.section == kRootSectionSettings){
+		if (indexPath.row == 0)
+			[self presentSuggestModeSheet];
+		return;
+	}
+	if (indexPath.section == kRootSectionPages){
 		if (indexPath.row == 0)
 			[self openPage:TGStickersPageTrending];
 		else if (indexPath.row == 1)
 			[self openPage:TGStickersPageArchived];
-		else
+		else if (indexPath.row == 2)
 			[self openPage:TGStickersPageFavourites];
+		else
+			[self openPage:(TGStickersPage)TGStickersPageMasks];
 		return;
 	}
-	if (indexPath.section == 1){
+	if (indexPath.section == kRootSectionSets){
 		NSDictionary *set = [self setAtIndexPath:indexPath];
 		if (set)
 			[self openSet:set];
@@ -1630,22 +1893,24 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 - (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
 	if ([self isGridPage])
 		return NO;
-	if (self.page == TGStickersPageArchived)
+	if (self.page == TGStickersPageArchived || [self isMaskPage])
 		return YES;
-	return self.page == TGStickersPageRoot && indexPath.section == 1;
+	return self.page == TGStickersPageRoot && indexPath.section == kRootSectionSets;
 }
 
 - (BOOL)tableView:(UITableView *)tableView canMoveRowAtIndexPath:(NSIndexPath *)indexPath {
-	return self.page == TGStickersPageRoot && indexPath.section == 1;
+	if ([self isMaskPage])
+		return YES;
+	return self.page == TGStickersPageRoot && indexPath.section == kRootSectionSets;
 }
 
 - (UITableViewCellEditingStyle)tableView:(UITableView *)tableView
 		   editingStyleForRowAtIndexPath:(NSIndexPath *)indexPath {
 	if (self.reordering)
 		return UITableViewCellEditingStyleNone;
-	if (self.page == TGStickersPageArchived)
+	if (self.page == TGStickersPageArchived || [self isMaskPage])
 		return UITableViewCellEditingStyleDelete;
-	if (self.page == TGStickersPageRoot && indexPath.section == 1)
+	if (self.page == TGStickersPageRoot && indexPath.section == kRootSectionSets)
 		return UITableViewCellEditingStyleDelete;
 	return UITableViewCellEditingStyleNone;
 }
@@ -1690,11 +1955,12 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 - (NSIndexPath *)tableView:(UITableView *)tableView
 		targetIndexPathForMoveFromRowAtIndexPath:(NSIndexPath *)sourceIndexPath
 							 toProposedIndexPath:(NSIndexPath *)proposedDestinationIndexPath {
-	if (proposedDestinationIndexPath.section == 1)
+	NSInteger section = [self isMaskPage] ? 0 : kRootSectionSets;
+	if (proposedDestinationIndexPath.section == section)
 		return proposedDestinationIndexPath;
-	if (proposedDestinationIndexPath.section < 1)
-		return [NSIndexPath indexPathForRow:0 inSection:1];
-	return [NSIndexPath indexPathForRow:(NSInteger)self.sets.count - 1 inSection:1];
+	if (proposedDestinationIndexPath.section < section)
+		return [NSIndexPath indexPathForRow:0 inSection:section];
+	return [NSIndexPath indexPathForRow:(NSInteger)self.sets.count - 1 inSection:section];
 }
 
 - (void)tableView:(UITableView *)tableView

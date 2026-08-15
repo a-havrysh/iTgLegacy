@@ -1,5 +1,6 @@
 #import "TGClient+SavedMessages.h"
 #import "TGClient+Private.h"
+#import "TGClient+ChatList.h"
 #import <objc/runtime.h>
 
 static NSMutableDictionary *TGSavedTopics(void){
@@ -12,6 +13,13 @@ static NSMutableDictionary *TGSavedTopics(void){
 static NSInteger TGSavedTopicCount = 0;
 static void (^TGSavedTopicsChanged)(void) = nil;
 static void (^TGSavedTagsChanged)(int64_t) = nil;
+
+static NSMutableSet *TGSavedTitleLookups(void){
+	static NSMutableSet *pending = nil;
+	if (!pending)
+		pending = [[NSMutableSet alloc] init];
+	return pending;
+}
 
 static NSString *TGSavedPreview(NSDictionary *message){
 	if (![message isKindOfClass:NSDictionary.class])
@@ -161,6 +169,41 @@ static NSDictionary *TGSavedFlattenTopic(NSDictionary *topic){
 			nil];
 }
 
+static void TGSavedResolveTopicTitle(NSDictionary *flat){
+	if (![flat isKindOfClass:NSDictionary.class])
+		return;
+	NSString *title = flat[@"title"];
+	if ([title isKindOfClass:NSString.class] && title.length)
+		return;
+	int64_t chatId = [flat[@"chatId"] longLongValue];
+	if (chatId == 0)
+		return;
+
+	id topicId = flat[@"id"];
+	if (![topicId isKindOfClass:NSNumber.class])
+		return;
+	if ([TGSavedTitleLookups() containsObject:topicId])
+		return;
+	[TGSavedTitleLookups() addObject:topicId];
+
+	[[TGClient shared] titleForChatId:chatId completion:^(NSString *resolved){
+		[TGSavedTitleLookups() removeObject:topicId];
+		if (![resolved isKindOfClass:NSString.class] || !resolved.length)
+			return;
+		NSDictionary *current = [TGSavedTopics() objectForKey:topicId];
+		if (![current isKindOfClass:NSDictionary.class])
+			return;
+		NSString *existing = current[@"title"];
+		if ([existing isKindOfClass:NSString.class] && existing.length)
+			return;
+		NSMutableDictionary *updated = [current mutableCopy];
+		[updated setObject:resolved forKey:@"title"];
+		[TGSavedTopics() setObject:updated forKey:topicId];
+		if (TGSavedTopicsChanged)
+			TGSavedTopicsChanged();
+	}];
+}
+
 static NSDictionary *TGSavedReactionType(NSString *emoji){
 	return [NSDictionary dictionaryWithObjectsAndKeys:
 			@"reactionTypeEmoji", @"@type",
@@ -192,6 +235,7 @@ static NSDictionary *TGSavedReactionType(NSString *emoji){
 				[TGSavedTopics() setObject:flat forKey:flat[@"id"]];
 				if (TGSavedTopicsChanged)
 					TGSavedTopicsChanged();
+				TGSavedResolveTopicTitle(flat);
 			}
 		} else if ([type isEqualToString:@"updateSavedMessagesTopicCount"]){
 			NSNumber *count = obj[@"topic_count"];

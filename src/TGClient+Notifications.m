@@ -56,6 +56,10 @@ static NSDictionary *TGNotifScopeSettingsFrom(NSDictionary *s) {
 		@"muteFor"     : TGNotifNumber(s, @"mute_for"),
 		@"showPreview" : TGNotifBool(s, @"show_preview"),
 		@"soundId"     : TGNotifNumber(s, @"sound_id"),
+		@"useDefaultMuteStories" : TGNotifBool(s, @"use_default_mute_stories"),
+		@"muteStories"           : TGNotifBool(s, @"mute_stories"),
+		@"storySoundId"          : TGNotifNumber(s, @"story_sound_id"),
+		@"showStoryPoster"       : TGNotifBool(s, @"show_story_poster"),
 		@"disablePinnedMessageNotifications" :
 				TGNotifBool(s, @"disable_pinned_message_notifications"),
 		@"disableMentionNotifications" :
@@ -88,10 +92,10 @@ static NSDictionary *TGNotifScopeSettingsFrom(NSDictionary *s) {
 			@"mute_for"     : settings[@"muteFor"] ?: @(0),
 			@"sound_id"     : settings[@"soundId"] ?: @(0),
 			@"show_preview" : settings[@"showPreview"] ?: @YES,
-			@"use_default_mute_stories" : @YES,
-			@"mute_stories"             : @NO,
-			@"story_sound_id"           : @(0),
-			@"show_story_poster"        : @NO,
+			@"use_default_mute_stories" : settings[@"useDefaultMuteStories"] ?: @YES,
+			@"mute_stories"             : settings[@"muteStories"] ?: @NO,
+			@"story_sound_id"           : settings[@"storySoundId"] ?: @(0),
+			@"show_story_poster"        : settings[@"showStoryPoster"] ?: @NO,
 			@"disable_pinned_message_notifications" :
 					settings[@"disablePinnedMessageNotifications"] ?: @NO,
 			@"disable_mention_notifications" :

@@ -1,0 +1,110 @@
+{
+  "screen": "New Contact (TGNewContactViewController)",
+  "originalCounterpart": "telegram-original-sources/extracted/telegram_iphone.src/Telegraph/Telegraph/TGProfileController.m (TGProfileControllerModeCreateNewContact) and TGPhoneItemCell.m; strings in Telegraph/en.lproj/Localizable.strings; action-row art in TGButtonsMenuItemView.m",
+  "findings": [
+    {
+      "kind": "layout",
+      "visibility": "obvious",
+      "ours": "src/TGNewContactViewController.m:94-124,353-386 - no table header at all; First and Last are two full-width grouped rows in section 0, each field at x=15 spanning the whole 320pt width.",
+      "theirs": "The create-contact screen is the profile screen in editing mode: an 86pt tableHeaderView (_titleContainer) with a 70x70 avatar / ProfilePhotoPlaceholder 'add photo' button at (9,14), and the First/Last fields inside _editNameContainer at CGRectMake(90, 14, width-90-9, 88) - two 44pt grouped-cell backgrounds (groupedCellTop/groupedCellBottom) stacked to the right of the avatar, fields at (15,12,w-20,22) and (15,55,w-20,22).",
+      "citation": "TGProfileController.m:704 (_titleContainer 86 high), :715 (_avatarView 9,14,70,70), :744-751 (ProfilePhotoPlaceholder + add/photo labels), :1179 (_editNameContainer 90,14,w-99,88), :1183-1194 (groupedCellTop/Bottom 44 each), :1198,:1211 (field frames)",
+      "fix": "Replace section 0 with a tableHeaderView 86pt tall: avatar/add-photo button at (9,14,70,70) using ProfilePhotoPlaceholder.png (+_Highlighted) stretched at half width, 'add'/'photo' labels boldSystemFontOfSize:14.5 white with shadow UIColorRGBA(0x47586c,0.5) offset (0,-1) at y 16.5 and 33; name container at (90,14,w-99,88) with the two 44pt grouped-cell images and the two fields at (15,12,w-20,22)/(15,55,w-20,22), boldSystemFontOfSize:16, black text."
+    },
+    {
+      "kind": "layout",
+      "visibility": "obvious",
+      "ours": "src/TGNewContactViewController.m:357-363,388-413 - phone entry is a fixed pair: a 'Country' disclosure row that pushes TGCountryPickerViewController plus one phone field whose left gutter shows the dial code (+1).",
+      "theirs": "There is no country row anywhere in the create-contact screen. The phones section is a list of TGPhoneItemCell rows, each a tappable label ('mobile', from TGSynchronizeContactsManager phoneLabels, TGLocalized(@\"Profile.LabelMobile\")) plus a full international number typed into the field; the section starts with 2 items and grows.",
+      "citation": "TGProfileController.m:807-869 (_editingPhonesSection built with addItemsCount = 2, label from phoneLabels, Profile.LabelMobile); Localizable.strings:452 \"Profile.SelectLabelTitle\" = \"Label\", :455 \"Profile.LabelMobile\" = \"mobile\"",
+      "fix": "Drop the Country row and the dial-code prefix logic; put the phone label ('mobile') in the 62pt left gutter as the original does, tapping it opens a Label picker titled 'Label'. Store/submit the full number as typed."
+    },
+    {
+      "kind": "state",
+      "visibility": "obvious",
+      "ours": "src/TGNewContactViewController.m:357-363 - exactly one phone row, no way to add a second number, no delete affordance.",
+      "theirs": "Two phone rows are created up front, and whenever the last row is non-empty a further empty row is appended live; each row carries an editing switch button (ListEditingSwitch.png with ListEditingSwitchMinus) at x=7 and a sliding 61x31 ListDeleteButton with the 'Delete' text image.",
+      "citation": "TGProfileController.m:828 (int addItemsCount = 2), :1391-1417 (append empty row when last is filled); TGPhoneItemCell.m:185-221 (switch button 30x30 at x=7 / -23, delete button 61x31 at width-16-61, y 7-0.5)",
+      "fix": "Model the phone section as a mutable list: start with 2 rows, append an empty row when the last becomes non-empty, and add the ListEditingSwitch/ListDeleteButton editing controls with the same frames and 0.25s animations."
+    },
+    {
+      "kind": "behaviour",
+      "visibility": "obvious",
+      "ours": "src/TGNewContactViewController.m:233-242 - Done, when the form is incomplete, pops a UIAlertView titled 'New Contact' saying 'Please enter a first name.' / 'Please enter a valid phone number.', and :259 shows 'The contact could not be added. Please check the phone number and your connection.'",
+      "theirs": "There is no validation alert: Done is simply disabled until the form is valid, and the failure path just reports completion. None of those three strings exist in the original's Localizable.strings.",
+      "citation": "TGProfileController.m:4820-4828 (updateDoneButtonState sets doneButton.enabled only); Localizable.strings:448-476 (no such messages in the Profile.* group)",
+      "fix": "Delete the three UIAlertViews and showAlertWithMessage:; rely on the disabled Done button. If a network failure must be surfaced, reuse an existing original string rather than inventing prose."
+    },
+    {
+      "kind": "behaviour",
+      "visibility": "noticeable",
+      "ours": "src/TGNewContactViewController.m:172-176 - isFormValid requires a non-empty FIRST name and a composed phone of at least 5 digits.",
+      "theirs": "doneButton.enabled = haveNumber && (_firstNameField.text.length != 0 || _lastNameField.text.length != 0) - either name suffices and any non-empty number counts.",
+      "citation": "TGProfileController.m:4821-4827",
+      "fix": "Change isFormValid to: any phone row non-empty AND (firstName.length || lastName.length). Drop the 5-digit minimum."
+    },
+    {
+      "kind": "behaviour",
+      "visibility": "noticeable",
+      "ours": "src/TGNewContactViewController.m:342-351 - the phone field accepts digits, '+', space, '-', '(' and ')' and never reformats what the user types.",
+      "theirs": "Only '+' and 0-9 survive the filter; the field then re-renders the whole number through [TGStringUtils formatPhone:forceInternational:false] on every keystroke, repositioning the caret to account for inserted separators.",
+      "citation": "TGPhoneItemCell.m:626-630 (filter) and :678-711 (formatPhone + caret fix-up)",
+      "fix": "Filter to '+' and digits only, and run the raw digits through the project's formatPhone equivalent on each change, restoring the caret with the same j/k walk as TGPhoneItemCell.m:684-699."
+    },
+    {
+      "kind": "order",
+      "visibility": "noticeable",
+      "ours": "src/TGNewContactViewController.m:353-363,415-425 - sections are: names, country+phone, 'Sync Contact to Phone' switch, 'Add via QR Code'.",
+      "theirs": "In create-new-contact editing mode the sections are: phones section, then the Notifications section inserted at index 1 (Notifications / Sound rows). There is no sync switch - the contact is always written locally via /tg/synchronizeContacts/(…,addContactLocal).",
+      "citation": "TGProfileController.m:1362-1370 (notifications section inserted for CreateNewContact), :4877-4879 (addContactLocal always runs); Localizable.strings:463-464 (Profile.Notifications / Profile.Sound)",
+      "fix": "Remove the sync switch section and always write to the address book; add the Notifications section (Notifications, Sound) below the phones section as the original does."
+    },
+    {
+      "kind": "wording",
+      "visibility": "noticeable",
+      "ours": "src/TGNewContactViewController.m:365-371 - grouped footers 'The contact's country and phone number.' and 'Adds this contact to your phone's address book too.'",
+      "theirs": "The profile table sets sectionFooterHeight = 0 and ships no footer copy for these sections; no such strings exist in the original.",
+      "citation": "TGProfileController.m:701 (_tableView.sectionFooterHeight = 0); Localizable.strings:448-476",
+      "fix": "Return nil from titleForFooterInSection: for all sections and set the table's sectionFooterHeight to 0."
+    },
+    {
+      "kind": "asset",
+      "visibility": "noticeable",
+      "ours": "src/TGNewContactViewController.m:427-436 - the 'Add via QR Code' action row is a plain centred UILabel in accentColour on a normal cell.",
+      "theirs": "Action rows of this era are TGHighlightableButtons backed by GroupedActionButton.png / GroupedActionButton_Highlighted.png, title boldSystemFontOfSize:14, colour 0x4a6587, shadow white at 45% offset (0,1), white title when highlighted.",
+      "citation": "TGButtonsMenuItemView.m:116-133; both PNGs are already present at images/GroupedActionButton@2x.png and images/GroupedActionButton_Highlighted@2x.png",
+      "fix": "Render the QR row as a stretched (left cap = width/2, top cap = 0) GroupedActionButton button with title bold 14, UIColorRGB(0x4a6587), shadow UIColorRGBA(0xffffff,0.45) offset (0,1), highlighted title white with clear shadow."
+    },
+    {
+      "kind": "asset",
+      "visibility": "subtle",
+      "ours": "src/TGNewContactViewController.m:28-31,57 - the vertical divider between the label gutter and the phone field is a 1pt UIView filled with [TGTheme separatorColour].",
+      "theirs": "A UIImageView built from GroupedCellVerticalSeparator.png with a highlighted twin GroupedCellVerticalSeparator_Highlighted.png, at x=72 width 1, autoresizing to the cell height and shortened by 1pt on the last grouped row.",
+      "citation": "TGPhoneItemCell.m:106-120 and :298-312 (setGroupedCellPosition trims lineEndY by 1 on the last cell)",
+      "fix": "Copy GroupedCellVerticalSeparator.png/_Highlighted.png into images/ and use a UIImageView with highlightedImage instead of the flat colour view; trim the height by 1pt on the last row of the group."
+    },
+    {
+      "kind": "colour",
+      "visibility": "subtle",
+      "ours": "src/TGNewContactViewController.m:204 - the field text colour is [TGTheme primaryTextColour] (TG_TEXT_PRIMARY, a dark blue-grey).",
+      "theirs": "Both the phone field and the name fields use plain [UIColor blackColor]; only the user's main phone number is tinted, to 0x347fd4.",
+      "citation": "TGPhoneItemCell.m:134,142 and TGProfileController.m:1205,:1218 (textColor = [UIColor blackColor]); TGPhoneItemCell.m:274-275 (main phone 0x347fd4)",
+      "fix": "Set the three fields' textColor to [UIColor blackColor] in the light theme, keeping the theme override only for dark mode."
+    },
+    {
+      "kind": "behaviour",
+      "visibility": "subtle",
+      "ours": "src/TGNewContactViewController.m:123 - [self.firstNameField becomeFirstResponder] on viewDidLoad, so the keyboard is up before the screen finishes appearing.",
+      "theirs": "Create-contact mode only puts the table into editing state; no field takes first responder on load - focus happens on tap (focusOnFirstNameField:) or when a phone cell requests it.",
+      "citation": "TGProfileController.m:866-879 (setEditing/updateEditingState/updateNavigationButtons only); :1187,:1194 (tap recognizers) and TGPhoneItemCell.m:446-449 (requestFocus)",
+      "fix": "Remove the becomeFirstResponder call from viewDidLoad and attach tap recognizers to the name-cell backgrounds instead."
+    },
+    {
+      "kind": "metric",
+      "visibility": "subtle",
+      "ours": "src/TGNewContactViewController.m:105-107,178-182 - Done is a TGIcons header button and the disabled look is faked with alpha 0.5.",
+      "theirs": "Done is a TGToolbarButton of type TGToolbarButtonTypeDone with minWidth 51 (Cancel is a generic TGToolbarButton with minWidth 59), and it has real enabled/disabled artwork rather than an alpha fade.",
+      "citation": "TGProfileController.m:4769-4786",
+      "fix": "Give the header buttons minWidth 59 (Cancel) / 51 (Done), use the Done-type blue button art, and express the disabled state with the disabled artwork instead of alpha 0.5."
+    }
+  ]
+}

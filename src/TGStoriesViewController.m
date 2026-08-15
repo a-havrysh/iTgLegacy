@@ -8,6 +8,7 @@
 #import "TGTheme.h"
 #import "TGIcons.h"
 #import "TGImageDecode.h"
+#import "TGReactionPickerView.h"
 
 static const CGFloat TGStoryStripHeight = 3.0f;
 static const CGFloat TGStoryStripInset = 4.0f;
@@ -23,6 +24,8 @@ static const CGFloat TGStoryPageGap = 16.0f;
 static const CGFloat TGStoryOverscroll = 48.0f;
 static const CGFloat TGStoryDismissDistance = 100.0f;
 static const CGFloat TGStoryDismissVelocity = 700.0f;
+static const NSTimeInterval TGStoryDuration = 5.0;
+static const NSTimeInterval TGStoryTick = 0.0667;
 
 static UIImage *TGStoryStretch(NSString *name, NSInteger leftCap)
 {
@@ -88,6 +91,157 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 	view.font = [UIFont systemFontOfSize:15];
 	view.text = self.text ?: @"";
 	[self.view addSubview:view];
+}
+
+@end
+
+@interface TGStoryContactPicker : UIViewController <UITableViewDataSource, UITableViewDelegate>
+@property (nonatomic, copy) void (^onPicked)(NSArray *userIds);
+@property (nonatomic, copy) NSArray *preselected;
++ (void)presentFrom:(UIViewController *)host
+			  title:(NSString *)title
+		 preselected:(NSArray *)preselected
+			  picked:(void (^)(NSArray *userIds))picked;
+@end
+
+@implementation TGStoryContactPicker
+{
+	UITableView *_tableView;
+	NSArray *_contacts;
+	NSMutableSet *_selected;
+}
+
++ (void)presentFrom:(UIViewController *)host
+			  title:(NSString *)title
+		 preselected:(NSArray *)preselected
+			  picked:(void (^)(NSArray *userIds))picked
+{
+	if (host == nil)
+		return;
+	TGStoryContactPicker *picker = [[TGStoryContactPicker alloc] init];
+	picker.title = title.length > 0 ? title : @"Select Contacts";
+	picker.preselected = preselected;
+	picker.onPicked = picked;
+	UINavigationController *navigation =
+			[[UINavigationController alloc] initWithRootViewController:picker];
+	[host presentViewController:navigation animated:YES completion:nil];
+}
+
+- (void)viewDidLoad
+{
+	[super viewDidLoad];
+
+	_selected = [[NSMutableSet alloc] init];
+	for (id value in self.preselected)
+	{
+		if ([value respondsToSelector:@selector(longLongValue)])
+			[_selected addObject:[NSNumber numberWithLongLong:[value longLongValue]]];
+	}
+
+	self.navigationItem.leftBarButtonItem =
+			[[UIBarButtonItem alloc] initWithTitle:@"Cancel"
+											 style:UIBarButtonItemStyleBordered
+											target:self
+											action:@selector(cancelPressed)];
+	self.navigationItem.rightBarButtonItem =
+			[[UIBarButtonItem alloc] initWithTitle:@"Done"
+											 style:UIBarButtonItemStyleDone
+											target:self
+											action:@selector(donePressed)];
+
+	_tableView = [[UITableView alloc] initWithFrame:self.view.bounds style:UITableViewStylePlain];
+	_tableView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+	_tableView.dataSource = self;
+	_tableView.delegate = self;
+	_tableView.rowHeight = 44.0f;
+	_tableView.separatorColor = [[TGTheme shared] separatorColour];
+	_tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	[self.view addSubview:_tableView];
+
+	__weak TGStoryContactPicker *weakSelf = self;
+	[[TGClient shared] contactsWithCompletion:^(NSArray *users)
+	{
+		TGStoryContactPicker *strongSelf = weakSelf;
+		if (strongSelf == nil)
+			return;
+		strongSelf->_contacts = [users isKindOfClass:[NSArray class]] ? [users copy] : nil;
+		[strongSelf->_tableView reloadData];
+	}];
+}
+
+- (void)cancelPressed
+{
+	void (^picked)(NSArray *) = self.onPicked;
+	self.onPicked = nil;
+	[self dismissViewControllerAnimated:YES completion:^
+	{
+		if (picked != nil)
+			picked(nil);
+	}];
+}
+
+- (void)donePressed
+{
+	void (^picked)(NSArray *) = self.onPicked;
+	self.onPicked = nil;
+	NSArray *ids = [_selected allObjects];
+	[self dismissViewControllerAnimated:YES completion:^
+	{
+		if (picked != nil)
+			picked(ids);
+	}];
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section
+{
+	(void)tableView;
+	(void)section;
+	return (NSInteger)_contacts.count;
+}
+
+- (NSString *)nameForContact:(NSDictionary *)contact
+{
+	NSString *first = TGStoryString(contact, @"first_name");
+	NSString *last = TGStoryString(contact, @"last_name");
+	if (first.length > 0 && last.length > 0)
+		return [NSString stringWithFormat:@"%@ %@", first, last];
+	if (first.length > 0)
+		return first;
+	if (last.length > 0)
+		return last;
+	NSString *username = TGStoryString(contact, @"username");
+	return username.length > 0 ? username : @"Contact";
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath
+{
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"contact"];
+	if (cell == nil)
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+									  reuseIdentifier:@"contact"];
+	NSDictionary *contact = [_contacts objectAtIndex:(NSUInteger)indexPath.row];
+	cell.textLabel.text = [self nameForContact:contact];
+	NSNumber *identifier = [NSNumber numberWithLongLong:TGStoryChatId(contact, @"id")];
+	cell.accessoryType = [_selected containsObject:identifier]
+			? UITableViewCellAccessoryCheckmark
+			: UITableViewCellAccessoryNone;
+	[[TGTheme shared] styleCell:cell];
+	return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath
+{
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	if (indexPath.row >= (NSInteger)_contacts.count)
+		return;
+	NSDictionary *contact = [_contacts objectAtIndex:(NSUInteger)indexPath.row];
+	NSNumber *identifier = [NSNumber numberWithLongLong:TGStoryChatId(contact, @"id")];
+	if ([_selected containsObject:identifier])
+		[_selected removeObject:identifier];
+	else
+		[_selected addObject:identifier];
+	[tableView reloadRowsAtIndexPaths:[NSArray arrayWithObject:indexPath]
+					 withRowAnimation:UITableViewRowAnimationNone];
 }
 
 @end
@@ -198,6 +352,8 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 
 - (void)setStoryImage:(UIImage *)image animated:(BOOL)animated;
 - (void)setCaption:(NSString *)caption;
+- (void)setAreas:(NSArray *)areas;
+- (NSDictionary *)areaAtPoint:(CGPoint)point;
 - (void)prepareForReuse;
 - (CGRect)captionFrame;
 
@@ -208,6 +364,7 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 	UIImageView *_imageView;
 	UIView *_captionPlate;
 	UILabel *_captionLabel;
+	NSArray *_areas;
 }
 
 - (id)initWithFrame:(CGRect)frame
@@ -270,11 +427,45 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 	[self setNeedsLayout];
 }
 
+- (void)setAreas:(NSArray *)areas
+{
+	_areas = [areas isKindOfClass:[NSArray class]] ? [areas copy] : nil;
+}
+
+- (NSDictionary *)areaAtPoint:(CGPoint)point
+{
+	if (_areas.count == 0)
+		return nil;
+
+	CGRect frame = _imageView.frame;
+	if (frame.size.width < 1.0f || frame.size.height < 1.0f)
+		return nil;
+
+	for (NSDictionary *area in _areas)
+	{
+		if (![area isKindOfClass:[NSDictionary class]])
+			continue;
+		CGFloat width = frame.size.width * (CGFloat)[[area objectForKey:@"width"] doubleValue] / 100.0f;
+		CGFloat height = frame.size.height * (CGFloat)[[area objectForKey:@"height"] doubleValue] / 100.0f;
+		if (width < 1.0f || height < 1.0f)
+			continue;
+		CGFloat centerX = frame.origin.x +
+				frame.size.width * (CGFloat)[[area objectForKey:@"x"] doubleValue] / 100.0f;
+		CGFloat centerY = frame.origin.y +
+				frame.size.height * (CGFloat)[[area objectForKey:@"y"] doubleValue] / 100.0f;
+		CGRect box = CGRectMake(centerX - width / 2.0f, centerY - height / 2.0f, width, height);
+		if (CGRectContainsPoint(CGRectInset(box, -4.0f, -4.0f), point))
+			return area;
+	}
+	return nil;
+}
+
 - (void)prepareForReuse
 {
 	_imageView.image = nil;
 	_captionLabel.text = @"";
 	_captionPlate.hidden = YES;
+	_areas = nil;
 	self.itemId = nil;
 }
 
@@ -335,6 +526,13 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 	UILabel *_titleLabel;
 	UILabel *_subtitleLabel;
 	NSString *_reportOptionId;
+
+	__weak TGReactionPickerView *_reactionPicker;
+	NSTimer *_timer;
+	NSTimeInterval _elapsed;
+	BOOL _holdPaused;
+	BOOL _modalPaused;
+	BOOL _onScreen;
 }
 @end
 
@@ -492,6 +690,13 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 	pan.maximumNumberOfTouches = 1;
 	[self.view addGestureRecognizer:pan];
 
+	UILongPressGestureRecognizer *hold = [[UILongPressGestureRecognizer alloc]
+			initWithTarget:self action:@selector(viewHeld:)];
+	hold.delegate = self;
+	hold.minimumPressDuration = 0.2;
+	hold.cancelsTouchesInView = NO;
+	[self.view addGestureRecognizer:hold];
+
 	[self updateStrip];
 	[self updateChrome];
 	[self discoverPosters];
@@ -550,6 +755,16 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 
 	_replyButton = [self footerButtonWithTitle:@"Reply" action:@selector(replyPressed)];
 	_middleButton = [self footerButtonWithTitle:@"" action:@selector(middlePressed)];
+	[_middleButton removeTarget:self
+						 action:@selector(middlePressed)
+			   forControlEvents:UIControlEventTouchDown];
+	[_middleButton addTarget:self
+					  action:@selector(middlePressed)
+			forControlEvents:UIControlEventTouchUpInside];
+	UILongPressGestureRecognizer *reactionHold = [[UILongPressGestureRecognizer alloc]
+			initWithTarget:self action:@selector(middleHeld:)];
+	reactionHold.minimumPressDuration = 0.4;
+	[_middleButton addGestureRecognizer:reactionHold];
 	_shareButton = [self footerButtonWithTitle:@"Share" action:@selector(sharePressed)];
 
 	UIImage *left = TGStoryStretch(@"ButtonGroupLeft.png", 8);
@@ -651,7 +866,11 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 		for (NSInteger i = 0; i < count; i++)
 		{
 			UIView *bar = [[UIView alloc] initWithFrame:CGRectZero];
-			bar.backgroundColor = [UIColor whiteColor];
+			bar.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.3f];
+			UIView *fill = [[UIView alloc] initWithFrame:CGRectZero];
+			fill.tag = 1;
+			fill.backgroundColor = [UIColor whiteColor];
+			[bar addSubview:fill];
 			[_stripView addSubview:bar];
 		}
 	}
@@ -676,9 +895,91 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 	for (NSUInteger i = 0; i < bars.count && i < _storyIds.count; i++)
 	{
 		UIView *bar = [bars objectAtIndex:i];
-		BOOL seen = [_seen containsObject:[_storyIds objectAtIndex:i]];
-		bar.alpha = seen ? 1.0f : 0.3f;
+		UIView *fill = [bar viewWithTag:1];
+		CGFloat portion;
+		if ((NSInteger)i < _index)
+			portion = 1.0f;
+		else if ((NSInteger)i > _index)
+			portion = [_seen containsObject:[_storyIds objectAtIndex:i]] ? 1.0f : 0.0f;
+		else
+			portion = (CGFloat)MIN(1.0, _elapsed / TGStoryDuration);
+		fill.frame = CGRectMake(0, 0, floorf(bar.bounds.size.width * portion),
+								bar.bounds.size.height);
 	}
+}
+
+#pragma mark - timeline
+
+- (BOOL)timelineShouldRun
+{
+	if (!_onScreen || _dismissing || _holdPaused || _modalPaused)
+		return NO;
+	if ([_pagingView isDragging] || [_pagingView isDecelerating])
+		return NO;
+	return [self pageForIndex:_index].image != nil;
+}
+
+- (void)updateTimeline
+{
+	BOOL run = [self timelineShouldRun];
+	if (run && _timer == nil)
+	{
+		_timer = [NSTimer scheduledTimerWithTimeInterval:TGStoryTick
+												  target:self
+												selector:@selector(timelineTick)
+												userInfo:nil
+												 repeats:YES];
+	}
+	else if (!run && _timer != nil)
+	{
+		[_timer invalidate];
+		_timer = nil;
+	}
+}
+
+- (void)resetTimeline
+{
+	_elapsed = 0.0;
+	[self updateStrip];
+	[self updateTimeline];
+}
+
+- (void)setHoldPaused:(BOOL)paused
+{
+	if (_holdPaused == paused)
+		return;
+	_holdPaused = paused;
+	[self updateTimeline];
+}
+
+- (void)setModalPaused:(BOOL)paused
+{
+	if (_modalPaused == paused)
+		return;
+	_modalPaused = paused;
+	[self updateTimeline];
+}
+
+- (void)timelineTick
+{
+	if (![self timelineShouldRun])
+	{
+		[self updateTimeline];
+		return;
+	}
+
+	_elapsed += TGStoryTick;
+	if (_elapsed < TGStoryDuration)
+	{
+		[self updateStrip];
+		return;
+	}
+
+	_elapsed = 0.0;
+	if (_index + 1 < (NSInteger)_storyIds.count)
+		[self showIndex:_index + 1 animated:YES];
+	else
+		[self movePosterBy:1];
 }
 
 #pragma mark - paging
@@ -695,12 +996,31 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 			[[TGClient shared] openStory:storyId inChat:_chatId];
 		}
 	}
+	_onScreen = YES;
+	_elapsed = 0.0;
+	[self updateTimeline];
+}
+
+- (void)viewDidAppear:(BOOL)animated
+{
+	[super viewDidAppear:animated];
+	_onScreen = YES;
+	[self updateTimeline];
 }
 
 - (void)viewWillDisappear:(BOOL)animated
 {
 	[super viewWillDisappear:animated];
+	_onScreen = NO;
+	[self updateTimeline];
+	[TGReactionPickerView dismiss];
 	[self closeCurrent];
+}
+
+- (void)dealloc
+{
+	[_timer invalidate];
+	_timer = nil;
 }
 
 - (void)closeCurrent
@@ -835,7 +1155,7 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 	_openStoryId = [key integerValue];
 	[[TGClient shared] openStory:_openStoryId inChat:_chatId];
 
-	[self updateStrip];
+	[self resetTimeline];
 	[self updateChrome];
 }
 
@@ -849,6 +1169,7 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 	if (known != nil)
 	{
 		[page setCaption:TGStoryString(known, @"caption")];
+		[page setAreas:[known objectForKey:@"areas"]];
 		[self loadPhotoForPage:page story:known];
 		return;
 	}
@@ -872,6 +1193,7 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 		if (strongPage == nil || ![strongPage.itemId isEqual:key])
 			return;
 		[strongPage setCaption:TGStoryString(story, @"caption")];
+		[strongPage setAreas:[story objectForKey:@"areas"]];
 		[strongSelf loadPhotoForPage:strongPage story:story];
 	}];
 }
@@ -899,6 +1221,7 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 
 	NSNumber *key = page.itemId;
 	__weak TGStoryPage *weakPage = page;
+	__weak TGStoriesViewController *weakSelf = self;
 	[[TGClient shared] downloadFile:[photoId integerValue]
 							 offset:0
 							  limit:0
@@ -918,6 +1241,7 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 				if (inner == nil || ![inner.itemId isEqual:key])
 					return;
 				[inner setStoryImage:image animated:YES];
+				[weakSelf updateTimeline];
 			});
 		});
 	}];
@@ -948,9 +1272,29 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 	[self layoutPages];
 }
 
+- (void)scrollViewWillBeginDragging:(UIScrollView *)scrollView
+{
+	(void)scrollView;
+	_elapsed = 0.0;
+	[self updateTimeline];
+}
+
+- (void)scrollViewDidEndDecelerating:(UIScrollView *)scrollView
+{
+	(void)scrollView;
+	[self updateTimeline];
+}
+
+- (void)scrollViewDidEndScrollingAnimation:(UIScrollView *)scrollView
+{
+	(void)scrollView;
+	[self updateTimeline];
+}
+
 - (void)scrollViewDidEndDragging:(UIScrollView *)scrollView willDecelerate:(BOOL)decelerate
 {
 	(void)decelerate;
+	[self updateTimeline];
 	CGFloat width = scrollView.bounds.size.width;
 	CGFloat maxOffset = MAX(0.0f, scrollView.contentSize.width - width);
 	CGFloat offset = scrollView.contentOffset.x;
@@ -1078,8 +1422,10 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 	}
 	[_visiblePages removeAllObjects];
 
+	_elapsed = 0.0;
 	[self layoutStrip];
 	[self updateChrome];
+	[self updateTimeline];
 
 	UIScrollView *paging = _pagingView;
 	[UIView transitionWithView:paging
@@ -1158,6 +1504,25 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 	}
 }
 
+- (void)viewHeld:(UILongPressGestureRecognizer *)recognizer
+{
+	if (recognizer.state == UIGestureRecognizerStateBegan)
+	{
+		CGPoint point = [recognizer locationInView:self.view];
+		if (CGRectContainsPoint(_footerView.frame, point))
+			return;
+		[self setHoldPaused:YES];
+		return;
+	}
+
+	if (recognizer.state == UIGestureRecognizerStateEnded ||
+		recognizer.state == UIGestureRecognizerStateCancelled ||
+		recognizer.state == UIGestureRecognizerStateFailed)
+	{
+		[self setHoldPaused:NO];
+	}
+}
+
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)recognizer
 {
 	if (![recognizer isKindOfClass:[UIPanGestureRecognizer class]])
@@ -1165,6 +1530,28 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 
 	CGPoint velocity = [(UIPanGestureRecognizer *)recognizer velocityInView:self.view];
 	return velocity.y > 0.0f && fabsf((float)velocity.y) > fabsf((float)velocity.x);
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)recognizer shouldReceiveTouch:(UITouch *)touch
+{
+	UIView *hit = touch.view;
+	if (hit == nil)
+		return YES;
+
+	UIView *picker = _reactionPicker;
+	if (picker != nil && picker.superview != nil && hit != picker &&
+		[hit isDescendantOfView:picker])
+	{
+		return NO;
+	}
+
+	if ([recognizer isKindOfClass:[UIPanGestureRecognizer class]])
+		return YES;
+
+	if (_footerView != nil && [hit isDescendantOfView:_footerView])
+		return NO;
+
+	return YES;
 }
 
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)recognizer
@@ -1215,7 +1602,19 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 	if (CGRectContainsPoint(_footerView.frame, point))
 		return;
 
+	if (_reactionPicker != nil && _reactionPicker.superview != nil)
+	{
+		[TGReactionPickerView dismiss];
+		[self setModalPaused:NO];
+		return;
+	}
+
+	[self setModalPaused:NO];
+
 	TGStoryPage *page = [self pageForIndex:_index];
+	if (page != nil && [self handleAreaTapOnPage:page atPoint:point])
+		return;
+
 	CGRect caption = [page captionFrame];
 	if (page != nil && !CGRectIsEmpty(caption) &&
 		CGRectContainsPoint([self.view convertRect:caption fromView:page], point))
@@ -1249,7 +1648,73 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 	}
 }
 
+- (BOOL)handleAreaTapOnPage:(TGStoryPage *)page atPoint:(CGPoint)point
+{
+	CGPoint local = [self.view convertPoint:point toView:page];
+	NSDictionary *area = [page areaAtPoint:local];
+	if (area == nil)
+		return NO;
+
+	NSString *kind = TGStoryString(area, @"kind");
+
+	if ([kind isEqualToString:@"link"])
+	{
+		NSString *link = TGStoryString(area, @"url");
+		if (link.length == 0)
+			return NO;
+		NSURL *url = [NSURL URLWithString:link];
+		if (url == nil)
+			return NO;
+		[[UIApplication sharedApplication] openURL:url];
+		return YES;
+	}
+
+	if ([kind isEqualToString:@"reaction"])
+	{
+		NSString *emoji = TGStoryString(area, @"emoji");
+		if (emoji.length == 0)
+			return NO;
+		[self sendReaction:emoji];
+		return YES;
+	}
+
+	if ([kind isEqualToString:@"message"])
+	{
+		return NO;
+	}
+
+	return NO;
+}
+
 #pragma mark - actions
+
+- (void)sendReaction:(NSString *)emoji
+{
+	NSInteger storyId = [self currentStoryId];
+	if (storyId == 0)
+		return;
+
+	NSString *value = emoji ?: @"";
+	[[TGClient shared] reactToStory:storyId inChat:_chatId emoji:value];
+
+	NSDictionary *story = [self currentStory];
+	if (story == nil)
+		return;
+
+	NSString *mine = TGStoryString(story, @"myReaction");
+	NSInteger count = TGStoryNumber(story, @"reactions");
+	NSInteger delta = 0;
+	if (mine.length == 0 && value.length > 0)
+		delta = 1;
+	else if (mine.length > 0 && value.length == 0)
+		delta = -1;
+
+	NSMutableDictionary *patched = [story mutableCopy];
+	[patched setObject:value forKey:@"myReaction"];
+	[patched setObject:[NSNumber numberWithInteger:MAX(0, count + delta)] forKey:@"reactions"];
+	[_stories setObject:patched forKey:[_storyIds objectAtIndex:(NSUInteger)_index]];
+	[self updateChrome];
+}
 
 - (void)replyPressed
 {
@@ -1258,6 +1723,8 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 		return;
 
 	int64_t chatId = _chatId;
+	[self setModalPaused:YES];
+	__weak TGStoriesViewController *weakSelf = self;
 	TGAlertView *alert = nil;
 	__block __weak TGAlertView *weakAlert = nil;
 	alert = [[TGAlertView alloc] initWithTitle:nil
@@ -1266,6 +1733,7 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 								 okButtonTitle:@"Send"
 							   completionBlock:^(bool okButtonPressed)
 	{
+		[weakSelf setModalPaused:NO];
 		if (!okButtonPressed)
 			return;
 		NSString *text = nil;
@@ -1298,19 +1766,58 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 	}
 
 	NSString *mine = story != nil ? TGStoryString(story, @"myReaction") : @"";
-	NSString *emoji = (mine.length > 0) ? @"" : @"❤";
-	[[TGClient shared] reactToStory:storyId inChat:_chatId emoji:emoji];
+	[self sendReaction:(mine.length > 0) ? @"" : @"❤"];
+}
 
-	if (story != nil)
+- (void)middleHeld:(UILongPressGestureRecognizer *)recognizer
+{
+	if (recognizer.state != UIGestureRecognizerStateBegan)
+		return;
+	if ([self currentStoryId] == 0)
+		return;
+
+	NSDictionary *story = [self currentStory];
+	if ([self isOwnStory] && (story == nil || TGStoryFlag(story, @"canGetViewers")))
+		return;
+	UIView *host = self.view;
+	CGRect anchor = [host convertRect:_middleButton.bounds fromView:_middleButton];
+	__weak TGStoriesViewController *weakSelf = self;
+
+	[self setModalPaused:YES];
+	[[TGClient shared] storyReactionsWithLimit:12 completion:^(NSArray *emoji)
 	{
-		NSMutableDictionary *patched = [story mutableCopy];
-		NSInteger count = TGStoryNumber(story, @"reactions");
-		[patched setObject:[NSString stringWithString:emoji] forKey:@"myReaction"];
-		[patched setObject:[NSNumber numberWithInteger:MAX(0, count + (emoji.length > 0 ? 1 : -1))]
-					forKey:@"reactions"];
-		[_stories setObject:patched forKey:[_storyIds objectAtIndex:(NSUInteger)_index]];
-		[self updateChrome];
-	}
+		TGStoriesViewController *strongSelf = weakSelf;
+		if (strongSelf == nil)
+			return;
+		if (![emoji isKindOfClass:[NSArray class]] || emoji.count == 0)
+		{
+			[strongSelf setModalPaused:NO];
+			return;
+		}
+
+		TGReactionPickerView *picker =
+				[TGReactionPickerView showForMessage:0
+											  inChat:0
+											fromRect:anchor
+											  inView:host
+											  picked:^(NSString *chosen, BOOL nowChosen)
+		{
+			(void)nowChosen;
+			TGStoriesViewController *inner = weakSelf;
+			if (inner == nil)
+				return;
+			[inner setModalPaused:NO];
+			if (chosen.length > 0)
+				[inner sendReaction:chosen];
+		}];
+		if (picker == nil)
+		{
+			[strongSelf setModalPaused:NO];
+			return;
+		}
+		strongSelf->_reactionPicker = picker;
+		[picker setEmoji:emoji reason:nil];
+	}];
 }
 
 - (void)sharePressed
@@ -1325,12 +1832,15 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 	int64_t myId = TGStoryChatId(me, @"id");
 	int64_t chatId = _chatId;
 
+	[self setModalPaused:YES];
+	__weak TGStoriesViewController *weakSelf = self;
 	[[[TGAlertView alloc] initWithTitle:nil
 								message:@"Repost this story to your own?"
 					  cancelButtonTitle:@"Cancel"
 						  okButtonTitle:@"Repost"
 						completionBlock:^(bool okButtonPressed)
 	{
+		[weakSelf setModalPaused:NO];
 		if (!okButtonPressed)
 			return;
 		[[TGClient shared] repostStory:storyId
@@ -1361,6 +1871,20 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Report" action:@"report"]];
 	}
 
+	if (story != nil && TGStoryFlag(story, @"canToggleProfile"))
+	{
+		NSString *title = TGStoryFlag(story, @"onProfile")
+				? @"Remove from Profile"
+				: @"Save to Profile";
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:title action:@"profile"]];
+	}
+
+	if (story != nil && TGStoryFlag(story, @"canSetPrivacy"))
+	{
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Who Can See"
+															   action:@"privacy"]];
+	}
+
 	if (story != nil && TGStoryFlag(story, @"canDelete"))
 	{
 		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Delete"
@@ -1371,6 +1895,7 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 	if (actions.count == 0)
 		return;
 
+	[self setModalPaused:YES];
 	__weak TGStoriesViewController *weakSelf = self;
 	TGActionSheet *sheet = [[TGActionSheet alloc] initWithTitle:nil
 													   actions:actions
@@ -1383,8 +1908,67 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 	[sheet showInView:self.view];
 }
 
+- (void)askStoryPrivacy
+{
+	NSInteger storyId = [self currentStoryId];
+	if (storyId == 0)
+		return;
+
+	NSArray *titles = [NSArray arrayWithObjects:
+			@"Everyone", @"My Contacts", @"Close Friends", @"Selected Contacts", nil];
+	NSArray *values = [NSArray arrayWithObjects:
+			@"everyone", @"contacts", @"closeFriends", @"selected", nil];
+
+	NSMutableArray *actions = [[NSMutableArray alloc] init];
+	for (NSString *title in titles)
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:title action:title]];
+
+	[self setModalPaused:YES];
+	__weak TGStoriesViewController *weakSelf = self;
+	TGActionSheet *sheet = [[TGActionSheet alloc] initWithTitle:@"Who can see this story?"
+													   actions:actions
+												   actionBlock:^(id target, NSString *action)
+	{
+		(void)target;
+		TGStoriesViewController *strongSelf = weakSelf;
+		if (strongSelf == nil)
+			return;
+		NSUInteger index = [titles indexOfObject:action];
+		if (index == NSNotFound)
+		{
+			[strongSelf setModalPaused:NO];
+			return;
+		}
+		NSString *privacy = [values objectAtIndex:index];
+		if (![privacy isEqualToString:@"selected"])
+		{
+			[strongSelf setModalPaused:NO];
+			[[TGClient shared] setStory:storyId privacy:privacy userIds:nil];
+			return;
+		}
+
+		[TGStoryContactPicker presentFrom:strongSelf
+									title:@"Selected Contacts"
+							  preselected:nil
+								   picked:^(NSArray *userIds)
+		{
+			TGStoriesViewController *inner = weakSelf;
+			if (inner == nil)
+				return;
+			[inner setModalPaused:NO];
+			if (userIds.count == 0)
+				return;
+			[[TGClient shared] setStory:storyId privacy:@"selected" userIds:userIds];
+		}];
+	}
+														target:self];
+	[sheet showInView:self.view];
+}
+
 - (void)performMoreAction:(NSString *)action
 {
+	[self setModalPaused:NO];
+
 	NSInteger storyId = [self currentStoryId];
 	if (storyId == 0)
 		return;
@@ -1394,6 +1978,26 @@ static BOOL TGStoryFlag(NSDictionary *story, NSString *key)
 		UIImage *image = [self currentImage];
 		if (image != nil)
 			UIImageWriteToSavedPhotosAlbum(image, nil, NULL, NULL);
+		return;
+	}
+
+	if ([action isEqualToString:@"profile"])
+	{
+		NSDictionary *story = [self currentStory];
+		BOOL onProfile = !TGStoryFlag(story, @"onProfile");
+		[[TGClient shared] setStory:storyId inChat:_chatId onProfile:onProfile];
+		if (story != nil)
+		{
+			NSMutableDictionary *patched = [story mutableCopy];
+			[patched setObject:[NSNumber numberWithBool:onProfile] forKey:@"onProfile"];
+			[_stories setObject:patched forKey:[_storyIds objectAtIndex:(NSUInteger)_index]];
+		}
+		return;
+	}
+
+	if ([action isEqualToString:@"privacy"])
+	{
+		[self askStoryPrivacy];
 		return;
 	}
 
@@ -1766,8 +2370,10 @@ static NSMutableArray *TGStoryComposersInFlight(void)
 
 - (void)askPrivacy
 {
-	NSArray *titles = [NSArray arrayWithObjects:@"Everyone", @"My Contacts", @"Close Friends", nil];
-	NSArray *values = [NSArray arrayWithObjects:@"everyone", @"contacts", @"closeFriends", nil];
+	NSArray *titles = [NSArray arrayWithObjects:
+			@"Everyone", @"My Contacts", @"Close Friends", @"Selected Contacts", nil];
+	NSArray *values = [NSArray arrayWithObjects:
+			@"everyone", @"contacts", @"closeFriends", @"selected", nil];
 
 	NSMutableArray *actions = [[NSMutableArray alloc] init];
 	for (NSString *title in titles)
@@ -1788,7 +2394,28 @@ static NSMutableArray *TGStoryComposersInFlight(void)
 			[strongSelf finishPosted:NO];
 			return;
 		}
-		[strongSelf postWithPrivacy:[values objectAtIndex:index]];
+		NSString *privacy = [values objectAtIndex:index];
+		if (![privacy isEqualToString:@"selected"])
+		{
+			[strongSelf postWithPrivacy:privacy];
+			return;
+		}
+
+		[TGStoryContactPicker presentFrom:strongSelf->_host
+									title:@"Selected Contacts"
+							  preselected:nil
+								   picked:^(NSArray *userIds)
+		{
+			TGStoryComposer *inner = weakSelf;
+			if (inner == nil)
+				return;
+			if (userIds.count == 0)
+			{
+				[inner finishPosted:NO];
+				return;
+			}
+			[inner postWithPrivacy:@"selected" userIds:userIds];
+		}];
 	}
 														target:self];
 	[sheet showInView:_host.view];
@@ -1796,12 +2423,17 @@ static NSMutableArray *TGStoryComposersInFlight(void)
 
 - (void)postWithPrivacy:(NSString *)privacy
 {
+	[self postWithPrivacy:privacy userIds:nil];
+}
+
+- (void)postWithPrivacy:(NSString *)privacy userIds:(NSArray *)userIds
+{
 	__weak TGStoryComposer *weakSelf = self;
 	[[TGClient shared] postPhotoStoryAtPath:_path
 									 asChat:_asChatId
 									caption:(_caption ?: @"")
 									privacy:privacy
-									userIds:nil
+									userIds:userIds
 								  toProfile:NO
 								 completion:^(NSDictionary *story)
 	{

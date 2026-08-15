@@ -13,7 +13,7 @@ static NSCache *TGRemoteImageMemoryCache(void) {
 	static dispatch_once_t onceToken;
 	dispatch_once(&onceToken, ^{
 		cache = [[NSCache alloc] init];
-		cache.countLimit = 96;
+		cache.totalCostLimit = 6 * 1024 * 1024;
 		[[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidReceiveMemoryWarningNotification
 														  object:nil
 														   queue:[NSOperationQueue mainQueue]
@@ -22,6 +22,14 @@ static NSCache *TGRemoteImageMemoryCache(void) {
 		}];
 	});
 	return cache;
+}
+
+static NSUInteger TGRemoteImageCost(UIImage *image) {
+	CGImageRef cg = image.CGImage;
+	if (!cg)
+		return 1;
+	NSUInteger cost = CGImageGetHeight(cg) * CGImageGetBytesPerRow(cg);
+	return cost > 0 ? cost : 1;
 }
 
 @implementation TGRemoteImageView
@@ -49,30 +57,16 @@ static NSCache *TGRemoteImageMemoryCache(void) {
 	return self.image;
 }
 
-- (void)tryFillCache:(NSMutableDictionary *)dict {
-	if (![dict isKindOfClass:NSMutableDictionary.class])
-		return;
-	NSString *key = self.currentCacheKey;
-	UIImage *image = self.image;
-	if (key.length != 0 && image != nil && image != self.placeholderImage)
-		[dict setObject:image forKey:key];
-}
-
-- (void)loadImage:(NSString *)url filter:(NSString *)__unused filter placeholder:(UIImage *)placeholder {
-	[self loadImage:url filter:filter placeholder:placeholder forceFade:false];
-}
-
-- (void)loadImage:(NSString *)__unused url filter:(NSString *)__unused filter placeholder:(UIImage *)placeholder forceFade:(bool)__unused forceFade {
-	self.placeholderImage = placeholder;
-	self.image = placeholder;
-}
-
 - (NSString *)cachePathForKey:(NSString *)key {
-	NSString *dir = [NSSearchPathForDirectoriesInDomains(
-			NSCachesDirectory, NSUserDomainMask, YES).firstObject
-					stringByAppendingPathComponent:@"RemoteImageCache"];
-	[[NSFileManager defaultManager] createDirectoryAtPath:dir
-							 withIntermediateDirectories:YES attributes:nil error:nil];
+	static NSString *dir = nil;
+	static dispatch_once_t onceToken;
+	dispatch_once(&onceToken, ^{
+		dir = [NSSearchPathForDirectoriesInDomains(
+				NSCachesDirectory, NSUserDomainMask, YES).firstObject
+						stringByAppendingPathComponent:@"RemoteImageCache"];
+		[[NSFileManager defaultManager] createDirectoryAtPath:dir
+								 withIntermediateDirectories:YES attributes:nil error:nil];
+	});
 	return [dir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.png", key]];
 }
 
@@ -113,6 +107,9 @@ static NSCache *TGRemoteImageMemoryCache(void) {
 
 	NSString *cachePath = [self cachePathForKey:cacheKey];
 	bool fade = self.fadeTransition || forceFade;
+	CGFloat screenScale = [UIScreen mainScreen].scale;
+	if (screenScale < 1.0f)
+		screenScale = 1.0f;
 	__weak typeof(self) weakSelf = self;
 
 	void (^deliver)(UIImage *) = ^(UIImage *image){
@@ -124,13 +121,16 @@ static NSCache *TGRemoteImageMemoryCache(void) {
 
 	dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
 		UIImage *cached = nil;
-		if ([[NSFileManager defaultManager] fileExistsAtPath:cachePath]){
-			cached = [UIImage imageWithContentsOfFile:cachePath];
-			if (cached && (fabs(cached.size.width - side) > 0.5f || fabs(cached.size.height - side) > 0.5f))
+		NSData *cachedData = [NSData dataWithContentsOfFile:cachePath];
+		if (cachedData.length){
+			cached = [UIImage imageWithData:cachedData scale:screenScale];
+			CGFloat expected = side * screenScale;
+			if (cached && (fabs(cached.size.width * cached.scale - expected) > 0.5f ||
+						   fabs(cached.size.height * cached.scale - expected) > 0.5f))
 				cached = nil;
 		}
 		if (cached){
-			[TGRemoteImageMemoryCache() setObject:cached forKey:cacheKey];
+			[TGRemoteImageMemoryCache() setObject:cached forKey:cacheKey cost:TGRemoteImageCost(cached)];
 			dispatch_async(dispatch_get_main_queue(), ^{ deliver(cached); });
 			return;
 		}
@@ -149,7 +149,7 @@ static NSCache *TGRemoteImageMemoryCache(void) {
 					NSData *data = UIImagePNGRepresentation(thumb);
 					if (data.length != 0)
 						[data writeToFile:cachePath atomically:YES];
-					[TGRemoteImageMemoryCache() setObject:thumb forKey:cacheKey];
+					[TGRemoteImageMemoryCache() setObject:thumb forKey:cacheKey cost:TGRemoteImageCost(thumb)];
 					dispatch_async(dispatch_get_main_queue(), ^{ deliver(thumb); });
 				});
 			}];

@@ -7,6 +7,23 @@
 
 
 static NSDictionary *TGFlattenMessage(NSDictionary *m);
+static NSDictionary *TGUserStatusInfo(NSDictionary *status);
+static NSString *TGMessagePreview(NSDictionary *message);
+
+static NSString *TGActiveUsername(NSDictionary *user) {
+	NSArray *active = user[@"usernames"][@"active_usernames"];
+	if (![active isKindOfClass:NSArray.class] || !active.count)
+		return nil;
+	NSString *name = [active objectAtIndex:0];
+	return [name isKindOfClass:NSString.class] ? name : nil;
+}
+
+static const NSTimeInterval TGRequestDeadline = 300.0;
+static const NSTimeInterval TGRequestSweepInterval = 30.0;
+
+@interface TGClient ()
+@property (nonatomic, assign) NSTimeInterval lastPendingSweep;
+@end
 
 @implementation TGClient
 
@@ -149,7 +166,10 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m);
 		return;
 	}
 	NSString *extra = [NSString stringWithFormat:@"r%lu", (unsigned long)(++self.requestSeq)];
-	self.pendingRequests[extra] = [completion copy];
+	self.pendingRequests[extra] = @{
+		@"block"    : [completion copy],
+		@"deadline" : @([NSDate timeIntervalSinceReferenceDate] + TGRequestDeadline),
+	};
 
 	NSMutableDictionary *withExtra = [request mutableCopy];
 	withExtra[@"@extra"] = extra;
@@ -158,11 +178,58 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m);
 
 #pragma mark - updates
 
+- (void)failPendingRequests:(NSString *)reason {
+	if (!self.pendingRequests.count)
+		return;
+	NSArray *entries = [self.pendingRequests allValues];
+	[self.pendingRequests removeAllObjects];
+	NSDictionary *error = @{@"@type"   : @"error",
+							@"code"    : @(500),
+							@"message" : reason ?: @"request abandoned"};
+	for (NSDictionary *entry in entries){
+		void (^completion)(NSDictionary *) = entry[@"block"];
+		if (completion)
+			completion(error);
+	}
+}
+
+- (void)sweepPendingRequests {
+	NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+	if (now - self.lastPendingSweep < TGRequestSweepInterval)
+		return;
+	self.lastPendingSweep = now;
+	if (!self.pendingRequests.count)
+		return;
+
+	NSMutableArray *expired = [NSMutableArray array];
+	for (NSString *key in [self.pendingRequests allKeys]){
+		NSDictionary *entry = self.pendingRequests[key];
+		if ([entry[@"deadline"] doubleValue] > now)
+			continue;
+		[expired addObject:entry];
+		[self.pendingRequests removeObjectForKey:key];
+	}
+	if (!expired.count)
+		return;
+
+	NSDictionary *error = @{@"@type"   : @"error",
+							@"code"    : @(500),
+							@"message" : @"request timed out"};
+	for (NSDictionary *entry in expired){
+		void (^completion)(NSDictionary *) = entry[@"block"];
+		if (completion)
+			completion(error);
+	}
+}
+
 - (void)handleUpdate:(NSDictionary *)obj {
+	[self sweepPendingRequests];
+
 	// A reply to one of our requests: route it and stop.
 	NSString *extra = obj[@"@extra"];
 	if ([extra isKindOfClass:NSString.class]){
-		void (^completion)(NSDictionary *) = self.pendingRequests[extra];
+		NSDictionary *entry = self.pendingRequests[extra];
+		void (^completion)(NSDictionary *) = entry[@"block"];
 		if (completion){
 			[self.pendingRequests removeObjectForKey:extra];
 			completion(obj);
@@ -190,8 +257,9 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m);
 		self.me = @{
 			@"id"         : obj[@"id"] ?: @(0),
 			@"first_name" : obj[@"first_name"] ?: @"",
-			@"username"   : obj[@"usernames"][@"active_usernames"][0] ?: (obj[@"username"] ?: @""),
+			@"username"   : TGActiveUsername(obj) ?: (obj[@"username"] ?: @""),
 			@"phone"      : obj[@"phone_number"] ?: @"",
+			@"is_premium" : obj[@"is_premium"] ?: @NO,
 		};
 		NSLog(@"TGClient: signed in as +%@", self.me[@"phone"]);
 		return;
@@ -202,7 +270,7 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m);
 				u[@"first_name"] ?: @"", u[@"last_name"] ?: @""]
 				stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
 		if (!name.length)
-			name = u[@"usernames"][@"active_usernames"][0] ?: @"";
+			name = TGActiveUsername(u) ?: @"";
 		if (u[@"id"] && name.length)
 			self.usersById[u[@"id"]] = name;
 		[self cacheProfilePhoto:u];
@@ -424,6 +492,7 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m);
 	} else if ([type isEqualToString:@"authorizationStateClosed"]){
 		s = TGAuthStateClosed;
 		self.running = NO;
+		[self failPendingRequests:@"client closed"];
 	} else {
 		return;                       // encryption-key states etc.
 	}
@@ -1362,7 +1431,7 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 						@"first_name"  : u[@"first_name"] ?: @"",
 						@"last_name"   : u[@"last_name"] ?: @"",
 						@"phone"       : u[@"phone_number"] ?: @"",
-						@"username"    : u[@"usernames"][@"active_usernames"][0] ?: @"",
+						@"username"    : TGActiveUsername(u) ?: @"",
 						@"photoFileId" : u[@"profile_photo"][@"small"][@"id"] ?: [NSNull null],
 						@"photoUniqueId" : u[@"profile_photo"][@"small"][@"remote"][@"unique_id"] ?: [NSNull null],
 						@"isOnline"    : status[@"isOnline"],
@@ -1425,7 +1494,7 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 			@"first_name" : u[@"first_name"] ?: @"",
 			@"last_name"  : u[@"last_name"] ?: @"",
 			@"phone"      : u[@"phone_number"] ?: @"",
-			@"username"   : u[@"usernames"][@"active_usernames"][0] ?: @"",
+			@"username"   : TGActiveUsername(u) ?: @"",
 		});
 	}];
 }
@@ -1447,7 +1516,7 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 	[self request:@{@"@type" : @"getUserFullInfo", @"user_id" : @(userId)}
 	   completion:^(NSDictionary *full){
 		if (completion)
-			completion([full[@"block_list"] isKindOfClass:NSDictionary.class]);
+			completion([full[@"block_list"][@"@type"] isEqualToString:@"blockListMain"]);
 	}];
 }
 
@@ -1471,15 +1540,14 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 }
 
 - (void)premiumStateWithCompletion:(void (^)(NSString *))completion {
-	[self request:@{@"@type" : @"getPremiumState"} completion:^(NSDictionary *state){
-		NSDictionary *me = self.me;
-		if (![me[@"is_premium"] boolValue]){
-			if (completion) completion(nil);
-			return;
-		}
-		// The state carries what is active; a date is the useful part of it.
-		NSNumber *until = state[@"state"][@"expiration_date"] ?: state[@"expiration_date"];
-		if (!until.doubleValue){
+	if (![self.me[@"is_premium"] boolValue]){
+		if (completion) completion(nil);
+		return;
+	}
+	[self request:@{@"@type" : @"getOption", @"name" : @"premium_expiration_date"}
+	   completion:^(NSDictionary *option){
+		double until = [option[@"value"] doubleValue];
+		if (until <= 0){
 			if (completion) completion(@"Active");
 			return;
 		}
@@ -1490,7 +1558,7 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		}
 		if (completion)
 			completion([NSString stringWithFormat:@"Until %@", [fmt stringFromDate:
-					[NSDate dateWithTimeIntervalSince1970:until.doubleValue]]]);
+					[NSDate dateWithTimeIntervalSince1970:until]]]);
 	}];
 }
 
@@ -1631,6 +1699,11 @@ static NSString *TGMessagePreview(NSDictionary *message) {
 
 	if ([ctype isEqualToString:@"messageText"])
 		return content[@"text"][@"text"] ?: @"";
+
+	NSString *caption = content[@"caption"][@"text"];
+	if ([caption isKindOfClass:NSString.class] && caption.length)
+		return caption;
+
 	if ([ctype isEqualToString:@"messagePhoto"])
 		return @"Photo";
 	if ([ctype isEqualToString:@"messageVideo"])
@@ -1641,14 +1714,16 @@ static NSString *TGMessagePreview(NSDictionary *message) {
 		return @"Video message";
 	if ([ctype isEqualToString:@"messageSticker"])
 		return @"Sticker";
-	if ([ctype isEqualToString:@"messageDocument"])
-		return @"Document";
-	if ([ctype isEqualToString:@"messageAudio"])
-		return @"Audio";
+	if ([ctype isEqualToString:@"messageDocument"]){
+		NSString *name = content[@"document"][@"file_name"];
+		return ([name isKindOfClass:NSString.class] && name.length) ? name : @"Document";
+	}
+	if ([ctype isEqualToString:@"messageAudio"]){
+		NSString *title = content[@"audio"][@"title"];
+		return ([title isKindOfClass:NSString.class] && title.length) ? title : @"Audio";
+	}
 	if ([ctype isEqualToString:@"messageAnimation"])
 		return @"GIF";
-	if ([ctype isEqualToString:@"messageVideoNote"])
-		return @"Video message";
 	if ([ctype isEqualToString:@"messageAnimatedEmoji"])
 		return content[@"emoji"] ?: @"Emoji";
 	if ([ctype isEqualToString:@"messageContact"])
@@ -1657,6 +1732,8 @@ static NSString *TGMessagePreview(NSDictionary *message) {
 		return @"Venue";
 	if ([ctype isEqualToString:@"messageLocation"])
 		return @"Location";
+	if ([ctype isEqualToString:@"messageLiveLocation"])
+		return @"Live location";
 	if ([ctype isEqualToString:@"messageCall"])
 		return @"Call";
 	if ([ctype isEqualToString:@"messageChatJoinByLink"] ||
@@ -1719,40 +1796,7 @@ static int64_t TGArchiveOrder(NSArray *positions) {
 - (void)statusForUser:(int64_t)userId completion:(void (^)(NSString *))completion {
 	[self request:@{@"@type" : @"getUser", @"user_id" : @(userId)}
 	   completion:^(NSDictionary *user){
-		NSDictionary *status = user[@"status"];
-		NSString *kind = status[@"@type"];
-		NSString *text = nil;
-
-		if ([kind isEqualToString:@"userStatusOnline"]){
-			text = @"online";
-		} else if ([kind isEqualToString:@"userStatusRecently"]){
-			text = @"last seen recently";
-		} else if ([kind isEqualToString:@"userStatusLastWeek"]){
-			text = @"last seen within a week";
-		} else if ([kind isEqualToString:@"userStatusLastMonth"]){
-			text = @"last seen within a month";
-		} else if ([kind isEqualToString:@"userStatusOffline"]){
-			NSTimeInterval was = [status[@"was_online"] doubleValue];
-			static NSDateFormatter *fmt = nil;
-			if (!fmt){
-				fmt = [[NSDateFormatter alloc] init];
-				[fmt setDateFormat:@"HH:mm"];
-			}
-			NSDate *date = [NSDate dateWithTimeIntervalSince1970:was];
-			BOOL today = [[NSCalendar currentCalendar]
-					components:NSDayCalendarUnit fromDate:date].day ==
-						 [[NSCalendar currentCalendar]
-					components:NSDayCalendarUnit fromDate:[NSDate date]].day;
-			text = today
-				? [NSString stringWithFormat:@"last seen at %@", [fmt stringFromDate:date]]
-				: @"last seen a long time ago";
-		} else {
-			// userStatusEmpty is what TDLib sends for someone who has turned
-			// their last-seen off, and for a user it will not talk about. Every
-			// client shows the same phrase rather than an empty subtitle.
-			text = @"last seen recently";
-		}
-		if (completion) completion(text);
+		if (completion) completion(TGUserStatusInfo(user[@"status"])[@"text"]);
 	}];
 }
 
@@ -1895,7 +1939,7 @@ static int64_t TGArchiveOrder(NSArray *positions) {
 		@"query"                    : @"",
 		@"offset_date"              : @(0),
 		@"offset_message_id"        : @(0),
-		@"offset_message_thread_id" : @(0),
+		@"offset_forum_topic_id"    : @(0),
 		@"limit"                    : @(100),
 	} completion:^(NSDictionary *result){
 		NSMutableArray *out = [NSMutableArray array];
@@ -1903,7 +1947,7 @@ static int64_t TGArchiveOrder(NSArray *positions) {
 			NSDictionary *info = topic[@"info"];
 			NSDictionary *last = topic[@"last_message"];
 			[out addObject:@{
-				@"threadId" : info[@"message_thread_id"] ?: @(0),
+				@"threadId" : info[@"forum_topic_id"] ?: @(0),
 				@"name"     : info[@"name"] ?: @"",
 				@"text"     : [last isKindOfClass:NSDictionary.class]
 								? (TGMessagePreview(last) ?: @"") : @"",
@@ -1949,7 +1993,7 @@ static int64_t TGArchiveOrder(NSArray *positions) {
 		void (^answer)(NSDictionary *) = ^(NSDictionary *full){
 			if (completion) completion(@{
 				@"description" : full[@"description"] ?: @"",
-				@"members"     : full[@"member_count"] ?: @0,
+				@"members"     : full[@"member_count"] ?: @([full[@"members"] count]),
 				@"admins"      : full[@"administrator_count"] ?: @0,
 				@"inviteLink"  : full[@"invite_link"][@"invite_link"] ?: @"",
 			});
@@ -2264,7 +2308,7 @@ static NSArray *TGPacksFrom(NSDictionary *target) {
 					u[@"first_name"] ?: @"", u[@"last_name"] ?: @""]
 					stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
 			if (!name.length)
-				name = u[@"usernames"][@"active_usernames"][0] ?: @"";
+				name = TGActiveUsername(u) ?: @"";
 			if (name.length)
 				me.usersById[@(userId)] = name;
 			[me cacheProfilePhoto:u];
@@ -2303,9 +2347,14 @@ static NSArray *TGPacksFrom(NSDictionary *target) {
 		info[@"unread"] = chat[@"unread_count"];
 
 	NSString *chatType = chat[@"type"][@"@type"];
-	if (chatType)
+	if (chatType){
+		BOOL isSupergroup = [chatType isEqualToString:@"chatTypeSupergroup"];
+		BOOL isChannel = isSupergroup && [chat[@"type"][@"is_channel"] boolValue];
 		info[@"isGroup"] = @(![chatType isEqualToString:@"chatTypePrivate"] &&
 							 ![chatType isEqualToString:@"chatTypeSecret"]);
+		info[@"isChannel"] = @(isChannel);
+		info[@"isPrivate"] = @([chatType isEqualToString:@"chatTypePrivate"]);
+	}
 
 	// A forum keeps several threads in one chat, so it opens on a topic list
 	// rather than a merged stream. The flag is on the supergroup, not here:
@@ -2412,10 +2461,8 @@ static NSArray *TGPacksFrom(NSDictionary *target) {
 		NSString *listType = position[@"list"][@"@type"];
 		if ([listType isEqualToString:@"chatListArchive"]){
 			info[@"archiveOrder"] = @(TGArchiveOrder(@[position]));
-			info[@"order"] = @(0);
 		} else if ([listType isEqualToString:@"chatListMain"]){
 			info[@"order"] = @(TGMainListOrder(@[position]));
-			info[@"archiveOrder"] = @(0);
 			info[@"isPinned"] = @(TGPinnedInMain(@[position]));
 		}
 	}

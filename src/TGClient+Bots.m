@@ -17,6 +17,14 @@ static NSNumber *TGBNumber(id value){
 	return [value isKindOfClass:NSNumber.class] ? value : @0;
 }
 
+static NSNumber *TGBInt64(id value){
+	if ([value isKindOfClass:NSNumber.class])
+		return value;
+	if ([value isKindOfClass:NSString.class])
+		return @([value longLongValue]);
+	return @0;
+}
+
 static BOOL TGBIsError(NSDictionary *result){
 	return !TGBDict(result) || [TGBString(result[@"@type"]) isEqualToString:@"error"];
 }
@@ -575,7 +583,7 @@ static NSNumber *TGBFileIdOfDocument(NSDictionary *owner, NSString *key){
 		BOOL startBot = [TGBString(buttonType[@"@type"])
 				isEqualToString:@"inlineQueryResultsButtonTypeStartBot"];
 		completion(@{
-			@"queryId"         : TGBNumber(result[@"inline_query_id"]),
+			@"queryId"         : TGBInt64(result[@"inline_query_id"]),
 			@"nextOffset"      : TGBString(result[@"next_offset"]),
 			@"buttonText"      : startBot ? TGBString(button[@"text"]) : @"",
 			@"buttonParameter" : startBot ? TGBString(buttonType[@"parameter"]) : @"",

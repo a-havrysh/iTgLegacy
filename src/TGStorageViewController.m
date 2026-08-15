@@ -2,6 +2,7 @@
 #import "TGClient.h"
 #import "TGClient+Storage.h"
 #import "TGTheme.h"
+#import <QuartzCore/QuartzCore.h>
 
 typedef enum {
 	TGStorageActionKinds = 0,
@@ -88,10 +89,61 @@ static const NSInteger TGStorageTTLValues[4] = {3 * 24 * 60 * 60,
 												30 * 24 * 60 * 60,
 												-1};
 
-static const long long TGStorageSizeValues[4] = {5LL * 1024 * 1024 * 1024,
+static long long TGStorageDiskTotalBytes(void) {
+	static long long total = -2;
+	if (total == -2){
+		total = 0;
+		NSDictionary *attributes = [[NSFileManager defaultManager]
+				attributesOfFileSystemForPath:NSHomeDirectory() error:NULL];
+		id value = [attributes objectForKey:NSFileSystemSize];
+		if ([value respondsToSelector:@selector(longLongValue)])
+			total = [value longLongValue];
+	}
+	return total;
+}
+
+static long long TGStorageDiskFreeBytes(void) {
+	NSDictionary *attributes = [[NSFileManager defaultManager]
+			attributesOfFileSystemForPath:NSHomeDirectory() error:NULL];
+	id value = [attributes objectForKey:NSFileSystemFreeSize];
+	if ([value respondsToSelector:@selector(longLongValue)])
+		return [value longLongValue];
+	return 0;
+}
+
+static const long long TGStorageSizeLadder[8] = {256LL * 1024 * 1024,
+												 512LL * 1024 * 1024,
+												 1LL * 1024 * 1024 * 1024,
+												 2LL * 1024 * 1024 * 1024,
+												 5LL * 1024 * 1024 * 1024,
+												 8LL * 1024 * 1024 * 1024,
 												 16LL * 1024 * 1024 * 1024,
-												 32LL * 1024 * 1024 * 1024,
-												 -1};
+												 32LL * 1024 * 1024 * 1024};
+
+static long long TGStorageSizeValueAtIndex(NSInteger index) {
+	static long long choices[4] = {0, 0, 0, -1};
+	if (choices[0] == 0){
+		long long total = TGStorageDiskTotalBytes();
+		long long ceiling = total > 0 ? total / 4 : 0;
+		NSInteger picked = 0;
+		long long found[3] = {0, 0, 0};
+		for (NSInteger i = 7; i >= 0 && picked < 3; i--){
+			if (ceiling > 0 && TGStorageSizeLadder[i] > ceiling)
+				continue;
+			found[picked++] = TGStorageSizeLadder[i];
+		}
+		if (picked < 3){
+			for (NSInteger i = 0; i < 3; i++)
+				found[i] = TGStorageSizeLadder[2 - i];
+		}
+		choices[0] = found[2];
+		choices[1] = found[1];
+		choices[2] = found[0];
+	}
+	if (index < 0 || index > 3)
+		return -1;
+	return choices[index];
+}
 
 static NSString *TGStorageTTLName(NSInteger ttl) {
 	if (ttl <= 0)
@@ -294,7 +346,64 @@ static NSString *TGHumanSize(long long bytes) {
 		return 1;
 	if (section == TGStorageSectionEverything)
 		return 12;
+	if (section == TGStorageSectionSummary && [self diskBarIsAvailable])
+		return 64;
 	return 46;
+}
+
+- (BOOL)diskBarIsAvailable {
+	return TGStorageDiskTotalBytes() > 0 && TGStorageDiskFreeBytes() > 0;
+}
+
+- (long long)telegramBytesOnDisk {
+	long long total = [[self.overview objectForKey:@"total"] longLongValue];
+	if (total > 0)
+		return total;
+	return self.bytes > 0 ? self.bytes : 0;
+}
+
+- (UIView *)diskBarWithWidth:(CGFloat)width {
+	long long total = TGStorageDiskTotalBytes();
+	long long freeBytes = TGStorageDiskFreeBytes();
+	long long mine = [self telegramBytesOnDisk];
+	if (total <= 0)
+		return nil;
+	if (mine > total - freeBytes)
+		mine = total - freeBytes;
+	if (mine < 0)
+		mine = 0;
+
+	CGFloat barWidth = width - 42;
+	if (barWidth < 40)
+		barWidth = 40;
+	UIView *bar = [[UIView alloc] initWithFrame:CGRectMake(21, 44, barWidth, 8)];
+	bar.backgroundColor = [[TGTheme shared] isDark]
+			? [UIColor colorWithWhite:1.0f alpha:0.16f]
+			: TGStorageRGB(0xd7dce3);
+	bar.layer.cornerRadius = 4;
+	bar.clipsToBounds = YES;
+
+	CGFloat usedFraction = (CGFloat)((double)(total - freeBytes) / (double)total);
+	CGFloat mineFraction = (CGFloat)((double)mine / (double)total);
+	if (usedFraction > 1.0f)
+		usedFraction = 1.0f;
+	if (mineFraction > usedFraction)
+		mineFraction = usedFraction;
+	if (mine > 0 && mineFraction < 0.02f)
+		mineFraction = 0.02f;
+
+	UIView *used = [[UIView alloc] initWithFrame:
+			CGRectMake(0, 0, barWidth * usedFraction, 8)];
+	used.backgroundColor = [[TGTheme shared] isDark]
+			? [UIColor colorWithWhite:1.0f alpha:0.32f]
+			: TGStorageRGB(0xa9b0bb);
+	[bar addSubview:used];
+
+	UIView *ours = [[UIView alloc] initWithFrame:
+			CGRectMake(0, 0, barWidth * mineFraction, 8)];
+	ours.backgroundColor = [[TGTheme shared] accentColour];
+	[bar addSubview:ours];
+	return bar;
 }
 
 - (NSString *)titleForSection:(NSInteger)section {
@@ -316,9 +425,17 @@ static NSString *TGHumanSize(long long bytes) {
 		return nil;
 
 	BOOL dark = [[TGTheme shared] isDark];
+	BOOL withBar = (section == TGStorageSectionSummary && [self diskBarIsAvailable]);
 	UIView *container = [[UIView alloc] initWithFrame:
-			CGRectMake(0, 0, tableView.bounds.size.width, 46)];
+			CGRectMake(0, 0, tableView.bounds.size.width, withBar ? 64 : 46)];
 	container.backgroundColor = [UIColor clearColor];
+	if (withBar){
+		UIView *bar = [self diskBarWithWidth:tableView.bounds.size.width];
+		if (bar){
+			bar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+			[container addSubview:bar];
+		}
+	}
 
 	UILabel *label = [[UILabel alloc] init];
 	label.text = title;
@@ -393,7 +510,7 @@ static NSString *TGHumanSize(long long bytes) {
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
 	switch (section){
 		case TGStorageSectionSummary:
-			return self.overview ? 4 : 2;
+			return self.overview ? 5 : 3;
 		case TGStorageSectionTypes:
 			if (!self.detailLoaded)
 				return 1;
@@ -461,6 +578,17 @@ static NSString *TGHumanSize(long long bytes) {
 
 	if (indexPath.section == TGStorageSectionSummary){
 		BOOL busy = self.working || !self.loaded;
+		if (indexPath.row == (self.overview ? 4 : 2)){
+			cell.textLabel.text = @"Free on device";
+			long long freeBytes = TGStorageDiskFreeBytes();
+			long long total = TGStorageDiskTotalBytes();
+			if (freeBytes > 0 && total > 0)
+				cell.detailTextLabel.text = [NSString stringWithFormat:@"%@ of %@",
+						TGHumanSize(freeBytes), TGHumanSize(total)];
+			else if (freeBytes > 0)
+				cell.detailTextLabel.text = TGHumanSize(freeBytes);
+			return cell;
+		}
 		switch (indexPath.row){
 			case 0:
 				cell.textLabel.text = @"Size on disk";
@@ -730,7 +858,7 @@ static NSString *TGHumanSize(long long bytes) {
 			[sheet addButtonWithTitle:TGStorageTTLName(TGStorageTTLValues[i])];
 	} else {
 		for (int i = 0; i < 4; i++)
-			[sheet addButtonWithTitle:TGStorageSizeName(TGStorageSizeValues[i])];
+			[sheet addButtonWithTitle:TGStorageSizeName(TGStorageSizeValueAtIndex(i))];
 	}
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 	if (self.tabBarController.tabBar)
@@ -781,7 +909,7 @@ static NSString *TGHumanSize(long long bytes) {
 		if (actionSheet.tag == TGStorageSheetTTL)
 			ttl = TGStorageTTLValues[buttonIndex];
 		else
-			maxBytes = TGStorageSizeValues[buttonIndex];
+			maxBytes = TGStorageSizeValueAtIndex(buttonIndex);
 		[[TGClient shared] setCachePolicyMaxBytes:maxBytes
 									   ttlSeconds:ttl
 								  excludedChatIds:[self policyExcludedChatIds]];

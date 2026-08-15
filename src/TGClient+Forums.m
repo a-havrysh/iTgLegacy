@@ -38,6 +38,14 @@ static NSString *TGForumsMessagePreview(NSDictionary *message){
 	return @"";
 }
 
+static NSNumber *TGForumsInt64(id value){
+	if ([value isKindOfClass:NSNumber.class])
+		return value;
+	if ([value isKindOfClass:NSString.class])
+		return [NSNumber numberWithLongLong:[value longLongValue]];
+	return [NSNumber numberWithLongLong:0];
+}
+
 static NSDictionary *TGForumsFlattenTopic(NSDictionary *topic, int64_t chatId){
 	if (![topic isKindOfClass:NSDictionary.class])
 		return nil;
@@ -83,11 +91,11 @@ static NSDictionary *TGForumsFlattenTopic(NSDictionary *topic, int64_t chatId){
 			@([topic[@"is_pinned"] boolValue]),          @"isPinned",
 			@([info[@"is_outgoing"] boolValue]),         @"isOutgoing",
 			icon[@"color"] ?: @(0),                      @"iconColor",
-			icon[@"custom_emoji_id"] ?: @(0),            @"iconEmojiId",
+			TGForumsInt64(icon[@"custom_emoji_id"]),     @"iconEmojiId",
 			settings[@"mute_for"] ?: @(0),               @"muteFor",
 			info[@"creation_date"] ?: @(0),              @"creationDate",
 			creator[@"user_id"] ?: @(0),                 @"creatorId",
-			topic[@"order"] ?: @(0),                     @"order",
+			TGForumsInt64(topic[@"order"]),              @"order",
 			nil];
 }
 
@@ -384,11 +392,39 @@ static NSDictionary *TGForumsFlattenTopic(NSDictionary *topic, int64_t chatId){
 		@"chat_id"        : @(chatId),
 		@"forum_topic_id" : @(topicId),
 	}];
-	[self runForumOk:@{
+	[self send:@{
 		@"@type"          : @"readAllForumTopicPollVotes",
 		@"chat_id"        : @(chatId),
 		@"forum_topic_id" : @(topicId),
-	} completion:completion];
+	}];
+	__weak typeof(self) weakSelf = self;
+	[self request:@{
+		@"@type"          : @"getForumTopic",
+		@"chat_id"        : @(chatId),
+		@"forum_topic_id" : @(topicId),
+	} completion:^(NSDictionary *result){
+		TGClient *client = weakSelf;
+		if (!client || [result[@"@type"] isEqualToString:@"error"]){
+			NSLog(@"TGClient: getForumTopic -> %@", result[@"message"]);
+			if (completion)
+				completion(NO);
+			return;
+		}
+		NSDictionary *last = result[@"last_message"];
+		NSNumber *messageId = [last isKindOfClass:NSDictionary.class] ? last[@"id"] : nil;
+		if (![messageId isKindOfClass:NSNumber.class] || [messageId longLongValue] == 0){
+			if (completion)
+				completion(YES);
+			return;
+		}
+		[client runForumOk:@{
+			@"@type"       : @"viewMessages",
+			@"chat_id"     : @(chatId),
+			@"message_ids" : @[messageId],
+			@"source"      : @{@"@type" : @"messageSourceForumTopicHistory"},
+			@"force_read"  : @YES,
+		} completion:completion];
+	}];
 }
 
 - (void)unpinAllMessagesInForumTopicInChat:(int64_t)chatId
@@ -454,7 +490,7 @@ static NSDictionary *TGForumsFlattenTopic(NSDictionary *topic, int64_t chatId){
 			if (![emoji isKindOfClass:NSString.class])
 				emoji = @"";
 			[out addObject:@{
-				@"emojiId"     : fullType[@"custom_emoji_id"] ?: @(0),
+				@"emojiId"     : TGForumsInt64(fullType[@"custom_emoji_id"]),
 				@"emoji"       : emoji,
 				@"thumbFileId" : thumbFile[@"id"] ?: @(0),
 				@"fileId"      : file[@"id"] ?: @(0),

@@ -47,7 +47,7 @@ static void tgFreePixels(void *info, const void *data, size_t size) {
 		CGDataProviderCreateWithData(NULL, pixels, size, tgFreePixels);
 	CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
 	CGImageRef cgImage = CGImageCreate(width, height, 8, 32, stride, space,
-			kCGBitmapByteOrderDefault | kCGImageAlphaPremultipliedLast,
+			kCGBitmapByteOrderDefault | kCGImageAlphaLast,
 			provider, NULL, NO, kCGRenderingIntentDefault);
 
 	UIImage *image = cgImage ? [UIImage imageWithCGImage:cgImage] : nil;

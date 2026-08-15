@@ -1,6 +1,7 @@
 #import "TGPrivacyViewController.h"
 #import "TGClient.h"
 #import "TGClient+Privacy.h"
+#import "TGClient+Stories.h"
 #import "TGTheme.h"
 #import "TGIcons.h"
 #import "TGSessionsViewController.h"
@@ -226,7 +227,7 @@ typedef void (^TGSecurityStepBlock)(TGSecurityStepViewController *step, NSString
 
 #pragma mark - two-step verification
 
-@interface TGTwoStepViewController ()
+@interface TGTwoStepViewController () <UIAlertViewDelegate>
 @property (nonatomic, strong) NSDictionary *state;
 @property (nonatomic, assign) BOOL loaded;
 @property (nonatomic, strong, getter=pendingPassword) NSString *newPassword;
@@ -288,6 +289,25 @@ typedef void (^TGSecurityStepBlock)(TGSecurityStepViewController *step, NSString
 	return [self.state[@"hasRecoveryEmail"] boolValue];
 }
 
+- (NSInteger)pendingResetDate {
+	id date = self.state[@"pendingResetDate"];
+	return [date isKindOfClass:[NSNumber class]] ? [date integerValue] : 0;
+}
+
+- (BOOL)showsResetRow {
+	if (![self hasPassword])
+		return NO;
+	return [self pendingResetDate] > 0 || ![self hasRecoveryEmail];
+}
+
+- (NSString *)describeDate:(NSInteger)date {
+	NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+	formatter.dateStyle = NSDateFormatterMediumStyle;
+	formatter.timeStyle = NSDateFormatterShortStyle;
+	return [formatter stringFromDate:
+			[NSDate dateWithTimeIntervalSince1970:(NSTimeInterval)date]];
+}
+
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
 	if (!self.loaded)
 		return 1;
@@ -303,7 +323,7 @@ typedef void (^TGSecurityStepBlock)(TGSecurityStepViewController *step, NSString
 		return [self hint].length ? 2 : 1;
 	if (section == 1)
 		return 2;
-	return 1;
+	return [self showsResetRow] ? 2 : 1;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
@@ -323,9 +343,19 @@ typedef void (^TGSecurityStepBlock)(TGSecurityStepViewController *step, NSString
 				   @"this account if you forget the password.";
 		return nil;
 	}
-	if (section == 2)
+	if (section == 2){
+		NSInteger pending = [self pendingResetDate];
+		if (pending > 0)
+			return [NSString stringWithFormat:
+					@"The password will be removed on %@ unless you call the reset off.",
+					[self describeDate:pending]];
+		if ([self showsResetRow])
+			return @"Turning the password off leaves only the text message code "
+				   @"protecting this account. Without a recovery e-mail address you "
+				   @"can ask for the password to be reset after a waiting period.";
 		return @"Turning the password off leaves only the text message code "
 			   @"protecting this account.";
+	}
 	return nil;
 }
 
@@ -393,6 +423,17 @@ typedef void (^TGSecurityStepBlock)(TGSecurityStepViewController *step, NSString
 		cell.textLabel.font = [UIFont boldSystemFontOfSize:16];
 		cell.textLabel.textAlignment = NSTextAlignmentCenter;
 		cell.textLabel.textColor = TGPrivacyActionColour();
+		cell.textLabel.highlightedTextColor = [UIColor whiteColor];
+		return cell;
+	}
+
+	if (indexPath.row == 1){
+		cell.textLabel.text = [self pendingResetDate] > 0
+				? @"Cancel Password Reset" : @"Reset Password";
+		cell.textLabel.font = [UIFont boldSystemFontOfSize:16];
+		cell.textLabel.textAlignment = NSTextAlignmentCenter;
+		cell.textLabel.textColor = [self pendingResetDate] > 0
+				? TGPrivacyActionColour() : TGPrivacyDestructiveColour();
 		cell.textLabel.highlightedTextColor = [UIColor whiteColor];
 		return cell;
 	}
@@ -516,19 +557,18 @@ typedef void (^TGSecurityStepBlock)(TGSecurityStepViewController *step, NSString
 					@"forget the password. Continue anyway?"
 			delegate:self cancelButtonTitle:@"Cancel" otherButtonTitles:@"Continue", nil];
 	alert.tag = (NSInteger)(hint.length ? 1 : 2);
-	objc_setAssociatedObject_placeholder: ;
-	[self performSelector:@selector(noop)];
 	[alert show];
 	self.pendingHint = hint;
 	self.pendingOldPassword = oldPassword;
 }
 
-- (void)noop {
-}
-
 - (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {
 	if (buttonIndex == alertView.cancelButtonIndex)
 		return;
+	if (alertView.tag == 77){
+		[self cancelPasswordReset];
+		return;
+	}
 	[self commitPassword:self.newPassword hint:self.pendingHint email:nil
 			 oldPassword:self.pendingOldPassword fromStep:nil];
 }
@@ -745,8 +785,64 @@ typedef void (^TGSecurityStepBlock)(TGSecurityStepViewController *step, NSString
 			[self startSetRecoveryEmail];
 		return;
 	}
-	if (indexPath.section == 2)
+	if (indexPath.section == 2){
+		if (indexPath.row == 1){
+			if ([self pendingResetDate] > 0)
+				[self confirmCancellingReset];
+			else
+				[self startPasswordReset];
+			return;
+		}
 		[self startDisablePassword];
+	}
+}
+
+- (void)startPasswordReset {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] resetPasswordWithCompletion:^(NSString *result, NSInteger date){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		if ([result isEqualToString:@"ok"]){
+			TGPrivacyComplain(@"The password has been removed.");
+			[strongSelf reload];
+			return;
+		}
+		if ([result isEqualToString:@"pending"]){
+			TGPrivacyComplain([NSString stringWithFormat:
+					@"The password will be removed on %@.",
+					[strongSelf describeDate:date]]);
+			[strongSelf reload];
+			return;
+		}
+		if ([result isEqualToString:@"declined"]){
+			TGPrivacyComplain([NSString stringWithFormat:
+					@"A reset can be asked for again on %@.",
+					[strongSelf describeDate:date]]);
+			return;
+		}
+		TGPrivacyComplain(@"The reset could not be started.");
+	}];
+}
+
+- (void)confirmCancellingReset {
+	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:nil
+			message:@"Call off the password reset and keep the password as it is?"
+			delegate:self cancelButtonTitle:@"Keep Resetting"
+			otherButtonTitles:@"Cancel Reset", nil];
+	alert.tag = 77;
+	[alert show];
+}
+
+- (void)cancelPasswordReset {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] cancelPasswordResetWithCompletion:^(BOOL ok){
+		if (!ok){
+			TGPrivacyComplain(@"The reset could not be called off.");
+			return;
+		}
+		[weakSelf reload];
+	}];
 }
 
 @end
@@ -1063,6 +1159,497 @@ typedef void (^TGSecurityStepBlock)(TGSecurityStepViewController *step, NSString
 
 @end
 
+#pragma mark - contact picker
+
+typedef void (^TGPrivacyPickerBlock)(NSArray *userIds);
+
+@interface TGPrivacyContactPickerViewController : UITableViewController
+- (instancetype)initWithTitle:(NSString *)title
+					 selected:(NSArray *)selected
+				   completion:(TGPrivacyPickerBlock)completion;
+@end
+
+@interface TGPrivacyContactPickerViewController ()
+@property (nonatomic, strong) NSArray *contacts;
+@property (nonatomic, strong) NSMutableArray *chosen;
+@property (nonatomic, copy) TGPrivacyPickerBlock completion;
+@property (nonatomic, assign) BOOL loaded;
+@end
+
+@implementation TGPrivacyContactPickerViewController
+
+- (instancetype)initWithTitle:(NSString *)title
+					 selected:(NSArray *)selected
+				   completion:(TGPrivacyPickerBlock)completion {
+	self = [super initWithStyle:UITableViewStylePlain];
+	if (self){
+		self.title = title;
+		_chosen = selected ? [selected mutableCopy] : [NSMutableArray array];
+		_completion = [completion copy];
+	}
+	return self;
+}
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
+		self.edgesForExtendedLayout = UIRectEdgeNone;
+	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	self.tableView.rowHeight = 44;
+
+	UIButton *button = [TGIcons headerButtonWithTitle:@"Done" bold:YES
+											   target:self action:@selector(done)];
+	self.navigationItem.rightBarButtonItem =
+			[[UIBarButtonItem alloc] initWithCustomView:button];
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] contactsWithCompletion:^(NSArray *users){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		strongSelf.loaded = YES;
+		strongSelf.contacts = [users isKindOfClass:[NSArray class]] ? users : nil;
+		[strongSelf.tableView reloadData];
+	}];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+	[super viewWillAppear:animated];
+	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+}
+
+- (void)done {
+	if (self.completion)
+		self.completion([NSArray arrayWithArray:self.chosen]);
+	[self.navigationController popViewControllerAnimated:YES];
+}
+
+- (NSString *)nameOf:(NSDictionary *)user {
+	NSMutableString *name = [NSMutableString string];
+	id first = user[@"first_name"];
+	id last = user[@"last_name"];
+	if ([first isKindOfClass:[NSString class]])
+		[name appendString:first];
+	if ([last isKindOfClass:[NSString class]] && [last length]){
+		if (name.length)
+			[name appendString:@" "];
+		[name appendString:last];
+	}
+	if (!name.length){
+		id username = user[@"username"];
+		if ([username isKindOfClass:[NSString class]] && [username length])
+			return username;
+		return @"Unknown";
+	}
+	return name;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	return (NSInteger)self.contacts.count;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView
+		 cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"contact"];
+	if (!cell)
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+									  reuseIdentifier:@"contact"];
+	[[TGTheme shared] styleCell:cell];
+	NSDictionary *user = self.contacts[indexPath.row];
+	cell.textLabel.text = [self nameOf:user];
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+	cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
+	id userId = user[@"id"];
+	cell.accessoryType = [self.chosen containsObject:userId]
+			? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+	return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	if ((NSUInteger)indexPath.row >= self.contacts.count)
+		return;
+	id userId = self.contacts[indexPath.row][@"id"];
+	if (![userId isKindOfClass:[NSNumber class]])
+		return;
+	if ([self.chosen containsObject:userId])
+		[self.chosen removeObject:userId];
+	else
+		[self.chosen addObject:userId];
+	[tableView reloadRowsAtIndexPaths:[NSArray arrayWithObject:indexPath]
+					 withRowAnimation:UITableViewRowAnimationNone];
+}
+
+@end
+
+#pragma mark - blocked users
+
+@interface TGBlockedUsersViewController : UITableViewController
+@end
+
+@interface TGBlockedUsersViewController ()
+@property (nonatomic, strong) NSMutableArray *senders;
+@property (nonatomic, assign) BOOL loaded;
+@end
+
+@implementation TGBlockedUsersViewController
+
+- (instancetype)init {
+	return [super initWithStyle:UITableViewStylePlain];
+}
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+	self.title = @"Blocked Users";
+	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
+		self.edgesForExtendedLayout = UIRectEdgeNone;
+	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	self.tableView.rowHeight = 48;
+	self.senders = [NSMutableArray array];
+	[self reload];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+	[super viewWillAppear:animated];
+	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+}
+
+- (void)reload {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] blockedSendersFromOffset:0 limit:100
+									 completion:^(NSArray *senders, NSInteger total){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		strongSelf.loaded = YES;
+		[strongSelf.senders removeAllObjects];
+		if ([senders isKindOfClass:[NSArray class]])
+			[strongSelf.senders addObjectsFromArray:senders];
+		[strongSelf.tableView reloadData];
+	}];
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	return (NSInteger)self.senders.count;
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+	if (!self.loaded)
+		return @"Loading...";
+	if (!self.senders.count)
+		return @"Blocked users cannot write to you. Swipe a name to unblock.";
+	return @"Swipe a name to unblock.";
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView
+		 cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"blocked"];
+	if (!cell)
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+									  reuseIdentifier:@"blocked"];
+	[[TGTheme shared] styleCell:cell];
+	NSDictionary *sender = self.senders[indexPath.row];
+	id name = sender[@"name"];
+	cell.textLabel.text = [name isKindOfClass:[NSString class]] ? name : @"Unknown";
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+	cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
+	cell.detailTextLabel.text = [sender[@"isChat"] boolValue] ? @"group" : @"";
+	cell.detailTextLabel.font = [UIFont systemFontOfSize:13];
+	cell.detailTextLabel.textColor = [[TGTheme shared] secondaryTextColour];
+	cell.selectionStyle = UITableViewCellSelectionStyleNone;
+	return cell;
+}
+
+- (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
+	return YES;
+}
+
+- (NSString *)tableView:(UITableView *)tableView
+		titleForDeleteConfirmationButtonForRowAtIndexPath:(NSIndexPath *)indexPath {
+	return @"Unblock";
+}
+
+- (void)tableView:(UITableView *)tableView
+		commitEditingStyle:(UITableViewCellEditingStyle)style
+		 forRowAtIndexPath:(NSIndexPath *)indexPath {
+	if (style != UITableViewCellEditingStyleDelete)
+		return;
+	if ((NSUInteger)indexPath.row >= self.senders.count)
+		return;
+	NSDictionary *sender = self.senders[indexPath.row];
+	id senderId = sender[@"id"];
+	if (![senderId isKindOfClass:[NSNumber class]])
+		return;
+	[self.senders removeObjectAtIndex:indexPath.row];
+	[tableView deleteRowsAtIndexPaths:[NSArray arrayWithObject:indexPath]
+					 withRowAnimation:UITableViewRowAnimationLeft];
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] setUser:[senderId longLongValue] blocked:NO completion:^(BOOL ok){
+		if (ok)
+			return;
+		TGPrivacyComplain(@"That person could not be unblocked.");
+		[weakSelf reload];
+	}];
+}
+
+@end
+
+#pragma mark - hidden story posters
+
+@interface TGHiddenStoriesViewController : UITableViewController
+@end
+
+@interface TGHiddenStoriesViewController ()
+@property (nonatomic, strong) NSMutableArray *posters;
+@property (nonatomic, assign) BOOL loaded;
+@end
+
+@implementation TGHiddenStoriesViewController
+
+- (instancetype)init {
+	return [super initWithStyle:UITableViewStylePlain];
+}
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+	self.title = @"Hidden Stories";
+	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
+		self.edgesForExtendedLayout = UIRectEdgeNone;
+	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	self.tableView.rowHeight = 44;
+	self.posters = [NSMutableArray array];
+	[self reload];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+	[super viewWillAppear:animated];
+	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+}
+
+- (void)reload {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] hiddenStoryPostersWithCompletion:^(NSArray *users){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		strongSelf.loaded = YES;
+		[strongSelf.posters removeAllObjects];
+		if ([users isKindOfClass:[NSArray class]])
+			[strongSelf.posters addObjectsFromArray:users];
+		[strongSelf.tableView reloadData];
+	}];
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	return (NSInteger)self.posters.count;
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+	if (!self.loaded)
+		return @"Loading...";
+	if (!self.posters.count)
+		return @"Stories you hide are listed here.";
+	return @"Swipe a name to put their stories back in the tray.";
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView
+		 cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"poster"];
+	if (!cell)
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+									  reuseIdentifier:@"poster"];
+	[[TGTheme shared] styleCell:cell];
+	id name = self.posters[indexPath.row][@"name"];
+	cell.textLabel.text = [name isKindOfClass:[NSString class]] ? name : @"Unknown";
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+	cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
+	cell.selectionStyle = UITableViewCellSelectionStyleNone;
+	return cell;
+}
+
+- (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
+	return YES;
+}
+
+- (NSString *)tableView:(UITableView *)tableView
+		titleForDeleteConfirmationButtonForRowAtIndexPath:(NSIndexPath *)indexPath {
+	return @"Unhide";
+}
+
+- (void)tableView:(UITableView *)tableView
+		commitEditingStyle:(UITableViewCellEditingStyle)style
+		 forRowAtIndexPath:(NSIndexPath *)indexPath {
+	if (style != UITableViewCellEditingStyleDelete)
+		return;
+	if ((NSUInteger)indexPath.row >= self.posters.count)
+		return;
+	id posterId = self.posters[indexPath.row][@"id"];
+	if (![posterId isKindOfClass:[NSNumber class]])
+		return;
+	[[TGClient shared] setUser:[posterId longLongValue] storiesHidden:NO];
+	[self.posters removeObjectAtIndex:indexPath.row];
+	[tableView deleteRowsAtIndexPaths:[NSArray arrayWithObject:indexPath]
+					 withRowAnimation:UITableViewRowAnimationLeft];
+}
+
+@end
+
+#pragma mark - connected websites
+
+@interface TGConnectedWebsitesViewController : UITableViewController
+@end
+
+@interface TGConnectedWebsitesViewController ()
+@property (nonatomic, strong) NSMutableArray *websites;
+@property (nonatomic, assign) BOOL loaded;
+@end
+
+@implementation TGConnectedWebsitesViewController
+
+- (instancetype)init {
+	return [super initWithStyle:UITableViewStyleGrouped];
+}
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+	self.title = @"Connected Websites";
+	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
+		self.edgesForExtendedLayout = UIRectEdgeNone;
+	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	self.tableView.rowHeight = 56;
+	self.websites = [NSMutableArray array];
+	[self reload];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+	[super viewWillAppear:animated];
+	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+}
+
+- (void)reload {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] connectedWebsitesWithCompletion:^(NSArray *websites){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		strongSelf.loaded = YES;
+		[strongSelf.websites removeAllObjects];
+		if ([websites isKindOfClass:[NSArray class]])
+			[strongSelf.websites addObjectsFromArray:websites];
+		[strongSelf.tableView reloadData];
+	}];
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+	return self.websites.count ? 2 : 1;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	if (section == 0)
+		return (NSInteger)self.websites.count;
+	return 1;
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
+	if (section == 0 && self.websites.count)
+		return @"Logged in with Telegram";
+	return nil;
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+	if (section == 0){
+		if (!self.loaded)
+			return @"Loading...";
+		if (!self.websites.count)
+			return @"No website is using your Telegram account to sign you in.";
+		return @"Swipe a website to log out of it.";
+	}
+	return nil;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView
+		 cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	if (indexPath.section == 1){
+		UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"all"];
+		if (!cell)
+			cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+										  reuseIdentifier:@"all"];
+		[[TGTheme shared] styleCell:cell];
+		cell.textLabel.text = @"Disconnect All Websites";
+		cell.textLabel.font = [UIFont boldSystemFontOfSize:16];
+		cell.textLabel.textAlignment = NSTextAlignmentCenter;
+		cell.textLabel.textColor = TGPrivacyDestructiveColour();
+		cell.textLabel.highlightedTextColor = [UIColor whiteColor];
+		cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+		return cell;
+	}
+
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"site"];
+	if (!cell)
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+									  reuseIdentifier:@"site"];
+	[[TGTheme shared] styleCell:cell];
+	NSDictionary *site = self.websites[indexPath.row];
+	id domain = site[@"domain"];
+	cell.textLabel.text = [domain isKindOfClass:[NSString class]] ? domain : @"Website";
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:16];
+	cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
+	NSMutableArray *bits = [NSMutableArray array];
+	for (NSString *key in [NSArray arrayWithObjects:@"browser", @"platform", @"ip", nil]){
+		id value = site[key];
+		if ([value isKindOfClass:[NSString class]] && [value length])
+			[bits addObject:value];
+	}
+	cell.detailTextLabel.text = [bits componentsJoinedByString:@", "];
+	cell.detailTextLabel.font = [UIFont systemFontOfSize:13];
+	cell.detailTextLabel.textColor = [[TGTheme shared] secondaryTextColour];
+	cell.detailTextLabel.numberOfLines = 2;
+	cell.selectionStyle = UITableViewCellSelectionStyleNone;
+	return cell;
+}
+
+- (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
+	return indexPath.section == 0;
+}
+
+- (NSString *)tableView:(UITableView *)tableView
+		titleForDeleteConfirmationButtonForRowAtIndexPath:(NSIndexPath *)indexPath {
+	return @"Disconnect";
+}
+
+- (void)tableView:(UITableView *)tableView
+		commitEditingStyle:(UITableViewCellEditingStyle)style
+		 forRowAtIndexPath:(NSIndexPath *)indexPath {
+	if (style != UITableViewCellEditingStyleDelete || indexPath.section != 0)
+		return;
+	if ((NSUInteger)indexPath.row >= self.websites.count)
+		return;
+	id siteId = self.websites[indexPath.row][@"id"];
+	if (![siteId isKindOfClass:[NSNumber class]])
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] disconnectWebsite:[siteId longLongValue] completion:^(BOOL ok){
+		if (!ok)
+			TGPrivacyComplain(@"That website could not be disconnected.");
+		[weakSelf reload];
+	}];
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	if (indexPath.section != 1)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] disconnectAllWebsitesWithCompletion:^(BOOL ok){
+		if (!ok)
+			TGPrivacyComplain(@"The websites could not be disconnected.");
+		[weakSelf reload];
+	}];
+}
+
+@end
+
 #pragma mark - privacy rule
 
 @interface TGPrivacyRuleViewController ()
@@ -1126,8 +1713,16 @@ typedef void (^TGSecurityStepBlock)(TGSecurityStepViewController *step, NSString
 	return @"Everybody";
 }
 
+- (BOOL)showsAllowedRow {
+	return ![self.value isEqualToString:@"everybody"];
+}
+
+- (BOOL)showsRestrictedRow {
+	return ![self.value isEqualToString:@"nobody"];
+}
+
 - (BOOL)showsExceptions {
-	return self.allowedUsers.count > 0 || self.restrictedUsers.count > 0;
+	return self.loaded;
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
@@ -1138,9 +1733,9 @@ typedef void (^TGSecurityStepBlock)(TGSecurityStepViewController *step, NSString
 	if (section == 0)
 		return self.loaded ? 3 : 0;
 	NSInteger rows = 0;
-	if (self.allowedUsers.count)
+	if ([self showsAllowedRow])
 		rows++;
-	if (self.restrictedUsers.count)
+	if ([self showsRestrictedRow])
 		rows++;
 	return rows;
 }
@@ -1154,7 +1749,7 @@ typedef void (^TGSecurityStepBlock)(TGSecurityStepViewController *step, NSString
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
 	if (section == 0)
 		return self.loaded ? nil : @"Loading...";
-	return @"Exceptions set on another device are kept as they are.";
+	return @"These people are treated differently, whatever you chose above.";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -1181,24 +1776,83 @@ typedef void (^TGSecurityStepBlock)(TGSecurityStepViewController *step, NSString
 		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
 									  reuseIdentifier:@"exception"];
 	[[TGTheme shared] styleCell:cell];
-	BOOL allowedRow = self.allowedUsers.count && indexPath.row == 0;
+	BOOL allowedRow = [self isAllowedRowAt:indexPath];
 	NSArray *list = allowedRow ? self.allowedUsers : self.restrictedUsers;
 	cell.textLabel.text = allowedRow ? @"Always Share With" : @"Never Share With";
 	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
 	cell.textLabel.textAlignment = NSTextAlignmentLeft;
 	cell.textLabel.textColor = TGPrivacyRowTitleColour();
-	cell.detailTextLabel.text = list.count == 1
-			? @"1 user" : [NSString stringWithFormat:@"%d users", (int)list.count];
+	if (!list.count)
+		cell.detailTextLabel.text = @"Add Users";
+	else if (list.count == 1)
+		cell.detailTextLabel.text = @"1 user";
+	else
+		cell.detailTextLabel.text = [NSString stringWithFormat:@"%d users", (int)list.count];
 	cell.detailTextLabel.font = [UIFont systemFontOfSize:17];
 	cell.detailTextLabel.textColor = [[TGTheme shared] cellDetailColour];
-	cell.selectionStyle = UITableViewCellSelectionStyleNone;
+	cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
 	return cell;
+}
+
+- (BOOL)isAllowedRowAt:(NSIndexPath *)indexPath {
+	if (![self showsAllowedRow])
+		return NO;
+	return indexPath.row == 0;
+}
+
+- (void)saveExceptionsAllowed:(NSArray *)allowed restricted:(NSArray *)restricted {
+	NSArray *previousAllowed = self.allowedUsers;
+	NSArray *previousRestricted = self.restrictedUsers;
+	self.allowedUsers = allowed;
+	self.restrictedUsers = restricted;
+	[self.tableView reloadData];
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] setPrivacyRule:self.setting
+								   to:self.value
+						 allowedUsers:allowed
+					  restrictedUsers:restricted
+						   completion:^(BOOL ok){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (ok || !strongSelf)
+			return;
+		strongSelf.allowedUsers = previousAllowed;
+		strongSelf.restrictedUsers = previousRestricted;
+		[strongSelf.tableView reloadData];
+		TGPrivacyComplain(@"Those exceptions could not be saved.");
+	}];
+}
+
+- (void)editExceptionsAllowed:(BOOL)allowed {
+	__weak typeof(self) weakSelf = self;
+	NSArray *current = allowed ? self.allowedUsers : self.restrictedUsers;
+	NSString *title = allowed ? @"Always Share With" : @"Never Share With";
+	TGPrivacyContactPickerViewController *picker =
+			[[TGPrivacyContactPickerViewController alloc] initWithTitle:title
+															   selected:current
+															 completion:^(NSArray *userIds){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		if (allowed)
+			[strongSelf saveExceptionsAllowed:userIds
+								   restricted:strongSelf.restrictedUsers];
+		else
+			[strongSelf saveExceptionsAllowed:strongSelf.allowedUsers
+								   restricted:userIds];
+	}];
+	[self.navigationController pushViewController:picker animated:YES];
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
-	if (indexPath.section != 0 || !self.loaded)
+	if (!self.loaded)
 		return;
+	if (indexPath.section == 1){
+		[self editExceptionsAllowed:[self isAllowedRowAt:indexPath]];
+		return;
+	}
 
 	NSString *picked = [self values][indexPath.row];
 	if ([picked isEqualToString:self.value])
@@ -1227,10 +1881,12 @@ typedef void (^TGSecurityStepBlock)(TGSecurityStepViewController *step, NSString
 
 #pragma mark - the hub
 
-@interface TGPrivacyViewController ()
+@interface TGPrivacyViewController () <UIActionSheetDelegate>
 @property (nonatomic, strong) NSMutableDictionary *ruleValues;
 @property (nonatomic, assign) BOOL passwordOn;
 @property (nonatomic, assign) BOOL passwordLoaded;
+@property (nonatomic, assign) NSInteger autoDeleteSeconds;
+@property (nonatomic, assign) BOOL autoDeleteLoaded;
 @end
 
 @implementation TGPrivacyViewController
@@ -1280,6 +1936,74 @@ typedef void (^TGSecurityStepBlock)(TGSecurityStepViewController *step, NSString
 		strongSelf.passwordOn = [state[@"hasPassword"] boolValue];
 		[strongSelf.tableView reloadData];
 	}];
+
+	[[TGClient shared] defaultAutoDeleteSecondsWithCompletion:^(NSInteger seconds){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (!strongSelf)
+			return;
+		strongSelf.autoDeleteLoaded = YES;
+		strongSelf.autoDeleteSeconds = seconds;
+		[strongSelf.tableView reloadData];
+	}];
+}
+
+- (NSArray *)autoDeleteOptions {
+	return [NSArray arrayWithObjects:
+			[NSNumber numberWithInteger:0],
+			[NSNumber numberWithInteger:24 * 60 * 60],
+			[NSNumber numberWithInteger:7 * 24 * 60 * 60],
+			[NSNumber numberWithInteger:31 * 24 * 60 * 60], nil];
+}
+
+- (NSString *)autoDeleteTitleForSeconds:(NSInteger)seconds {
+	if (seconds <= 0)
+		return @"Off";
+	if (seconds >= 31 * 24 * 60 * 60)
+		return @"1 month";
+	if (seconds >= 7 * 24 * 60 * 60)
+		return @"1 week";
+	if (seconds >= 24 * 60 * 60)
+		return @"1 day";
+	return [NSString stringWithFormat:@"%d hours", (int)(seconds / 3600)];
+}
+
+- (void)showAutoDeletePicker {
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Auto-Delete Messages"
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:nil];
+	for (NSNumber *option in [self autoDeleteOptions]){
+		NSString *title = [self autoDeleteTitleForSeconds:[option integerValue]];
+		if ([option integerValue] == self.autoDeleteSeconds)
+			title = [title stringByAppendingString:@" ✓"];
+		[sheet addButtonWithTitle:title];
+	}
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = 91;
+	[sheet showInView:self.navigationController.view];
+}
+
+- (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
+	if (sheet.tag != 91 || index == sheet.cancelButtonIndex)
+		return;
+	NSArray *options = [self autoDeleteOptions];
+	if (index < 0 || index >= (NSInteger)options.count)
+		return;
+	NSInteger previous = self.autoDeleteSeconds;
+	NSInteger picked = [[options objectAtIndex:index] integerValue];
+	self.autoDeleteSeconds = picked;
+	[self.tableView reloadData];
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] setDefaultAutoDeleteSeconds:picked completion:^(BOOL ok){
+		__strong typeof(weakSelf) strongSelf = weakSelf;
+		if (ok || !strongSelf)
+			return;
+		strongSelf.autoDeleteSeconds = previous;
+		[strongSelf.tableView reloadData];
+		TGPrivacyComplain(@"That setting could not be changed.");
+	}];
 }
 
 - (NSArray *)settings {
@@ -1302,8 +2026,8 @@ typedef void (^TGSecurityStepBlock)(TGSecurityStepViewController *step, NSString
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
 	if (section == 0)
-		return (NSInteger)[self settings].count;
-	return 3;
+		return (NSInteger)[self settings].count + 3;
+	return 4;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
@@ -1336,9 +2060,27 @@ typedef void (^TGSecurityStepBlock)(TGSecurityStepViewController *step, NSString
 	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
 
 	if (indexPath.section == 0){
-		NSString *setting = [self settings][indexPath.row];
-		cell.textLabel.text = [TGClient titleForPrivacySetting:setting];
-		cell.detailTextLabel.text = [self shortTitleForValue:self.ruleValues[setting]];
+		NSArray *settings = [self settings];
+		if ((NSUInteger)indexPath.row < settings.count){
+			NSString *setting = settings[indexPath.row];
+			cell.textLabel.text = [TGClient titleForPrivacySetting:setting];
+			cell.detailTextLabel.text = [self shortTitleForValue:self.ruleValues[setting]];
+			return cell;
+		}
+		NSInteger extra = indexPath.row - (NSInteger)settings.count;
+		if (extra == 0){
+			cell.textLabel.text = @"Blocked Users";
+			cell.detailTextLabel.text = @"";
+			return cell;
+		}
+		if (extra == 1){
+			cell.textLabel.text = @"Hidden Stories";
+			cell.detailTextLabel.text = @"";
+			return cell;
+		}
+		cell.textLabel.text = @"Auto-Delete Messages";
+		cell.detailTextLabel.text = self.autoDeleteLoaded
+				? [self autoDeleteTitleForSeconds:self.autoDeleteSeconds] : @"...";
 		return cell;
 	}
 
@@ -1353,7 +2095,12 @@ typedef void (^TGSecurityStepBlock)(TGSecurityStepViewController *step, NSString
 				? (self.passwordOn ? @"On" : @"Off") : @"...";
 		return cell;
 	}
-	cell.textLabel.text = @"Active Sessions";
+	if (indexPath.row == 2){
+		cell.textLabel.text = @"Active Sessions";
+		cell.detailTextLabel.text = @"";
+		return cell;
+	}
+	cell.textLabel.text = @"Connected Websites";
 	cell.detailTextLabel.text = @"";
 	return cell;
 }
@@ -1363,11 +2110,24 @@ typedef void (^TGSecurityStepBlock)(TGSecurityStepViewController *step, NSString
 
 	if (indexPath.section == 0){
 		NSArray *settings = [self settings];
-		if ((NSUInteger)indexPath.row >= settings.count)
+		if ((NSUInteger)indexPath.row < settings.count){
+			TGPrivacyRuleViewController *rule = [[TGPrivacyRuleViewController alloc]
+					initWithSetting:settings[indexPath.row]];
+			[self.navigationController pushViewController:rule animated:YES];
 			return;
-		TGPrivacyRuleViewController *rule = [[TGPrivacyRuleViewController alloc]
-				initWithSetting:settings[indexPath.row]];
-		[self.navigationController pushViewController:rule animated:YES];
+		}
+		NSInteger extra = indexPath.row - (NSInteger)settings.count;
+		if (extra == 0){
+			[self.navigationController pushViewController:
+					[[TGBlockedUsersViewController alloc] init] animated:YES];
+			return;
+		}
+		if (extra == 1){
+			[self.navigationController pushViewController:
+					[[TGHiddenStoriesViewController alloc] init] animated:YES];
+			return;
+		}
+		[self showAutoDeletePicker];
 		return;
 	}
 
@@ -1381,8 +2141,13 @@ typedef void (^TGSecurityStepBlock)(TGSecurityStepViewController *step, NSString
 				[[TGTwoStepViewController alloc] init] animated:YES];
 		return;
 	}
+	if (indexPath.row == 2){
+		[self.navigationController pushViewController:
+				[[TGSessionsViewController alloc] init] animated:YES];
+		return;
+	}
 	[self.navigationController pushViewController:
-			[[TGSessionsViewController alloc] init] animated:YES];
+			[[TGConnectedWebsitesViewController alloc] init] animated:YES];
 }
 
 @end

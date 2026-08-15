@@ -173,10 +173,11 @@
 /// below returns a single preset in this category's key vocabulary.
 
 /// Apply auto-download settings for one network type. `settings` keys are
-/// "enabled" (NSNumber BOOL), "maxPhoto", "maxVideo", "maxOther" (bytes,
-/// NSNumber), "videoUploadBitrate" (NSNumber, 0 for server choice),
-/// "preloadLargeVideos", "preloadNextAudio", "useLessDataForCalls" (NSNumber
-/// BOOL); any key left out falls back to a safe default.
+/// "enabled" (NSNumber BOOL), "maxPhotoSize", "maxVideoSize", "maxOtherSize"
+/// (bytes, NSNumber), "videoUploadBitrate" (NSNumber, 0 for server choice),
+/// "preloadLargeVideos", "preloadNextAudio", "preloadStories",
+/// "useLessDataForCalls" (NSNumber BOOL); any key left out falls back to a
+/// safe default. Same key vocabulary as TGClient+Network and TGClient+Files.
 /// `type` is @"wifi", @"mobile", @"roaming", @"other" or @"none".
 /// NOTE: TDLib has no getter for the settings currently in force, so the UI
 /// has to mirror whatever it last set in NSUserDefaults.

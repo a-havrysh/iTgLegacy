@@ -301,7 +301,7 @@ static UIColor *rgb(int r, int g, int b) {
 	// black_alpha12 in their palette, and it applies to both styles: their
 	// bubbles carry a hairline whatever the era. On a dark surface a black
 	// hairline is invisible, so it turns into a faint white one.
-	if (self.isDarkStyle)
+	if (self.isDark)
 		return [UIColor colorWithWhite:1.0f alpha:0.08f];
 	return [UIColor colorWithWhite:0.0f alpha:0.12f];
 }
@@ -366,7 +366,7 @@ static UIColor *rgb(int r, int g, int b) {
 /// These four are the file block from their design system, and they are the
 /// same blue in every theme: it is the block's own colour, not the accent.
 - (UIColor *)fileTileColour {
-	return self.isDarkStyle ? TG_GRAY_DARK13 : TG_FILE_TILE;
+	return self.isDark ? TG_GRAY_DARK13 : TG_FILE_TILE;
 }
 
 - (UIColor *)mediaCircleColour {
@@ -379,7 +379,7 @@ static UIColor *rgb(int r, int g, int b) {
 }
 
 - (UIColor *)fileMetaColour {
-	return self.isDarkStyle ? TG_GRAY_DARK6 : TG_STEEL_LIGHT13;
+	return self.isDark ? TG_GRAY_DARK6 : TG_STEEL_LIGHT13;
 }
 
 /// The stamp over a picture has to read against whatever the picture is, so it
@@ -396,7 +396,7 @@ static UIColor *rgb(int r, int g, int b) {
 }
 
 - (UIColor *)mutedBadgeColour {
-	return self.isDarkStyle ? rgb(0x55, 0x55, 0x55) : TG_STEEL_LIGHT6;
+	return self.isDark ? rgb(0x55, 0x55, 0x55) : TG_STEEL_LIGHT6;
 }
 
 - (UIColor *)typingColour {
@@ -411,7 +411,7 @@ static UIColor *rgb(int r, int g, int b) {
 - (UIColor *)separatorColour {
 	if (_imported)
 		return [self bubbleBorderColour];
-	return self.isDarkStyle ? TG_GRAY_DARK13 : TG_STEEL_LIGHT3;
+	return self.isDark ? TG_GRAY_DARK13 : TG_STEEL_LIGHT3;
 }
 
 #pragma mark - service messages
@@ -419,12 +419,12 @@ static UIColor *rgb(int r, int g, int b) {
 /// A narrow plate centred on the wallpaper. Because it sits over a picture as
 /// often as over a colour, it is drawn as a wash rather than a fixed grey.
 - (UIColor *)serviceBubbleColour {
-	return self.isDarkStyle ? [UIColor colorWithWhite:1.0f alpha:0.12f]
+	return self.isDark ? [UIColor colorWithWhite:1.0f alpha:0.12f]
 							: [UIColor colorWithWhite:0.0f alpha:0.30f];
 }
 
 - (UIColor *)serviceTextColour {
-	return self.isDarkStyle ? [UIColor colorWithWhite:1.0f alpha:0.85f]
+	return self.isDark ? [UIColor colorWithWhite:1.0f alpha:0.85f]
 							: [UIColor whiteColor];
 }
 
