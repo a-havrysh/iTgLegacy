@@ -1,0 +1,931 @@
+#import "TGSavedMessagesViewController.h"
+#import "TGChatViewController.h"
+#import "TGClient.h"
+#import "TGClient+SavedMessages.h"
+#import "TGClient+Files.h"
+#import "TGTheme.h"
+#import "TGIcons.h"
+#import "TGPopupMenu.h"
+#import <QuartzCore/QuartzCore.h>
+
+static NSString *const TGSavedShowsTopicsKey = @"TGSavedMessagesShowsTopics";
+
+static const CGFloat kSavedRowHeight = 73.0f;
+static const CGFloat kSavedAvatar = 56.0f;
+static const CGFloat kSavedAvatarLeft = 8.0f;
+static const CGFloat kSavedTextLeft = 73.0f;
+static const CGFloat kSavedMessageRowHeight = 51.0f;
+static const NSInteger kSavedTopicPage = 40;
+static const NSInteger kSavedHistoryPage = 40;
+
+static const NSInteger kSavedDeleteAlertTag = 71;
+
+static NSString *TGSavedDate(NSTimeInterval unix) {
+	if (unix <= 0)
+		return @"";
+
+	NSDate *date = [NSDate dateWithTimeIntervalSince1970:unix];
+	NSTimeInterval age = -[date timeIntervalSinceNow];
+
+	static NSDateFormatter *time = nil, *weekday = nil, *full = nil;
+	if (!time){
+		NSLocale *fixed = [[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"];
+		time = [[NSDateFormatter alloc] init];    [time setLocale:fixed];    [time setDateFormat:@"HH:mm"];
+		weekday = [[NSDateFormatter alloc] init]; [weekday setLocale:fixed]; [weekday setDateFormat:@"EEE"];
+		full = [[NSDateFormatter alloc] init];    [full setLocale:fixed];    [full setDateFormat:@"dd.MM.yy"];
+	}
+
+	if (age < 24 * 3600)     return [time stringFromDate:date];
+	if (age < 7 * 24 * 3600) return [weekday stringFromDate:date];
+	return [full stringFromDate:date];
+}
+
+static NSString *TGSavedTopicKind(NSDictionary *topic) {
+	NSString *kind = topic[@"kind"];
+	return [kind isKindOfClass:NSString.class] ? kind : @"";
+}
+
+static NSString *TGSavedTopicTitle(NSDictionary *topic) {
+	NSString *title = topic[@"title"];
+	if ([title isKindOfClass:NSString.class] && title.length)
+		return title;
+
+	NSString *kind = TGSavedTopicKind(topic);
+	if ([kind isEqualToString:@"myNotes"])
+		return @"My Notes";
+	if ([kind isEqualToString:@"authorHidden"])
+		return @"Hidden Author";
+
+	int64_t chatId = [topic[@"chatId"] longLongValue];
+	NSString *name = chatId ? [[TGClient shared] nameForUserId:chatId] : nil;
+	return name.length ? name : @"Saved Messages";
+}
+
+#pragma mark - the messages of one topic
+
+@interface TGSavedTopicController : UITableViewController
+
+@property (nonatomic, assign) int64_t topicId;
+@property (nonatomic, copy)   NSString *topicTitle;
+@property (nonatomic, strong) NSMutableArray *messages;
+@property (nonatomic, strong) UILabel *emptyLabel;
+@property (nonatomic, strong) UIActivityIndicatorView *spinner;
+@property (nonatomic, assign) BOOL loading;
+@property (nonatomic, assign) BOOL exhausted;
+
+@end
+
+@implementation TGSavedTopicController
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+
+	TGTheme *theme = [TGTheme shared];
+	[theme styleNavigationBar:self.navigationController.navigationBar];
+	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
+		self.edgesForExtendedLayout = UIRectEdgeNone;
+
+	self.title = self.topicTitle.length ? self.topicTitle : @"Saved Messages";
+	self.messages = [NSMutableArray array];
+
+	self.tableView.rowHeight = kSavedMessageRowHeight;
+	self.tableView.backgroundColor = [theme listBackgroundColour];
+	self.tableView.separatorColor = [theme separatorColour];
+
+	UIView *background = [[UIView alloc] initWithFrame:self.tableView.bounds];
+	background.backgroundColor = [theme listBackgroundColour];
+	background.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+
+	self.emptyLabel = [[UILabel alloc] initWithFrame:
+			CGRectMake(0, 120, background.bounds.size.width, 22)];
+	self.emptyLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	self.emptyLabel.backgroundColor = [UIColor clearColor];
+	self.emptyLabel.textAlignment = NSTextAlignmentCenter;
+	self.emptyLabel.font = [UIFont systemFontOfSize:15];
+	self.emptyLabel.textColor = [theme secondaryTextColour];
+	self.emptyLabel.hidden = YES;
+	[background addSubview:self.emptyLabel];
+
+	self.spinner = [[UIActivityIndicatorView alloc]
+			initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleGray];
+	self.spinner.center = CGPointMake(background.bounds.size.width / 2.0f, 120);
+	self.spinner.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin
+			| UIViewAutoresizingFlexibleRightMargin;
+	self.spinner.hidesWhenStopped = YES;
+	[background addSubview:self.spinner];
+
+	self.tableView.backgroundView = background;
+
+	UIButton *chat = [TGIcons headerButtonWithTitle:@"Chat" bold:NO
+											 target:self action:@selector(openChat)];
+	self.navigationItem.rightBarButtonItem =
+			[[UIBarButtonItem alloc] initWithCustomView:chat];
+
+	[self loadOlder];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+	[super viewWillAppear:animated];
+	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+}
+
+- (void)openChat {
+	int64_t chatId = [[TGClient shared] savedMessagesChatId];
+	if (!chatId)
+		return;
+	TGChatViewController *vc = [[TGChatViewController alloc] init];
+	vc.chatId = chatId;
+	vc.chatTitle = @"Saved Messages";
+	[self.navigationController pushViewController:vc animated:YES];
+}
+
+- (void)loadOlder {
+	if (self.loading || self.exhausted)
+		return;
+	self.loading = YES;
+
+	if (self.messages.count == 0){
+		self.emptyLabel.hidden = YES;
+		[self.spinner startAnimating];
+	}
+
+	int64_t from = 0;
+	if (self.messages.count){
+		NSDictionary *oldest = [self.messages lastObject];
+		from = [oldest[@"id"] longLongValue];
+	}
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] savedMessagesTopicHistory:self.topicId
+									 fromMessage:from
+										   limit:kSavedHistoryPage
+									  completion:^(NSArray *messages){
+		TGSavedTopicController *me = weakSelf;
+		if (!me)
+			return;
+		me.loading = NO;
+		[me.spinner stopAnimating];
+
+		NSMutableArray *clean = [NSMutableArray array];
+		if ([messages isKindOfClass:NSArray.class]){
+			for (id message in messages){
+				if ([message isKindOfClass:NSDictionary.class])
+					[clean addObject:message];
+			}
+		}
+		if (clean.count == 0)
+			me.exhausted = YES;
+
+		for (NSInteger i = (NSInteger)clean.count - 1; i >= 0; i--)
+			[me.messages addObject:clean[(NSUInteger)i]];
+
+		me.emptyLabel.text = @"No messages";
+		me.emptyLabel.hidden = (me.messages.count > 0);
+		[me.tableView reloadData];
+	}];
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	return (NSInteger)self.messages.count;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	static NSString *reuse = @"TGSavedMessageCell";
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
+	if (!cell)
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+									  reuseIdentifier:reuse];
+
+	TGTheme *theme = [TGTheme shared];
+	[theme styleCell:cell];
+	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+	cell.accessoryType = UITableViewCellAccessoryNone;
+
+	if (indexPath.row >= (NSInteger)self.messages.count)
+		return cell;
+
+	NSDictionary *message = self.messages[indexPath.row];
+	NSString *text = message[@"text"];
+	if (![text isKindOfClass:NSString.class] || !text.length)
+		text = @"Media";
+
+	cell.textLabel.font = [UIFont systemFontOfSize:15];
+	cell.textLabel.numberOfLines = 1;
+	cell.textLabel.textColor = [theme primaryTextColour];
+	cell.textLabel.text = text;
+
+	NSArray *tags = message[@"tags"];
+	NSString *tagLine = @"";
+	if ([tags isKindOfClass:NSArray.class] && tags.count)
+		tagLine = [NSString stringWithFormat:@"%@  ", [tags componentsJoinedByString:@" "]];
+
+	int date = [message[@"date"] intValue];
+	cell.detailTextLabel.font = [UIFont systemFontOfSize:13];
+	cell.detailTextLabel.textColor = [theme secondaryTextColour];
+	cell.detailTextLabel.text = [NSString stringWithFormat:@"%@%@",
+			tagLine, date ? TGSavedDate(date) : @""];
+	return cell;
+}
+
+- (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell
+		forRowAtIndexPath:(NSIndexPath *)indexPath {
+	if (indexPath.row >= (NSInteger)self.messages.count - 3)
+		[self loadOlder];
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	[self openChat];
+}
+
+@end
+
+#pragma mark - the topic row
+
+@interface TGSavedTopicCell : UITableViewCell
+@property (nonatomic, strong) UIImageView *avatar;
+@property (nonatomic, strong) UILabel *titleLabel;
+@property (nonatomic, strong) UILabel *previewLabel;
+@property (nonatomic, strong) UILabel *dateLabel;
+@property (nonatomic, strong) UIImageView *pinIcon;
+@property (nonatomic, strong) UIImageView *arrow;
+@end
+
+@implementation TGSavedTopicCell
+
+- (id)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)reuseIdentifier {
+	self = [super initWithStyle:UITableViewCellStyleDefault reuseIdentifier:reuseIdentifier];
+	if (!self)
+		return nil;
+
+	self.avatar = [[UIImageView alloc] initWithFrame:
+			CGRectMake(kSavedAvatarLeft, 8, kSavedAvatar, kSavedAvatar)];
+	self.avatar.layer.cornerRadius = 5.0f;
+	self.avatar.clipsToBounds = YES;
+	self.avatar.backgroundColor = [UIColor clearColor];
+	self.avatar.contentMode = UIViewContentModeScaleAspectFill;
+	[self.contentView addSubview:self.avatar];
+
+	self.titleLabel = [[UILabel alloc] init];
+	self.titleLabel.font = [UIFont boldSystemFontOfSize:16];
+	self.titleLabel.backgroundColor = [UIColor clearColor];
+	self.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+	[self.contentView addSubview:self.titleLabel];
+
+	self.previewLabel = [[UILabel alloc] init];
+	self.previewLabel.font = [UIFont systemFontOfSize:14];
+	self.previewLabel.backgroundColor = [UIColor clearColor];
+	self.previewLabel.numberOfLines = 2;
+	self.previewLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+	[self.contentView addSubview:self.previewLabel];
+
+	self.dateLabel = [[UILabel alloc] init];
+	self.dateLabel.font = [UIFont systemFontOfSize:13];
+	self.dateLabel.textAlignment = NSTextAlignmentRight;
+	self.dateLabel.backgroundColor = [UIColor clearColor];
+	[self.contentView addSubview:self.dateLabel];
+
+	self.pinIcon = [[UIImageView alloc] initWithImage:[TGIcons menuGlyphNamed:@"pin"]];
+	self.pinIcon.hidden = YES;
+	[self.contentView addSubview:self.pinIcon];
+
+	self.arrow = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"DialogListArrow.png"]];
+	[self.contentView addSubview:self.arrow];
+
+	UIImage *plate = [[UIImage imageNamed:@"DialogListCell.png"]
+			stretchableImageWithLeftCapWidth:1 topCapHeight:0];
+	UIImage *platePressed = [[UIImage imageNamed:@"DialogListCellHighlighted.png"]
+			stretchableImageWithLeftCapWidth:1 topCapHeight:0];
+	self.backgroundView = [[UIImageView alloc] initWithImage:plate];
+	self.selectedBackgroundView = [[UIImageView alloc] initWithImage:platePressed];
+
+	self.accessoryType = UITableViewCellAccessoryNone;
+	self.selectionStyle = UITableViewCellSelectionStyleBlue;
+	return self;
+}
+
+- (void)layoutSubviews {
+	[super layoutSubviews];
+
+	CGFloat w = self.contentView.bounds.size.width;
+	CGFloat left = kSavedTextLeft;
+
+	self.avatar.frame = CGRectMake(kSavedAvatarLeft, 8, kSavedAvatar, kSavedAvatar);
+
+	CGFloat dateWidth = (int)[self.dateLabel.text sizeWithFont:self.dateLabel.font].width;
+	CGFloat dateX = w - dateWidth - 9;
+	self.dateLabel.frame = CGRectMake(dateX - (75 - dateWidth), 9, 75, 15);
+
+	CGSize pinSize = self.pinIcon.image ? self.pinIcon.image.size : CGSizeZero;
+	if (!self.pinIcon.hidden && pinSize.width > 0){
+		self.pinIcon.frame = CGRectMake(dateX - pinSize.width - 5,
+				9 + (15 - pinSize.height) / 2.0f, pinSize.width, pinSize.height);
+		dateX -= pinSize.width + 5;
+	}
+
+	CGFloat titleWidth = (int)(dateX - 4 - left - 18);
+	titleWidth = MIN(titleWidth, [self.titleLabel.text sizeWithFont:self.titleLabel.font].width);
+	if (titleWidth < 0)
+		titleWidth = 0;
+	self.titleLabel.frame = CGRectMake(left, 6, titleWidth, 20);
+
+	self.previewLabel.frame = CGRectMake(left, 29, w - left - 26, 40);
+
+	CGSize arrowSize = self.arrow.image ? self.arrow.image.size : CGSizeZero;
+	self.arrow.frame = CGRectMake(w - arrowSize.width - 6, 33, arrowSize.width, arrowSize.height);
+}
+
+@end
+
+#pragma mark - the topics list
+
+@interface TGSavedMessagesViewController () <UIAlertViewDelegate>
+@property (nonatomic, strong) NSArray *topics;
+@property (nonatomic, strong) NSMutableDictionary *avatars;
+@property (nonatomic, strong) NSMutableSet *avatarsRequested;
+@property (nonatomic, strong) UIView *emptyContainer;
+@property (nonatomic, strong) UIActivityIndicatorView *spinner;
+@property (nonatomic, assign) BOOL loading;
+@property (nonatomic, assign) BOOL loadedOnce;
+@property (nonatomic, assign) BOOL reordering;
+@property (nonatomic, assign) BOOL orderDirty;
+@property (nonatomic, strong) NSDictionary *actionTopic;
+@property (nonatomic, assign) CGPoint menuPoint;
+@end
+
+@implementation TGSavedMessagesViewController
+
++ (BOOL)showsTopics {
+	return [[NSUserDefaults standardUserDefaults] boolForKey:TGSavedShowsTopicsKey];
+}
+
++ (void)setShowsTopics:(BOOL)showsTopics {
+	[[NSUserDefaults standardUserDefaults] setBool:showsTopics forKey:TGSavedShowsTopicsKey];
+	[[NSUserDefaults standardUserDefaults] synchronize];
+}
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+
+	TGTheme *theme = [TGTheme shared];
+	[theme styleNavigationBar:self.navigationController.navigationBar];
+	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
+		self.edgesForExtendedLayout = UIRectEdgeNone;
+
+	self.title = @"Saved Messages";
+	self.topics = @[];
+	self.avatars = [NSMutableDictionary dictionary];
+	self.avatarsRequested = [NSMutableSet set];
+
+	self.tableView.rowHeight = kSavedRowHeight;
+	self.tableView.backgroundColor = [theme listBackgroundColour];
+	self.tableView.separatorColor = [theme separatorColour];
+
+	BOOL plainPlate = (!theme.isDark && theme.importedName == nil);
+	self.tableView.separatorStyle = plainPlate
+			? UITableViewCellSeparatorStyleNone
+			: UITableViewCellSeparatorStyleSingleLine;
+
+	UIView *background = [[UIView alloc] initWithFrame:self.tableView.bounds];
+	background.backgroundColor = [theme listBackgroundColour];
+	background.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+	[self buildEmptyContainerInside:background];
+
+	self.spinner = [[UIActivityIndicatorView alloc]
+			initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleGray];
+	self.spinner.center = CGPointMake(background.bounds.size.width / 2.0f, 120);
+	self.spinner.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin
+			| UIViewAutoresizingFlexibleRightMargin;
+	self.spinner.hidesWhenStopped = YES;
+	[background addSubview:self.spinner];
+
+	self.tableView.backgroundView = background;
+
+	[self showListButtons];
+
+	UILongPressGestureRecognizer *hold = [[UILongPressGestureRecognizer alloc]
+			initWithTarget:self action:@selector(topicHeld:)];
+	[self.tableView addGestureRecognizer:hold];
+
+	[[NSNotificationCenter defaultCenter] addObserver:self
+											 selector:@selector(themeChanged)
+												 name:TGThemeChangedNotification
+											   object:nil];
+
+	[TGSavedMessagesViewController setShowsTopics:YES];
+	[self reloadTopics];
+}
+
+- (void)dealloc {
+	[[NSNotificationCenter defaultCenter] removeObserver:self];
+	[[TGClient shared] setSavedMessagesTopicsChangedHandler:nil];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+	[super viewWillAppear:animated];
+	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] setSavedMessagesTopicsChangedHandler:^{
+		[weakSelf applyCachedTopics];
+	}];
+
+	if (self.loadedOnce)
+		[self applyCachedTopics];
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+	[super viewWillDisappear:animated];
+	[[TGClient shared] setSavedMessagesTopicsChangedHandler:nil];
+	[TGPopupMenu dismiss];
+}
+
+- (void)themeChanged {
+	TGTheme *theme = [TGTheme shared];
+	[theme styleNavigationBar:self.navigationController.navigationBar];
+	self.tableView.backgroundColor = [theme listBackgroundColour];
+	self.tableView.separatorColor = [theme separatorColour];
+	self.tableView.backgroundView.backgroundColor = [theme listBackgroundColour];
+
+	BOOL plainPlate = (!theme.isDark && theme.importedName == nil);
+	self.tableView.separatorStyle = plainPlate
+			? UITableViewCellSeparatorStyleNone
+			: UITableViewCellSeparatorStyleSingleLine;
+
+	for (UIView *view in self.emptyContainer.subviews){
+		if ([view isKindOfClass:UILabel.class])
+			[(UILabel *)view setTextColor:[theme secondaryTextColour]];
+	}
+	[self.tableView reloadData];
+}
+
+#pragma mark - the empty state
+
+- (void)buildEmptyContainerInside:(UIView *)background {
+	TGTheme *theme = [TGTheme shared];
+
+	UIView *container = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 250, 0)];
+	container.backgroundColor = [UIColor clearColor];
+	container.hidden = YES;
+
+	UIImageView *iconView = [[UIImageView alloc]
+			initWithImage:[TGIcons savedMessagesAvatarOfSide:66]];
+	iconView.frame = CGRectMake(floorf((250 - 66) / 2.0f), 0, 66, 66);
+	[container addSubview:iconView];
+
+	UILabel *titleLabel = [[UILabel alloc] init];
+	titleLabel.backgroundColor = [UIColor clearColor];
+	titleLabel.textColor = [theme secondaryTextColour];
+	titleLabel.font = [UIFont boldSystemFontOfSize:15];
+	titleLabel.text = @"No Saved Messages";
+	[titleLabel sizeToFit];
+	titleLabel.frame = CGRectMake(floorf((250 - titleLabel.frame.size.width) / 2.0f),
+			CGRectGetMaxY(iconView.frame) + 21,
+			titleLabel.frame.size.width, titleLabel.frame.size.height);
+	[container addSubview:titleLabel];
+
+	UILabel *textLabel = [[UILabel alloc] init];
+	textLabel.textAlignment = NSTextAlignmentCenter;
+	textLabel.lineBreakMode = NSLineBreakByWordWrapping;
+	textLabel.numberOfLines = 0;
+	textLabel.backgroundColor = [UIColor clearColor];
+	textLabel.textColor = [theme secondaryTextColour];
+	textLabel.font = [UIFont systemFontOfSize:14];
+	textLabel.text = @"Forward messages here to keep them. They are grouped by who sent them.";
+	CGSize textSize = [textLabel sizeThatFits:CGSizeMake(232, 1000)];
+	textLabel.frame = CGRectMake(floorf((250 - textSize.width) / 2.0f),
+			CGRectGetMaxY(titleLabel.frame) + 8, textSize.width, textSize.height);
+	[container addSubview:textLabel];
+
+	CGFloat height = CGRectGetMaxY(textLabel.frame);
+	container.frame = CGRectMake(floorf((background.bounds.size.width - 250) / 2.0f),
+			floorf((background.bounds.size.height - height) / 2.0f), 250, height);
+	container.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin
+			| UIViewAutoresizingFlexibleRightMargin
+			| UIViewAutoresizingFlexibleTopMargin
+			| UIViewAutoresizingFlexibleBottomMargin;
+
+	self.emptyContainer = container;
+	[background addSubview:container];
+}
+
+- (void)updateEmptyContainer {
+	BOOL empty = (self.topics.count == 0) && self.loadedOnce;
+	self.emptyContainer.hidden = !empty;
+}
+
+#pragma mark - loading
+
+- (void)reloadTopics {
+	if (self.loading)
+		return;
+	self.loading = YES;
+
+	if (!self.loadedOnce)
+		[self.spinner startAnimating];
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] loadSavedMessagesTopicsWithLimit:kSavedTopicPage
+											 completion:^(NSArray *topics){
+		TGSavedMessagesViewController *me = weakSelf;
+		if (!me)
+			return;
+		me.loading = NO;
+		me.loadedOnce = YES;
+		[me.spinner stopAnimating];
+		[me applyTopics:topics];
+	}];
+}
+
+- (void)applyCachedTopics {
+	[self applyTopics:[[TGClient shared] cachedSavedMessagesTopics]];
+}
+
+- (void)applyTopics:(NSArray *)topics {
+	if (self.reordering)
+		return;
+
+	NSMutableArray *clean = [NSMutableArray array];
+	if ([topics isKindOfClass:NSArray.class]){
+		for (id topic in topics){
+			if ([topic isKindOfClass:NSDictionary.class])
+				[clean addObject:topic];
+		}
+	}
+
+	NSMutableArray *ordered = [NSMutableArray arrayWithCapacity:clean.count];
+	for (NSDictionary *topic in clean){
+		if ([topic[@"isPinned"] boolValue])
+			[ordered addObject:topic];
+	}
+	for (NSDictionary *topic in clean){
+		if (![topic[@"isPinned"] boolValue])
+			[ordered addObject:topic];
+	}
+
+	self.topics = ordered;
+	[self fetchMissingAvatars];
+	[self.tableView reloadData];
+	[self updateEmptyContainer];
+}
+
+- (void)fetchMissingAvatars {
+	__weak typeof(self) weakSelf = self;
+	for (NSDictionary *topic in self.topics){
+		if (![TGSavedTopicKind(topic) isEqualToString:@"fromChat"])
+			continue;
+		int64_t chatId = [topic[@"chatId"] longLongValue];
+		if (!chatId)
+			continue;
+		NSNumber *fileId = [[TGClient shared] photoFileIdForChat:chatId];
+		if (!fileId || self.avatars[fileId] || [self.avatarsRequested containsObject:fileId])
+			continue;
+		[self.avatarsRequested addObject:fileId];
+
+		[[TGClient shared] downloadFile:[fileId integerValue] completion:^(NSString *path){
+			TGSavedMessagesViewController *me = weakSelf;
+			if (!me || !path)
+				return;
+			UIImage *image = [UIImage imageWithContentsOfFile:path];
+			if (!image)
+				return;
+			me.avatars[fileId] = image;
+			[me.tableView reloadData];
+		}];
+	}
+}
+
+- (UIImage *)avatarForTopic:(NSDictionary *)topic {
+	NSString *kind = TGSavedTopicKind(topic);
+	if ([kind isEqualToString:@"myNotes"])
+		return [TGIcons savedMessagesAvatarOfSide:kSavedAvatar];
+
+	int64_t chatId = [topic[@"chatId"] longLongValue];
+	if ([kind isEqualToString:@"fromChat"] && chatId){
+		NSNumber *fileId = [[TGClient shared] photoFileIdForChat:chatId];
+		UIImage *photo = fileId ? self.avatars[fileId] : nil;
+		if (photo)
+			return photo;
+	}
+
+	NSString *title = TGSavedTopicTitle(topic);
+	NSString *initials = [kind isEqualToString:@"authorHidden"]
+			? @"?"
+			: (title.length ? [title substringToIndex:1].uppercaseString : @"?");
+	return [TGIcons avatarWithInitials:initials size:kSavedAvatar colourId:chatId];
+}
+
+#pragma mark - the plain chat
+
+- (void)showListButtons {
+	UIButton *chat = [TGIcons headerButtonWithTitle:@"Chat" bold:NO
+											 target:self action:@selector(openPlainChat)];
+	self.navigationItem.rightBarButtonItem =
+			[[UIBarButtonItem alloc] initWithCustomView:chat];
+}
+
+- (void)openPlainChat {
+	int64_t chatId = [[TGClient shared] savedMessagesChatId];
+	if (!chatId)
+		return;
+
+	[TGSavedMessagesViewController setShowsTopics:NO];
+
+	TGChatViewController *vc = [[TGChatViewController alloc] init];
+	vc.chatId = chatId;
+	vc.chatTitle = @"Saved Messages";
+	[self.navigationController pushViewController:vc animated:YES];
+}
+
+#pragma mark - table
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	return (NSInteger)self.topics.count;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	static NSString *reuse = @"TGSavedTopicCell";
+	TGSavedTopicCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
+	if (!cell)
+		cell = [[TGSavedTopicCell alloc] initWithStyle:UITableViewCellStyleDefault
+									   reuseIdentifier:reuse];
+
+	TGTheme *theme = [TGTheme shared];
+	BOOL plainPlate = (!theme.isDark && theme.importedName == nil);
+	cell.backgroundColor = [theme listBackgroundColour];
+	cell.backgroundView.hidden = !plainPlate;
+	cell.titleLabel.textColor = [theme primaryTextColour];
+	cell.previewLabel.textColor = [theme secondaryTextColour];
+	cell.dateLabel.textColor = [theme accentColour];
+	cell.dateLabel.text = @"";
+	cell.previewLabel.text = @"";
+	cell.pinIcon.hidden = YES;
+
+	if (indexPath.row >= (NSInteger)self.topics.count)
+		return cell;
+
+	NSDictionary *topic = self.topics[indexPath.row];
+	cell.titleLabel.text = TGSavedTopicTitle(topic);
+
+	NSString *draft = topic[@"draft"];
+	NSString *text = topic[@"text"];
+	if ([draft isKindOfClass:NSString.class] && draft.length){
+		cell.previewLabel.text = [NSString stringWithFormat:@"Draft: %@", draft];
+	} else if ([text isKindOfClass:NSString.class] && text.length){
+		cell.previewLabel.text = [topic[@"outgoing"] boolValue]
+				? [NSString stringWithFormat:@"You: %@", text]
+				: text;
+	}
+
+	cell.dateLabel.text = TGSavedDate([topic[@"date"] doubleValue]);
+	cell.pinIcon.hidden = ![topic[@"isPinned"] boolValue];
+	if (!cell.pinIcon.hidden)
+		cell.pinIcon.image = [TGIcons menuGlyphNamed:@"pin"];
+	cell.avatar.image = [self avatarForTopic:topic];
+
+	[cell setNeedsLayout];
+	return cell;
+}
+
+- (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell
+		forRowAtIndexPath:(NSIndexPath *)indexPath {
+	if (self.reordering || self.loading)
+		return;
+	if (indexPath.row < (NSInteger)self.topics.count - 1)
+		return;
+	if ((NSInteger)self.topics.count >= [[TGClient shared] savedMessagesTopicCount])
+		return;
+	[self reloadTopics];
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+
+	if (self.reordering || indexPath.row >= (NSInteger)self.topics.count)
+		return;
+
+	NSDictionary *topic = self.topics[indexPath.row];
+	int64_t topicId = [topic[@"id"] longLongValue];
+	if (!topicId)
+		return;
+
+	TGSavedTopicController *vc = [[TGSavedTopicController alloc] initWithStyle:UITableViewStylePlain];
+	vc.topicId = topicId;
+	vc.topicTitle = TGSavedTopicTitle(topic);
+	[self.navigationController pushViewController:vc animated:YES];
+}
+
+#pragma mark - topic actions
+
+- (void)showError:(NSString *)message {
+	[[[UIAlertView alloc] initWithTitle:nil message:message delegate:nil
+					  cancelButtonTitle:@"OK" otherButtonTitles:nil] show];
+}
+
+- (NSInteger)pinnedCount {
+	NSInteger count = 0;
+	for (NSDictionary *topic in self.topics){
+		if ([topic[@"isPinned"] boolValue])
+			count++;
+		else
+			break;
+	}
+	return count;
+}
+
+- (void)topicHeld:(UILongPressGestureRecognizer *)hold {
+	if (hold.state != UIGestureRecognizerStateBegan || self.reordering)
+		return;
+
+	NSIndexPath *path = [self.tableView indexPathForRowAtPoint:
+			[hold locationInView:self.tableView]];
+	if (!path || path.row >= (NSInteger)self.topics.count)
+		return;
+
+	NSDictionary *topic = self.topics[path.row];
+	self.actionTopic = topic;
+
+	BOOL pinned = [topic[@"isPinned"] boolValue];
+
+	NSMutableArray *items = [NSMutableArray array];
+	NSMutableArray *keys = [NSMutableArray array];
+
+	[items addObject:@{@"title" : (pinned ? @"Unpin" : @"Pin"),
+					   @"icon"  : (pinned ? @"unpin" : @"pin")}];
+	[keys addObject:@"pin"];
+
+	if (pinned && [self pinnedCount] > 1){
+		[items addObject:@{@"title" : @"Reorder Pins", @"icon" : @"pin"}];
+		[keys addObject:@"reorder"];
+	}
+
+	[items addObject:@{@"title"       : @"Delete",
+					   @"icon"        : @"delete",
+					   @"destructive" : @YES}];
+	[keys addObject:@"delete"];
+
+	CGRect rect = [self.tableView rectForRowAtIndexPath:path];
+	CGPoint where = [self.tableView convertPoint:
+			CGPointMake(120, CGRectGetMaxY(rect) - 10) toView:self.navigationController.view];
+	self.menuPoint = where;
+
+	__weak typeof(self) weakSelf = self;
+	[TGPopupMenu showItems:items atPoint:where inView:self.navigationController.view
+				  onChoice:^(NSInteger choice, NSString *title){
+		if (choice < 0 || choice >= (NSInteger)keys.count)
+			return;
+		[weakSelf runTopicAction:keys[choice]];
+	}];
+}
+
+- (void)runTopicAction:(NSString *)key {
+	NSDictionary *topic = self.actionTopic;
+	if (!topic)
+		return;
+
+	int64_t topicId = [topic[@"id"] longLongValue];
+	__weak typeof(self) weakSelf = self;
+
+	if ([key isEqualToString:@"pin"]){
+		BOOL pin = ![topic[@"isPinned"] boolValue];
+		self.actionTopic = nil;
+		[[TGClient shared] setSavedMessagesTopic:topicId pinned:pin completion:^(BOOL ok){
+			if (!ok)
+				[weakSelf showError:pin ? @"Could not pin the topic."
+										: @"Could not unpin the topic."];
+			[weakSelf applyCachedTopics];
+		}];
+		return;
+	}
+
+	if ([key isEqualToString:@"reorder"]){
+		self.actionTopic = nil;
+		[self beginReordering];
+		return;
+	}
+
+	if ([key isEqualToString:@"delete"]){
+		UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Delete Topic"
+														message:[NSString stringWithFormat:
+																@"Delete every saved message from %@?",
+																TGSavedTopicTitle(topic)]
+													   delegate:self
+											  cancelButtonTitle:@"Cancel"
+											  otherButtonTitles:@"Delete", nil];
+		alert.tag = kSavedDeleteAlertTag;
+		[alert show];
+	}
+}
+
+- (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {
+	NSDictionary *topic = self.actionTopic;
+	self.actionTopic = nil;
+
+	if (alertView.tag != kSavedDeleteAlertTag || buttonIndex == alertView.cancelButtonIndex)
+		return;
+
+	int64_t topicId = [topic[@"id"] longLongValue];
+	if (!topicId)
+		return;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] deleteSavedMessagesTopic:topicId completion:^(BOOL ok){
+		if (!ok)
+			[weakSelf showError:@"Could not delete the topic."];
+		[weakSelf applyCachedTopics];
+	}];
+}
+
+#pragma mark - reordering pinned topics
+
+- (void)beginReordering {
+	if ([self pinnedCount] < 2)
+		return;
+
+	self.reordering = YES;
+	self.orderDirty = NO;
+	[self.tableView setEditing:YES animated:YES];
+
+	UIButton *done = [TGIcons headerButtonWithTitle:@"Done" bold:YES
+											 target:self action:@selector(finishReordering)];
+	self.navigationItem.rightBarButtonItem =
+			[[UIBarButtonItem alloc] initWithCustomView:done];
+}
+
+- (void)finishReordering {
+	self.reordering = NO;
+	[self.tableView setEditing:NO animated:YES];
+	[self showListButtons];
+
+	if (!self.orderDirty){
+		[self applyCachedTopics];
+		return;
+	}
+	self.orderDirty = NO;
+
+	NSMutableArray *ids = [NSMutableArray array];
+	for (NSDictionary *topic in self.topics){
+		if (![topic[@"isPinned"] boolValue])
+			break;
+		int64_t topicId = [topic[@"id"] longLongValue];
+		if (topicId)
+			[ids addObject:@(topicId)];
+	}
+	if (ids.count < 2){
+		[self applyCachedTopics];
+		return;
+	}
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] setPinnedSavedMessagesTopics:ids completion:^(BOOL ok){
+		if (!ok)
+			[weakSelf showError:@"Could not save the order of the pinned topics."];
+		[weakSelf applyCachedTopics];
+	}];
+}
+
+- (BOOL)tableView:(UITableView *)tableView canMoveRowAtIndexPath:(NSIndexPath *)indexPath {
+	return self.reordering && indexPath.row < [self pinnedCount];
+}
+
+- (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
+	return self.reordering;
+}
+
+- (UITableViewCellEditingStyle)tableView:(UITableView *)tableView
+		   editingStyleForRowAtIndexPath:(NSIndexPath *)indexPath {
+	return UITableViewCellEditingStyleNone;
+}
+
+- (BOOL)tableView:(UITableView *)tableView
+		shouldIndentWhileEditingRowAtIndexPath:(NSIndexPath *)indexPath {
+	return NO;
+}
+
+- (NSIndexPath *)tableView:(UITableView *)tableView
+targetIndexPathForMoveFromRowAtIndexPath:(NSIndexPath *)from
+	   toProposedIndexPath:(NSIndexPath *)proposed {
+	NSInteger last = [self pinnedCount] - 1;
+	if (last < 0)
+		return from;
+	if (proposed.row > last)
+		return [NSIndexPath indexPathForRow:last inSection:0];
+	return proposed;
+}
+
+- (void)tableView:(UITableView *)tableView
+		moveRowAtIndexPath:(NSIndexPath *)from toIndexPath:(NSIndexPath *)to {
+	NSInteger pinned = [self pinnedCount];
+	if (from.row >= pinned || from.row >= (NSInteger)self.topics.count)
+		return;
+
+	NSMutableArray *ordered = [self.topics mutableCopy];
+	NSDictionary *topic = ordered[from.row];
+	[ordered removeObjectAtIndex:from.row];
+	NSInteger target = MIN(MAX(to.row, 0), pinned - 1);
+	[ordered insertObject:topic atIndex:target];
+	self.topics = ordered;
+	self.orderDirty = YES;
+}
+
+@end

@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="320" height="480">
+<title>messages-content A</title>
+<rect x="0" y="0" width="320" height="480" fill="#D9DED4"/>
+
+<rect x="0" y="0" width="320" height="20" fill="#000000"/><text x="8" y="14" font-family="Helvetica" font-size="10" font-weight="bold" fill="#FFFFFF">●●●○○</text><text x="160" y="14" font-family="Helvetica" font-size="12" font-weight="bold" fill="#FFFFFF" text-anchor="middle">Telegram</text><text x="312" y="14" font-family="Helvetica" font-size="12" font-weight="bold" fill="#FFFFFF" text-anchor="end">12:04</text><rect x="270" y="6" width="20" height="8" rx="1.5" fill="none" stroke="#FFFFFF" stroke-width="1"/><rect x="271.5" y="7.5" width="14" height="5" fill="#FFFFFF"/>
+<defs><linearGradient id="navg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7699c0"/><stop offset="1" stop-color="#42678f"/></linearGradient></defs>
+<rect x="0" y="20" width="320" height="44" fill="url(#navg)"/>
+<svg x="5" y="27" width="15" height="1" viewBox="0 0 15 1" preserveAspectRatio="none"><image x="0" y="0" width="27" height="30" xlink:href="ASSET:BackButton"/></svg>
+<svg x="20" y="27" width="36" height="1" viewBox="15 0 1 1" preserveAspectRatio="none"><image x="0" y="0" width="27" height="30" xlink:href="ASSET:BackButton"/></svg>
+<svg x="56" y="27" width="11" height="1" viewBox="16 0 11 1" preserveAspectRatio="none"><image x="0" y="0" width="27" height="30" xlink:href="ASSET:BackButton"/></svg>
+<svg x="5" y="28" width="15" height="29" viewBox="0 1 15 29" preserveAspectRatio="none"><image x="0" y="0" width="27" height="30" xlink:href="ASSET:BackButton"/></svg>
+<svg x="20" y="28" width="36" height="29" viewBox="15 1 1 29" preserveAspectRatio="none"><image x="0" y="0" width="27" height="30" xlink:href="ASSET:BackButton"/></svg>
+<svg x="56" y="28" width="11" height="29" viewBox="16 1 11 29" preserveAspectRatio="none"><image x="0" y="0" width="27" height="30" xlink:href="ASSET:BackButton"/></svg>
+<text x="24" y="46" font-family="Helvetica" font-size="12" font-weight="bold" fill="#FFFFFF">Chats</text>
+<text x="150" y="39" font-family="Helvetica" font-size="17" font-weight="bold" fill="#FFFFFF" text-anchor="middle">Alina Petrova</text>
+<text x="150" y="53" font-family="Helvetica" font-size="12" fill="#E0EEFD" text-anchor="middle">last seen recently</text>
+<rect x="277" y="24" width="35" height="35" rx="4" fill="#C2743D"/>
+<text x="294.5" y="48" font-family="Helvetica" font-size="18" font-weight="bold" fill="#FFFFFF" text-anchor="middle">A</text>
+<rect x="134.5" y="70" width="51" height="21" rx="10.5" fill="#000000" opacity="0.16"/><text x="160" y="85" font-family="Helvetica" font-size="12" fill="#FFFFFF" text-anchor="middle">Today</text>
+<svg x="8" y="97" width="20" height="15" viewBox="0 0 20 15" preserveAspectRatio="none"><image x="0" y="0" width="40" height="31" xlink:href="ASSET:Msg_In"/></svg>
+<svg x="28" y="97" width="183" height="15" viewBox="20 0 1 15" preserveAspectRatio="none"><image x="0" y="0" width="40" height="31" xlink:href="ASSET:Msg_In"/></svg>
+<svg x="211" y="97" width="19" height="15" viewBox="21 0 19 15" preserveAspectRatio="none"><image x="0" y="0" width="40" height="31" xlink:href="ASSET:Msg_In"/></svg>
+<svg x="8" y="112" width="20" height="25" viewBox="0 15 20 1" preserveAspectRatio="none"><image x="0" y="0" width="40" height="31" xlink:href="ASSET:Msg_In"/></svg>
+<svg x="28" y="112" width="183" height="25" viewBox="20 15 1 1" preserveAspectRatio="none"><image x="0" y="0" width="40" height="31" xlink:href="ASSET:Msg_In"/></svg>
+<svg x="211" y="112" width="19" height="25" viewBox="21 15 19 1" preserveAspectRatio="none"><image x="0" y="0" width="40" height="31" xlink:href="ASSET:Msg_In"/></svg>
+<svg x="8" y="137" width="20" height="15" viewBox="0 16 20 15" preserveAspectRatio="none"><image x="0" y="0" width="40" height="31" xlink:href="ASSET:Msg_In"/></svg>
+<svg x="28" y="137" width="183" height="15" viewBox="20 16 1 15" preserveAspectRatio="none"><image x="0" y="0" width="40" height="31" xlink:href="ASSET:Msg_In"/></svg>
+<svg x="211" y="137" width="19" height="15" viewBox="21 16 19 15" preserveAspectRatio="none"><image x="0" y="0" width="40" height="31" xlink:href="ASSET:Msg_In"/></svg>
+<circle cx="45" cy="124.5" r="18.5" fill="#7D9AB7"/><circle cx="45" cy="124.5" r="18" fill="none" stroke="#FFFFFF" stroke-opacity="0.55" stroke-width="1"/>
+<g transform="translate(45,124) scale(0.95)"><path d="M0 -8 C4.4 -8 8 -4.6 8 -0.4 C8 4.6 0 12 0 12 C0 12 -8 4.6 -8 -0.4 C-8 -4.6 -4.4 -8 0 -8 Z" fill="#FFFFFF"/><circle cx="0" cy="-0.6" r="2.9" fill="#7D9AB7"/></g>
+<text x="72" y="117" font-family="Helvetica" font-size="15" font-weight="bold" fill="#141617">Live Location</text>
+<text x="72" y="135" font-family="Helvetica" font-size="13" fill="#697487">updating · 42 min left</text>
+<text x="222" y="143" font-family="Helvetica" font-size="11" fill="#232D37" text-anchor="end">12:01</text>
+<rect x="244" y="158" width="64" height="64" rx="8" fill="#FFFFFF"/>
+<rect x="248" y="162" width="56" height="56" rx="6" fill="#F4F1EA" stroke="#C9C4B8" stroke-width="1"/>
+<circle cx="264.48" cy="175.92" r="4.8" fill="#B4291F"/>
+<circle cx="264.48" cy="190" r="4.8" fill="#B4291F"/>
+<circle cx="264.48" cy="204.08" r="4.8" fill="#B4291F"/>
+<circle cx="287.52" cy="175.92" r="4.8" fill="#B4291F"/>
+<circle cx="287.52" cy="190" r="4.8" fill="#B4291F"/>
+<circle cx="287.52" cy="204.08" r="4.8" fill="#B4291F"/>
+<rect x="264" y="207.5" width="46" height="17" rx="8.5" fill="#000000" opacity="0.4"/><text x="302" y="220" font-family="Helvetica" font-size="11" fill="#FFFFFF" text-anchor="end">12:02</text>
+<svg x="8" y="228" width="20" height="15" viewBox="0 0 20 15" preserveAspectRatio="none"><image x="0" y="0" width="40" height="31" xlink:href="ASSET:Msg_In"/></svg>
+<svg x="28" y="228" width="183" height="15" viewBox="20 0 1 15" preserveAspectRatio="none"><image x="0" y="0" width="40" height="31" xlink:href="ASSET:Msg_In"/></svg>
+<svg x="211" y="228" width="19" height="15" viewBox="21 0 19 15" preserveAspectRatio="none"><image x="0" y="0" width="40" height="31" xlink:href="ASSET:Msg_In"/></svg>
+<svg x="8" y="243" width="20" height="31" viewBox="0 15 20 1" preserveAspectRatio="none"><image x="0" y="0" width="40" height="31" xlink:href="ASSET:Msg_In"/></svg>
+<svg x="28" y="243" width="183" height="31" viewBox="20 15 1 1" preserveAspectRatio="none"><image x="0" y="0" width="40" height="31" xlink:href="ASSET:Msg_In"/></svg>
+<svg x="211" y="243" width="19" height="31" viewBox="21 15 19 1" preserveAspectRatio="none"><image x="0" y="0" width="40" height="31" xlink:href="ASSET:Msg_In"/></svg>
+<svg x="8" y="274" width="20" height="15" viewBox="0 16 20 15" preserveAspectRatio="none"><image x="0" y="0" width="40" height="31" xlink:href="ASSET:Msg_In"/></svg>
+<svg x="28" y="274" width="183" height="15" viewBox="20 16 1 15" preserveAspectRatio="none"><image x="0" y="0" width="40" height="31" xlink:href="ASSET:Msg_In"/></svg>
+<svg x="211" y="274" width="19" height="15" viewBox="21 16 19 15" preserveAspectRatio="none"><image x="0" y="0" width="40" height="31" xlink:href="ASSET:Msg_In"/></svg>
+<defs><clipPath id="st19236"><rect x="19" y="236" width="45" height="45" rx="4"/></clipPath><linearGradient id="sgst19236" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#F0B15C"/><stop offset="0.55" stop-color="#C86A4B"/><stop offset="1" stop-color="#4B3A57"/></linearGradient></defs>
+<g clip-path="url(#st19236)">
+<rect x="19" y="236" width="45" height="45" fill="url(#sgst19236)"/>
+<circle cx="50.5" cy="249.5" r="4.05" fill="#FFE9B0" opacity="0.9"/>
+<path d="M19 281 L31.6 262.1 L42.4 272.9 L54.1 258.5 L64 281 Z" fill="#2F2740" opacity="0.85"/>
+</g>
+<rect x="19.5" y="236.5" width="44" height="44" rx="4" fill="none" stroke="#000000" stroke-opacity="0.12"/>
+<text x="72" y="252" font-family="Helvetica" font-size="15" font-weight="bold" fill="#141617">Story from Alina</text>
+<text x="72" y="270" font-family="Helvetica" font-size="13" fill="#697487">tap to view · 7 h left</text>
+<text x="222" y="280" font-family="Helvetica" font-size="11" fill="#232D37" text-anchor="end">12:03</text>
+<rect x="88.5" y="295.5" width="223" height="115" rx="14" fill="#EFFEDD" stroke="#000000" stroke-opacity="0.12"/><svg x="88" y="295" width="15" height="15" viewBox="0 0 15 15" preserveAspectRatio="none"><image x="0" y="0" width="40" height="31" xlink:href="ASSET:Msg_Out"/></svg>
+<svg x="103" y="295" width="185" height="15" viewBox="15 0 1 15" preserveAspectRatio="none"><image x="0" y="0" width="40" height="31" xlink:href="ASSET:Msg_Out"/></svg>
+<svg x="288" y="295" width="24" height="15" viewBox="16 0 24 15" preserveAspectRatio="none"><image x="0" y="0" width="40" height="31" xlink:href="ASSET:Msg_Out"/></svg>
+<svg x="88" y="310" width="15" height="86" viewBox="0 15 15 1" preserveAspectRatio="none"><image x="0" y="0" width="40" height="31" xlink:href="ASSET:Msg_Out"/></svg>
+<svg x="103" y="310" width="185" height="86" viewBox="15 15 1 1" preserveAspectRatio="none"><image x="0" y="0" width="40" height="31" xlink:href="ASSET:Msg_Out"/></svg>
+<svg x="288" y="310" width="24" height="86" viewBox="16 15 24 1" preserveAspectRatio="none"><image x="0" y="0" width="40" height="31" xlink:href="ASSET:Msg_Out"/></svg>
+<svg x="88" y="396" width="15" height="15" viewBox="0 16 15 15" preserveAspectRatio="none"><image x="0" y="0" width="40" height="31" xlink:href="ASSET:Msg_Out"/></svg>
+<svg x="103" y="396" width="185" height="15" viewBox="15 16 1 15" preserveAspectRatio="none"><image x="0" y="0" width="40" height="31" xlink:href="ASSET:Msg_Out"/></svg>
+<svg x="288" y="396" width="24" height="15" viewBox="16 16 24 15" preserveAspectRatio="none"><image x="0" y="0" width="40" height="31" xlink:href="ASSET:Msg_Out"/></svg>
+<circle cx="117" cy="321" r="18.5" fill="#4E8B3C"/><circle cx="117" cy="321" r="18" fill="none" stroke="#FFFFFF" stroke-opacity="0.55" stroke-width="1"/>
+<g fill="none" stroke="#FFFFFF" stroke-width="2"><rect x="109" y="314" width="16" height="12" rx="2"/></g><rect x="109" y="318" width="16" height="3" fill="#FFFFFF"/>
+<text x="145" y="317" font-family="Helvetica" font-size="15" font-weight="bold" fill="#141617">Telegram Premium</text>
+<text x="145" y="335" font-family="Helvetica" font-size="13" fill="#697487">3 months · @PremiumBot</text>
+<svg x="99" y="350" width="16" height="21" viewBox="0 0 16 21" preserveAspectRatio="none"><image x="0" y="0" width="33" height="43" xlink:href="ASSET:GroupedActionButtonGreen"/></svg>
+<svg x="115" y="350" width="162" height="21" viewBox="16 0 1 21" preserveAspectRatio="none"><image x="0" y="0" width="33" height="43" xlink:href="ASSET:GroupedActionButtonGreen"/></svg>
+<svg x="277" y="350" width="16" height="21" viewBox="17 0 16 21" preserveAspectRatio="none"><image x="0" y="0" width="33" height="43" xlink:href="ASSET:GroupedActionButtonGreen"/></svg>
+<svg x="99" y="371" width="16" height="1" viewBox="0 21 16 1" preserveAspectRatio="none"><image x="0" y="0" width="33" height="43" xlink:href="ASSET:GroupedActionButtonGreen"/></svg>
+<svg x="115" y="371" width="162" height="1" viewBox="16 21 1 1" preserveAspectRatio="none"><image x="0" y="0" width="33" height="43" xlink:href="ASSET:GroupedActionButtonGreen"/></svg>
+<svg x="277" y="371" width="16" height="1" viewBox="17 21 16 1" preserveAspectRatio="none"><image x="0" y="0" width="33" height="43" xlink:href="ASSET:GroupedActionButtonGreen"/></svg>
+<svg x="99" y="372" width="16" height="21" viewBox="0 22 16 21" preserveAspectRatio="none"><image x="0" y="0" width="33" height="43" xlink:href="ASSET:GroupedActionButtonGreen"/></svg>
+<svg x="115" y="372" width="162" height="21" viewBox="16 22 1 21" preserveAspectRatio="none"><image x="0" y="0" width="33" height="43" xlink:href="ASSET:GroupedActionButtonGreen"/></svg>
+<svg x="277" y="372" width="16" height="21" viewBox="17 22 16 21" preserveAspectRatio="none"><image x="0" y="0" width="33" height="43" xlink:href="ASSET:GroupedActionButtonGreen"/></svg>
+<text x="196" y="376.5" font-family="Helvetica" font-size="14" font-weight="bold" text-anchor="middle" fill="#FFFFFF">Pay US$ 11.99</text>
+<text x="301" y="405" font-family="Helvetica" font-size="11" fill="#232D37" text-anchor="end">12:04</text>
+<path d="M304 400 l3 3 l6 -7 M309 400 l3 3 l6 -7" stroke="#4B7A2E" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+<svg x="0" y="437" width="320" height="43" viewBox="0 0 1 43" preserveAspectRatio="none"><image x="0" y="0" width="1" height="43" xlink:href="ASSET:ConversationInputPanel_Background"/></svg>
+<image x="6" y="444" width="28" height="29" xlink:href="ASSET:AttachBtn"/>
+<svg x="41" y="444" width="9" height="12" viewBox="0 0 9 12" preserveAspectRatio="none"><image x="0" y="0" width="30" height="26.5" xlink:href="ASSET:textbg"/></svg>
+<svg x="50" y="444" width="189" height="12" viewBox="9 0 1 12" preserveAspectRatio="none"><image x="0" y="0" width="30" height="26.5" xlink:href="ASSET:textbg"/></svg>
+<svg x="239" y="444" width="20" height="12" viewBox="10 0 20 12" preserveAspectRatio="none"><image x="0" y="0" width="30" height="26.5" xlink:href="ASSET:textbg"/></svg>
+<svg x="41" y="456" width="9" height="4.5" viewBox="0 12 9 1" preserveAspectRatio="none"><image x="0" y="0" width="30" height="26.5" xlink:href="ASSET:textbg"/></svg>
+<svg x="50" y="456" width="189" height="4.5" viewBox="9 12 1 1" preserveAspectRatio="none"><image x="0" y="0" width="30" height="26.5" xlink:href="ASSET:textbg"/></svg>
+<svg x="239" y="456" width="20" height="4.5" viewBox="10 12 20 1" preserveAspectRatio="none"><image x="0" y="0" width="30" height="26.5" xlink:href="ASSET:textbg"/></svg>
+<svg x="41" y="460.5" width="9" height="13.5" viewBox="0 13 9 13.5" preserveAspectRatio="none"><image x="0" y="0" width="30" height="26.5" xlink:href="ASSET:textbg"/></svg>
+<svg x="50" y="460.5" width="189" height="13.5" viewBox="9 13 1 13.5" preserveAspectRatio="none"><image x="0" y="0" width="30" height="26.5" xlink:href="ASSET:textbg"/></svg>
+<svg x="239" y="460.5" width="20" height="13.5" viewBox="10 13 20 13.5" preserveAspectRatio="none"><image x="0" y="0" width="30" height="26.5" xlink:href="ASSET:textbg"/></svg>
+<text x="52" y="463" font-family="Helvetica" font-size="16" fill="#9DA7B3">Message</text>
+<svg x="263" y="444" width="17" height="14" viewBox="0 0 17 14" preserveAspectRatio="none"><image x="0" y="0" width="35" height="29" xlink:href="ASSET:SendButton"/></svg>
+<svg x="280" y="444" width="17" height="14" viewBox="17 0 1 14" preserveAspectRatio="none"><image x="0" y="0" width="35" height="29" xlink:href="ASSET:SendButton"/></svg>
+<svg x="297" y="444" width="17" height="14" viewBox="18 0 17 14" preserveAspectRatio="none"><image x="0" y="0" width="35" height="29" xlink:href="ASSET:SendButton"/></svg>
+<svg x="263" y="458" width="17" height="2" viewBox="0 14 17 1" preserveAspectRatio="none"><image x="0" y="0" width="35" height="29" xlink:href="ASSET:SendButton"/></svg>
+<svg x="280" y="458" width="17" height="2" viewBox="17 14 1 1" preserveAspectRatio="none"><image x="0" y="0" width="35" height="29" xlink:href="ASSET:SendButton"/></svg>
+<svg x="297" y="458" width="17" height="2" viewBox="18 14 17 1" preserveAspectRatio="none"><image x="0" y="0" width="35" height="29" xlink:href="ASSET:SendButton"/></svg>
+<svg x="263" y="460" width="17" height="14" viewBox="0 15 17 14" preserveAspectRatio="none"><image x="0" y="0" width="35" height="29" xlink:href="ASSET:SendButton"/></svg>
+<svg x="280" y="460" width="17" height="14" viewBox="17 15 1 14" preserveAspectRatio="none"><image x="0" y="0" width="35" height="29" xlink:href="ASSET:SendButton"/></svg>
+<svg x="297" y="460" width="17" height="14" viewBox="18 15 17 14" preserveAspectRatio="none"><image x="0" y="0" width="35" height="29" xlink:href="ASSET:SendButton"/></svg>
+<text x="288.5" y="463" font-family="Helvetica" font-size="14.5" font-weight="bold" fill="#FFFFFF" text-anchor="middle">Send</text>
+</svg>

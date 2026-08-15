@@ -1,0 +1,132 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="320" height="480">
+  <defs>
+    <linearGradient id="nav" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7699c0"/>
+      <stop offset="1" stop-color="#42678f"/>
+    </linearGradient>
+    <linearGradient id="inputbg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d8dce1"/>
+      <stop offset="1" stop-color="#c3c8cf"/>
+    </linearGradient>
+    <pattern id="paper" width="16" height="16" patternUnits="userSpaceOnUse">
+      <rect width="16" height="16" fill="#e9e2d4"/>
+      <path d="M0 16 L16 0" stroke="#ffffff" stroke-opacity="0.22" stroke-width="1"/>
+      <path d="M0 8 L8 0" stroke="#d9d0bd" stroke-opacity="0.35" stroke-width="1"/>
+      <path d="M8 16 L16 8" stroke="#d9d0bd" stroke-opacity="0.35" stroke-width="1"/>
+    </pattern>
+
+    <symbol id="thumb" viewBox="0 0 24 24">
+      <rect x="2.5" y="10" width="5" height="11" rx="1.2" fill="#e2952a"/>
+      <path d="M9 10 L12.8 3.2 C13.8 1.6 16.4 2.6 16 4.8 L15.1 9 H20.4 C21.9 9 22.9 10.2 22.6 11.6 L21.2 18.8 C20.9 20.2 19.9 21 18.6 21 H9 Z" fill="#f7c34a"/>
+    </symbol>
+    <symbol id="heart" viewBox="0 0 24 24">
+      <path d="M12 21.2 C1.8 14.2 3 5 8 5 C10.3 5 12 6.9 12 8.4 C12 6.9 13.7 5 16 5 C21 5 22.2 14.2 12 21.2 Z" fill="#e8402a"/>
+    </symbol>
+    <symbol id="fire" viewBox="0 0 24 24">
+      <path d="M12 1.8 C13.2 7 18.2 8.2 18.2 13.6 C18.2 17.8 15.4 21.2 12 21.2 C8.6 21.2 5.8 17.8 5.8 13.6 C5.8 10.4 8 9 9.1 6.4 C9.9 8.8 10.6 9.6 11 10.2 C11.5 8 11.6 4.8 12 1.8 Z" fill="#f5891f"/>
+      <path d="M12 10.8 C13.1 13.4 15.1 14.6 15.1 16.7 C15.1 18.9 13.7 20.4 12 20.4 C10.3 20.4 8.9 18.9 8.9 16.7 C8.9 15 10.5 13.4 12 10.8 Z" fill="#f7d046"/>
+    </symbol>
+    <symbol id="joy" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10.2" fill="#f7ce46"/>
+      <path d="M5.6 11.6 C8.4 18.4 15.6 18.4 18.4 11.6 Z" fill="#7a4a12"/>
+      <path d="M6.6 12.2 C9 12.9 15 12.9 17.4 12.2 C16.4 13.1 7.6 13.1 6.6 12.2 Z" fill="#ffffff"/>
+      <path d="M6 8.4 C7 6.6 9.4 6.6 10.4 8.4" stroke="#7a4a12" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+      <path d="M13.6 8.4 C14.6 6.6 17 6.6 18 8.4" stroke="#7a4a12" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="star" viewBox="0 0 24 24">
+      <path d="M12 2 L14.9 8.6 L22 9.4 L16.7 14.2 L18.2 21.2 L12 17.6 L5.8 21.2 L7.3 14.2 L2 9.4 L9.1 8.6 Z" fill="#f5c518"/>
+    </symbol>
+    <symbol id="pray" viewBox="0 0 24 24">
+      <path d="M12 2.4 L18.4 12.4 L18.4 19 C18.4 20.2 17.6 21 16.4 21 H7.6 C6.4 21 5.6 20.2 5.6 19 L5.6 12.4 Z" fill="#f2b98a"/>
+      <path d="M12 4.6 L12 21" stroke="#d99a68" stroke-width="1.2"/>
+    </symbol>
+  </defs>
+
+  <!-- wallpaper -->
+  <rect x="0" y="0" width="320" height="480" fill="url(#paper)"/>
+
+  <!-- status bar -->
+  <rect x="0" y="0" width="320" height="20" fill="#000000"/>
+  <text x="160" y="14" font-family="Helvetica" font-size="12" font-weight="bold" fill="#ffffff" text-anchor="middle">9:41</text>
+  <rect x="286" y="6" width="22" height="8" fill="none" stroke="#ffffff" stroke-width="1"/>
+  <rect x="288" y="8" width="15" height="4" fill="#ffffff"/>
+
+  <!-- nav bar -->
+  <rect x="0" y="20" width="320" height="44" fill="url(#nav)"/>
+  <rect x="0" y="63" width="320" height="1" fill="#2f4c6e"/>
+  <image x="5" y="27" width="27" height="30" xlink:href="ASSET:BackButton"/>
+  <text x="20" y="46" font-family="Helvetica" font-size="12" font-weight="bold" fill="#ffffff" text-anchor="middle">Chats</text>
+  <text x="160" y="38" font-family="Helvetica" font-size="16" font-weight="bold" fill="#ffffff" text-anchor="middle">Design Team</text>
+  <text x="160" y="53" font-family="Helvetica" font-size="13" fill="#e0eefd" text-anchor="middle">8 members, 3 online</text>
+
+  <!-- message 1: incoming -->
+  <rect x="6" y="84" width="30" height="30" rx="5" fill="#fc4380"/>
+  <text x="21" y="105" font-family="Helvetica" font-size="15" font-weight="bold" fill="#ffffff" text-anchor="middle">N</text>
+  <path d="M46 76 H182 A6 6 0 0 1 188 82 V116 A6 6 0 0 1 182 122 H46 A6 6 0 0 1 40 116 V88 L34 92 L40 82 A6 6 0 0 1 46 76 Z" fill="#fbfbfb" stroke="#c9c9c9" stroke-width="0.5"/>
+  <text x="50" y="93" font-family="Helvetica" font-size="13" font-weight="bold" fill="#fc4380">Nastya</text>
+  <text x="50" y="112" font-family="Helvetica" font-size="15" fill="#141617">Shipping Friday?</text>
+  <text x="180" y="117" font-family="Helvetica" font-size="11" fill="#232d37" text-anchor="end">13:41</text>
+
+  <!-- message 2: outgoing -->
+  <path d="M186 126 H308 A6 6 0 0 1 314 132 V156 L320 160 L314 162 A6 6 0 0 1 308 162 H186 A6 6 0 0 1 180 156 V132 A6 6 0 0 1 186 126 Z" fill="#d3fbb1" stroke="#a9d68a" stroke-width="0.5"/>
+  <text x="190" y="148" font-family="Helvetica" font-size="15" fill="#141617">Sounds good</text>
+  <text x="304" y="149" font-family="Helvetica" font-size="11" fill="#232d37" text-anchor="end">13:42</text>
+
+  <!-- emoji picker strip (TGMenuView metrics: height 41, buttons 44) -->
+  <image x="32" y="115" width="10" height="41" xlink:href="ASSET:MenuButtonLeft"/>
+  <image x="42" y="115" width="244" height="41" xlink:href="ASSET:MenuButtonCenter"/>
+  <image x="286" y="115" width="10" height="41" xlink:href="ASSET:MenuButtonRight"/>
+  <rect x="32" y="115" width="264" height="41" rx="5" fill="#2b3a4b" fill-opacity="0.0"/>
+  <image x="75" y="119" width="2" height="36" xlink:href="ASSET:MenuButtonSeparator"/>
+  <image x="119" y="119" width="2" height="36" xlink:href="ASSET:MenuButtonSeparator"/>
+  <image x="163" y="119" width="2" height="36" xlink:href="ASSET:MenuButtonSeparator"/>
+  <image x="207" y="119" width="2" height="36" xlink:href="ASSET:MenuButtonSeparator"/>
+  <image x="251" y="119" width="2" height="36" xlink:href="ASSET:MenuButtonSeparator"/>
+  <use xlink:href="#thumb" x="42" y="124" width="24" height="24"/>
+  <use xlink:href="#heart" x="86" y="124" width="24" height="24"/>
+  <use xlink:href="#fire" x="130" y="124" width="24" height="24"/>
+  <use xlink:href="#joy" x="174" y="124" width="24" height="24"/>
+  <use xlink:href="#pray" x="218" y="124" width="24" height="24"/>
+  <use xlink:href="#star" x="262" y="124" width="24" height="24"/>
+  <image x="154" y="155" width="20" height="15" xlink:href="ASSET:MenuArrowBottom"/>
+
+  <!-- message 3: the subject, with reaction chips inside the bubble -->
+  <rect x="6" y="178" width="30" height="30" rx="5" fill="#0f94ed"/>
+  <text x="21" y="199" font-family="Helvetica" font-size="15" font-weight="bold" fill="#ffffff" text-anchor="middle">P</text>
+  <path d="M46 170 H282 A6 6 0 0 1 288 176 V284 A6 6 0 0 1 282 290 H46 A6 6 0 0 1 40 284 V182 L34 186 L40 176 A6 6 0 0 1 46 170 Z" fill="#fbfbfb" stroke="#c9c9c9" stroke-width="0.5"/>
+  <text x="52" y="187" font-family="Helvetica" font-size="13" font-weight="bold" fill="#0f94ed">Pavel</text>
+  <text x="52" y="207" font-family="Helvetica" font-size="15" fill="#141617">New icon set is on the beta build —</text>
+  <text x="52" y="225" font-family="Helvetica" font-size="15" fill="#141617">grab it and tell me what breaks</text>
+  <text x="52" y="243" font-family="Helvetica" font-size="15" fill="#141617">before Friday.</text>
+
+  <!-- chips row: 20 tall, radius 10, padding 7, gap 4 -->
+  <rect x="52" y="250" width="42" height="20" rx="10" fill="#def0ff" stroke="#0779d0" stroke-width="1"/>
+  <use xlink:href="#thumb" x="59" y="253" width="14" height="14"/>
+  <text x="76" y="264" font-family="Helvetica" font-size="11" font-weight="bold" fill="#0779d0">5</text>
+  <rect x="98" y="250" width="42" height="20" rx="10" fill="#def0ff"/>
+  <use xlink:href="#heart" x="105" y="253" width="14" height="14"/>
+  <text x="122" y="264" font-family="Helvetica" font-size="11" font-weight="bold" fill="#506e8d">3</text>
+  <rect x="144" y="250" width="42" height="20" rx="10" fill="#def0ff"/>
+  <use xlink:href="#fire" x="151" y="253" width="14" height="14"/>
+  <text x="168" y="264" font-family="Helvetica" font-size="11" font-weight="bold" fill="#506e8d">2</text>
+  <rect x="190" y="250" width="42" height="20" rx="10" fill="#def0ff"/>
+  <use xlink:href="#joy" x="197" y="253" width="14" height="14"/>
+  <text x="214" y="264" font-family="Helvetica" font-size="11" font-weight="bold" fill="#506e8d">1</text>
+
+  <text x="280" y="284" font-family="Helvetica" font-size="11" fill="#232d37" text-anchor="end">13:44</text>
+
+  <!-- message 4: outgoing, no reactions, shows the row does not disturb others -->
+  <path d="M196 298 H308 A6 6 0 0 1 314 304 V328 L320 332 L314 334 A6 6 0 0 1 308 334 H196 A6 6 0 0 1 190 328 V304 A6 6 0 0 1 196 298 Z" fill="#d3fbb1" stroke="#a9d68a" stroke-width="0.5"/>
+  <text x="200" y="320" font-family="Helvetica" font-size="15" fill="#141617">On it</text>
+  <text x="304" y="321" font-family="Helvetica" font-size="11" fill="#232d37" text-anchor="end">13:45</text>
+
+  <!-- input panel, 43 pt -->
+  <image x="0" y="437" width="320" height="43" xlink:href="ASSET:ConversationInputPanel_Background"/>
+  <rect x="0" y="437" width="320" height="43" fill="url(#inputbg)" fill-opacity="0.0"/>
+  <rect x="0" y="437" width="320" height="1" fill="#a3abb5"/>
+  <image x="6" y="444" width="28" height="29" xlink:href="ASSET:AttachBtn"/>
+  <rect x="40" y="444" width="232" height="29" rx="5" fill="#ffffff" stroke="#a9afb6" stroke-width="1"/>
+  <text x="49" y="463" font-family="Helvetica" font-size="16" fill="#9da7b3">Message</text>
+  <image x="279" y="444" width="35" height="29" xlink:href="ASSET:SendButton"/>
+  <text x="296" y="463" font-family="Helvetica" font-size="14.5" font-weight="bold" fill="#ffffff" text-anchor="middle">Send</text>
+</svg>

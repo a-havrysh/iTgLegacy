@@ -15,14 +15,19 @@ static const CGFloat kSearchAvatarTop = 5.0f;
 static const CGFloat kSearchTextLeft = 54.0f;
 static const CGFloat kSearchTextRight = 5.0f;
 static const CGFloat kSearchSectionHeight = 25.0f;
+static const CGFloat kSearchMessageRowHeight = 73.0f;
+static const CGFloat kSearchMessageAvatar = 56.0f;
+static const CGFloat kSearchMessageTextLeft = 73.0f;
 static const CGFloat kSearchScopeHeight = 36.0f;
 static const CGFloat kSearchTagStripHeight = 34.0f;
 
 @interface TGSearchResultCell : UITableViewCell
 @property (nonatomic, strong) UIImageView *avatarView;
 @property (nonatomic, strong) UILabel *titleLabel;
+@property (nonatomic, strong) UILabel *titleLabelSecond;
 @property (nonatomic, strong) UILabel *subtitleLabel;
 @property (nonatomic, strong) UILabel *dateLabel;
+- (void)setTitleText:(NSString *)title matching:(NSString *)query;
 @end
 
 @implementation TGSearchResultCell
@@ -48,6 +53,14 @@ static const CGFloat kSearchTagStripHeight = 34.0f;
 								   blue:0x11 / 255.0f alpha:1.0f];
 		_titleLabel.highlightedTextColor = [UIColor whiteColor];
 		[self.contentView addSubview:_titleLabel];
+
+		_titleLabelSecond = [[UILabel alloc] init];
+		_titleLabelSecond.backgroundColor = [UIColor clearColor];
+		_titleLabelSecond.font = [UIFont boldSystemFontOfSize:19];
+		_titleLabelSecond.textColor = _titleLabel.textColor;
+		_titleLabelSecond.highlightedTextColor = [UIColor whiteColor];
+		_titleLabelSecond.hidden = YES;
+		[self.contentView addSubview:_titleLabelSecond];
 
 		_subtitleLabel = [[UILabel alloc] init];
 		_subtitleLabel.backgroundColor = [UIColor clearColor];
@@ -77,6 +90,47 @@ static const CGFloat kSearchTagStripHeight = 34.0f;
 		[self.contentView addSubview:_avatarView];
 	}
 	return self;
+}
+
+- (void)setTitleText:(NSString *)title matching:(NSString *)query {
+	NSString *text = title ?: @"";
+	_titleLabel.text = text;
+	_titleLabel.font = [UIFont systemFontOfSize:19];
+	_titleLabelSecond.text = nil;
+	_titleLabelSecond.hidden = YES;
+
+	if (!query.length || !text.length)
+		return;
+
+	NSRange space = [text rangeOfString:@" "];
+	if (space.location == NSNotFound){
+		if ([text rangeOfString:query options:(NSCaseInsensitiveSearch | NSAnchoredSearch)].location
+				!= NSNotFound)
+			_titleLabel.font = [UIFont boldSystemFontOfSize:19];
+		return;
+	}
+
+	NSString *first = [text substringToIndex:space.location];
+	NSString *second = [text substringFromIndex:space.location + 1];
+	if (!second.length)
+		return;
+
+	BOOL secondMatches = [second rangeOfString:query
+									   options:(NSCaseInsensitiveSearch | NSAnchoredSearch)].location
+			!= NSNotFound;
+	BOOL firstMatches = [first rangeOfString:query
+									 options:(NSCaseInsensitiveSearch | NSAnchoredSearch)].location
+			!= NSNotFound;
+	if (!firstMatches && !secondMatches)
+		return;
+
+	_titleLabel.text = first;
+	_titleLabel.font = firstMatches ? [UIFont boldSystemFontOfSize:19]
+									: [UIFont systemFontOfSize:19];
+	_titleLabelSecond.text = second;
+	_titleLabelSecond.font = (secondMatches && !firstMatches)
+			? [UIFont boldSystemFontOfSize:19] : [UIFont systemFontOfSize:19];
+	_titleLabelSecond.hidden = NO;
 }
 
 - (void)layoutSubviews {
@@ -115,11 +169,121 @@ static const CGFloat kSearchTagStripHeight = 34.0f;
 				viewSize.width - kSearchTextLeft - kSearchTextRight - 1, subtitleHeight);
 	}
 	_subtitleLabel.hidden = !hasSubtitle;
-	_titleLabel.frame = CGRectMake(kSearchTextLeft, y, textWidth, titleHeight);
+	if (_titleLabelSecond.hidden){
+		_titleLabel.frame = CGRectMake(kSearchTextLeft, y, textWidth, titleHeight);
+	} else {
+		CGFloat firstWidth = (CGFloat)(int)[_titleLabel.text sizeWithFont:_titleLabel.font].width;
+		if (firstWidth > textWidth)
+			firstWidth = textWidth;
+		_titleLabel.frame = CGRectMake(kSearchTextLeft, y, firstWidth, titleHeight);
+		CGFloat secondX = kSearchTextLeft + firstWidth + 5;
+		CGFloat secondWidth = kSearchTextLeft + textWidth - secondX;
+		if (secondWidth < 0)
+			secondWidth = 0;
+		_titleLabelSecond.frame = CGRectMake(secondX, y, secondWidth, titleHeight);
+	}
 	if (dateWidth > 0){
 		_dateLabel.frame = CGRectMake(viewSize.width - kSearchTextRight - dateWidth,
 									  y + 1, dateWidth, titleHeight);
 	}
+}
+
+@end
+
+@interface TGSearchMessageCell : UITableViewCell
+@property (nonatomic, strong) UIImageView *avatarView;
+@property (nonatomic, strong) UILabel *titleLabel;
+@property (nonatomic, strong) UILabel *textLabel_;
+@property (nonatomic, strong) UILabel *dateLabel;
+@end
+
+@implementation TGSearchMessageCell
+
+- (id)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)reuseIdentifier {
+	self = [super initWithStyle:style reuseIdentifier:reuseIdentifier];
+	if (self){
+		if (![TGTheme shared].isFlat){
+			UIImage *plate = [[UIImage imageNamed:@"DialogListCell.png"]
+					stretchableImageWithLeftCapWidth:1 topCapHeight:0];
+			UIImage *plateHighlighted = [[UIImage imageNamed:@"DialogListCellHighlighted.png"]
+					stretchableImageWithLeftCapWidth:1 topCapHeight:0];
+			if (plate)
+				self.backgroundView = [[UIImageView alloc] initWithImage:plate];
+			if (plateHighlighted)
+				self.selectedBackgroundView = [[UIImageView alloc] initWithImage:plateHighlighted];
+		}
+
+		_titleLabel = [[UILabel alloc] init];
+		_titleLabel.backgroundColor = [UIColor clearColor];
+		_titleLabel.font = [UIFont boldSystemFontOfSize:16];
+		_titleLabel.textColor = [TGTheme shared].isFlat
+				? [[TGTheme shared] primaryTextColour]
+				: [UIColor colorWithRed:0x11 / 255.0f green:0x11 / 255.0f
+									blue:0x11 / 255.0f alpha:1.0f];
+		_titleLabel.highlightedTextColor = [UIColor whiteColor];
+		[self.contentView addSubview:_titleLabel];
+
+		_textLabel_ = [[UILabel alloc] init];
+		_textLabel_.backgroundColor = [UIColor clearColor];
+		_textLabel_.font = [UIFont systemFontOfSize:14];
+		_textLabel_.numberOfLines = 2;
+		_textLabel_.textColor = [TGTheme shared].isFlat
+				? [[TGTheme shared] secondaryTextColour]
+				: [UIColor colorWithRed:0x88 / 255.0f green:0x88 / 255.0f
+									blue:0x88 / 255.0f alpha:1.0f];
+		_textLabel_.highlightedTextColor = [UIColor whiteColor];
+		[self.contentView addSubview:_textLabel_];
+
+		_dateLabel = [[UILabel alloc] init];
+		_dateLabel.backgroundColor = [UIColor clearColor];
+		_dateLabel.font = [UIFont systemFontOfSize:13];
+		_dateLabel.textAlignment = NSTextAlignmentRight;
+		_dateLabel.textColor = [TGTheme shared].isFlat
+				? [[TGTheme shared] accentColour]
+				: [UIColor colorWithRed:0x33 / 255.0f green:0x7a / 255.0f
+									blue:0xcc / 255.0f alpha:1.0f];
+		_dateLabel.highlightedTextColor = [UIColor whiteColor];
+		[self.contentView addSubview:_dateLabel];
+
+		_avatarView = [[UIImageView alloc] initWithFrame:
+				CGRectMake(8, 8, kSearchMessageAvatar, kSearchMessageAvatar)];
+		_avatarView.layer.cornerRadius = 6;
+		_avatarView.clipsToBounds = YES;
+		[self.contentView addSubview:_avatarView];
+	}
+	return self;
+}
+
+- (void)layoutSubviews {
+	[super layoutSubviews];
+
+	if (self.selectedBackgroundView){
+		CGRect selectedFrame = self.selectedBackgroundView.frame;
+		selectedFrame.origin.y = -1;
+		selectedFrame.size.height = self.frame.size.height + 1;
+		self.selectedBackgroundView.frame = selectedFrame;
+	}
+
+	CGSize viewSize = self.contentView.frame.size;
+	_avatarView.frame = CGRectMake(8, 8, kSearchMessageAvatar, kSearchMessageAvatar);
+
+	CGFloat dateWidth = 0;
+	if (_dateLabel.text.length){
+		CGSize dateSize = [_dateLabel.text sizeWithFont:_dateLabel.font];
+		dateWidth = (CGFloat)(int)dateSize.width + 4;
+	}
+	_dateLabel.hidden = dateWidth == 0;
+	if (dateWidth > 0)
+		_dateLabel.frame = CGRectMake(viewSize.width - 9 - dateWidth, 8, dateWidth, 16);
+
+	CGFloat titleWidth = viewSize.width - kSearchMessageTextLeft - 10;
+	if (dateWidth > 0)
+		titleWidth -= dateWidth + 6;
+	if (titleWidth < 0)
+		titleWidth = 0;
+	_titleLabel.frame = CGRectMake(kSearchMessageTextLeft, 6, titleWidth, 20);
+	_textLabel_.frame = CGRectMake(kSearchMessageTextLeft, 29,
+			viewSize.width - kSearchMessageTextLeft - 10, 40);
 }
 
 @end
@@ -1348,7 +1512,8 @@ static const NSUInteger kSearchRecentsLimit = 12;
 					title = [NSString stringWithFormat:@"%@ in %@", title,
 							[[self class] chatTypeTitles][_chatTypeIndex]];
 			}
-			[built addObject:@{@"title": title, @"rows": self.messageHits, @"paged": @YES}];
+			[built addObject:@{@"title": title, @"rows": self.messageHits, @"paged": @YES,
+							   @"messages": @YES}];
 		}
 	}
 	self.sections = built;
@@ -1480,24 +1645,25 @@ static const NSUInteger kSearchRecentsLimit = 12;
 - (UIImage *)avatarForChat:(int64_t)chatId
 					 title:(NSString *)title
 					fileId:(NSNumber *)fileId
+					  size:(CGFloat)size
 {
-	UIImage *cached = [fileId isKindOfClass:NSNumber.class] ? self.avatars[fileId] : nil;
+	NSString *cacheKey = [fileId isKindOfClass:NSNumber.class]
+			? [NSString stringWithFormat:@"%@_%d", fileId, (int)size] : nil;
+	UIImage *cached = cacheKey ? self.avatars[cacheKey] : nil;
 	if (cached)
 		return cached;
 
-	if ([fileId isKindOfClass:NSNumber.class] &&
-		![self.avatarsRequested containsObject:fileId]){
-		[self.avatarsRequested addObject:fileId];
+	if (cacheKey && ![self.avatarsRequested containsObject:cacheKey]){
+		[self.avatarsRequested addObject:cacheKey];
 		__weak typeof(self) weakSelf = self;
 		[[TGClient shared] downloadFile:fileId.integerValue completion:^(NSString *path){
 			TGSearchViewController *me = weakSelf;
 			UIImage *photo = path ? [UIImage imageWithContentsOfFile:path] : nil;
 			if (!me || !photo)
 				return;
-			UIGraphicsBeginImageContextWithOptions(
-					CGSizeMake(kSearchAvatar, kSearchAvatar), NO, 0);
-			[photo drawInRect:CGRectMake(0, 0, kSearchAvatar, kSearchAvatar)];
-			me.avatars[fileId] = UIGraphicsGetImageFromCurrentImageContext();
+			UIGraphicsBeginImageContextWithOptions(CGSizeMake(size, size), NO, 0);
+			[photo drawInRect:CGRectMake(0, 0, size, size)];
+			me.avatars[cacheKey] = UIGraphicsGetImageFromCurrentImageContext();
 			UIGraphicsEndImageContext();
 			[me.tableView reloadData];
 		}];
@@ -1505,13 +1671,48 @@ static const NSUInteger kSearchRecentsLimit = 12;
 
 	return [TGIcons avatarWithInitials:
 				(title.length ? [title substringToIndex:1].uppercaseString : @"?")
-								  size:kSearchAvatar
+								  size:size
 							  colourId:chatId];
+}
+
+- (BOOL)sectionIsMessages:(NSInteger)section {
+	if (section < 0 || section >= (NSInteger)self.sections.count)
+		return NO;
+	return [((NSDictionary *)self.sections[section])[@"messages"] boolValue];
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
+	return [self sectionIsMessages:indexPath.section]
+			? kSearchMessageRowHeight : kSearchRowHeight;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
 		 cellForRowAtIndexPath:(NSIndexPath *)indexPath
 {
+	NSDictionary *messageRow = [self rowAtIndexPath:indexPath];
+	if ([self sectionIsMessages:indexPath.section]){
+		static NSString *messageReuse = @"TGSearchMessageCell";
+		TGSearchMessageCell *cell = [tableView dequeueReusableCellWithIdentifier:messageReuse];
+		if (!cell)
+			cell = [[TGSearchMessageCell alloc] initWithStyle:UITableViewCellStyleDefault
+											  reuseIdentifier:messageReuse];
+
+		NSString *messageTitle = [messageRow[@"title"] isKindOfClass:NSString.class]
+				? messageRow[@"title"] : @"";
+		cell.titleLabel.text = messageTitle;
+		cell.textLabel_.text = [messageRow[@"subtitle"] isKindOfClass:NSString.class]
+				? messageRow[@"subtitle"] : @"";
+		cell.dateLabel.text = [messageRow[@"date"] isKindOfClass:NSString.class]
+				? messageRow[@"date"] : @"";
+		cell.avatarView.image = [self avatarForChat:[messageRow[@"chatId"] longLongValue]
+											  title:messageTitle
+											 fileId:([messageRow[@"fileId"] isKindOfClass:NSNumber.class]
+													 ? messageRow[@"fileId"] : nil)
+											   size:kSearchMessageAvatar];
+		[cell setNeedsLayout];
+		return cell;
+	}
+
 	static NSString *reuse = @"TGSearchCell";
 	TGSearchResultCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
 	if (!cell)
@@ -1525,7 +1726,7 @@ static const NSUInteger kSearchRecentsLimit = 12;
 	if (!colourId)
 		colourId = [row[@"userId"] longLongValue];
 
-	cell.titleLabel.text = title;
+	[cell setTitleText:title matching:_query];
 	cell.subtitleLabel.text = subtitle;
 	cell.dateLabel.text = [row[@"date"] isKindOfClass:NSString.class] ? row[@"date"] : @"";
 
@@ -1540,8 +1741,9 @@ static const NSUInteger kSearchRecentsLimit = 12;
 
 	cell.avatarView.image = [self avatarForChat:colourId
 										  title:title
-										 fileId:[row[@"fileId"] isKindOfClass:NSNumber.class]
-												 ? row[@"fileId"] : nil];
+										 fileId:([row[@"fileId"] isKindOfClass:NSNumber.class]
+												 ? row[@"fileId"] : nil)
+										   size:kSearchAvatar];
 
 	[cell setNeedsLayout];
 	return cell;

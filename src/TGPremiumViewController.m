@@ -6,6 +6,7 @@
 #import "TGAlertView.h"
 
 static const CGFloat kPremiumHeaderHeight = 86.0f;
+static const CGFloat kPremiumSectionHeaderHeight = 46.0f;
 
 static inline UIColor *TGPremiumRGB(unsigned int value) {
 	return [UIColor colorWithRed:((value >> 16) & 0xff) / 255.0f
@@ -15,9 +16,9 @@ static inline UIColor *TGPremiumRGB(unsigned int value) {
 }
 
 enum {
-	TGPremiumSectionLimits = 0,
+	TGPremiumSectionAccount = 0,
+	TGPremiumSectionLimits,
 	TGPremiumSectionFeatures,
-	TGPremiumSectionAccount,
 	TGPremiumSectionBoosts,
 	TGPremiumSectionGiftCode,
 	TGPremiumSectionCount
@@ -57,6 +58,7 @@ enum {
 
 	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
 	self.tableView.separatorColor = [[TGTheme shared] separatorColour];
+	self.tableView.sectionFooterHeight = 1;
 	if (self.navigationController.navigationBar)
 		[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
 
@@ -92,7 +94,7 @@ enum {
 
 	UIImageView *badge = [[UIImageView alloc] initWithFrame:CGRectMake(9, 14, 70, 70)];
 	badge.image = [TGIcons avatarWithInitials:@"★" size:70 colourId:2];
-	badge.layer.cornerRadius = 6.0f;
+	badge.layer.cornerRadius = 10.0f;
 	badge.clipsToBounds = YES;
 	[header addSubview:badge];
 	self.headerBadgeView = badge;
@@ -150,7 +152,7 @@ enum {
 	}
 
 	if (!line.length)
-		line = active ? @"Active" : @"Not subscribed";
+		line = active ? @"Active on this account" : @"Not active on this account";
 	self.headerStatusLabel.text = line;
 	self.headerBadgeView.image = [TGIcons avatarWithInitials:@"★" size:70
 													colourId:active ? 2 : 6];
@@ -195,37 +197,18 @@ enum {
 
 #pragma mark - shape
 
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-	return TGPremiumSectionCount;
-}
-
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+- (NSString *)titleForSection:(NSInteger)section {
 	switch (section){
-		case TGPremiumSectionLimits:
-			return self.limits.count ? (NSInteger)self.limits.count : 1;
-		case TGPremiumSectionFeatures:
-			return self.features.count ? (NSInteger)self.features.count : 1;
-		case TGPremiumSectionAccount:
-			return self.optionsLoaded ? 4 : 1;
-		case TGPremiumSectionBoosts:
-			return 1;
-		default:
-			return 1;
-	}
-}
-
-- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
-	switch (section){
-		case TGPremiumSectionLimits:   return @"Limits (free / premium)";
-		case TGPremiumSectionFeatures: return @"What Premium gives you";
 		case TGPremiumSectionAccount:  return @"This account";
+		case TGPremiumSectionLimits:   return @"Limits — now / with Premium";
+		case TGPremiumSectionFeatures: return @"What Premium gives you";
 		case TGPremiumSectionBoosts:   return @"Channel boosts";
 		default:                       return @"Gift codes";
 	}
 }
 
-- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
-	if (section == TGPremiumSectionFeatures)
+- (NSString *)commentForSection:(NSInteger)section {
+	if (section == TGPremiumSectionFeatures && self.features.count)
 		return @"Dimmed rows are features this client cannot show.";
 	if (section == TGPremiumSectionGiftCode)
 		return @"Premium cannot be bought here. A gift code from a giveaway or a "
@@ -235,7 +218,82 @@ enum {
 	return nil;
 }
 
+- (NSInteger)contentRowsInSection:(NSInteger)section {
+	switch (section){
+		case TGPremiumSectionAccount:
+			return self.optionsLoaded ? 4 : 1;
+		case TGPremiumSectionLimits:
+			return self.limits.count ? (NSInteger)self.limits.count : 1;
+		case TGPremiumSectionFeatures:
+			return self.features.count ? (NSInteger)self.features.count : 1;
+		default:
+			return 1;
+	}
+}
+
+- (BOOL)isCommentRow:(NSIndexPath *)indexPath {
+	return [self commentForSection:indexPath.section] != nil
+			&& indexPath.row == [self contentRowsInSection:indexPath.section];
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+	return TGPremiumSectionCount;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	return [self contentRowsInSection:section] + ([self commentForSection:section] ? 1 : 0);
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
+	return kPremiumSectionHeaderHeight;
+}
+
+- (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
+	BOOL dark = [[TGTheme shared] isDark];
+
+	UILabel *label = [[UILabel alloc] init];
+	label.text = [self titleForSection:section];
+	label.backgroundColor = [UIColor clearColor];
+	label.font = [UIFont boldSystemFontOfSize:17];
+	label.textColor = dark ? [[TGTheme shared] secondaryTextColour] : TGPremiumRGB(0x697487);
+	if (!dark){
+		label.shadowColor = TGPremiumRGB(0xdae0e8);
+		label.shadowOffset = CGSizeMake(0, 1);
+	}
+	[label sizeToFit];
+	label.frame = CGRectOffset(label.frame, 21, 16);
+
+	UIView *container = [[UIView alloc] initWithFrame:
+			CGRectMake(0, 0, tableView.bounds.size.width, kPremiumSectionHeaderHeight)];
+	container.backgroundColor = [UIColor clearColor];
+	[container addSubview:label];
+	return container;
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForFooterInSection:(NSInteger)section {
+	return 1;
+}
+
+- (UIView *)tableView:(UITableView *)tableView viewForFooterInSection:(NSInteger)section {
+	UIView *spacer = [[UIView alloc] initWithFrame:
+			CGRectMake(0, 0, tableView.bounds.size.width, 1)];
+	spacer.backgroundColor = [UIColor clearColor];
+	return spacer;
+}
+
+- (UIFont *)commentFont {
+	return [UIFont systemFontOfSize:14];
+}
+
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
+	if ([self isCommentRow:indexPath]){
+		CGFloat width = tableView.bounds.size.width ?: 320;
+		CGSize size = [[self commentForSection:indexPath.section]
+				sizeWithFont:[self commentFont]
+				constrainedToSize:CGSizeMake(width - 12 * 2, 1000)
+				lineBreakMode:NSLineBreakByWordWrapping];
+		return size.height + 7 * 2;
+	}
 	return 44;
 }
 
@@ -252,12 +310,47 @@ enum {
 	cell.accessoryView = nil;
 	cell.imageView.image = nil;
 	cell.detailTextLabel.text = @"";
+	if ([cell.detailTextLabel respondsToSelector:@selector(setAttributedText:)])
+		cell.detailTextLabel.attributedText = nil;
 	cell.selectionStyle = UITableViewCellSelectionStyleNone;
-	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
-	cell.textLabel.textColor = [UIColor blackColor];
+	cell.textLabel.textAlignment = NSTextAlignmentLeft;
+	cell.textLabel.font = [UIFont systemFontOfSize:16];
+	cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
+	cell.textLabel.shadowColor = nil;
 	cell.detailTextLabel.font = [UIFont systemFontOfSize:15];
-	cell.detailTextLabel.textColor = TGPremiumRGB(0x356596);
+	cell.detailTextLabel.textColor = [[TGTheme shared] cellDetailColour];
 	[[TGTheme shared] styleCell:cell];
+	return cell;
+}
+
+- (UITableViewCell *)commentCellInTable:(UITableView *)tableView text:(NSString *)text {
+	static NSString *reuseId = @"TGPremiumComment";
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuseId];
+	UILabel *label = nil;
+	if (!cell){
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+									  reuseIdentifier:reuseId];
+		cell.backgroundColor = [UIColor clearColor];
+		cell.backgroundView = nil;
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		label = [[UILabel alloc] initWithFrame:CGRectMake(12, 7,
+				cell.contentView.bounds.size.width - 24, cell.contentView.bounds.size.height - 14)];
+		label.tag = 4001;
+		label.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+		label.textAlignment = NSTextAlignmentCenter;
+		label.font = [self commentFont];
+		label.backgroundColor = [UIColor clearColor];
+		label.numberOfLines = 0;
+		[cell.contentView addSubview:label];
+	} else {
+		label = (UILabel *)[cell.contentView viewWithTag:4001];
+	}
+
+	BOOL dark = [[TGTheme shared] isDark];
+	label.textColor = dark ? [[TGTheme shared] secondaryTextColour] : TGPremiumRGB(0x697487);
+	label.shadowColor = dark ? nil : TGPremiumRGB(0xdae0e8);
+	label.shadowOffset = dark ? CGSizeZero : CGSizeMake(0, 1);
+	label.text = text;
 	return cell;
 }
 
@@ -298,54 +391,43 @@ enum {
 	return [NSString stringWithFormat:@"%.0f MB", mb];
 }
 
+- (void)setComparisonOnCell:(UITableViewCell *)cell
+					   free:(NSString *)freeValue
+					premium:(NSString *)premiumValue
+{
+	NSString *plain = [NSString stringWithFormat:@"%@ → %@", freeValue, premiumValue];
+	UIColor *freeColour = [[TGTheme shared] secondaryTextColour];
+	UIColor *premiumColour = [[TGTheme shared] cellDetailColour];
+
+	if (![cell.detailTextLabel respondsToSelector:@selector(setAttributedText:)]
+			|| !NSClassFromString(@"NSMutableAttributedString")){
+		cell.detailTextLabel.text = plain;
+		cell.detailTextLabel.textColor = premiumColour;
+		return;
+	}
+
+	NSMutableAttributedString *value =
+			[[NSMutableAttributedString alloc] initWithString:plain];
+	[value addAttribute:NSFontAttributeName value:[UIFont systemFontOfSize:15]
+				  range:NSMakeRange(0, plain.length)];
+	[value addAttribute:NSForegroundColorAttributeName value:freeColour
+				  range:NSMakeRange(0, freeValue.length + 3)];
+	[value addAttribute:NSForegroundColorAttributeName value:premiumColour
+				  range:NSMakeRange(freeValue.length + 3, plain.length - freeValue.length - 3)];
+	cell.detailTextLabel.attributedText = value;
+}
+
+- (BOOL)featureIsSupported:(NSDictionary *)feature {
+	id supported = feature[@"supported"];
+	return ![supported isKindOfClass:[NSNumber class]] || [supported boolValue];
+}
+
 - (UITableViewCell *)tableView:(UITableView *)tableView
 		 cellForRowAtIndexPath:(NSIndexPath *)indexPath
 {
-	if (indexPath.section == TGPremiumSectionLimits){
-		if (!self.limits.count)
-			return [self statusCellInTable:tableView
-									  text:self.limitsLoaded ? @"Limits unavailable"
-															 : @"Loading limits..."];
-		NSDictionary *limit = self.limits[indexPath.row];
-		UITableViewCell *cell = [self plainCellInTable:tableView
-												 style:UITableViewCellStyleValue1
-											   reuseId:@"TGPremiumLimit"];
-		NSString *title = limit[@"title"];
-		cell.textLabel.text = [title isKindOfClass:[NSString class]] && title.length
-				? title : limit[@"type"];
-		cell.textLabel.font = [UIFont systemFontOfSize:16];
-		cell.detailTextLabel.text = [NSString stringWithFormat:@"%@ → %@",
-				[self formattedNumber:limit[@"default"]],
-				[self formattedNumber:limit[@"premium"]]];
-		return cell;
-	}
-
-	if (indexPath.section == TGPremiumSectionFeatures){
-		if (!self.features.count)
-			return [self statusCellInTable:tableView
-									  text:self.featuresLoaded ? @"Feature list unavailable"
-															   : @"Loading features..."];
-		NSDictionary *feature = self.features[indexPath.row];
-		UITableViewCell *cell = [self plainCellInTable:tableView
-												 style:UITableViewCellStyleSubtitle
-											   reuseId:@"TGPremiumFeature"];
-		BOOL supported = ![feature[@"supported"] isKindOfClass:[NSNumber class]]
-				|| [feature[@"supported"] boolValue];
-		NSString *title = feature[@"title"];
-		cell.textLabel.text = [title isKindOfClass:[NSString class]] && title.length
-				? title : feature[@"type"];
-		cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
-		cell.textLabel.textColor = supported
-				? [[TGTheme shared] primaryTextColour]
-				: [UIColor colorWithWhite:0.0f alpha:0.35f];
-		NSString *subtitle = feature[@"subtitle"];
-		cell.detailTextLabel.text = [subtitle isKindOfClass:[NSString class]] ? subtitle : @"";
-		cell.detailTextLabel.font = [UIFont systemFontOfSize:14];
-		cell.detailTextLabel.textColor = TGPremiumRGB(0x697487);
-		cell.selectionStyle = supported ? UITableViewCellSelectionStyleBlue
-										: UITableViewCellSelectionStyleNone;
-		return cell;
-	}
+	if ([self isCommentRow:indexPath])
+		return [self commentCellInTable:tableView
+								   text:[self commentForSection:indexPath.section]];
 
 	if (indexPath.section == TGPremiumSectionAccount){
 		if (!self.optionsLoaded)
@@ -353,7 +435,6 @@ enum {
 		UITableViewCell *cell = [self plainCellInTable:tableView
 												 style:UITableViewCellStyleValue1
 											   reuseId:@"TGPremiumOption"];
-		cell.textLabel.font = [UIFont systemFontOfSize:16];
 		switch (indexPath.row){
 			case 0:
 				cell.textLabel.text = @"Premium";
@@ -366,7 +447,7 @@ enum {
 						[self formattedNumber:self.options[@"downloadSpeedup"]]];
 				break;
 			case 2:
-				cell.textLabel.text = @"Upload limit";
+				cell.textLabel.text = @"Max upload size";
 				cell.detailTextLabel.text = [self formattedSize:
 						[self.options[@"maxUploadFileSize"] longLongValue]];
 				break;
@@ -374,6 +455,60 @@ enum {
 				cell.textLabel.text = @"Stars";
 				cell.detailTextLabel.text = [self formattedNumber:self.options[@"starCount"]];
 				break;
+		}
+		return cell;
+	}
+
+	if (indexPath.section == TGPremiumSectionLimits){
+		if (!self.limits.count)
+			return [self statusCellInTable:tableView
+									  text:self.limitsLoaded ? @"Limits unavailable"
+															 : @"Loading limits..."];
+		id rawLimit = self.limits[indexPath.row];
+		if (![rawLimit isKindOfClass:[NSDictionary class]])
+			return [self statusCellInTable:tableView text:@"-"];
+		NSDictionary *limit = rawLimit;
+		UITableViewCell *cell = [self plainCellInTable:tableView
+												 style:UITableViewCellStyleValue1
+											   reuseId:@"TGPremiumLimit"];
+		NSString *title = limit[@"title"];
+		cell.textLabel.text = [title isKindOfClass:[NSString class]] && title.length
+				? title : limit[@"type"];
+		[self setComparisonOnCell:cell
+							 free:[self formattedNumber:limit[@"default"]]
+						  premium:[self formattedNumber:limit[@"premium"]]];
+		return cell;
+	}
+
+	if (indexPath.section == TGPremiumSectionFeatures){
+		if (!self.features.count)
+			return [self statusCellInTable:tableView
+									  text:self.featuresLoaded ? @"Feature list unavailable"
+															   : @"Loading features..."];
+		id rawFeature = self.features[indexPath.row];
+		if (![rawFeature isKindOfClass:[NSDictionary class]])
+			return [self statusCellInTable:tableView text:@"-"];
+		NSDictionary *feature = rawFeature;
+		UITableViewCell *cell = [self plainCellInTable:tableView
+												 style:UITableViewCellStyleSubtitle
+											   reuseId:@"TGPremiumFeature"];
+		BOOL supported = [self featureIsSupported:feature];
+		NSString *title = feature[@"title"];
+		cell.textLabel.text = [title isKindOfClass:[NSString class]] && title.length
+				? title : feature[@"type"];
+		cell.textLabel.textColor = supported
+				? [[TGTheme shared] primaryTextColour]
+				: TGPremiumRGB(0xb0b0b0);
+		NSString *subtitle = feature[@"subtitle"];
+		cell.detailTextLabel.font = [UIFont systemFontOfSize:13];
+		if (supported){
+			cell.detailTextLabel.text = [subtitle isKindOfClass:[NSString class]] ? subtitle : @"";
+			cell.detailTextLabel.textColor = [[TGTheme shared] secondaryTextColour];
+			cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+			cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+		} else {
+			cell.detailTextLabel.text = @"Not available in this client";
+			cell.detailTextLabel.textColor = TGPremiumRGB(0xb0b0b0);
 		}
 		return cell;
 	}
@@ -389,7 +524,6 @@ enum {
 		UITableViewCell *cell = [self plainCellInTable:tableView
 												 style:UITableViewCellStyleValue1
 											   reuseId:@"TGPremiumBoost"];
-		cell.textLabel.font = [UIFont systemFontOfSize:16];
 		cell.textLabel.text = @"Boost slots";
 		cell.detailTextLabel.text = self.slots.count
 				? [NSString stringWithFormat:@"%d free of %d",
@@ -404,7 +538,7 @@ enum {
 	cell.textLabel.text = @"Redeem a Gift Code...";
 	cell.textLabel.font = [UIFont boldSystemFontOfSize:16];
 	cell.textLabel.textAlignment = NSTextAlignmentCenter;
-	cell.textLabel.textColor = TGPremiumRGB(0x0779d0);
+	cell.textLabel.textColor = [[TGTheme shared] accentColour];
 	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
 	return cell;
 }
@@ -414,11 +548,15 @@ enum {
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
 
+	if ([self isCommentRow:indexPath])
+		return;
+
 	if (indexPath.section == TGPremiumSectionFeatures && self.features.count){
-		NSDictionary *feature = self.features[indexPath.row];
-		BOOL supported = ![feature[@"supported"] isKindOfClass:[NSNumber class]]
-				|| [feature[@"supported"] boolValue];
-		if (!supported)
+		id rawFeature = self.features[indexPath.row];
+		if (![rawFeature isKindOfClass:[NSDictionary class]])
+			return;
+		NSDictionary *feature = rawFeature;
+		if (![self featureIsSupported:feature])
 			return;
 		NSString *type = feature[@"type"];
 		if ([type isKindOfClass:[NSString class]] && type.length)

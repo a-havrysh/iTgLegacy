@@ -10,10 +10,12 @@
 #import "UIView+SafeTint.h"
 #import <QuartzCore/QuartzCore.h>
 
-static const CGFloat kMemberRowHeight    = 49.0f;
+static const CGFloat kMemberRowHeight    = 51.0f;
 static const CGFloat kMemberAvatar       = 40.0f;
 static const CGFloat kMemberAvatarLeft   = 5.0f;
+static const CGFloat kMemberAvatarTop    = 5.0f;
 static const CGFloat kMemberTextLeft     = 54.0f;
+static const CGFloat kSectionHeaderHeight = 25.0f;
 static const CGFloat kModeBarHeight      = 44.0f;
 static const CGFloat kGroupButtonHeight  = 30.0f;
 static const CGFloat kGroupSeparatorWidth = 2.0f;
@@ -58,7 +60,10 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 @interface TGGroupMemberCell : UITableViewCell
 @property (nonatomic, strong) UIImageView *avatarView;
 @property (nonatomic, strong) UILabel *titleLabel;
+@property (nonatomic, strong) UILabel *titleSecondLabel;
 @property (nonatomic, strong) UILabel *subtitleLabel;
+
+- (void)setName:(NSString *)name;
 @end
 
 @implementation TGGroupMemberCell
@@ -80,50 +85,99 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 	self.backgroundColor = [[TGTheme shared] listBackgroundColour];
 
 	self.avatarView = [[UIImageView alloc] initWithFrame:
-			CGRectMake(kMemberAvatarLeft, 4, kMemberAvatar, kMemberAvatar)];
+			CGRectMake(kMemberAvatarLeft, kMemberAvatarTop, kMemberAvatar, kMemberAvatar)];
 	self.avatarView.contentMode = UIViewContentModeScaleAspectFill;
 	self.avatarView.clipsToBounds = YES;
 	self.avatarView.layer.cornerRadius = 4.0f;
 	[self.contentView addSubview:self.avatarView];
 
+	UIColor *titleColour = flat ? [[TGTheme shared] primaryTextColour] : [UIColor blackColor];
+
 	self.titleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
 	self.titleLabel.backgroundColor = [UIColor clearColor];
 	self.titleLabel.font = [UIFont systemFontOfSize:19];
-	self.titleLabel.textColor = flat ? [[TGTheme shared] primaryTextColour] : [UIColor blackColor];
+	self.titleLabel.textColor = titleColour;
 	self.titleLabel.highlightedTextColor = [UIColor whiteColor];
+	self.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
 	[self.contentView addSubview:self.titleLabel];
+
+	self.titleSecondLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	self.titleSecondLabel.backgroundColor = [UIColor clearColor];
+	self.titleSecondLabel.font = [UIFont boldSystemFontOfSize:19];
+	self.titleSecondLabel.textColor = titleColour;
+	self.titleSecondLabel.highlightedTextColor = [UIColor whiteColor];
+	self.titleSecondLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+	[self.contentView addSubview:self.titleSecondLabel];
 
 	self.subtitleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
 	self.subtitleLabel.backgroundColor = [UIColor clearColor];
 	self.subtitleLabel.font = [UIFont systemFontOfSize:13.5f];
-	self.subtitleLabel.textColor = [UIColor colorWithWhite:0.0f alpha:0.53f];
+	self.subtitleLabel.textColor = [UIColor colorWithRed:0x88 / 255.0f green:0x88 / 255.0f
+													blue:0x88 / 255.0f alpha:1.0f];
 	self.subtitleLabel.highlightedTextColor = [UIColor whiteColor];
+	self.subtitleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
 	[self.contentView addSubview:self.subtitleLabel];
 
 	return self;
 }
 
+- (void)setName:(NSString *)name {
+	NSString *first = name ?: @"";
+	NSString *second = nil;
+	NSRange space = [first rangeOfString:@" "];
+	if (space.location != NSNotFound && space.location + 1 < first.length){
+		second = [first substringFromIndex:space.location + 1];
+		first = [first substringToIndex:space.location];
+	}
+	self.titleLabel.text = first;
+	self.titleSecondLabel.text = second;
+	[self setNeedsLayout];
+}
+
 - (void)layoutSubviews {
 	[super layoutSubviews];
 
+	CGRect selectedFrame = self.selectedBackgroundView.frame;
+	if (selectedFrame.size.width > 0){
+		selectedFrame.origin.y = -1;
+		selectedFrame.size.height = self.frame.size.height + 1;
+		self.selectedBackgroundView.frame = selectedFrame;
+	}
+
 	CGSize viewSize = self.contentView.frame.size;
-	self.avatarView.frame = CGRectMake(kMemberAvatarLeft, 4, kMemberAvatar, kMemberAvatar);
+	self.avatarView.frame = CGRectMake(kMemberAvatarLeft, kMemberAvatarTop,
+			kMemberAvatar, kMemberAvatar);
 
 	CGFloat width = viewSize.width - kMemberTextLeft - 5;
 	if (width < 10)
 		width = 10;
 	CGFloat titleHeight = self.titleLabel.font.lineHeight;
 	CGFloat subtitleHeight = self.subtitleLabel.font.lineHeight;
+	BOOL hasSubtitle = self.subtitleLabel.text.length != 0;
 
-	if (self.subtitleLabel.text.length == 0){
-		CGFloat titleY = (CGFloat)(int)((viewSize.height - titleHeight) / 2) - 1;
-		self.titleLabel.frame = CGRectMake(kMemberTextLeft, titleY, width, titleHeight);
+	CGFloat titleY = hasSubtitle
+			? (CGFloat)(int)((viewSize.height - titleHeight - subtitleHeight - 1) / 2)
+			: (CGFloat)(int)((viewSize.height - titleHeight) / 2) - 1;
+
+	CGFloat firstWidth = width;
+	if (self.titleSecondLabel.text.length != 0){
+		firstWidth = [self.titleLabel.text sizeWithFont:self.titleLabel.font].width;
+		if (firstWidth > width - 14)
+			firstWidth = width - 14;
+		CGFloat secondX = kMemberTextLeft + firstWidth + 4;
+		CGFloat secondWidth = viewSize.width - 5 - secondX;
+		if (secondWidth < 0)
+			secondWidth = 0;
+		self.titleSecondLabel.frame = CGRectMake(secondX, titleY, secondWidth, titleHeight);
+	} else {
+		self.titleSecondLabel.frame = CGRectZero;
+	}
+	self.titleLabel.frame = CGRectMake(kMemberTextLeft, titleY, firstWidth, titleHeight);
+
+	if (!hasSubtitle){
 		self.subtitleLabel.frame = CGRectZero;
 		return;
 	}
-
-	CGFloat titleY = (CGFloat)(int)((viewSize.height - titleHeight - subtitleHeight - 1) / 2);
-	self.titleLabel.frame = CGRectMake(kMemberTextLeft, titleY, width, titleHeight);
 	self.subtitleLabel.frame = CGRectMake(kMemberTextLeft + 1, titleY + titleHeight + 0.5f,
 			width, subtitleHeight);
 }
@@ -395,6 +449,9 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 @property (nonatomic, strong) NSDictionary *myRights;
 @property (nonatomic, strong) NSString *myStatus;
 @property (nonatomic, strong) UILabel *statusLabel;
+@property (nonatomic, strong) UIView *emptyPlaceholder;
+@property (nonatomic, strong) UILabel *emptyTitleLabel;
+@property (nonatomic, strong) UILabel *emptyHelpLabel;
 @property (nonatomic, strong) UIButton *retryButton;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @property (nonatomic, assign) NSInteger mode;
@@ -444,6 +501,26 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 		case 2: return @"No removed users";
 		case 3: return @"No restricted users";
 		default: return @"No members";
+	}
+}
+
+- (NSString *)emptyHelpForMode:(NSInteger)mode {
+	switch (mode){
+		case 1: return @"Nobody here has been promoted yet. Hold a member to give them admin rights.";
+		case 2: return @"Nobody has been removed from this group.";
+		case 3: return @"Nobody here is restricted. Hold a member to limit what they may do.";
+		default: return @"Nobody else is in this group yet.";
+	}
+}
+
+- (NSString *)sectionCaptionForMode:(NSInteger)mode {
+	if (self.query.length)
+		return @"SEARCH RESULTS";
+	switch (mode){
+		case 1: return @"ADMINISTRATORS";
+		case 2: return @"REMOVED USERS";
+		case 3: return @"RESTRICTED USERS";
+		default: return @"MEMBERS";
 	}
 }
 
@@ -521,6 +598,38 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 	self.statusLabel.textColor = [[TGTheme shared] secondaryTextColour];
 	self.statusLabel.hidden = YES;
 	[background addSubview:self.statusLabel];
+
+	self.emptyPlaceholder = [[UIView alloc] initWithFrame:
+			CGRectMake(0, (CGFloat)(int)((background.bounds.size.height - 70) / 2) - 40,
+					background.bounds.size.width, 70)];
+	self.emptyPlaceholder.autoresizingMask = UIViewAutoresizingFlexibleWidth
+			| UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
+	self.emptyPlaceholder.backgroundColor = [UIColor clearColor];
+	self.emptyPlaceholder.hidden = YES;
+
+	UIColor *placeholderColour = [UIColor colorWithRed:0x86 / 255.0f green:0x94 / 255.0f
+												  blue:0xa4 / 255.0f alpha:1.0f];
+
+	self.emptyTitleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	self.emptyTitleLabel.backgroundColor = [UIColor clearColor];
+	self.emptyTitleLabel.font = [UIFont boldSystemFontOfSize:14];
+	self.emptyTitleLabel.textColor = placeholderColour;
+	self.emptyTitleLabel.shadowColor = [UIColor colorWithWhite:1.0f alpha:0.5f];
+	self.emptyTitleLabel.shadowOffset = CGSizeMake(0, 1);
+	self.emptyTitleLabel.textAlignment = NSTextAlignmentCenter;
+	[self.emptyPlaceholder addSubview:self.emptyTitleLabel];
+
+	self.emptyHelpLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	self.emptyHelpLabel.backgroundColor = [UIColor clearColor];
+	self.emptyHelpLabel.font = [UIFont systemFontOfSize:14];
+	self.emptyHelpLabel.textColor = placeholderColour;
+	self.emptyHelpLabel.shadowColor = [UIColor colorWithWhite:1.0f alpha:0.5f];
+	self.emptyHelpLabel.shadowOffset = CGSizeMake(0, 1);
+	self.emptyHelpLabel.textAlignment = NSTextAlignmentCenter;
+	self.emptyHelpLabel.numberOfLines = 0;
+	[self.emptyPlaceholder addSubview:self.emptyHelpLabel];
+
+	[background addSubview:self.emptyPlaceholder];
 
 	self.retryButton = [TGIcons headerButtonWithTitle:@"Try Again" bold:NO
 											   target:self action:@selector(reload)];
@@ -827,11 +936,26 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 	}];
 }
 
+- (void)layoutEmptyPlaceholderWithTitle:(NSString *)title help:(NSString *)help {
+	CGFloat width = self.emptyPlaceholder.bounds.size.width;
+	self.emptyTitleLabel.text = title;
+	CGSize titleSize = [title sizeWithFont:self.emptyTitleLabel.font];
+	self.emptyTitleLabel.frame = CGRectMake(0, 0, width, titleSize.height);
+
+	self.emptyHelpLabel.text = help;
+	CGSize helpSize = [help sizeWithFont:self.emptyHelpLabel.font
+					   constrainedToSize:CGSizeMake(260, 1000)
+						   lineBreakMode:NSLineBreakByWordWrapping];
+	self.emptyHelpLabel.frame = CGRectMake((CGFloat)(int)((width - 260) / 2), 26,
+			260, helpSize.height);
+}
+
 - (void)updateStatusView {
 	if (self.loading){
 		[self.spinner startAnimating];
 		self.statusLabel.text = @"Loading...";
 		self.statusLabel.hidden = NO;
+		self.emptyPlaceholder.hidden = YES;
 		self.retryButton.hidden = YES;
 		return;
 	}
@@ -840,19 +964,25 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 	if (self.failed){
 		self.statusLabel.text = @"Could not load the member list.";
 		self.statusLabel.hidden = NO;
+		self.emptyPlaceholder.hidden = YES;
 		self.retryButton.hidden = NO;
 		return;
 	}
 	self.retryButton.hidden = YES;
+	self.statusLabel.hidden = YES;
 
 	NSArray *rows = [self rows];
 	if (rows.count == 0 && self.loaded){
-		self.statusLabel.text = self.query.length
-				? @"No results" : [self emptyTextForMode:self.mode];
-		self.statusLabel.hidden = NO;
+		if (self.query.length)
+			[self layoutEmptyPlaceholderWithTitle:@"No results"
+											 help:@"Nobody here matches that name."];
+		else
+			[self layoutEmptyPlaceholderWithTitle:[self emptyTextForMode:self.mode]
+											 help:[self emptyHelpForMode:self.mode]];
+		self.emptyPlaceholder.hidden = NO;
 		return;
 	}
-	self.statusLabel.hidden = YES;
+	self.emptyPlaceholder.hidden = YES;
 }
 
 #pragma mark - photos
@@ -967,6 +1097,49 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 	return kMemberRowHeight;
 }
 
+- (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
+	return [self rows].count == 0 ? 0.0f : kSectionHeaderHeight;
+}
+
+- (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
+	if ([self rows].count == 0)
+		return nil;
+
+	CGFloat width = tableView.bounds.size.width;
+	UIView *container = [[UIView alloc] initWithFrame:
+			CGRectMake(0, 0, width, kSectionHeaderHeight)];
+	container.clipsToBounds = NO;
+	container.backgroundColor = [UIColor clearColor];
+
+	UIImage *plate = [UIImage imageNamed:@"CategoryDividerFirst.png"];
+	BOOL plated = plate != nil && ![[TGTheme shared] isFlat];
+	if (plated){
+		UIImageView *plateView = [[UIImageView alloc] initWithImage:plate];
+		plateView.frame = CGRectMake(0, -1, width, kSectionHeaderHeight + 1);
+		plateView.autoresizingMask =
+				UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+		[container addSubview:plateView];
+	} else {
+		container.backgroundColor = [[TGTheme shared] inputBarColour];
+	}
+
+	UILabel *caption = [[UILabel alloc] initWithFrame:CGRectZero];
+	caption.backgroundColor = [UIColor clearColor];
+	caption.font = [UIFont boldSystemFontOfSize:15];
+	caption.textColor = plated ? [UIColor whiteColor] : [[TGTheme shared] secondaryTextColour];
+	if (plated){
+		caption.shadowColor = [UIColor colorWithRed:0x88 / 255.0f green:0x92 / 255.0f
+											   blue:0x9c / 255.0f alpha:1.0f];
+		caption.shadowOffset = CGSizeMake(0, -1);
+	}
+	caption.text = [self sectionCaptionForMode:self.mode];
+	[caption sizeToFit];
+	caption.frame = CGRectOffset(caption.frame, 10, 1);
+	[container addSubview:caption];
+
+	return container;
+}
+
 - (UITableViewCell *)tableView:(UITableView *)tableView
 		 cellForRowAtIndexPath:(NSIndexPath *)indexPath {
 	static NSString *reuse = @"TGGroupMemberCell";
@@ -978,7 +1151,7 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 
 	NSDictionary *member = [self memberAtIndexPath:indexPath];
 	if (!member){
-		cell.titleLabel.text = @"";
+		[cell setName:@""];
 		cell.subtitleLabel.text = @"";
 		cell.avatarView.image = nil;
 		return cell;
@@ -987,14 +1160,8 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 	NSString *name = TGMembersString(member, @"name");
 	if (!name.length)
 		name = @"Unknown";
-	cell.titleLabel.text = name;
+	[cell setName:name];
 	cell.subtitleLabel.text = [self statusTextForMember:member];
-
-	NSString *status = TGMembersString(member, @"status");
-	BOOL emphasised = [status isEqualToString:@"creator"] || [status isEqualToString:@"administrator"];
-	cell.subtitleLabel.textColor = emphasised
-			? [[TGTheme shared] accentColour]
-			: [UIColor colorWithWhite:0.0f alpha:0.53f];
 
 	int64_t userId = [[member objectForKey:@"id"] longLongValue];
 	NSNumber *key = [NSNumber numberWithLongLong:userId];
@@ -1294,6 +1461,12 @@ static NSString *TGMembersString(NSDictionary *m, NSString *key) {
 
 	NSArray *paths = [NSArray arrayWithObject:
 			[NSIndexPath indexPathForRow:index inSection:0]];
+	if (!member && rows.count == 0){
+		[self.tableView reloadData];
+		[self updateStatusView];
+		[self updateTitle];
+		return;
+	}
 	if (member)
 		[self.tableView reloadRowsAtIndexPaths:paths
 							  withRowAnimation:UITableViewRowAnimationNone];

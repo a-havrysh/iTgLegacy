@@ -2,12 +2,19 @@
 #import "TGTheme.h"
 #import "TGClient.h"
 #import "TGCountryPickerViewController.h"
+#import "TGClient+Account.h"
+#import "TGActionSheet.h"
 #import <QuartzCore/QuartzCore.h>
 
 typedef NS_ENUM(NSInteger, TGLoginStep) {
     TGLoginStepPhone,
     TGLoginStepCode,
-    TGLoginStepPassword
+    TGLoginStepPassword,
+    TGLoginStepEmail,
+    TGLoginStepEmailCode,
+    TGLoginStepRecoveryCode,
+    TGLoginStepNewPassword,
+    TGLoginStepQrCode
 };
 
 @interface TGLoginViewController ()
@@ -21,12 +28,22 @@ typedef NS_ENUM(NSInteger, TGLoginStep) {
 @property (nonatomic, strong) UITextField *inputField;
 @property (nonatomic, strong) UIButton *nextButton;
 @property (nonatomic, strong) UIButton *resendButton;
+@property (nonatomic, strong) UIButton *extraButton;
+@property (nonatomic, strong) UIButton *optionsButton;
+@property (nonatomic, strong) UIButton *backButton;
 @property (nonatomic, strong) UILabel *timeoutLabel;
+@property (nonatomic, strong) UILabel *qrLinkLabel;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @property (nonatomic, copy) NSString *savedPhoneNumber;
+@property (nonatomic, copy) NSString *emailPattern;
+@property (nonatomic, copy) NSString *verifiedRecoveryCode;
+@property (nonatomic, copy) NSString *nextCodeTypeTitle;
 @property (nonatomic, assign) BOOL busy;
 @property (nonatomic, strong) NSTimer *resendTimer;
 @property (nonatomic, assign) NSInteger resendSeconds;
+@property (nonatomic, strong) NSTimer *qrTimer;
+@property (nonatomic, strong) TGActionSheet *currentActionSheet;
+@property (nonatomic, assign) BOOL suppressResendButton;
 
 @end
 
@@ -178,6 +195,34 @@ static NSDictionary *tgDialCodes(void) {
     [self.nextButton addSubview:self.spinner];
 
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:self.nextButton];
+
+    [self installOptionsButton];
+}
+
+- (UIButton *)neutralLoginButtonWithTitle:(NSString *)title {
+    return [self loginToolbarButtonWithTitle:title
+                                       plate:@"HeaderButton_Login.png"
+                                     pressed:@"HeaderButton_Login_Pressed.png"
+                                 leftCapHalf:NO
+                                     leftCap:11
+                                shadowColour:tgRGBA(0x07080a, 0.35f)
+                                 paddingLeft:7
+                                paddingRight:7
+                                    minWidth:0
+                                      isBack:NO];
+}
+
+- (void)setLoginButton:(UIButton *)button title:(NSString *)title {
+    [button setTitle:title forState:UIControlStateNormal];
+    [self sizeLoginToolbarButton:button paddingLeft:7 paddingRight:7 minWidth:0];
+}
+
+- (void)installOptionsButton {
+    if (self.optionsButton == nil) {
+        self.optionsButton = [self neutralLoginButtonWithTitle:@"Options"];
+        [self.optionsButton addTarget:self action:@selector(optionsTapped) forControlEvents:UIControlEventTouchUpInside];
+    }
+    self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:self.optionsButton];
 }
 
 - (void)setupUI {
@@ -310,6 +355,23 @@ static NSDictionary *tgDialCodes(void) {
     self.resendButton.hidden = YES;
     [self.view addSubview:self.resendButton];
 
+    self.extraButton = [self neutralLoginButtonWithTitle:@"Didn't get the code?"];
+    [self.extraButton addTarget:self action:@selector(extraTapped) forControlEvents:UIControlEventTouchUpInside];
+    self.extraButton.hidden = YES;
+    [self.view addSubview:self.extraButton];
+
+    self.qrLinkLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+    self.qrLinkLabel.font = [UIFont boldSystemFontOfSize:13];
+    self.qrLinkLabel.textColor = tgRGB(0xf0f0f0);
+    self.qrLinkLabel.shadowColor = tgRGB(0x25272b);
+    self.qrLinkLabel.shadowOffset = CGSizeMake(0, 1);
+    self.qrLinkLabel.textAlignment = NSTextAlignmentCenter;
+    self.qrLinkLabel.lineBreakMode = NSLineBreakByCharWrapping;
+    self.qrLinkLabel.numberOfLines = 0;
+    self.qrLinkLabel.backgroundColor = [UIColor clearColor];
+    self.qrLinkLabel.hidden = YES;
+    [self.view addSubview:self.qrLinkLabel];
+
     self.currentStep = TGLoginStepPhone;
     [self updateCountryNameForDialCode];
     [self layoutInterface];
@@ -387,9 +449,51 @@ static NSDictionary *tgDialCodes(void) {
         [self.navigationController pushViewController:picker animated:YES];
 }
 
+- (CGFloat)plateWidthForCurrentStep {
+    switch (self.currentStep) {
+        case TGLoginStepCode:
+        case TGLoginStepEmailCode:
+        case TGLoginStepRecoveryCode:
+            return 80;
+        default:
+            return 200;
+    }
+}
+
 - (void)layoutInterface {
     CGSize screenSize = [UIScreen mainScreen].bounds.size;
-    CGSize viewSize = CGSizeMake(screenSize.width, screenSize.height - 20 - 44 - 216);
+    BOOL keyboardUp = self.currentStep != TGLoginStepQrCode;
+    CGSize viewSize = CGSizeMake(screenSize.width, screenSize.height - 20 - 44 - (keyboardUp ? 216 : 0));
+
+    if (self.currentStep == TGLoginStepQrCode) {
+        self.countryButton.hidden = YES;
+        self.countryCodeField.hidden = YES;
+        self.inputDivider.hidden = YES;
+        self.inputBackgroundView.hidden = YES;
+        self.inputField.hidden = YES;
+        self.qrLinkLabel.hidden = NO;
+
+        CGSize noticeSize = [self.noticeLabel sizeThatFits:CGSizeMake(280, 1024)];
+        self.noticeLabel.frame = CGRectIntegral(CGRectMake((viewSize.width - noticeSize.width) / 2, 40, noticeSize.width, noticeSize.height));
+        self.noticeLabel.alpha = 1.0f;
+
+        CGSize linkSize = [self.qrLinkLabel sizeThatFits:CGSizeMake(280, 1024)];
+        self.qrLinkLabel.frame = CGRectIntegral(CGRectMake((viewSize.width - linkSize.width) / 2,
+                                                           self.noticeLabel.frame.origin.y + self.noticeLabel.frame.size.height + 24,
+                                                           linkSize.width, linkSize.height));
+
+        self.timeoutLabel.hidden = YES;
+        self.resendButton.hidden = YES;
+        self.extraButton.hidden = NO;
+        self.extraButton.frame = CGRectMake((int)((viewSize.width - self.extraButton.frame.size.width) / 2),
+                                            viewSize.height - self.extraButton.frame.size.height - 20,
+                                            self.extraButton.frame.size.width, self.extraButton.frame.size.height);
+        return;
+    }
+
+    self.inputBackgroundView.hidden = NO;
+    self.inputField.hidden = NO;
+    self.qrLinkLabel.hidden = YES;
 
     if (self.currentStep == TGLoginStepPhone) {
         CGFloat width = 290;
@@ -409,7 +513,7 @@ static NSDictionary *tgDialCodes(void) {
                                            self.inputBackgroundView.frame.size.width - 74 - 14, 32);
         self.inputField.textAlignment = NSTextAlignmentLeft;
     } else {
-        CGFloat width = self.currentStep == TGLoginStepCode ? 80 : 200;
+        CGFloat width = [self plateWidthForCurrentStep];
         self.countryButton.hidden = YES;
         self.countryCodeField.hidden = YES;
         self.inputDivider.hidden = YES;
@@ -439,9 +543,15 @@ static NSDictionary *tgDialCodes(void) {
     self.resendButton.frame = CGRectMake((int)((viewSize.width - self.resendButton.frame.size.width) / 2), resendY,
                                          self.resendButton.frame.size.width, self.resendButton.frame.size.height);
 
-    BOOL onCodeStep = self.currentStep == TGLoginStepCode;
-    self.timeoutLabel.hidden = !onCodeStep || self.resendSeconds <= 0;
-    self.resendButton.hidden = !onCodeStep || self.resendSeconds > 0;
+    BOOL countdownStep = self.currentStep == TGLoginStepCode || self.currentStep == TGLoginStepEmailCode;
+    self.timeoutLabel.hidden = !countdownStep || self.resendSeconds <= 0;
+    self.resendButton.hidden = !countdownStep || self.resendSeconds > 0 || self.suppressResendButton;
+
+    BOOL hasExtra = self.currentStep == TGLoginStepCode || self.currentStep == TGLoginStepPassword;
+    self.extraButton.hidden = !hasExtra;
+    CGFloat extraY = resendY + (self.currentStep == TGLoginStepCode ? 38 : 0);
+    self.extraButton.frame = CGRectMake((int)((viewSize.width - self.extraButton.frame.size.width) / 2), extraY,
+                                        self.extraButton.frame.size.width, self.extraButton.frame.size.height);
 }
 
 - (void)inputBackgroundTapped {
@@ -479,6 +589,14 @@ static NSDictionary *tgDialCodes(void) {
         return [self digitsOnly:text].length >= 4 && [self digitsOnly:self.countryCodeField.text].length >= 1;
     if (self.currentStep == TGLoginStepCode)
         return [self digitsOnly:text].length >= 4;
+    if (self.currentStep == TGLoginStepEmail)
+        return [text rangeOfString:@"@"].location != NSNotFound && text.length >= 5;
+    if (self.currentStep == TGLoginStepEmailCode)
+        return text.length >= 4;
+    if (self.currentStep == TGLoginStepRecoveryCode)
+        return text.length >= 4;
+    if (self.currentStep == TGLoginStepQrCode)
+        return NO;
     return text.length > 0;
 }
 
@@ -533,13 +651,79 @@ static NSDictionary *tgDialCodes(void) {
         if (self.onPasswordSubmitted) {
             self.onPasswordSubmitted(text);
         }
+    } else if (self.currentStep == TGLoginStepEmail) {
+        __weak TGLoginViewController *weakSelf = self;
+        [[TGClient shared] setAuthenticationEmailAddress:text completion:^(NSString *pattern, NSInteger codeLength) {
+            TGLoginViewController *me = weakSelf;
+            if (me == nil)
+                return;
+            [me setBusy:NO];
+            if (pattern.length == 0) {
+                [me showLoginAlert:@"This email address was not accepted."];
+                return;
+            }
+            [me showEmailCodeStepWithPattern:pattern];
+        }];
+    } else if (self.currentStep == TGLoginStepEmailCode) {
+        __weak TGLoginViewController *weakSelf = self;
+        [[TGClient shared] checkAuthenticationEmailCode:text completion:^(BOOL ok) {
+            TGLoginViewController *me = weakSelf;
+            if (me == nil)
+                return;
+            [me setBusy:NO];
+            if (!ok) {
+                me.inputField.text = @"";
+                [me updateNextEnabled];
+                [me showLoginAlert:@"Invalid code. Please try again."];
+            }
+        }];
+    } else if (self.currentStep == TGLoginStepRecoveryCode) {
+        __weak TGLoginViewController *weakSelf = self;
+        [[TGClient shared] checkAuthenticationPasswordRecoveryCode:text completion:^(BOOL ok) {
+            TGLoginViewController *me = weakSelf;
+            if (me == nil)
+                return;
+            [me setBusy:NO];
+            if (!ok) {
+                me.inputField.text = @"";
+                [me updateNextEnabled];
+                [me showLoginAlert:@"Invalid recovery code. Please try again."];
+                return;
+            }
+            me.verifiedRecoveryCode = text;
+            [me showNewPasswordStep];
+        }];
+    } else if (self.currentStep == TGLoginStepNewPassword) {
+        __weak TGLoginViewController *weakSelf = self;
+        [[TGClient shared] recoverAuthenticationPasswordWithCode:self.verifiedRecoveryCode
+                                                     newPassword:text
+                                                         newHint:nil
+                                                      completion:^(BOOL ok) {
+            TGLoginViewController *me = weakSelf;
+            if (me == nil)
+                return;
+            [me setBusy:NO];
+            if (!ok)
+                [me showLoginAlert:@"The password could not be changed. Please try again."];
+        }];
     }
+}
+
+- (void)showLoginAlert:(NSString *)message {
+    UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@""
+                                                    message:message
+                                                   delegate:nil
+                                          cancelButtonTitle:@"OK"
+                                          otherButtonTitles:nil];
+    [alert show];
 }
 
 - (void)showCodeStepWithPhoneNumber:(NSString *)phoneNumber {
     (void)self.view;
     [self setBusy:NO];
+    [self stopQrRefresh];
     self.currentStep = TGLoginStepCode;
+    self.suppressResendButton = NO;
     self.title = phoneNumber.length > 0 ? phoneNumber : (self.savedPhoneNumber.length > 0 ? self.savedPhoneNumber : @"Enter Code");
     self.noticeLabel.text = @"We have sent you an SMS with the code";
 
@@ -548,19 +732,55 @@ static NSDictionary *tgDialCodes(void) {
     self.inputField.placeholder = @"Code";
     self.inputField.keyboardType = UIKeyboardTypeNumberPad;
 
+    [self setLoginButton:self.resendButton title:@"Send the code again"];
+    [self setLoginButton:self.extraButton title:@"Didn't get the code?"];
+    self.nextCodeTypeTitle = nil;
+
     [self installBackButton];
     [self startResendCountdown];
     [self layoutInterface];
     [self updateNextEnabled];
     [self.inputField becomeFirstResponder];
+
+    __weak TGLoginViewController *weakSelf = self;
+    [[TGClient shared] authenticationCodeInfoWithCompletion:^(NSDictionary *info) {
+        TGLoginViewController *me = weakSelf;
+        if (me == nil || me.currentStep != TGLoginStepCode || info == nil)
+            return;
+        [me applyCodeInfo:info];
+    }];
+}
+
+- (void)applyCodeInfo:(NSDictionary *)info {
+    NSString *description = [info objectForKey:@"description"];
+    if ([description isKindOfClass:[NSString class]] && description.length > 0)
+        self.noticeLabel.text = description;
+
+    NSString *nextDescription = [info objectForKey:@"nextDescription"];
+    if ([nextDescription isKindOfClass:[NSString class]] && nextDescription.length > 0) {
+        self.nextCodeTypeTitle = nextDescription;
+        [self setLoginButton:self.resendButton title:nextDescription];
+    }
+
+    NSNumber *timeout = [info objectForKey:@"timeout"];
+    if ([timeout isKindOfClass:[NSNumber class]] && [timeout intValue] > 0) {
+        [self stopResendCountdown];
+        self.resendSeconds = [timeout integerValue];
+        [self startResendTimer];
+    }
+
+    [self updateResendTitle];
+    [self layoutInterface];
 }
 
 - (void)showPasswordStep {
     (void)self.view;
     [self setBusy:NO];
+    [self stopQrRefresh];
     self.currentStep = TGLoginStepPassword;
     self.title = @"Password";
     self.noticeLabel.text = @"Your account is protected with a password. Please enter it below.";
+    [self setLoginButton:self.extraButton title:@"Forgot password?"];
 
     self.inputField.text = @"";
     self.inputField.placeholder = @"Password";
@@ -587,15 +807,266 @@ static NSDictionary *tgDialCodes(void) {
     self.inputField.keyboardType = UIKeyboardTypeNumberPad;
 
     [self stopResendCountdown];
-    self.navigationItem.leftBarButtonItem = nil;
+    [self stopQrRefresh];
+    [self installOptionsButton];
     [self layoutInterface];
     [self updateNextEnabled];
     [self.inputField becomeFirstResponder];
 }
 
-- (void)installBackButton {
-    if (self.navigationItem.leftBarButtonItem != nil)
+- (void)optionsTapped {
+    if (self.busy || self.currentStep != TGLoginStepPhone)
         return;
+
+    [self.inputField resignFirstResponder];
+    [self.countryCodeField resignFirstResponder];
+
+    NSArray *actions = @[ [[TGActionSheetAction alloc] initWithTitle:@"Log in by QR Code" action:@"qr"],
+                          [[TGActionSheetAction alloc] initWithTitle:@"Log in with Email" action:@"email"],
+                          [[TGActionSheetAction alloc] initWithTitle:@"Cancel" action:@"cancel" type:TGActionSheetActionTypeCancel] ];
+
+    __weak TGLoginViewController *weakSelf = self;
+    TGActionSheet *sheet = [[TGActionSheet alloc] initWithTitle:nil
+                                                        actions:actions
+                                                    actionBlock:^(__unused id target, NSString *action) {
+        TGLoginViewController *me = weakSelf;
+        if (me == nil)
+            return;
+        if ([action isEqualToString:@"qr"])
+            [me showQrCodeStep];
+        else if ([action isEqualToString:@"email"])
+            [me showEmailStep];
+        else
+            [me.inputField becomeFirstResponder];
+    } target:self];
+    self.currentActionSheet = sheet;
+    [sheet showInView:self.view];
+}
+
+- (void)showEmailStep {
+    (void)self.view;
+    [self setBusy:NO];
+    [self stopResendCountdown];
+    [self stopQrRefresh];
+    self.currentStep = TGLoginStepEmail;
+    self.title = @"Email";
+    self.noticeLabel.text = @"Enter the email address connected to your Telegram account.";
+
+    self.inputField.text = @"";
+    self.inputField.secureTextEntry = NO;
+    self.inputField.placeholder = @"Email";
+    self.inputField.keyboardType = UIKeyboardTypeEmailAddress;
+
+    [self installBackButton];
+    [self layoutInterface];
+    [self updateNextEnabled];
+    [self.inputField becomeFirstResponder];
+}
+
+- (void)showEmailCodeStepWithPattern:(NSString *)pattern {
+    (void)self.view;
+    [self setBusy:NO];
+    [self stopQrRefresh];
+    self.currentStep = TGLoginStepEmailCode;
+    self.suppressResendButton = NO;
+    self.emailPattern = pattern;
+    self.title = @"Email Code";
+    self.noticeLabel.text = [NSString stringWithFormat:@"We have sent a code to %@", pattern];
+
+    self.inputField.text = @"";
+    self.inputField.secureTextEntry = NO;
+    self.inputField.placeholder = @"Code";
+    self.inputField.keyboardType = UIKeyboardTypeNumberPad;
+
+    [self setLoginButton:self.resendButton title:@"Reset email address"];
+    [self installBackButton];
+    [self layoutInterface];
+    [self updateNextEnabled];
+    [self.inputField becomeFirstResponder];
+
+    __weak TGLoginViewController *weakSelf = self;
+    [[TGClient shared] authenticationEmailStateWithCompletion:^(NSDictionary *info) {
+        TGLoginViewController *me = weakSelf;
+        if (me == nil || me.currentStep != TGLoginStepEmailCode || info == nil)
+            return;
+        [me applyEmailState:info];
+    }];
+}
+
+- (void)applyEmailState:(NSDictionary *)info {
+    NSString *resetState = [info objectForKey:@"resetState"];
+    if (![resetState isKindOfClass:[NSString class]])
+        resetState = @"";
+
+    if ([resetState isEqualToString:@"pending"]) {
+        NSNumber *resetIn = [info objectForKey:@"resetIn"];
+        [self stopResendCountdown];
+        self.resendSeconds = [resetIn isKindOfClass:[NSNumber class]] ? [resetIn integerValue] : 0;
+        if (self.resendSeconds > 0)
+            [self startResendTimer];
+    } else if ([resetState isEqualToString:@"available"]) {
+        [self stopResendCountdown];
+    } else {
+        [self stopResendCountdown];
+        self.suppressResendButton = YES;
+    }
+
+    [self updateResendTitle];
+    [self layoutInterface];
+}
+
+- (void)showRecoveryCodeStep {
+    (void)self.view;
+    [self setBusy:NO];
+    [self stopResendCountdown];
+    [self stopQrRefresh];
+    self.currentStep = TGLoginStepRecoveryCode;
+    self.title = @"Recovery";
+    self.noticeLabel.text = @"We have sent a recovery code to the email address you provided when setting up your password.";
+
+    self.inputField.text = @"";
+    self.inputField.secureTextEntry = NO;
+    self.inputField.placeholder = @"Code";
+    self.inputField.keyboardType = UIKeyboardTypeNumberPad;
+
+    [self installBackButton];
+    [self layoutInterface];
+    [self updateNextEnabled];
+    [self.inputField becomeFirstResponder];
+}
+
+- (void)showNewPasswordStep {
+    (void)self.view;
+    [self setBusy:NO];
+    [self stopResendCountdown];
+    [self stopQrRefresh];
+    self.currentStep = TGLoginStepNewPassword;
+    self.title = @"New Password";
+    self.noticeLabel.text = @"Please enter a new password for your account.";
+
+    self.inputField.text = @"";
+    self.inputField.secureTextEntry = YES;
+    self.inputField.placeholder = @"New password";
+    self.inputField.keyboardType = UIKeyboardTypeDefault;
+
+    [self installBackButton];
+    [self layoutInterface];
+    [self updateNextEnabled];
+    [self.inputField becomeFirstResponder];
+}
+
+- (void)showQrCodeStep {
+    (void)self.view;
+    [self setBusy:YES];
+    [self stopResendCountdown];
+    self.currentStep = TGLoginStepQrCode;
+    self.title = @"Log in by QR Code";
+    self.noticeLabel.text = @"1. Open Telegram on your other phone\n2. Go to Settings → Devices\n3. Add this device with the link below";
+    self.qrLinkLabel.text = @"Requesting a link…";
+
+    [self.inputField resignFirstResponder];
+    [self.countryCodeField resignFirstResponder];
+
+    [self setLoginButton:self.extraButton title:@"Log in with phone number"];
+    [self installBackButton];
+    [self layoutInterface];
+    [self updateNextEnabled];
+
+    __weak TGLoginViewController *weakSelf = self;
+    [[TGClient shared] requestQrCodeLoginWithCompletion:^(NSString *link) {
+        TGLoginViewController *me = weakSelf;
+        if (me == nil || me.currentStep != TGLoginStepQrCode)
+            return;
+        [me setBusy:NO];
+        if (link.length == 0) {
+            me.qrLinkLabel.text = @"This account cannot be logged in by QR code.";
+            [me layoutInterface];
+            return;
+        }
+        [me applyQrLink:link];
+        [me startQrRefresh];
+    }];
+}
+
+- (void)applyQrLink:(NSString *)link {
+    self.qrLinkLabel.text = link;
+    [self layoutInterface];
+}
+
+- (void)startQrRefresh {
+    [self stopQrRefresh];
+    self.qrTimer = [NSTimer scheduledTimerWithTimeInterval:20.0
+                                                    target:self
+                                                  selector:@selector(refreshQrLink)
+                                                  userInfo:nil
+                                                   repeats:YES];
+}
+
+- (void)stopQrRefresh {
+    [self.qrTimer invalidate];
+    self.qrTimer = nil;
+}
+
+- (void)refreshQrLink {
+    if (self.currentStep != TGLoginStepQrCode) {
+        [self stopQrRefresh];
+        return;
+    }
+
+    __weak TGLoginViewController *weakSelf = self;
+    [[TGClient shared] qrCodeLoginLinkWithCompletion:^(NSString *link) {
+        TGLoginViewController *me = weakSelf;
+        if (me == nil || me.currentStep != TGLoginStepQrCode)
+            return;
+        if (link.length > 0)
+            [me applyQrLink:link];
+    }];
+}
+
+- (void)extraTapped {
+    if (self.busy)
+        return;
+
+    __weak TGLoginViewController *weakSelf = self;
+
+    if (self.currentStep == TGLoginStepQrCode) {
+        [self stopQrRefresh];
+        [self showPhoneStep];
+        return;
+    }
+
+    if (self.currentStep == TGLoginStepCode) {
+        [[TGClient shared] reportAuthenticationCodeMissing:nil completion:^(BOOL ok) {
+            TGLoginViewController *me = weakSelf;
+            if (me == nil)
+                return;
+            [me showLoginAlert:ok ? @"Telegram has been told the code did not arrive. Please wait a little longer."
+                                  : @"Could not report the missing code."];
+        }];
+        return;
+    }
+
+    if (self.currentStep == TGLoginStepPassword) {
+        [self setBusy:YES];
+        [[TGClient shared] requestAuthenticationPasswordRecoveryWithCompletion:^(BOOL ok) {
+            TGLoginViewController *me = weakSelf;
+            if (me == nil)
+                return;
+            [me setBusy:NO];
+            if (!ok) {
+                [me showLoginAlert:@"Since you did not provide a recovery email when setting up your password, your remaining options are either to remember your password or to reset your account."];
+                return;
+            }
+            [me showRecoveryCodeStep];
+        }];
+    }
+}
+
+- (void)installBackButton {
+    if (self.backButton != nil) {
+        self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:self.backButton];
+        return;
+    }
 
     UIButton *backButton = [self loginToolbarButtonWithTitle:@"Back"
                                                       plate:@"BackButton_Login.png"
@@ -608,6 +1079,7 @@ static NSDictionary *tgDialCodes(void) {
                                                    minWidth:0
                                                      isBack:YES];
     [backButton addTarget:self action:@selector(backTapped) forControlEvents:UIControlEventTouchUpInside];
+    self.backButton = backButton;
 
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:backButton];
 }
@@ -615,6 +1087,26 @@ static NSDictionary *tgDialCodes(void) {
 - (void)backTapped {
     if (self.busy)
         return;
+
+    if (self.currentStep == TGLoginStepEmailCode) {
+        [self showEmailStep];
+        return;
+    }
+
+    if (self.currentStep == TGLoginStepNewPassword) {
+        [self showRecoveryCodeStep];
+        return;
+    }
+
+    if (self.currentStep == TGLoginStepRecoveryCode) {
+        [self showPasswordStep];
+        return;
+    }
+
+    if (self.currentStep == TGLoginStepEmail || self.currentStep == TGLoginStepQrCode) {
+        [self showPhoneStep];
+        return;
+    }
 
     [[TGClient shared] logOut];
     [self showPhoneStep];
@@ -624,6 +1116,11 @@ static NSDictionary *tgDialCodes(void) {
     [self stopResendCountdown];
     self.resendSeconds = 60;
     [self updateResendTitle];
+    [self startResendTimer];
+}
+
+- (void)startResendTimer {
+    [self.resendTimer invalidate];
     self.resendTimer = [NSTimer scheduledTimerWithTimeInterval:1.0
                                                         target:self
                                                       selector:@selector(resendTick)
@@ -649,7 +1146,10 @@ static NSDictionary *tgDialCodes(void) {
 
 - (void)updateResendTitle {
     if (self.resendSeconds > 0) {
-        self.timeoutLabel.text = [NSString stringWithFormat:@"You can request the code again in %d:%02d",
+        NSString *format = self.currentStep == TGLoginStepEmailCode
+            ? @"You will be able to reset your email address in %d:%02d"
+            : @"You can request the code again in %d:%02d";
+        self.timeoutLabel.text = [NSString stringWithFormat:format,
                                   (int)self.resendSeconds / 60, (int)self.resendSeconds % 60];
         self.resendButton.enabled = NO;
     } else {
@@ -659,10 +1159,36 @@ static NSDictionary *tgDialCodes(void) {
 }
 
 - (void)resendTapped {
-    if (self.busy || self.resendSeconds > 0 || self.currentStep != TGLoginStepCode)
+    if (self.busy || self.resendSeconds > 0)
         return;
 
-    [[TGClient shared] send:@{ @"@type" : @"resendAuthenticationCode" }];
+    __weak TGLoginViewController *weakSelf = self;
+
+    if (self.currentStep == TGLoginStepEmailCode) {
+        [self setBusy:YES];
+        [[TGClient shared] resetAuthenticationEmailAddressWithCompletion:^(BOOL ok) {
+            TGLoginViewController *me = weakSelf;
+            if (me == nil)
+                return;
+            [me setBusy:NO];
+            if (ok)
+                [me showEmailStep];
+            else
+                [me showLoginAlert:@"The email address could not be reset."];
+        }];
+        return;
+    }
+
+    if (self.currentStep != TGLoginStepCode)
+        return;
+
+    [[TGClient shared] resendAuthenticationCodeWithFailureMessage:nil completion:^(NSDictionary *info) {
+        TGLoginViewController *me = weakSelf;
+        if (me == nil || me.currentStep != TGLoginStepCode)
+            return;
+        if (info != nil)
+            [me applyCodeInfo:info];
+    }];
     [self startResendCountdown];
 }
 
@@ -675,6 +1201,11 @@ static NSDictionary *tgDialCodes(void) {
     if (self.currentStep == TGLoginStepCode) {
         NSString *result = [textField.text stringByReplacingCharactersInRange:range withString:string];
         return [self digitsOnly:result].length <= 8 && [[self digitsOnly:string] length] == string.length;
+    }
+
+    if (self.currentStep == TGLoginStepEmailCode || self.currentStep == TGLoginStepRecoveryCode) {
+        NSString *result = [textField.text stringByReplacingCharactersInRange:range withString:string];
+        return result.length <= 12;
     }
 
     if (self.currentStep == TGLoginStepPhone) {
@@ -696,6 +1227,8 @@ static NSDictionary *tgDialCodes(void) {
 
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
+    if (self.currentStep == TGLoginStepQrCode)
+        return;
     if (!self.busy && ![self.inputField isFirstResponder] && ![self.countryCodeField isFirstResponder])
         [self.inputField becomeFirstResponder];
 }
@@ -703,6 +1236,9 @@ static NSDictionary *tgDialCodes(void) {
 - (void)dealloc {
     [_resendTimer invalidate];
     _resendTimer = nil;
+    [_qrTimer invalidate];
+    _qrTimer = nil;
+    _currentActionSheet.delegate = nil;
     _inputField.delegate = nil;
     _countryCodeField.delegate = nil;
 }

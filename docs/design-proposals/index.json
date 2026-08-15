@@ -1,0 +1,657 @@
+[
+ {
+  "theme": "Chat management",
+  "markdownFile": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/docs/design-proposals/chat-management.md",
+  "options": [
+   {
+    "letter": "A",
+    "name": "Switches with drilldown",
+    "svgFile": "chat-management-a.svg",
+    "oneLine": "The standard grouped switch table with the nine media booleans collapsed into one 'Send Media' row showing '5 / 9' and pushing a sub-screen, plus value+disclosure rows for slow mode and removed users.",
+    "tradeoff": "Costs a push to see or change any individual media right; the '5 / 9' label is the only hint of what is inside."
+   },
+   {
+    "letter": "B",
+    "name": "Presets, then the detail",
+    "svgFile": "chat-management-b.svg",
+    "oneLine": "A four-row preset group (Open group / Text only / Read-only / Custom) ticked with ListCheck writes the whole permissions struct in one tap, with the full switch matrix always present in a second group below.",
+    "tradeoff": "The presets are our invention rather than Telegram's, and the screen now scrolls so half the matrix is off-screen at rest."
+   },
+   {
+    "letter": "C",
+    "name": "Checklist, no switches",
+    "svgFile": "chat-management-c.svg",
+    "oneLine": "Replaces UISwitch with a ListCheck tick, reclaiming 79pt per row so a row can carry both a tick and a value and slow mode fits inline as a seven-segment TGButtonGroupView strip in a 43pt row.",
+    "tradeoff": "Breaks with every other Settings screen in the app, a tick reads as weaker affordance than a switch, and batch Save adds a discard-confirmation state."
+   }
+  ],
+  "recommendation": "Option A, with C's inline seven-segment ButtonGroup row borrowed for slow mode. A is indistinguishable from the settings screens already shipped, needs no new cell class, and fits the whole top-level form on one non-scrolling 320x480 screen — which is exactly what the question asked — while the borrowed strip removes its only real weakness, a push for a seven-value enum.",
+  "cannotFit": [
+   "Expand/collapse of the media sub-matrix in place: a ~13-row insert animation over plated cells drops frames badly on the A5, so the sub-matrix has to be a push or an always-visible group.",
+   "Chat event log rendered as service messages inside a chat view (how modern clients show the ~45 chatEventAction variants): instantiating the conversation renderer for a synthetic message list competes with the real chat controller for the image cache on 512MB. Reduced version: a plain 51pt two-line list, losing in-event media previews.",
+   "UIDatePicker for invite-link expiry: it runs on iOS 6 but at 216pt tall there is no sheet-with-picker idiom in the 2013 language. Reduced version: a checklist of durations (1 hour / 1 day / 1 week / Never).",
+   "Set chat location (pin-drop map plus reverse geocode): MapKit works, but it is a whole new picker surface for a feature nobody uses — recommend dropping rather than reducing.",
+   "Group sticker set preview grid: nine resident 64pt sticker thumbnails on top of the chat's existing sticker cache risks jetsam on 512MB. Reduced version: short-name field plus one row with the set title and count."
+  ]
+ },
+ {
+  "theme": "Groups and channels — member management, statistics and boosts",
+  "options": [
+   {
+    "letter": "A",
+    "name": "Numbers list",
+    "svgFile": "groups-channels-a.svg",
+    "oneLine": "Statistics is a plain white list of 51pt Cell102 rows showing label, value and a coloured delta, with boosts as two rows carrying a DialogListUnreadBadge.",
+    "tradeoff": "No shape at all — you learn the direction of a number but never whether growth was steady or one Tuesday spike."
+   },
+   {
+    "letter": "B",
+    "name": "Sparkline rows",
+    "svgFile": "groups-channels-b.svg",
+    "oneLine": "Same list, but each headline row is followed by a 51pt graph row that draws one seven-point #337ACC polyline with no axes, plus a boost level meter built from ButtonGroup segment art.",
+    "tradeoff": "No y-axis and no multi-series, so you read shape from the curve and magnitude only from the row above it; drill-down is a table of seven days, not a second chart."
+   },
+   {
+    "letter": "C",
+    "name": "Chart panel and mode bar",
+    "svgFile": "groups-channels-c.svg",
+    "oneLine": "A full stats screen: the members screen's 44pt ButtonGroup mode bar (Growth / Top posters / Boosts) over a 128pt gridded chart panel, then 49pt member rows carrying a 4pt proportional bar as a horizontal bar chart.",
+    "tradeoff": "Holds a 327 kB backing store alive while a table scrolls over it, the chart is completely untouchable (no scrub, no zoom, no tooltip), and it leaves only 244pt for content."
+   }
+  ],
+  "markdownFile": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/docs/design-proposals/groups-channels.md",
+  "recommendation": "Option B. Option A is defensible and cheap but throws away the only thing a chart is for — telling a rise from a spike — to save a drawRect: with seven line segments, while Option C commits a bespoke chart view and a large live bitmap to a feature the catalogue already marks blocked and still cannot let you touch the chart. B keeps every row inside the existing 51pt Cell102 idiom, adds no artwork, and extends downward by sections if the boosts API ever lands.",
+  "cannotFit": [
+   "Telegram's interactive graphs — zoom, pan, the two-handle range scrubber, tap-to-reveal tooltips and the expanding drill-down chart all need continuous re-tessellation of a several-hundred-point path during a gesture, which one A5 core cannot do behind a scrolling table on iOS 6.1.3.",
+   "Stacked and multi-series charts (joined vs left, message types) — two series on a 320pt axis at 1.5pt stroke are unreadable before they are slow; reduced to one series per section.",
+   "Pie and donut charts for language/source breakdowns — no circular-chart precedent or asset in the idiom; reduced to rows with a percentage in the value slot.",
+   "Boost gifting, boost purchase, and any Stars or paid-message flow — these need an in-app-purchase or web-checkout surface, and paid messages are already marked blocked. Only display of boost level, boost count and the booster list is possible.",
+   "Live-updating or refreshable stats — there is no pull-to-refresh anywhere in the 1.1 source and no toast/banner idiom, so the screen loads once on viewWillAppear: and shows what it got.",
+   "Group video chats — a multi-party audio session with a participant grid exceeds the codec budget and needs UICollectionView, which does not exist on iOS 6."
+  ]
+ },
+ {
+  "theme": "Search",
+  "markdownFile": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/docs/design-proposals/search.md",
+  "options": [
+   {
+    "letter": "A",
+    "name": "Single scope bar + filter sheet",
+    "svgFile": "search-a.svg",
+    "oneLine": "Finishes what the repo already has: one 36pt scope bar of five SearchBarScopeButton plates (All/Media/Links/Files/Voice) pinned under the search bar, with chat type, date range and sender behind a Filter header button that opens a TGActionSheet.",
+    "tradeoff": "Active filter state is invisible — only a 'Filter (3)' caption tells you anything is on, so users must reopen the sheet to recall what they set."
+   },
+   {
+    "letter": "B",
+    "name": "Scope bar + removable filter chips",
+    "svgFile": "search-b.svg",
+    "oneLine": "Adds a second 34pt line under the scope bar holding active filters as 26pt scope-button chips with an x glyph, plus a '+' chip that opens the same sheet; the same strip carries Saved Messages tags.",
+    "tradeoff": "Costs 34pt of vertical space (one whole 51pt result row) and introduces a chip rail the 2013 app never had, albeit drawn entirely in its own scope-button art."
+   },
+   {
+    "letter": "C",
+    "name": "In-field scope token + Options screen",
+    "svgFile": "search-c.svg",
+    "oneLine": "Drops the scope bar entirely: the chat scope becomes a 22pt token inside the search field and all other filters move to a pushed grouped Options table, giving the results list the full 372pt plus a 'Show 42 more results' footer row.",
+    "tradeoff": "Media/Links/Files filters become two taps and a screen away with near-zero discoverability, and shifting UISearchBar's internal text rect for the token is an undocumented iOS 6 hack."
+   }
+  ],
+  "recommendation": "Option B, built as Option A first. A is already about 80% present in TGSearchViewController and is the honest baseline, but its invisible filter state is precisely the defect that makes a search screen untrustworthy, and the fix is a strip the code already has a height constant and an inset calculation for; C's token is the prettiest idea but buries the most-used filters and puts the riskiest UIKit hack on the most-used screen.",
+  "cannotFit": [
+   "Sticker/emoji search results grid — decoding many animated stickers at once has no headroom on a 512MB single-core A5, and there is no UICollectionView; only a static-thumbnail grid of installed sets is viable",
+   "Jump-to-date heat calendar (getChatMessageCalendar) — the density month grid is a hand-drawn view with no 2013 analogue and wants a transition richer than push/modal; the reduced version is a UIDatePicker action sheet calling getChatMessageByDate, giving up density shading",
+   "Media-grid fast-scroll date bubble — needs a floating overlay tracking a custom scroll indicator during momentum scrolling, costing frame time the A5 does not have, and buying nothing on a scroll range only a few screens long",
+   "Downloaded-files search — no download manager exists in this client, so searchFileDownloads has nothing to search",
+   "Public post search, sponsored results, story search, nearby chats and secret-chat search — blocked on Stars payments, ad reporting, a story viewer this hardware cannot sustain, a discontinued server feature, and absent E2E sessions",
+   "Interactive swipe-to-dismiss of the search screen — iOS 6 has no interactive view-controller transitions; entry is push, exit is the back button or Cancel"
+  ]
+ },
+ {
+  "theme": "Links and previews",
+  "markdownFile": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/docs/design-proposals/web-and-links.md",
+  "options": [
+   {
+    "letter": "A",
+    "name": "Compact preview footer, Safari for everything",
+    "svgFile": "web-and-links-a.svg",
+    "oneLine": "A 2pt accent-bar block inside the existing bubble carrying site name, title, one description line and a 52pt thumbnail; every external link opens through a domain-confirmation action sheet into Safari.",
+    "tradeoff": "No Instant View at all and no large-media variant, so image-led channel posts collapse to a 52pt grey square."
+   },
+   {
+    "letter": "B",
+    "name": "Native Instant View reader from page blocks",
+    "svgFile": "web-and-links-b.svg",
+    "oneLine": "Option A's bubble plus the large-media layout and a 34pt INSTANT VIEW button strip that pushes a UITableView reader with one cell class per TDLib page block and no web view anywhere.",
+    "tradeoff": "The biggest build in the area — a dozen cell classes, a rich-text builder and a measurement pass — and v2 tables, embeds and maps still degrade to Safari."
+   },
+   {
+    "letter": "C",
+    "name": "UIWebView reader over locally generated HTML",
+    "svgFile": "web-and-links-c.svg",
+    "oneLine": "Same bubble, but the reader converts page blocks to an HTML string with an inlined stylesheet and lets UIWebView draw it, wrapped in our nav bar, progress line and a 44pt Footer toolbar.",
+    "tradeoff": "8-15MB resident per web view on a 512MB phone, WebKit's scrolling and typography instead of ours, and no hook for our tap-run or long-press machinery."
+   }
+  ],
+  "recommendation": "Ship A first and then B: A costs a week on components that already exist and delivers the thing users see constantly, and B's bubble is literally A's bubble plus a media variant and a button strip. C looks cheaper only until you weigh UIWebView's resident memory on a 512MB device against a fortnight of cell classes — TDLib hands us structured blocks precisely so no browser is needed, and declining that is the wrong trade here.",
+  "cannotFit": [
+   "Telegram Mini Apps / Web Apps — need WKWebView with a postMessage bridge plus modern TLS and ES6; iOS 6 has neither engine nor certificate stack, so these must say 'not supported' and offer Safari",
+   "Instant View embedded blocks (YouTube, tweets, iframes) — the supplied HTML is modern JS against hosts requiring TLS 1.2/SNI the 4S stack does not do; render the poster and open Safari",
+   "Instant View map blocks — MKMapSnapshotter is iOS 7+ and an offscreen MKMapView render on a 4S is slow and memory-hungry; static placeholder that opens Maps",
+   "Animated/GIF link previews played inline — a decoded frame buffer per visible cell in a scrolling table is unaffordable; show the first frame with a play disc",
+   "Instant View v2 tables with colspan/rowspan — the grid measurer plus its own horizontal scroll view is a separate project; first pass renders a table as an 'Open in Safari' plate",
+   "Interactive swipe-back dismissal of the reader — iOS 6 has no interactive pop transition; the back button is the only exit"
+  ]
+ },
+ {
+  "theme": "Premium",
+  "markdownFile": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/docs/design-proposals/premium.md",
+  "options": [
+   {
+    "letter": "A",
+    "name": "Premium Settings Group",
+    "svgFile": "premium-a.svg",
+    "oneLine": "A pushed grouped-settings screen on the tiled SettingsBackground ground: an 86pt profile-style header with a gold star tile answering 'do I have it?', then 44pt right-detail rows where each limit reads as one two-run label, grey '5' then blue '10'.",
+    "tradeoff": "Six sections means a long scroll to reach the gift-code action, and the status header scrolls away; it reads as just another settings page rather than as the premium screen."
+   },
+   {
+    "letter": "B",
+    "name": "The Ledger",
+    "svgFile": "premium-b.svg",
+    "oneLine": "Premium as a pure comparison table: a pinned 44pt status banner, then plain white full-bleed 44pt rows with two right-aligned columns (now in #888888 at x248, premium in bold #356596 at x310) under 26pt CategoryDivider section strips that carry the column heads.",
+    "tradeoff": "Loses every word of explanation - no per-feature copy, no detail screens, viewPremiumFeature never fires - and the two right columns squeeze long labels into truncation on 320pt."
+   },
+   {
+    "letter": "C",
+    "name": "Scoped Premium",
+    "svgFile": "premium-c.svg",
+    "oneLine": "A 30pt ButtonGroup segment bar pinned under the nav bar (Status | Limits | Features) swapping one table in place, with the Features segment drawn as 51pt Cell102 rows using the contact-cell geometry and 40pt identity-colour glyph tiles.",
+    "tradeoff": "Premium status is invisible on two of the three segments, it permanently spends 30pt of a 480pt screen on chrome, and it is the most code and the most memory of the three."
+   }
+  ],
+  "recommendation": "Option A, borrowing B's dimmed 'Not available in this client' rows. Premium here is a property of the account rather than a product, so it belongs on a page that looks like every other settings page, and A's 86pt profile header answers the first question at a glance while reusing the most existing code and adding no new artwork.",
+  "cannotFit": [
+   "Buying Premium in any form - App Store purchase needs Telegram's own product IDs bound to their bundle ID and TDLib rejects a receipt from a foreign bundle, while the web checkout is a modern card form that iOS 6 UIWebView cannot host; no option draws a Subscribe button",
+   "The animated promo carousel - per-feature MP4/TGS loops on a horizontally paging gradient need a Lottie renderer and UICollectionView, neither of which exists here, and per-frame video decode on one A5 core is unaffordable",
+   "The gradient/blur premium identity - no blur or vibrancy on iOS 6, and CALayer shadows on a scrolling list are a per-frame rasterise the A5 cannot afford",
+   "Custom emoji and emoji status - statuses are document ids that must be downloaded and animated, and with no custom-emoji pipeline the picker would show empty cells",
+   "Premium stickers, upgraded/unique gifts and gift auctions - all are defined by animation (premium overlays, rotating symbol patterns, gradient backdrops, live bid feeds) and every action costs Stars we cannot buy",
+   "Star revenue graphs and withdrawal - the statistics payload is a modern chart format with no renderer available to us and the flow ends in an external web page behind 2FA",
+   "Gesture-driven interactive dismissal - iOS 6 has no interactive view controller transitions, so the screen is a plain push with a standard back button"
+  ]
+ },
+ {
+  "theme": "Stickers and custom emoji",
+  "options": [
+   {
+    "letter": "A",
+    "name": "Panel",
+    "svgFile": "stickers-emoji-a.svg",
+    "oneLine": "A 216pt input-accessory panel: all sets concatenated into one vertically scrolling UITableView of Cell102 plates (78pt rows, four 72x72 tiles at x 2/78/154/230) with a pinned 30pt ButtonGroup tab strip of set covers, plus custom emoji drawn as 18x18 inline boxes inside the bubble's own drawRect.",
+    "tradeoff": "One long shared scroll, so a 200-sticker set makes reaching later sets a fling or a tab tap, and the 44pt search bar eats an already short panel when pulled down."
+   },
+   {
+    "letter": "B",
+    "name": "Library",
+    "svgFile": "stickers-emoji-b.svg",
+    "oneLine": "Browsing lives entirely in a pushed Settings > Stickers table: 44pt search, 78pt trending rows with a five-cover strip and a 70x30 GroupedActionButtonGreen ADD, 51pt installed rows with a 40pt cover at x5 and text at x49, set preview pushed on tap.",
+    "tradeoff": "Gives up in-chat sending beyond the recents strip: picking a sticker mid-conversation means leaving the chat, so this is the management half rather than a whole answer."
+   },
+   {
+    "letter": "C",
+    "name": "Paged decks",
+    "svgFile": "stickers-emoji-c.svg",
+    "oneLine": "The panel is a pagingEnabled scroll view showing exactly eight tiles per page (two plated 78pt rows) under a 30pt set-name header, with page dots below and a long-press 176x176 preview overlay that is the only place a sticker animates.",
+    "tradeoff": "Sets stop reading as one shelf, a 9-sticker set wastes a page, and with no tab strip reaching a specific set among fifteen means paging or a round trip through the SETS screen."
+   }
+  ],
+  "markdownFile": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/docs/design-proposals/stickers-emoji.md",
+  "recommendation": "Ship A with B beside it: TGStickerPanelView already implements sections, a view recycler, a purge distance and a cache limit, so A is finishing work rather than new work, and B is not a competitor but the management surface (install, archive, reorder, trending) that A has nowhere to put, costing only one new 78pt cell over a 51pt row table. C's bounded-memory guarantee is its best argument, but UITableView recycling plus the existing purge distance already bound the working set to about the same 2 MB, so it pays a real usability tax for nothing — though its long-press overlay should be adopted regardless, since it is the one moment the single Lottie instance can play with nothing else scrolling.",
+  "cannotFit": [
+   "Video (WEBM/VP9) stickers — iOS 6 AVFoundation has no VP9 decoder and the A5 has no hardware path; only the static thumbnail can ever be shown",
+   "Many animated stickers playing at once — eight Lottie rasterisers on one A5 core would drop the panel to single-digit frames, hence one instance process-wide and a static first frame everywhere else",
+   "Sending custom emoji and setting an emoji status — both Premium-gated server-side, so only incoming custom-emoji rendering is worth building",
+   "Creating or editing sticker sets — a dozen TDLib calls plus a multi-screen authoring flow with image processing, for something users do via @stickers bot",
+   "Mask stickers — need a photo editor with face detection and interactive placement, which does not exist in this client",
+   "Emoji suggestions URL — the page assumes a current JavaScript engine; iOS 6 has only the old UIWebView",
+   "Gesture-driven interactive dismissal of the sticker preview overlay — iOS 6 has no interactive transitions, so the overlay is a 0.15s window fade"
+  ]
+ },
+ {
+  "theme": "Stories",
+  "options": [
+   {
+    "letter": "A",
+    "name": "Pushed viewer with full chrome",
+    "svgFile": "stories-a.svg",
+    "oneLine": "The story viewer is an ordinary pushed controller keeping the blue nav bar, a 3pt five-segment position strip under it, a letterboxed 9:16 photo on black, a caption plate, and a 30pt ButtonGroup footer of Reply / heart / Share; entry is a single 73pt 'Stories' row pinned at the top of the chat list.",
+    "tradeoff": "64pt of blue chrome sits over every story and the photo is letterboxed rather than full-bleed; no auto-advance, so eleven stories are eleven taps."
+   },
+   {
+    "letter": "B",
+    "name": "Ring tray plus black modal viewer",
+    "svgFile": "stories-b.svg",
+    "oneLine": "An 82pt horizontally scrolling tray of 56pt rounded-rect avatars with 2pt rounded unread rings sits above the chat list (My Story first), opening a black full-screen modal viewer with timed progress bars, an inline reply field and a close button.",
+    "tradeoff": "Costs 82pt of a 480pt screen permanently, ~1100 lines, 6-8MB resident, and a timer that will skip stories on a slow network; it promises a modern player it cannot fully deliver (no swipe-to-dismiss, unreliable video)."
+   },
+   {
+    "letter": "C",
+    "name": "Stories as a read-only conversation",
+    "svgFile": "stories-c.svg",
+    "oneLine": "No viewer and no tray: a pseudo-chat named 'Stories' in the chat list opens TGChatViewController in read-only mode, each story rendered as an incoming Msg_In bubble with author avatar, thumbnail, caption and timestamp, with the existing long-press menu for react/reply.",
+    "tradeoff": "Gives up the format entirely - it is a digest, not stories: no rings, no full-screen watching, and all posters' stories flattened into one chronological stream."
+   }
+  ],
+  "markdownFile": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/docs/design-proposals/stories.md",
+  "recommendation": "Option A, with B's tray as a later optional addition: it is the only one both recognisable as stories and honest about the hardware, since dismissal on iOS 6 must be a button and the nav bar is where this app's dismissal button already lives, and a position strip beats a timer that silently skips content when the network is slow. Its chat-list row entry point costs 73pt only when stories exist and reuses an existing cell, whereas the tray costs 82pt permanently plus a per-poster avatar decode on every chat-list appearance - and the viewer is identical either way, which is why the two decisions should stay separate.",
+  "cannotFit": [
+   "Live stories (RTMP / group-call): needs the WebRTC stack and real-time video decode, impossible on an A5 under iOS 6 - render a live poster as an ordinary unread ring and show a one-button UIAlertView",
+   "Posting a video story: capture works but there is no trimming/transcoding stack on iOS 6 inside 512MB and the upload sizes are impractical - composer is photo-only",
+   "Story statistics: getStoryStatistics returns StatisticalGraph JSON meant for a charting web view; no WKWebView on iOS 6 and no charting code here",
+   "Stealth mode and custom expiration period: server-side Premium gates that error without a subscription, so the rows should not be drawn at all",
+   "Business-account stories (editBusinessStory / deleteBusinessStory): require a business connection and a connected bot",
+   "Interactive dismissal, hold-to-pause rubber-band, pinch-to-zoom, scale-from-avatar open transition and cube page turns: iOS 6 has no interactive view-controller transitions, so each is replaced by a tap or a button or dropped",
+   "Reliable video story playback: only the low-quality alternative file may be fetched, and failure to play must fall back silently to the still cover",
+   "A story-authoring canvas (draggable stickers, drawn text, placed areas): reading and hit-testing storyArea rectangles is fine, but direct-manipulation authoring is neither in this idiom nor within the CPU budget"
+  ]
+ },
+ {
+  "theme": "Profiles and identity",
+  "options": [
+   {
+    "letter": "A",
+    "name": "Everything is a row",
+    "svgFile": "users-contacts-a.svg",
+    "oneLine": "Emoji status becomes a 15 pt glyph after the name, the accent colour just picks which of the eight identity colours fills the avatar, and birthday plus personal channel become ordinary 44 pt grouped rows.",
+    "tradeoff": "Zero new components and it will never look wrong, but the accent is invisible on a photo avatar and the channel is a name with no preview."
+   },
+   {
+    "letter": "B",
+    "name": "Identity header",
+    "svgFile": "users-contacts-b.svg",
+    "oneLine": "The header grows 86 to 118 pt, the accent tints its gradient and paints a solid 3 pt rule along its bottom edge, and emoji status and birthday become 22 pt tappable chips built from the reaction-chip recipe.",
+    "tradeoff": "Costs 32 pt of a 480 pt screen, the wash reads weakly on the pale half of the palette, and chips are a slightly foreign shape outside a bubble."
+   },
+   {
+    "letter": "C",
+    "name": "Channel preview card",
+    "svgFile": "users-contacts-c.svg",
+    "oneLine": "The personal channel becomes a full-bleed 73 pt DialogListCell showing its latest post, with a 25 pt #E4E9F0 birthday strip under the header on the day itself.",
+    "tradeoff": "Breaks the grouped-table rhythm with a plain full-bleed row, costs one extra history call per profile open, and does nothing for the accent colour."
+   }
+  ],
+  "markdownFile": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/docs/design-proposals/users-contacts.md",
+  "recommendation": "Option C, using Option A's row treatment for everything C does not cover: the personal channel is the only one of these features that is real content rather than a value, and reusing TGDialogListCell gets it almost free and guarantees it looks right on device. Option B is the fallback if the accent colour turns out to matter, since its accent rule is the most honest way to show a colour in an idiom with no tint system, but 32 pt of header is a real price.",
+  "cannotFit": [
+   "Animated emoji status — a premium status is a looping VP9/WEBM sticker or Lottie; no VP9 decoder exists on the A5 and looping animation behind a scrolling table burns the single core. Only the static thumbnail ships.",
+   "Gradient profile accent colours — the rulebook forbids tinting the name, and a per-profile CAGradientLayer under a scrolling table is a per-frame rasterise the A5 cannot afford. Reduced to one flat colour from the fixed eight.",
+   "Per-profile background patterns or custom header wallpapers — a 320x118 pt decode held per screen on a 512MB device, for no informational gain.",
+   "Main profile tab strip (Posts/Gifts/Media) — no UICollectionView on iOS 6 and no gesture-driven paging between view controllers; a swipeable strip means three live tables at once. The version that fits is a disclosure row per section that pushes a normal list.",
+   "Stretchy/parallax/blur-behind profile header — no UIVisualEffectView, no vibrancy, and the original header is a static table header view."
+  ]
+ },
+ {
+  "theme": "Reactions on a message",
+  "markdownFile": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/docs/design-proposals/reactions.md",
+  "options": [
+   {
+    "letter": "A",
+    "name": "Chips inside the bubble",
+    "svgFile": "reactions-a.svg",
+    "oneLine": "Four 20pt chips (emoji 14 + bold-11 count) on a row inside the bubble's text column, filled with the bubble's own _Selected artwork, the chosen one bordered #0779D0, added via long-press TGPopupMenu React then a TGMenuView-metric emoji strip.",
+    "tradeoff": "Every bubble kind now has a reactions case in its frame-based height calculation, and five or more emoji wrap to a second row that can double a short message's height."
+   },
+   {
+    "letter": "B",
+    "name": "Summary line and unread badge",
+    "svgFile": "reactions-b.svg",
+    "oneLine": "A single always-20pt line under the text: the distinct emoji at 14pt on a 20pt pitch, then the total 11 in a stretched DialogListUnreadBadge, whole line taps through to the reactor list.",
+    "tradeoff": "Loses per-emoji counts and tap-to-toggle from the bubble; a blue unread badge is a louder signal than the content warrants."
+   },
+   {
+    "letter": "C",
+    "name": "Chips in the gutter",
+    "svgFile": "reactions-c.svg",
+    "oneLine": "Bubble metrics untouched: chips sit in the wallpaper 4pt beneath the bubble in the bubble's normal fill, edge-aligned to it, ending in a + chip that opens the picker in one tap, plus the floating unread-reactions button above the input panel.",
+    "tradeoff": "Near-white chips on a user wallpaper have weak contrast, it spends the most vertical space, and the + chip is an invention with no 2013 precedent."
+   }
+  ],
+  "recommendation": "Option A, because it is the rulebook's own answer, the constants for it are already written in src/TGReactionPickerView.m (kChipHeight 20, kChipPadding 7, kChipGap 4, emoji 13, count bold 11), and it is the only option that shows all four counts, the chosen state and a toggle target in the bubble itself. I would borrow C's floating unread-reactions button, which is orthogonal to the chip question, and fall back to B only if the cell-height arithmetic in the frame-based ChatViewCell proves unreliable, since B's line is a constant 20pt.",
+  "cannotFit": [
+   "Animated reaction effects (appear/select/activate/around) — the assets are TGS gzipped Lottie; no Lottie renderer exists for iOS 6 and a single-core A5 cannot render vector animation at frame rate.",
+   "Custom emoji reactions — Premium-gated to send and the icons are animated custom-emoji stickers; incoming ones can only be shown as a generic star chip.",
+   "Paid (star) reactions — sending needs a Telegram Stars balance topped up via in-app purchase, impossible on a sideloaded build.",
+   "Top paid reactors leaderboard — drawable read-only, but it is a second new avatar row inside the cell for a feature the user can never take part in; recommend leaving it out.",
+   "Story reactions and live-story/group-call paid reactions — there is no story viewer on this client and there will not be one on a 4S.",
+   "Saved Messages reaction tags — Premium-gated server-side, so the tag strip would always be empty and label setting would fail.",
+   "Reaction statistics graphs — modern clients use a WebView-backed chart component; iOS 6 has only UIWebView and hand-drawing the charts is disproportionate.",
+   "A one-tap add path that is also archaeologically honest — without a context menu the only 2013-legal entry points are long-press TGPopupMenu and a double-tap quick reaction; option C's + chip buys one-tap adding only by inventing a control.",
+   "MediaActionButton.png as the chip background, which typography-colour.md §5 specifies — the asset does not exist in images/, so the chip must use Msg_In_Selected / Msg_Out_Selected instead."
+  ]
+ },
+ {
+  "theme": "Stars and payments",
+  "markdownFile": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/docs/design-proposals/stars-payments.md",
+  "options": [
+   {
+    "letter": "A",
+    "name": "Checkout is a screen",
+    "svgFile": "stars-payments-a.svg",
+    "oneLine": "A pushed grouped-table Checkout on the SettingsBackground pattern: 78pt product header row, one 44pt row per labeled price part plus a bold Total, a #697487 comment stating the balance and remainder, disclosure rows for bot and Terms, and a 300x43 GroupedActionButtonGreen 'Pay 75 Stars' row.",
+    "tradeoff": "Two taps and a push animation to spend 75 stars, and it is the slowest of the three; in exchange it is the only structure that survives card payments, tips, shipping and receipts without a redesign."
+   },
+   {
+    "letter": "B",
+    "name": "Wallet with a direction filter",
+    "svgFile": "stars-payments-b.svg",
+    "oneLine": "The Stars hub becomes a plain white list of 51pt Cell102 rows under a full-width 30pt TGButtonGroupView (All / Earned / Spent), the balance moves into the navigation-bar subtitle in #E0EEFD 13pt, and payment is confirmed by a TGActionSheet without ever leaving the chat.",
+    "tradeoff": "An action-sheet title cannot carry the product photo, so the user confirms against a name and a number; it also has no room to grow, so card payments would force Option A's screen back in alongside it."
+   },
+   {
+    "letter": "C",
+    "name": "The ledger is a chat list",
+    "svgFile": "stars-payments-c.svg",
+    "oneLine": "Transactions render as 73pt DialogListCell rows with the amount inside a stretched DialogListUnreadBadge, the balance sits in a 44pt #EBF0F5 banner under the nav bar, and payment is a bare TGAlertView confirm.",
+    "tradeoff": "A blue badge on the right of a 73pt row already means 'unread messages' to every Telegram user, and the alert has room for two lines, so no price breakdown, tip or shipping is possible."
+   }
+  ],
+  "recommendation": "Option A, with B's navigation-bar balance subtitle borrowed into it. A is the only layout that still works once paymentFormTypeRegular brings price parts, tips, shipping options and saved cards — each of which needs a row — and Twelve shipped exactly this structure (TGPaymentCheckoutController plus its info and card controllers), which is the strongest evidence available that it holds up in this idiom.",
+  "cannotFit": [
+   "Buying Stars, gifting Stars and Star giveaways: all route through StoreKit product identifiers registered to Telegram's App Store account, which a sideloaded build does not have, and the Fragment top-up alternative needs a browser session iOS 6's UIWebView cannot hold. Every insufficient-balance path therefore dead-ends with a sentence and no 'Buy more' button.",
+   "Apple Pay checkout: PassKit requires iOS 8 and a Secure Element the iPhone 4S lacks.",
+   "Star revenue withdrawal: needs the 2FA password check plus a Fragment web session; the getStarWithdrawalUrl page cannot be completed in a 2013 UIWebView.",
+   "Unique gift upgrade card and its variant-cycling preview: a radial-gradient backdrop with a tiled symbol pattern animating under a sticker is beyond an A5; reduced to a static 51pt attribute row per model/symbol/backdrop with the rarity percentage as the right-hand value and a flat identity colour instead of the gradient.",
+   "Gift picker grid, resale marketplace and gift crafting: no UICollectionView, and a screenful of animated sticker gifts will not fit 512MB; reduced to a table of plated rows with four 72x72 static first-frame tiles and the price in bold 12 beneath.",
+   "Gift auctions: the live countdown plus bid-list reload stutters visibly on one A5 core, and a real-money auction that stutters is worse than none — recommend omitting rather than reducing.",
+   "A modal transaction-detail card over the list: iOS 6 has no over-context presentation, so all three options replace it with a navigation push."
+  ]
+ },
+ {
+  "theme": "Chat list organisation",
+  "markdownFile": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/docs/design-proposals/chat-list.md",
+  "options": [
+   {
+    "letter": "A",
+    "name": "Title-tap chooser",
+    "svgFile": "chat-list-a.svg",
+    "oneLine": "The nav-bar title becomes the folder name with a caret; tapping it raises a TGActionSheet of folders with unread badges, and the list geometry is untouched.",
+    "tradeoff": "Two taps per switch, the sheet hides the list while you choose, and it stops scaling past about six folders."
+   },
+   {
+    "letter": "B",
+    "name": "Scope-bar folder strip",
+    "svgFile": "chat-list-b.svg",
+    "oneLine": "A pinned 36pt strip under the nav bar of SearchBarScopeButton tabs with inline unread badges, scrolling horizontally when folders overflow.",
+    "tradeoff": "Costs 36pt permanently — one row of chat list — and stacks to 80pt of furniture when search is revealed."
+   },
+   {
+    "letter": "C",
+    "name": "Folders as a place",
+    "svgFile": "chat-list-c.svg",
+    "oneLine": "The Messages tab roots on a 51pt-row Folders screen (All Chats, Unread, folders, Archived, Create New Folder) that pushes the ordinary chat list.",
+    "tradeoff": "Slowest switch (pop plus tap) and puts a screen between the user and their chats unless the last folder is remembered on launch."
+   }
+  ],
+  "recommendation": "Option A: it spends zero screen space, changes neither the cell nor the table, and an action sheet is the container the app's own interaction rules name for a mutually-exclusive choice — which matters because most users will have no folders at all. B is better for someone living in three folders and is the right later addition, but only if the strip hides itself when fewer than two folders exist.",
+  "cannotFit": [
+   "Swipe-to-page between folders with both lists moving together: needs two live chat-list tables holding decoded 56pt avatars plus an interactive transition; iOS 6 has no interactive VC transitions and 512MB/one A5 core cannot carry it. Folder changes are discrete reloadData.",
+   "Modern animated tab strip with sliding selection underline and elastic overscroll: no UICollectionView, no spring animations in the idiom, and the rulebook forbids pill tabs. The scope bar swaps two PNGs instead.",
+   "Folder icon picker as a grid: no UICollectionView on iOS 6.1.3 (hand-laid 64pt tiles in a UIScrollView would work), but the icon artwork does not exist in images/ — 20-odd @2x glyphs must be drawn before the feature is possible.",
+   "Shareable folder invite links and the 'new chats added to a shared folder' banner: each is a nested chat multi-select editor; buildable but recommended cut for a single-device port.",
+   "Sponsored chats in search results: needs scroll-tied impression tracking plus a report sheet; possible but recommended not implemented."
+  ]
+ },
+ {
+  "theme": "New message content kinds",
+  "markdownFile": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/docs/design-proposals/messages-content.md",
+  "options": [
+   {
+    "letter": "A",
+    "name": "Attachment block",
+    "svgFile": "messages-content-a.svg",
+    "oneLine": "Every new kind reuses the existing file/attachment block inside the bubble — a 37pt media disc, a bold-15 title and a system-13 #697487 subtitle — with dice staying a bubble-less sticker and invoices/giveaways gaining one 43pt GroupedActionButton row.",
+    "tradeoff": "No map imagery at all, postage-stamp story previews and no giveaway artwork; the recipient must tap to learn anything the two lines do not say."
+   },
+   {
+    "letter": "B",
+    "name": "Media tile family",
+    "svgFile": "messages-content-b.svg",
+    "oneLine": "Each kind with imagery gets a real media tile inside the bubble clipped to kMediaRadius 6 — a 200x100 map still with a 30pt countdown ring, a 108x144 story preview, a product photo for invoices — with a text strip beneath.",
+    "tradeoff": "About 320KB of decoded bitmap per location row and 250KB per story row, and only two messages fit on a 480pt screen, so scrolling back through a media-heavy chat becomes slow and memory-risky."
+   },
+   {
+    "letter": "C",
+    "name": "Full-width banner rows",
+    "svgFile": "messages-content-c.svg",
+    "oneLine": "Machine-generated kinds leave the bubble entirely and render as 44pt full-width white banners with a hairline, text column at x=48, an optional countdown ring or chevron, and a TGButtonGroupView bar underneath for actions.",
+    "tradeoff": "Banners have no tail and no delivery ticks, so your own invoice looks identical to one you received and you cannot tell whether it sent; a busy channel starts to look like a settings table."
+   }
+  ],
+  "recommendation": "Option A, with the single borrowing from B that the live-location bubble gets the 200x100 map tile and 30pt countdown ring. Five of the six kinds are notifications with a payload that two lines of text answer completely, and A costs almost nothing and cannot regress scrolling; location is the one case where the imagery is the message, so that is where the memory is worth spending.",
+  "cannotFit": [
+   "Slot-machine dice (diceStickersSlotMachine): five TGS sprites playing in sync; TGLottieView manages one moderate TGS on an A5. Reduced to a static final-state image with the value, no spin.",
+   "A live map in a bubble: no MKMapSnapshotter before iOS 7 and one MKMapView per row will not fit 512MB. Reduced to a fetched still plus one shared full-screen MKMapView pushed on tap, so the bubble's map is never live.",
+   "Reliable background live-location updating: iOS 6 keeps CLLocationManager alive under the location key but jettisons the app under memory pressure with no fetch/significant-change combination that survives. Reduced to updating only while foregrounded or in the location background mode, and the bubble says 'paused' honestly.",
+   "Video stories: story video is frequently HEVC and iOS 6 has no decoder. Reduced to the cover frame plus a 'video unavailable' line; photo stories work fully.",
+   "Any blur (story viewer letterbox, media spoiler cover): no UIVisualEffectView on iOS 6. Only a pre-blurred small bitmap scaled up, which looks like what it is."
+  ]
+ },
+ {
+  "theme": "Saved Messages",
+  "markdownFile": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/docs/design-proposals/saved-messages.md",
+  "options": [
+   {
+    "letter": "A",
+    "name": "Chat with a tag scope bar",
+    "svgFile": "saved-messages-a.svg",
+    "oneLine": "Saved Messages stays the ordinary 2013 conversation screen, with a 36pt SearchBarScopeButton tag strip under the nav bar, a matching 20pt tag chip inside each bubble, and origins offered as a 'From' action sheet instead of a topics screen.",
+    "tradeoff": "Topics are only a filter, not a place — no per-topic counts, pinning or drafts — and the strip permanently costs 36pt of chat height."
+   },
+   {
+    "letter": "B",
+    "name": "Topics list",
+    "svgFile": "saved-messages-b.svg",
+    "oneLine": "Saved Messages opens a chat-list-shaped screen of 73pt TGDialogListCell rows, one per origin author, with Pinned/Saved-from CategoryDivider sections and the unread badge repurposed as a saved count; tapping pushes the chat in topic mode.",
+    "tradeoff": "Breaks the 2013 truth that Saved Messages is a chat — the compose bar moves one level away — and adds a second history-loading path plus edit-mode reorder plumbing."
+   },
+   {
+    "letter": "C",
+    "name": "Tag-sectioned digest",
+    "svgFile": "saved-messages-c.svg",
+    "oneLine": "Saved Messages opens a browsable list of saved messages grouped under collapsible tag section headers, each row showing the origin avatar and the message text, with a 'Chat' header button back to the real self-chat.",
+    "tradeoff": "Throws topics away entirely and inverts the model: a message with two tags appears in two sections, and per-section paging must be capped to survive the A5."
+   }
+  ],
+  "recommendation": "Option A, because it is the only one that does not contradict the source material — in 2013 Saved Messages was a chat, and its whole value is that typing a note saves it, which any list placed in front destroys; tags map cleanly onto the scope bar the rulebook already prescribes for folders, so A costs almost nothing new. Option B is the right eventual shape for a heavy account and its row art is free, so it should later be pushed from A's 'From' button rather than replacing the chat.",
+  "cannotFit": [
+   "Custom-emoji tags: need TGS/Lottie animated-sticker playback inside a 20pt chip on a scrolling list, which a single-core A5 with 512MB cannot do, and there is no static fallback frame without decoding the animation.",
+   "Premium pinned-topic limit raise and premium tag features: server-side entitlement, the client can only surface the error, so there is nothing to design.",
+   "Drag-to-reorder pinned topics with a lifted floating row: iOS 6 UITableView reordering offers only the plain grab-handle edit mode, no shadowed row following the finger and no usable edge auto-scroll.",
+   "Interactive swipe-back from a topic to the topics list: iOS 6 has no gesture-driven interactive transitions, only push and a Back button.",
+   "A tag strip floating over blurred content: no UIVisualEffectView and no vibrancy on iOS 6; the strip must be opaque SearchBarBackground art occupying its 36pt.",
+   "Jump-to-date as a continuous fast scrubber: re-querying getChatSparseMessagePositions as the thumb moves thrashes the A5 and the TDLib socket; only a one-shot UIDatePicker 'Jump to date' is buildable."
+  ]
+ },
+ {
+  "theme": "Forum topics",
+  "markdownFile": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/docs/design-proposals/forums.md",
+  "options": [
+   {
+    "letter": "A",
+    "name": "The chat list, one level down",
+    "svgFile": "forums-a.svg",
+    "oneLine": "The topic list is the chat list verbatim — 73pt DialogListCell rows, 56pt colour tiles, two-line previews, unread badges — with the hierarchy carried entirely by the nav bar (group name title, \"24 topics\" subtitle, \"Chats\" back button).",
+    "tradeoff": "Looks identical to the root chat list, so the only cues that you are one level down are in the 44pt navigation bar; a notification tap can land you here disoriented."
+   },
+   {
+    "letter": "B",
+    "name": "A compact index",
+    "svgFile": "forums-b.svg",
+    "oneLine": "Deliberately not the chat list: 51pt contact-cell rows with 40pt icons, one-line previews, a 44pt search bar, and pinned/unpinned CategoryDivider sections, fitting seven and a half topics per screen instead of five and a half.",
+    "tradeoff": "Gives up the two-line message preview and the feeling that a topic is a conversation; needs a new cell class since the contact cell has no date, badge or mute glyph."
+   },
+   {
+    "letter": "C",
+    "name": "The parent card",
+    "svgFile": "forums-c.svg",
+    "oneLine": "Option A's rows under an 86pt profile-style table header showing the group avatar, name and \"1 245 members, 24 topics\", tappable through to group info, so the parent sits on the content surface rather than only in the chrome.",
+    "tradeoff": "Costs a screenful and a half of rows, scrolls away (a sticky version is unaffordable on an A5), and duplicates the top third of the group profile screen."
+   }
+  ],
+  "recommendation": "Option A, because the rulebook's governing rule is that this app never invents a container when one exists, and a forum genuinely is a chat list — same unread counts, previews, swipe and sort — so any other shape costs a cell class to buy a distinction the nav bar already draws. Three simultaneous cues (back button \"Chats\", group-name title, \"24 topics\" subtitle, and no tab bar) keep the user oriented; C's header can be added later if the screen tests as confusing, and B only wins if real forums run to fifty-plus topics.",
+  "cannotFit": [
+   "Topic tabs strip above the transcript: needs UICollectionView (absent on iOS 6.1) and several message histories resident at once on 512MB with one A5 core — the catalogue already marks it blocked.",
+   "Animated TGS/Lottie custom-emoji topic icons: per-row per-frame vector rendering is out of reach; only a static WEBP first frame, decoded once and cached, is viable, and setting one requires Premium anyway.",
+   "Interactive swipe-from-edge back: iOS 6 has no interactive pop, so escaping Chats → Topics → Topic always costs two deliberate taps; unfixable, which is why the back-button labels carry so much of the design.",
+   "A sticky group header that survives scrolling: would mean laying out a second view on every scroll callback of a fast list on an A5 and permanently eating 44 of 416 usable points — Option C's scrolling header is the affordable version.",
+   "Drag-to-reorder pinned topics (setPinnedForumTopics): table editing-mode reordering fights our custom-drawn cells and the swipe-delete button; pin/unpin ships, reordering is a later pass."
+  ]
+ },
+ {
+  "theme": "Bots",
+  "markdownFile": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/docs/design-proposals/bots.md",
+  "options": [
+   {
+    "letter": "A",
+    "name": "Everything inline, in the chat",
+    "svgFile": "bots-a.svg",
+    "oneLine": "Inline keyboards render as 30pt ButtonGroup bars 4pt under the bubble, and the custom reply keyboard takes the system keyboard's 216pt slot as rows of 43pt GroupedActionButton plates.",
+    "tradeoff": "Adds button-row layout, hit testing and height contribution to ChatViewCell, slows chat scrolling, truncates long labels on a 320pt row, and puts typing and bot buttons into two exclusive modes."
+   },
+   {
+    "letter": "B",
+    "name": "Modal-first picker",
+    "svgFile": "bots-b.svg",
+    "oneLine": "Typing @bot pushes a presented modal with a 44pt search bar and 51pt Cell102 result rows, a switch-pm header row, and next_offset paging shown as one more row — the sticker ruling applied to inline results.",
+    "tradeoff": "Costs an extra tap and loses the live as-you-type feel, and it cannot answer inline keyboards at all since those belong to a specific message."
+   },
+   {
+    "letter": "C",
+    "name": "The Bot page",
+    "svgFile": "bots-c.svg",
+    "oneLine": "One pushed screen with the 86pt profile header, a Commands section of 44pt rows, and the web app reduced to a 52pt icon+title row reading \"Cannot run on this device\" over Open in Safari / Copy link buttons.",
+    "tradeoff": "It is honestly not a web app — a user expecting a store or a form gets a description and a link — and it does nothing for inline or reply keyboards."
+   }
+  ],
+  "recommendation": "Ship A and C together and keep B's modal for inline query results only: inline keyboards are attached to individual messages so the group button bar is the only way to draw them without inventing a control, and C gives the web-app problem a truthful home for almost no code. B earns its place solely for inline results, because holding decoded thumbnails in a live strip inside an already-heavy chat controller is exactly what kills a 512MB device, and a modal that frees its images on dismiss is both safer and already the ruled pattern for stickers.",
+  "cannotFit": [
+   "Telegram Mini Apps (openWebApp / sendWebAppData): iOS 6.1.3 has only UIWebView — no WKWebView, no script message handler bridge, pre-ES6 JavaScriptCore, and a TLS stack modern hosts reject; a current mini-app bundle will not parse and the A5's 512MB could not hold the DOM if it did",
+   "Attachment-menu bots: every entry point launches a web app, so the icons would be dead buttons",
+   "Playing games: same web runtime problem — the game bubble and the high-score table are buildable, pressing Play is not",
+   "Prepared inline messages, getGrossingWebAppBots, getWebAppPlaceholder, checkWebAppFileDownload: support calls for a runtime that cannot exist here",
+   "Inline message editing (editInlineMessage*): requires a bot-token session, impossible from a user client at any hardware level",
+   "Business connected bot management: requires an active Telegram Business subscription on the account",
+   "A live keyboard-height inline-results strip updating per keystroke: decoded thumbnails plus a live message list on 512MB is the jetsam configuration; refused on purpose in favour of the modal",
+   "Any bot UI needing a transition beyond push/modal — no blur behind a panel, no interactive dismissal, no view controller transitions on iOS 6"
+  ]
+ },
+ {
+  "theme": "Privacy and security",
+  "options": [
+   {
+    "letter": "A",
+    "name": "Pushed chain — one question per screen",
+    "svgFile": "privacy-security-a.svg",
+    "oneLine": "Each step of 2SV, passcode or recovery is its own pushed grouped table: one 44pt input row, one comment footer, a blue Next in the bar, keyboard permanently up in the bottom 216pt.",
+    "tradeoff": "Five pushes for one conceptual act, and the user can never see or edit the whole form at once; going back means unwinding the stack."
+   },
+   {
+    "letter": "B",
+    "name": "One form, one Done",
+    "svgFile": "privacy-security-b.svg",
+    "oneLine": "All four 2SV fields stacked in a single 4-row group with one blue Done that validates and commits everything at once, plus a red Turn Password Off group below.",
+    "tradeoff": "With the keyboard up only two rows are visible, so the table scrolls under it and the explanatory caption is hidden exactly when it is needed; mistakes surface only at Done."
+   },
+   {
+    "letter": "C",
+    "name": "Security hub with modal forms",
+    "svgFile": "privacy-security-c.svg",
+    "oneLine": "A new Security screen owns the live state (Passcode ON, Auto-Lock value, 2SV On, Recovery E-Mail unconfirmed in red, 4 devices) with the 44pt unconfirmed-session banner as table header; the wizards are raised modally with Cancel/Done.",
+    "tradeoff": "One more Settings level to navigate, 44pt spent on a usually-absent banner, and the passcode keypad window is the largest single piece of new code and memory."
+   }
+  ],
+  "markdownFile": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/docs/design-proposals/privacy-security.md",
+  "recommendation": "Option C for the hub with Option A's chain inside it: C is a statement about where state lives, A about where the seams between steps go, and C builds its modal forms out of A. Only the hub can show the two facts the feature set exists to convey — \"2SV on but recovery e-mail unconfirmed\" and \"a session you never confirmed\" — without making the user walk a wizard to find them.",
+  "cannotFit": [
+   "Gesture-driven or animated wizard chrome — iOS 6.1.3 has no interactive dismissal and no transitions beyond push and modal, so progress is a text caption ('Step 2 of 4'), never a control.",
+   "Biometric unlock — no Touch ID on a 4S and no LocalAuthentication before iOS 8; the passcode is the only lock.",
+   "Blurred or vibrant privacy overlay over the app snapshot — no UIVisualEffectView; the lock screen is opaque over Linen/DarkLinen.",
+   "UIAlertController-style prompt with an embedded passcode field plus explanatory footer — UIAlertController does not exist on iOS 6, and UIAlertView's secure-input style cannot carry the rules text, so passcode entry stays a full screen.",
+   "Per-session map view — MKMapView costs megabytes of tiles and a round trip per row on 512MB/one core; session detail shows country and IP as text, which is all TDLib returns anyway.",
+   "The full server-driven report option tree of arbitrary depth with a free-text comment — a UITextView over a 216pt keyboard leaves 200pt; reduced to one level of options plus a single-line reason row in a 44pt grouped cell.",
+   "A password strength meter or any live-validating chrome — no asset exists and inventing a PNG is forbidden; strength feedback can only be a changing footer sentence."
+  ]
+ },
+ {
+  "theme": "Login and accounts",
+  "options": [
+   {
+    "letter": "A",
+    "name": "Same wizard, one more menu",
+    "svgFile": "auth-account-a.svg",
+    "oneLine": "The three login screens are untouched; the empty left bar slot on the phone step gains an Options button that raises a TGActionSheet offering 'Log in by QR Code' and 'Log in with Email', both of which reuse the code-step layout verbatim.",
+    "tradeoff": "QR and email login are invisible until you open a menu, and multiple accounts get no visual presence beyond one Settings row."
+   },
+   {
+    "letter": "B",
+    "name": "QR front door",
+    "svgFile": "auth-account-b.svg",
+    "oneLine": "QR becomes a peer of phone entry, reached by a left bar button that swaps the two: a keyboard-free screen with a 216pt white plate, a 25-module code at 8pt per module, three numbered instructions and a refresh countdown.",
+    "tradeoff": "Adds a fourth screen and requires writing or bundling a QR encoder (600-900 lines of C) since quirc only decodes and iOS 6 has no CIQRCodeGenerator."
+   },
+   {
+    "letter": "C",
+    "name": "Accounts is a place",
+    "svgFile": "auth-account-c.svg",
+    "oneLine": "Multiple accounts becomes a first-class plain list in Settings, 51pt rows with identity-coloured avatars, ListCheck on the connected one and a stale unread badge on the others, plus two blue 44pt 'Add Account' rows that push the login stack.",
+    "tradeoff": "Only one account can be connected at a time on 512MB, so switching tears TDLib down and back up: a 2-5s progress row and badge counts that are only as fresh as the last time you were on that account."
+   }
+  ],
+  "markdownFile": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/docs/design-proposals/auth-account.md",
+  "recommendation": "Ship A now and B's QR screen next, hold C. A adds both login methods without moving a single pixel of the existing flow, because the one place the layout genuinely has room is the empty left bar slot (the phone step's 200pt content band is full and there are six points under the input plate); B is the right second step but is gated on a QR encoder that deserves its own task, and C promises simultaneous accounts the hardware only half-delivers.",
+  "cannotFit": [
+   "Sign in with Apple ID / Google ID (emailAddressAuthenticationAppleId/GoogleId): no AuthenticationServices and no Google SDK targeting iOS 6, so the token cannot be obtained",
+   "Passkey / WebAuthn and web-token login: requires AuthenticationServices and WKWebView, neither of which exists on iOS 6",
+   "Firebase SMS device verification: needs an APNs push receipt for the bundle; this sideloaded build has no push registration and no matching entitlement",
+   "Premium-purchase-gated authorization: needs a live StoreKit purchase against the modern Telegram product id",
+   "Two accounts connected simultaneously: a RAM limit, not an API one — one warm TDLib client already costs tens of MB of the 4S's 512MB, so every multi-account design must be serial",
+   "Displaying a login QR while also running the camera scanner: one camera, one screen, and a capture preview underneath a refreshing 216pt code stalls on a single A5 core",
+   "Gesture-driven interactive dismissal of any login screen: iOS 6 offers push and modal only"
+  ]
+ },
+ {
+  "theme": "Media and downloads",
+  "options": [
+   {
+    "letter": "A",
+    "name": "Downloads banner over a table-backed grid",
+    "svgFile": "media-download-a.svg",
+    "oneLine": "Shared media as a UITableView whose every 80pt cell draws four 79pt tiles, with a 44pt download-progress banner as the table header.",
+    "tradeoff": "Month sections quantise to whole rows so the last row of a month is ragged, and the banner scrolls away with the content."
+   },
+   {
+    "letter": "B",
+    "name": "Downloads as a fourth scope of Shared Media",
+    "svgFile": "media-download-b.svg",
+    "oneLine": "A 44pt SearchBarScopeButton strip adds a Downloads scope that gives the manager the whole screen as 51pt Cell102 rows with per-file progress bars and a pause ring.",
+    "tradeoff": "Costs 44pt of screen permanently, cramps four segments into 320pt, and hides download state entirely while the Media scope is selected."
+   },
+   {
+    "letter": "C",
+    "name": "Continuous hand-tiled grid with a docked tray",
+    "svgFile": "media-download-c.svg",
+    "oneLine": "A raw UIScrollView with a hand-written tile recycling pool, a sticky 25pt month strip, and a permanently docked 44pt download tray at the bottom.",
+    "tradeoff": "Three to four times the code, you reimplement UITableView's recycling by hand (where a bug leaks 100KB bitmaps), and the tray eats a whole tile row forever."
+   }
+  ],
+  "markdownFile": "/Users/alexanderhavrysh/Git/iOS/iTgLegacy/docs/design-proposals/media-download.md",
+  "recommendation": "Option A for the grid, with option B's 51pt row table as the screen its banner pushes to — the memory problem here is purely a recycling problem, and UITableView already solves recycling correctly on a device where a hand-rolled pool bug leaks 100KB bitmaps per scroll. Drop B's scope strip: reach the downloads screen from the banner and from Settings instead, which keeps download state visible in the common case and gives the grid back its 44pt.",
+  "cannotFit": [
+   "Real Gaussian blur for the minithumbnail placeholder — no usable CIFilter and no UIVisualEffectView on iOS 6.1.3; the reduced version is a tiny-JPEG decode upscaled with kCGInterpolationLow, which reads as blur only at tile size.",
+   "Gesture-driven interactive dismissal of the photo viewer and a tile-expands-into-fullscreen transition — iOS 6 has no view controller transition API beyond push and modal and no interactive transitions; reduced to a cross-dissolve modal with a Done button.",
+   "True full-resolution photo zoom — a 4000x3000 JPEG decodes to ~48MB on a 512MB device, so the viewer must decode via CGImageSourceCreateThumbnailAtIndex capped at 1136px and pinch-zoom bottoms out at screen resolution.",
+   "Play-while-downloading video via byte-range streaming — the A5 has no headroom for 720p H.264 plus the AVAssetResourceLoaderDelegate chunk copies; reduced to audio-only streaming, video downloads then plays.",
+   "Client-side video transcode before upload via the file-generation protocol — AVAssetExportSession runs slower than real time above 640x480 on a 4S and gets killed in the background; reduced to photo downscaling only.",
+   "A live per-chat storage breakdown from getStorageStatistics — it walks every cached file, seconds of I/O; reduced to the fast API on the Settings row plus a separate pushed screen with a spinner, chat_limit 32, and a session-long cache."
+  ]
+ }
+]

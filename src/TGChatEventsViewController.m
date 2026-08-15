@@ -33,21 +33,39 @@ static NSArray *TGEventsAllFilters(void) {
 			@"videoChatChanges", @"forumChanges", nil];
 }
 
-static NSString *TGEventsFilterTitle(NSString *filter) {
-	if ([filter isEqualToString:@"messageEdits"]) return @"Edited Messages";
-	if ([filter isEqualToString:@"messageDeletions"]) return @"Deleted Messages";
-	if ([filter isEqualToString:@"messagePins"]) return @"Pinned Messages";
-	if ([filter isEqualToString:@"memberJoins"]) return @"New Members";
-	if ([filter isEqualToString:@"memberLeaves"]) return @"Members Left";
-	if ([filter isEqualToString:@"memberInvites"]) return @"Invited Members";
-	if ([filter isEqualToString:@"memberPromotions"]) return @"Admin Rights";
-	if ([filter isEqualToString:@"memberRestrictions"]) return @"Restrictions";
-	if ([filter isEqualToString:@"infoChanges"]) return @"Group Info";
-	if ([filter isEqualToString:@"settingChanges"]) return @"Settings";
-	if ([filter isEqualToString:@"inviteLinkChanges"]) return @"Invite Links";
-	if ([filter isEqualToString:@"videoChatChanges"]) return @"Video Chats";
-	if ([filter isEqualToString:@"forumChanges"]) return @"Topics";
-	return filter;
+static NSDictionary *TGEventsCategory(NSString *title, NSArray *filters) {
+	return [NSDictionary dictionaryWithObjectsAndKeys:
+			title, @"title", filters, @"filters", nil];
+}
+
+static NSArray *TGEventsMainCategories(void) {
+	static NSArray *categories = nil;
+	if (!categories){
+		categories = [NSArray arrayWithObjects:
+				TGEventsCategory(@"Restrictions", @[@"memberRestrictions"]),
+				TGEventsCategory(@"New Admins", @[@"memberPromotions"]),
+				TGEventsCategory(@"New Members", @[@"memberJoins", @"memberInvites"]),
+				TGEventsCategory(@"Members Removed", @[@"memberLeaves"]),
+				TGEventsCategory(@"Group Info", @[@"infoChanges"]),
+				TGEventsCategory(@"Deleted Messages", @[@"messageDeletions"]),
+				TGEventsCategory(@"Edited Messages", @[@"messageEdits"]),
+				TGEventsCategory(@"Pinned Messages", @[@"messagePins"]),
+				nil];
+	}
+	return categories;
+}
+
+static NSArray *TGEventsOtherCategories(void) {
+	static NSArray *categories = nil;
+	if (!categories){
+		categories = [NSArray arrayWithObjects:
+				TGEventsCategory(@"Settings", @[@"settingChanges"]),
+				TGEventsCategory(@"Invite Links", @[@"inviteLinkChanges"]),
+				TGEventsCategory(@"Video Chats", @[@"videoChatChanges"]),
+				TGEventsCategory(@"Topics", @[@"forumChanges"]),
+				nil];
+	}
+	return categories;
 }
 
 static NSString *TGEventsInitials(NSString *name) {
@@ -67,11 +85,18 @@ static NSString *TGEventsInitials(NSString *name) {
 
 #pragma mark - the filter form
 
+typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
+	TGEventsFilterPageMain = 0,
+	TGEventsFilterPageOther = 1
+};
+
 @interface TGChatEventsFilterController : UITableViewController
 
 @property (nonatomic, strong) NSMutableArray *selection;
 @property (nonatomic, strong) NSArray *administrators;
 @property (nonatomic, strong) NSMutableArray *userSelection;
+@property (nonatomic, assign) TGEventsFilterPage page;
+@property (nonatomic, strong) UIButton *doneButton;
 @property (nonatomic, copy) void (^completion)(NSArray *filters, NSArray *userIds);
 
 - (instancetype)initWithFilters:(NSArray *)filters
@@ -105,6 +130,55 @@ static NSString *TGEventsInitials(NSString *name) {
 	return self;
 }
 
+- (instancetype)initWithSelection:(NSMutableArray *)selection page:(TGEventsFilterPage)page {
+	self = [super initWithStyle:UITableViewStyleGrouped];
+	if (self){
+		_selection = selection;
+		_administrators = [NSArray array];
+		_userSelection = [NSMutableArray array];
+		_page = page;
+	}
+	return self;
+}
+
+- (NSArray *)categories {
+	return self.page == TGEventsFilterPageOther ? TGEventsOtherCategories()
+											   : TGEventsMainCategories();
+}
+
+- (BOOL)isCategorySelected:(NSDictionary *)category {
+	NSArray *filters = category[@"filters"];
+	for (NSString *filter in filters){
+		if (![self.selection containsObject:filter])
+			return NO;
+	}
+	return filters.count != 0;
+}
+
+- (void)setCategory:(NSDictionary *)category selected:(BOOL)selected {
+	for (NSString *filter in category[@"filters"]){
+		if (selected){
+			if (![self.selection containsObject:filter])
+				[self.selection addObject:filter];
+		} else {
+			[self.selection removeObject:filter];
+		}
+	}
+}
+
+- (NSInteger)selectedOtherCount {
+	NSInteger count = 0;
+	for (NSDictionary *category in TGEventsOtherCategories()){
+		if ([self isCategorySelected:category])
+			count++;
+	}
+	return count;
+}
+
+- (BOOL)allActionsSelected {
+	return self.selection.count == TGEventsAllFilters().count;
+}
+
 - (NSNumber *)userIdAtRow:(NSInteger)row {
 	if (row < 1 || row - 1 >= (NSInteger)self.administrators.count)
 		return nil;
@@ -115,38 +189,62 @@ static NSString *TGEventsInitials(NSString *name) {
 	return [userId isKindOfClass:[NSNumber class]] ? userId : nil;
 }
 
-- (NSString *)adminTitleAtRow:(NSInteger)row {
+- (NSString *)adminNameAtRow:(NSInteger)row {
 	NSDictionary *admin = self.administrators[row - 1];
 	NSString *name = [admin isKindOfClass:[NSDictionary class]] ? admin[@"name"] : nil;
 	if (![name isKindOfClass:[NSString class]] || !name.length)
-		name = @"Admin";
-	NSString *custom = [admin isKindOfClass:[NSDictionary class]]
-			? admin[@"customTitle"] : nil;
-	if ([custom isKindOfClass:[NSString class]] && custom.length)
-		return [NSString stringWithFormat:@"%@ (%@)", name, custom];
+		return @"Admin";
 	return name;
+}
+
+- (NSString *)adminStatusAtRow:(NSInteger)row {
+	NSDictionary *admin = self.administrators[row - 1];
+	if (![admin isKindOfClass:[NSDictionary class]])
+		return @"admin";
+	NSString *custom = admin[@"customTitle"];
+	if ([custom isKindOfClass:[NSString class]] && custom.length)
+		return custom;
+	return [admin[@"isOwner"] boolValue] ? @"creator" : @"admin";
 }
 
 - (void)viewDidLoad {
 	[super viewDidLoad];
-	self.title = @"Filter";
 	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
 	self.tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
 	self.tableView.rowHeight = 44;
 
+	if (self.page == TGEventsFilterPageOther){
+		self.title = @"Other Actions";
+		return;
+	}
+
+	self.title = @"Filter";
 	UIButton *cancel = [TGIcons headerButtonWithTitle:@"Cancel" bold:NO
 											   target:self action:@selector(cancelPressed)];
-	UIButton *done = [TGIcons headerButtonWithTitle:@"Done" bold:YES
-											target:self action:@selector(donePressed)];
+	self.doneButton = [TGIcons headerButtonWithTitle:@"Done" bold:YES
+											 target:self action:@selector(donePressed)];
 	self.navigationItem.leftBarButtonItem =
 			[[UIBarButtonItem alloc] initWithCustomView:cancel];
 	self.navigationItem.rightBarButtonItem =
-			[[UIBarButtonItem alloc] initWithCustomView:done];
+			[[UIBarButtonItem alloc] initWithCustomView:self.doneButton];
+	[self updateDone];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
+	if (self.page == TGEventsFilterPageMain){
+		[self updateDone];
+		[self.tableView reloadData];
+	}
+}
+
+- (void)updateDone {
+	if (!self.doneButton)
+		return;
+	BOOL enabled = self.selection.count != 0;
+	self.doneButton.enabled = enabled;
+	self.doneButton.alpha = enabled ? 1.0f : 0.4f;
 }
 
 - (void)cancelPressed {
@@ -154,8 +252,10 @@ static NSString *TGEventsInitials(NSString *name) {
 }
 
 - (void)donePressed {
+	if (!self.selection.count)
+		return;
 	NSArray *result = nil;
-	if (self.selection.count && self.selection.count < TGEventsAllFilters().count)
+	if (self.selection.count < TGEventsAllFilters().count)
 		result = [NSArray arrayWithArray:self.selection];
 	NSArray *users = nil;
 	if (self.administrators.count && self.userSelection.count
@@ -167,22 +267,31 @@ static NSString *TGEventsInitials(NSString *name) {
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+	if (self.page == TGEventsFilterPageOther)
+		return 1;
 	return self.administrators.count ? 3 : 2;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	if (self.page == TGEventsFilterPageOther)
+		return (NSInteger)[self categories].count;
 	if (section == 0)
 		return 1;
 	if (section == 1)
-		return (NSInteger)TGEventsAllFilters().count;
+		return (NSInteger)[self categories].count + 1;
 	return (NSInteger)self.administrators.count + 1;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
+	if (self.page == TGEventsFilterPageOther)
+		return nil;
 	return section == 2 ? @"By Admin" : nil;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+	if (self.page == TGEventsFilterPageOther)
+		return @"Actions of these kinds are rarer, so they are kept on a screen "
+				@"of their own.";
 	if (section == 1)
 		return @"Only the selected kinds of action are listed.";
 	if (section == 2)
@@ -190,93 +299,201 @@ static NSString *TGEventsInitials(NSString *name) {
 	return nil;
 }
 
-- (UIImage *)checkImage {
-	return [UIImage imageNamed:@"ListCheck.png"];
-}
-
-- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"filter"];
-	if (!cell)
-		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
-									  reuseIdentifier:@"filter"];
-
-	[[TGTheme shared] styleCell:cell];
-	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
-	cell.textLabel.font = [UIFont systemFontOfSize:17];
-	cell.textLabel.textColor = [[TGTheme shared] isDark]
-			? [[TGTheme shared] primaryTextColour] : TGEventsRGB(0x516691);
-
-	BOOL selected;
-	if (indexPath.section == 0){
-		cell.textLabel.text = @"All Actions";
-		selected = self.selection.count == TGEventsAllFilters().count;
-	} else if (indexPath.section == 1){
-		NSString *filter = TGEventsAllFilters()[indexPath.row];
-		cell.textLabel.text = TGEventsFilterTitle(filter);
-		selected = [self.selection containsObject:filter];
-	} else if (indexPath.row == 0){
-		cell.textLabel.text = @"All Admins";
-		selected = self.userSelection.count == self.administrators.count;
-	} else {
-		cell.textLabel.text = [self adminTitleAtRow:indexPath.row];
-		NSNumber *userId = [self userIdAtRow:indexPath.row];
-		selected = userId != nil && [self.userSelection containsObject:userId];
-	}
-
-	UIImage *check = [self checkImage];
-	if (selected && check){
-		UIImageView *view = [[UIImageView alloc] initWithImage:check];
-		cell.accessoryView = view;
-	} else if (selected){
+- (UIView *)checkAccessory {
+	UIImage *art = [UIImage imageNamed:@"ListCheck.png"];
+	if (!art){
 		UILabel *mark = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 14, 20)];
 		mark.backgroundColor = [UIColor clearColor];
 		mark.font = [UIFont boldSystemFontOfSize:16];
 		mark.textColor = TGEventsRGB(0x0779d0);
 		mark.text = @"✓";
-		cell.accessoryView = mark;
-	} else {
-		cell.accessoryView = nil;
+		return mark;
 	}
+	UIImageView *view = [[UIImageView alloc] initWithImage:art
+										 highlightedImage:[UIImage imageNamed:
+												 @"ListCheck_Highlighted.png"]];
+	view.frame = CGRectMake(0, 0, art.size.width, art.size.height);
+	return view;
+}
+
+- (UIView *)disclosureAccessory {
+	UIImage *art = [[TGTheme shared] isDark]
+			? [UIImage imageNamed:@"MenuDisclosureIndicator_Light.png"]
+			: [UIImage imageNamed:@"MenuDisclosureIndicator.png"];
+	if (!art)
+		return nil;
+	UIImageView *view = [[UIImageView alloc] initWithImage:art
+										 highlightedImage:[UIImage imageNamed:
+												 @"MenuDisclosureIndicator_Highlighted.png"]];
+	view.frame = CGRectMake(0, 0, art.size.width, art.size.height);
+	return view;
+}
+
+- (void)mark:(BOOL)checked on:(UITableViewCell *)cell {
+	if (!checked){
+		cell.accessoryView = nil;
+		cell.accessoryType = UITableViewCellAccessoryNone;
+		return;
+	}
+	UIView *check = [self checkAccessory];
+	if (check){
+		cell.accessoryView = check;
+		cell.accessoryType = UITableViewCellAccessoryNone;
+	} else {
+		cell.accessoryType = UITableViewCellAccessoryCheckmark;
+	}
+}
+
+- (UITableViewCell *)cellWithIdentifier:(NSString *)identifier
+								  style:(UITableViewCellStyle)style
+							  tableView:(UITableView *)tableView {
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:identifier];
+	if (!cell)
+		cell = [[UITableViewCell alloc] initWithStyle:style reuseIdentifier:identifier];
+	[[TGTheme shared] styleCell:cell];
+	cell.accessoryView = nil;
+	cell.accessoryType = UITableViewCellAccessoryNone;
+	cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+	cell.textLabel.textColor = [[TGTheme shared] isDark]
+			? [[TGTheme shared] primaryTextColour] : [UIColor blackColor];
 	return cell;
+}
+
+- (UITableViewCell *)switchCellWithTitle:(NSString *)title on:(BOOL)on
+								  action:(SEL)action tableView:(UITableView *)tableView {
+	UITableViewCell *cell = [self cellWithIdentifier:@"switch"
+											   style:UITableViewCellStyleDefault
+										   tableView:tableView];
+	cell.textLabel.text = title;
+	cell.selectionStyle = UITableViewCellSelectionStyleNone;
+
+	UISwitch *toggle = [[UISwitch alloc] init];
+	toggle.on = on;
+	[toggle addTarget:self action:action forControlEvents:UIControlEventValueChanged];
+	cell.accessoryView = toggle;
+	return cell;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	NSArray *categories = [self categories];
+
+	if (self.page == TGEventsFilterPageOther){
+		NSDictionary *category = categories[indexPath.row];
+		UITableViewCell *cell = [self cellWithIdentifier:@"check"
+												   style:UITableViewCellStyleDefault
+											   tableView:tableView];
+		cell.textLabel.text = category[@"title"];
+		[self mark:[self isCategorySelected:category] on:cell];
+		return cell;
+	}
+
+	if (indexPath.section == 0){
+		return [self switchCellWithTitle:@"All Actions" on:[self allActionsSelected]
+								  action:@selector(allActionsToggled:) tableView:tableView];
+	}
+
+	if (indexPath.section == 1){
+		if (indexPath.row == (NSInteger)categories.count){
+			UITableViewCell *cell = [self cellWithIdentifier:@"variant"
+													   style:UITableViewCellStyleValue1
+												   tableView:tableView];
+			cell.textLabel.text = @"Other Actions";
+			cell.detailTextLabel.font = [UIFont systemFontOfSize:16];
+			cell.detailTextLabel.textColor = [[TGTheme shared] isDark]
+					? [[TGTheme shared] cellDetailColour] : TGEventsRGB(0x356596);
+			cell.detailTextLabel.text = [NSString stringWithFormat:@"%d / %d",
+					(int)[self selectedOtherCount], (int)TGEventsOtherCategories().count];
+			UIView *chevron = [self disclosureAccessory];
+			if (chevron)
+				cell.accessoryView = chevron;
+			else
+				cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+			return cell;
+		}
+		NSDictionary *category = categories[indexPath.row];
+		UITableViewCell *cell = [self cellWithIdentifier:@"check"
+												   style:UITableViewCellStyleDefault
+											   tableView:tableView];
+		cell.textLabel.text = category[@"title"];
+		[self mark:[self isCategorySelected:category] on:cell];
+		return cell;
+	}
+
+	if (indexPath.row == 0){
+		return [self switchCellWithTitle:@"All Admins"
+									  on:self.userSelection.count == self.administrators.count
+								  action:@selector(allAdminsToggled:) tableView:tableView];
+	}
+
+	UITableViewCell *cell = [self cellWithIdentifier:@"admin"
+											   style:UITableViewCellStyleSubtitle
+										   tableView:tableView];
+	cell.textLabel.text = [self adminNameAtRow:indexPath.row];
+	cell.detailTextLabel.font = [UIFont systemFontOfSize:13];
+	cell.detailTextLabel.textColor = [[TGTheme shared] secondaryTextColour];
+	cell.detailTextLabel.text = [self adminStatusAtRow:indexPath.row];
+	NSNumber *userId = [self userIdAtRow:indexPath.row];
+	[self mark:userId != nil && [self.userSelection containsObject:userId] on:cell];
+	return cell;
+}
+
+- (void)allActionsToggled:(UISwitch *)toggle {
+	[self.selection removeAllObjects];
+	if (toggle.on)
+		[self.selection addObjectsFromArray:TGEventsAllFilters()];
+	[self updateDone];
+	[self.tableView reloadData];
+}
+
+- (void)allAdminsToggled:(UISwitch *)toggle {
+	[self.userSelection removeAllObjects];
+	if (toggle.on){
+		for (NSDictionary *admin in self.administrators){
+			NSNumber *userId = [admin isKindOfClass:[NSDictionary class]]
+					? admin[@"userId"] : nil;
+			if ([userId isKindOfClass:[NSNumber class]])
+				[self.userSelection addObject:userId];
+		}
+	}
+	[self.tableView reloadData];
+}
+
+- (void)openOtherActions {
+	TGChatEventsFilterController *controller = [[TGChatEventsFilterController alloc]
+			initWithSelection:self.selection page:TGEventsFilterPageOther];
+	[self.navigationController pushViewController:controller animated:YES];
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
 
-	if (indexPath.section == 0){
-		if (self.selection.count == TGEventsAllFilters().count)
-			[self.selection removeAllObjects];
-		else
-			[self.selection setArray:TGEventsAllFilters()];
+	NSArray *categories = [self categories];
+
+	if (self.page == TGEventsFilterPageOther){
+		NSDictionary *category = categories[indexPath.row];
+		[self setCategory:category selected:![self isCategorySelected:category]];
 		[tableView reloadData];
 		return;
 	}
+
+	if (indexPath.section == 0)
+		return;
 
 	if (indexPath.section == 1){
-		NSString *filter = TGEventsAllFilters()[indexPath.row];
-		if ([self.selection containsObject:filter])
-			[self.selection removeObject:filter];
-		else
-			[self.selection addObject:filter];
+		if (indexPath.row == (NSInteger)categories.count){
+			[self openOtherActions];
+			return;
+		}
+		NSDictionary *category = categories[indexPath.row];
+		[self setCategory:category selected:![self isCategorySelected:category]];
+		[self updateDone];
 		[tableView reloadData];
 		return;
 	}
 
-	if (indexPath.row == 0){
-		if (self.userSelection.count == self.administrators.count){
-			[self.userSelection removeAllObjects];
-		} else {
-			[self.userSelection removeAllObjects];
-			for (NSDictionary *admin in self.administrators){
-				NSNumber *userId = [admin isKindOfClass:[NSDictionary class]]
-						? admin[@"userId"] : nil;
-				if ([userId isKindOfClass:[NSNumber class]])
-					[self.userSelection addObject:userId];
-			}
-		}
-		[tableView reloadData];
+	if (indexPath.row == 0)
 		return;
-	}
 
 	NSNumber *userId = [self userIdAtRow:indexPath.row];
 	if (!userId)

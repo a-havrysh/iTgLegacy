@@ -33,15 +33,17 @@ static const CGFloat kHeaderHeight = 86.0f;
 static const CGFloat kHeaderAvatar = 70.0f;
 
 enum {
-	TGSettingsPageAutoDownload = 100,
-	TGSettingsPageAutosave     = 101,
-	TGSettingsPageWallpaper    = 102
+	TGSettingsPageAutoDownload   = 100,
+	TGSettingsPageAutosave       = 101,
+	TGSettingsPageWallpaper      = 102,
+	TGSettingsPageChatListLayout = 103
 };
 
 enum {
 	TGSettingsRootKindSuggestions = 0,
 	TGSettingsRootKindAccount,
 	TGSettingsRootKindSettings,
+	TGSettingsRootKindStories,
 	TGSettingsRootKindTelegram,
 	TGSettingsRootKindGroupTools,
 	TGSettingsRootKindHelp,
@@ -52,6 +54,13 @@ static NSString *const TGSettingsPresetDefaultsKey = @"TGAutoDownloadPresetNames
 static NSString *const TGSettingsSavedPresetsKey = @"TGAutoDownloadPresetsBeforeSaver";
 static NSString *const TGSettingsLessCallDataKey = @"TGUseLessDataForCalls";
 static NSString *const TGSettingsArchiveSuggestionKey = @"TGArchiveSuggestionDismissed";
+static NSString *const TGSettingsStoriesEnabledKey = @"TGStoriesEnabled";
+static NSString *const TGSettingsChatListLayoutKey = @"TGChatListLayout";
+
+NSString *const TGSettingsStoriesEnabledChangedNotification =
+		@"TGStoriesEnabledChanged";
+NSString *const TGSettingsChatListLayoutChangedNotification =
+		@"TGChatListLayoutChanged";
 
 static inline UIColor *TGSettingsRGB(unsigned int value) {
 	return [UIColor colorWithRed:((value >> 16) & 0xff) / 255.0f
@@ -130,6 +139,8 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		self.title = @"Save to Camera Roll";
 	else if ((NSInteger)self.page == TGSettingsPageWallpaper)
 		self.title = @"Chat Wallpaper";
+	else if ((NSInteger)self.page == TGSettingsPageChatListLayout)
+		self.title = @"Chat List";
 	else switch (self.page){
 		case TGSettingsPageAppearance:    self.title = @"Chat Settings"; break;
 		case TGSettingsPageData:          self.title = @"Data and Storage"; break;
@@ -544,6 +555,71 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 	return titles;
 }
 
+#pragma mark - stories and chat list layout
+
++ (BOOL)storiesEnabled {
+	NSNumber *stored = [[NSUserDefaults standardUserDefaults]
+			objectForKey:TGSettingsStoriesEnabledKey];
+	if (![stored isKindOfClass:[NSNumber class]])
+		return YES;
+	return [stored boolValue];
+}
+
++ (void)setStoriesEnabled:(BOOL)enabled {
+	[[NSUserDefaults standardUserDefaults] setObject:@(enabled)
+											  forKey:TGSettingsStoriesEnabledKey];
+	[[NSUserDefaults standardUserDefaults] synchronize];
+	[[NSNotificationCenter defaultCenter]
+			postNotificationName:TGSettingsStoriesEnabledChangedNotification
+						  object:nil];
+}
+
++ (NSArray *)chatListLayouts {
+	static NSArray *layouts = nil;
+	if (!layouts)
+		layouts = @[@"a", @"b"];
+	return layouts;
+}
+
++ (NSArray *)chatListLayoutTitles {
+	static NSArray *titles = nil;
+	if (!titles)
+		titles = @[@"Chooser in the Title", @"Strip Under the Title"];
+	return titles;
+}
+
++ (NSString *)chatListLayout {
+	NSString *stored = [[NSUserDefaults standardUserDefaults]
+			objectForKey:TGSettingsChatListLayoutKey];
+	if ([stored isKindOfClass:[NSString class]]
+			&& [[TGSettingsViewController chatListLayouts] containsObject:stored])
+		return stored;
+	return @"b";
+}
+
++ (NSString *)chatListLayoutTitle {
+	NSUInteger index = [[TGSettingsViewController chatListLayouts]
+			indexOfObject:[TGSettingsViewController chatListLayout]];
+	if (index == NSNotFound)
+		index = 1;
+	return [TGSettingsViewController chatListLayoutTitles][index];
+}
+
++ (void)setChatListLayout:(NSString *)layout {
+	if (![[TGSettingsViewController chatListLayouts] containsObject:layout])
+		return;
+	[[NSUserDefaults standardUserDefaults] setObject:layout
+											  forKey:TGSettingsChatListLayoutKey];
+	[[NSUserDefaults standardUserDefaults] synchronize];
+	[[NSNotificationCenter defaultCenter]
+			postNotificationName:TGSettingsChatListLayoutChangedNotification
+						  object:nil];
+}
+
+- (void)storiesToggled:(UISwitch *)toggle {
+	[TGSettingsViewController setStoriesEnabled:toggle.on];
+}
+
 #pragma mark - shape
 
 + (NSArray *)networkKinds {
@@ -627,8 +703,10 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		return 4;
 	if ((NSInteger)self.page == TGSettingsPageWallpaper)
 		return 2;
+	if ((NSInteger)self.page == TGSettingsPageChatListLayout)
+		return 1;
 	if (self.page == TGSettingsPageRoot)
-		return [self showsSuggestions] ? 7 : 6;
+		return [self showsSuggestions] ? 8 : 7;
 	switch (self.page){
 		case TGSettingsPageAppearance:    return 3;
 		case TGSettingsPageData:          return 3;
@@ -650,6 +728,8 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 			return [TGTheme shared].wallpaper ? 2 : 1;
 		return (NSInteger)MAX((NSUInteger)1, self.backgrounds.count);
 	}
+	if ((NSInteger)self.page == TGSettingsPageChatListLayout)
+		return (NSInteger)[TGSettingsViewController chatListLayouts].count;
 	switch (self.page){
 		case TGSettingsPageAppearance:
 			if (section == 0) return 3;                          // styles
@@ -676,6 +756,7 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		case TGSettingsRootKindAccount:     return 3;
 		case TGSettingsRootKindSettings:
 			return (NSInteger)[TGSettingsViewController rootSettingsRows].count;
+		case TGSettingsRootKindStories:     return 1;
 		case TGSettingsRootKindTelegram:
 			return (NSInteger)[TGSettingsViewController telegramRows].count;
 		case TGSettingsRootKindGroupTools:
@@ -716,6 +797,7 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		case TGSettingsRootKindSuggestions: return @"Suggested";
 		case TGSettingsRootKindAccount:     return @"Account";
 		case TGSettingsRootKindSettings:    return @"Settings";
+		case TGSettingsRootKindStories:     return @"Stories";
 		case TGSettingsRootKindTelegram:    return @"Telegram";
 		case TGSettingsRootKindGroupTools:  return @"Group tools";
 		case TGSettingsRootKindHelp:        return @"Help";
@@ -740,6 +822,15 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 			  @"full-screen in memory, so pick a small one."
 			: @"This device has too little memory for a photographic wallpaper, "
 			  @"so only colours and gradients are offered.";
+	if ((NSInteger)self.page == TGSettingsPageChatListLayout)
+		return @"The chooser keeps the list as it is: the folder name sits in the "
+			   @"title bar and tapping it raises the list of folders. The strip "
+			   @"puts the folders under the title bar, where they are always "
+			   @"visible and cost one row of chats.";
+	if (self.page == TGSettingsPageRoot
+			&& [self rootKindForSection:section] == TGSettingsRootKindStories)
+		return @"Turn off to hide stories everywhere: no tray over the chat list "
+			   @"and no story entries anywhere in the app.";
 	if (self.page == TGSettingsPageAppearance && section == 2)
 		return @"Theme files made for the official clients - .tgios-theme and "
 			   @".attheme - are read from the app's Documents folder, or from "
@@ -801,6 +892,11 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		return [self fillAutosaveCell:cell at:indexPath];
 	if ((NSInteger)self.page == TGSettingsPageWallpaper)
 		return [self fillWallpaperCell:cell at:indexPath];
+	if ((NSInteger)self.page == TGSettingsPageChatListLayout)
+		return [self fillChatListLayoutCell:cell at:indexPath];
+	if (self.page == TGSettingsPageRoot
+			&& [self rootKindForSection:indexPath.section] == TGSettingsRootKindStories)
+		return [self fillStoriesCell:cell];
 
 	switch (self.page){
 		case TGSettingsPageAppearance:    return [self fillAppearanceCell:cell at:indexPath];
@@ -823,6 +919,7 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 				 @[@"Chat Settings",            @"chat"],
 				 @[@"Stickers",                 @"react"],
 				 @[@"Folders",                  @"folder"],
+				 @[@"Chat List",                @"folder"],
 				 @[@"Proxy",                    @"data"],
 				 @[@"Devices",                  @"devices"],
 				 @[@"Language",                 @"language"]];
@@ -876,6 +973,11 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
 		cell.imageView.image = [TGIcons menuGlyphNamed:row[1]];
 		[cell.imageView tg_setTintColor:[theme secondaryTextColour]];
+		if (kind == TGSettingsRootKindSettings
+				&& [row[0] isEqualToString:@"Chat List"]){
+			cell.detailTextLabel.text = [TGSettingsViewController chatListLayoutTitle];
+			cell.detailTextLabel.textColor = [theme cellDetailColour];
+		}
 		[self markDisclosure:cell];
 		return cell;
 	}
@@ -995,6 +1097,30 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 	[toggle addTarget:self action:@selector(notificationToggled:)
 	 forControlEvents:UIControlEventValueChanged];
 	cell.accessoryView = toggle;
+	return cell;
+}
+
+- (UITableViewCell *)fillStoriesCell:(UITableViewCell *)cell {
+	cell.textLabel.text = @"Show Stories";
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+	UISwitch *toggle = [[UISwitch alloc] init];
+	toggle.on = [TGSettingsViewController storiesEnabled];
+	[toggle addTarget:self action:@selector(storiesToggled:)
+	 forControlEvents:UIControlEventValueChanged];
+	cell.accessoryView = toggle;
+	cell.selectionStyle = UITableViewCellSelectionStyleNone;
+	return cell;
+}
+
+- (UITableViewCell *)fillChatListLayoutCell:(UITableViewCell *)cell
+										 at:(NSIndexPath *)path {
+	NSArray *layouts = [TGSettingsViewController chatListLayouts];
+	if ((NSUInteger)path.row >= layouts.count)
+		return cell;
+	cell.textLabel.text = [TGSettingsViewController chatListLayoutTitles][path.row];
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+	[self markChecked:[layouts[path.row] isEqualToString:
+			[TGSettingsViewController chatListLayout]] on:cell];
 	return cell;
 }
 
@@ -1425,6 +1551,13 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		[self tapWallpaper:indexPath];
 		return;
 	}
+	if ((NSInteger)self.page == TGSettingsPageChatListLayout){
+		NSArray *layouts = [TGSettingsViewController chatListLayouts];
+		if ((NSUInteger)indexPath.row < layouts.count)
+			[TGSettingsViewController setChatListLayout:layouts[indexPath.row]];
+		[tableView reloadData];
+		return;
+	}
 
 	switch (self.page){
 		case TGSettingsPageAppearance: [self tapAppearance:indexPath]; return;
@@ -1480,12 +1613,15 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 				[self.navigationController pushViewController:folders animated:YES];
 				break;
 			}
-			case 6: {
+			case 6:
+				[self openPage:(TGSettingsPage)TGSettingsPageChatListLayout];
+				break;
+			case 7: {
 				TGProxyViewController *proxy = [[TGProxyViewController alloc] init];
 				[self.navigationController pushViewController:proxy animated:YES];
 				break;
 			}
-			case 7: {
+			case 8: {
 				UIViewController *sessions = [[TGSessionsViewController alloc] init];
 				[self.navigationController pushViewController:sessions animated:YES];
 				break;
@@ -1494,6 +1630,9 @@ static inline UIColor *TGSettingsRGB(unsigned int value) {
 		}
 		return;
 	}
+
+	if (kind == TGSettingsRootKindStories)
+		return;
 
 	if (kind == TGSettingsRootKindTelegram){
 		[self tapTelegramRow:indexPath.row];

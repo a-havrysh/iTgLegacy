@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="320" height="480">
+  <defs>
+    <linearGradient id="ph1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#33507c"/>
+      <stop offset="0.5" stop-color="#8a7594"/>
+      <stop offset="1" stop-color="#eeb078"/>
+    </linearGradient>
+    <linearGradient id="ph2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9fbcd6"/>
+      <stop offset="0.6" stop-color="#cfd8c8"/>
+      <stop offset="1" stop-color="#6f7d5c"/>
+    </linearGradient>
+    <clipPath id="c1"><rect x="54" y="114" width="120" height="140"/></clipPath>
+    <clipPath id="c2"><rect x="54" y="316" width="100" height="120"/></clipPath>
+  </defs>
+
+  <rect x="0" y="0" width="320" height="480" fill="#d8cec2"/>
+  <image x="0" y="0" width="320" height="480" preserveAspectRatio="none" xlink:href="ASSET:wallpaper"/>
+
+  <!-- status bar -->
+  <rect x="0" y="0" width="320" height="20" fill="#000000"/>
+  <text x="160" y="14" font-family="Helvetica" font-size="12" font-weight="bold" fill="#ffffff" text-anchor="middle">14:32</text>
+  <text x="303" y="14" font-family="Helvetica" font-size="12" font-weight="bold" fill="#ffffff" text-anchor="end">78%</text>
+
+  <!-- navigation bar -->
+  <image x="0" y="20" width="320" height="44" preserveAspectRatio="none" xlink:href="ASSET:NavBarBackground"/>
+  <image x="5" y="27" width="58" height="30" preserveAspectRatio="none" xlink:href="ASSET:BackButton"/>
+  <text x="23" y="46" font-family="Helvetica" font-size="12" font-weight="bold" fill="#ffffff">Chats</text>
+  <text x="160" y="41" font-family="Helvetica" font-size="16" font-weight="bold" fill="#ffffff" text-anchor="middle">Stories</text>
+  <text x="160" y="56" font-family="Helvetica" font-size="13" fill="#e0eefd" text-anchor="middle">11 stories from 6 people</text>
+  <image x="263" y="27" width="52" height="30" preserveAspectRatio="none" xlink:href="ASSET:HeaderButton"/>
+  <text x="289" y="46" font-family="Helvetica" font-size="12" font-weight="bold" fill="#ffffff" text-anchor="middle">More</text>
+
+  <!-- service plate -->
+  <rect x="128" y="70" width="64" height="20" rx="10" ry="10" fill="#000000" fill-opacity="0.25"/>
+  <text x="160" y="84" font-family="Helvetica" font-size="13" fill="#ffffff" text-anchor="middle">Today</text>
+
+  <!-- story 1 as an incoming bubble -->
+  <rect x="4" y="258" width="30" height="30" rx="5" ry="5" fill="#ee4928"/>
+  <text x="19" y="279" font-family="Helvetica" font-size="13" font-weight="bold" fill="#ffffff" text-anchor="middle">AG</text>
+  <image x="38" y="92" width="150" height="196" preserveAspectRatio="none" xlink:href="ASSET:Msg_In"/>
+  <text x="54" y="110" font-family="Helvetica" font-size="13" font-weight="bold" fill="#4d688c">Alena Grishko</text>
+  <g clip-path="url(#c1)">
+    <rect x="54" y="114" width="120" height="140" fill="url(#ph1)"/>
+    <circle cx="132" cy="176" r="18" fill="#ffd9a0"/>
+    <path d="M54 214 L86 182 L112 212 L140 186 L174 224 L174 254 L54 254 Z" fill="#1d2230"/>
+  </g>
+  <text x="54" y="272" font-family="Helvetica" font-size="15" fill="#141617">Last light over the river.</text>
+  <text x="180" y="282" font-family="Helvetica" font-size="11" fill="#232d37" text-anchor="end">14:12</text>
+
+  <!-- story 2 as an incoming bubble -->
+  <rect x="4" y="434" width="30" height="30" rx="5" ry="5" fill="#41a903"/>
+  <text x="19" y="455" font-family="Helvetica" font-size="13" font-weight="bold" fill="#ffffff" text-anchor="middle">DI</text>
+  <image x="38" y="294" width="130" height="170" preserveAspectRatio="none" xlink:href="ASSET:Msg_In"/>
+  <text x="54" y="312" font-family="Helvetica" font-size="13" font-weight="bold" fill="#4d688c">Dmitri Ivanov</text>
+  <g clip-path="url(#c2)">
+    <rect x="54" y="316" width="100" height="120" fill="url(#ph2)"/>
+    <path d="M54 396 L82 372 L104 396 L128 366 L154 402 L154 436 L54 436 Z" fill="#5b6b48"/>
+    <rect x="62" y="324" width="36" height="14" rx="4" ry="4" fill="#000000" fill-opacity="0.35"/>
+    <text x="66" y="335" font-family="Helvetica" font-size="10" font-weight="bold" fill="#ffffff">0:14</text>
+  </g>
+  <text x="160" y="458" font-family="Helvetica" font-size="11" fill="#232d37" text-anchor="end">13:05</text>
+
+  <!-- reaction chip under the second story, group-button-bar art at 30pt -->
+  <image x="54" y="440" width="46" height="20" preserveAspectRatio="none" xlink:href="ASSET:ButtonGroupLeft"/>
+  <text x="77" y="454" font-family="Helvetica" font-size="12" font-weight="bold" fill="#ffffff" text-anchor="middle">&#9829; 3</text>
+</svg>

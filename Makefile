@@ -196,6 +196,10 @@ APP_SRC_M := \
 	src/TGStorageViewController.m \
 	src/TGSessionsViewController.m \
 	src/TGSettingsViewController.m \
+	src/TGActionsMenu.m \
+	src/TGStoriesViewController.m \
+	src/TGSavedMessagesViewController.m \
+	src/TGPrivacyViewController.m \
 	src/TGStickersViewController.m \
 	src/TGStickerPanelView.m \
 	src/TGReactionPickerView.m \

@@ -1,0 +1,175 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="320" height="480">
+  <defs>
+    <linearGradient id="nav" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7699c0"/><stop offset="1" stop-color="#42678f"/>
+    </linearGradient>
+    <linearGradient id="tabplate" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fdfefe"/><stop offset="1" stop-color="#dfe4ea"/>
+    </linearGradient>
+    <linearGradient id="tabsel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#c9d3de"/><stop offset="1" stop-color="#aebbc9"/>
+    </linearGradient>
+    <clipPath id="panelclip"><rect x="0" y="264" width="320" height="216"/></clipPath>
+  </defs>
+
+  <!-- chat background -->
+  <rect x="0" y="0" width="320" height="480" fill="#e4e9f0"/>
+  <image x="0" y="20" width="320" height="244" xlink:href="ASSET:wallpaper" preserveAspectRatio="xMidYMid slice"/>
+
+  <!-- status bar -->
+  <rect x="0" y="0" width="320" height="20" fill="#000000"/>
+  <text x="8" y="14" font-family="Helvetica" font-size="12" fill="#ffffff">●●●●● Telegram</text>
+  <text x="152" y="14" font-family="Helvetica" font-size="12" fill="#ffffff">9:41</text>
+  <text x="286" y="14" font-family="Helvetica" font-size="12" fill="#ffffff">100%</text>
+
+  <!-- nav bar -->
+  <rect x="0" y="20" width="320" height="44" fill="url(#nav)"/>
+  <image x="5" y="27" width="62" height="30" xlink:href="ASSET:BackButton"/>
+  <text x="26" y="47" font-family="Helvetica" font-size="13" font-weight="bold" fill="#ffffff">Chats</text>
+  <text x="160" y="43" font-family="Helvetica" font-size="20" font-weight="bold" fill="#ffffff" text-anchor="middle">Ilya Perekopsky</text>
+  <text x="160" y="56" font-family="Helvetica" font-size="11" fill="#e0eefd" text-anchor="middle">online</text>
+  <rect x="0" y="63" width="320" height="1" fill="#2f4a6b"/>
+
+  <!-- incoming bubble with custom emoji inline -->
+  <g>
+    <path d="M12 78 h214 a5 5 0 0 1 5 5 v40 a5 5 0 0 1 -5 5 h-208 l-6 6 v-6 a5 5 0 0 1 -5 -5 v-40 a5 5 0 0 1 5 -5 z" fill="#ffffff" stroke="#c9ced6" stroke-width="0.5"/>
+    <text x="20" y="97" font-family="Helvetica" font-size="15" fill="#141617">build is green</text>
+    <!-- custom emoji glyph 1 (18x18, baseline aligned) -->
+    <g transform="translate(112,84)">
+      <circle cx="9" cy="9" r="8.5" fill="#4caf50"/>
+      <path d="M4.5 9.5 l3 3 l6 -6.5" stroke="#ffffff" stroke-width="2" fill="none" stroke-linecap="round"/>
+    </g>
+    <text x="134" y="97" font-family="Helvetica" font-size="15" fill="#141617">shipping now</text>
+    <g transform="translate(20,102)">
+      <circle cx="9" cy="9" r="8.5" fill="#f4a63a"/>
+      <circle cx="6" cy="7" r="1.3" fill="#3a2a12"/><circle cx="12" cy="7" r="1.3" fill="#3a2a12"/>
+      <path d="M5 11.5 q4 4 8 0" stroke="#3a2a12" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+    </g>
+    <text x="42" y="115" font-family="Helvetica" font-size="15" fill="#141617">party in #general</text>
+    <g transform="translate(148,102)">
+      <rect x="0" y="2" width="18" height="14" rx="3" fill="#8e5bd8"/>
+      <path d="M4 9 l3 3 l7 -7" stroke="#ffffff" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+    </g>
+    <text x="212" y="124" font-family="Helvetica" font-size="11" fill="#232d37">10:22</text>
+  </g>
+
+  <!-- outgoing bubble-less sticker, 96pt, with date overlay -->
+  <g transform="translate(206,138)">
+    <circle cx="48" cy="48" r="40" fill="#ffd24d"/>
+    <circle cx="34" cy="40" r="5" fill="#2b2b2b"/><circle cx="62" cy="40" r="5" fill="#2b2b2b"/>
+    <path d="M28 58 q20 22 40 0" stroke="#2b2b2b" stroke-width="4" fill="none" stroke-linecap="round"/>
+    <path d="M14 24 l10 -16 l10 16 z" fill="#ffd24d"/>
+    <path d="M62 24 l10 -16 l10 16 z" fill="#ffd24d"/>
+    <rect x="46" y="78" width="46" height="16" rx="4" fill="#000000" opacity="0.35"/>
+    <text x="52" y="90" font-family="Helvetica" font-size="11" fill="#ffffff">10:23</text>
+    <path d="M80 84 l3 4 l7 -8" stroke="#ffffff" stroke-width="1.6" fill="none"/>
+  </g>
+
+  <!-- input panel -->
+  <image x="0" y="219" width="320" height="45" xlink:href="ASSET:ConversationInputPanel"/>
+  <rect x="0" y="219" width="320" height="45" fill="#c3ccd6" opacity="0.0"/>
+  <image x="4" y="226" width="30" height="30" xlink:href="ASSET:AttachBtn"/>
+  <rect x="38" y="226" width="216" height="31" rx="5" fill="#ffffff" stroke="#a8b1bb" stroke-width="0.5"/>
+  <text x="46" y="246" font-family="Helvetica" font-size="16" fill="#9da7b3">Message</text>
+  <g transform="translate(228,229)">
+    <circle cx="12" cy="12" r="11" fill="none" stroke="#7d8794" stroke-width="1.5"/>
+    <circle cx="8" cy="9" r="1.4" fill="#7d8794"/><circle cx="16" cy="9" r="1.4" fill="#7d8794"/>
+    <path d="M7 15 q5 5 10 0" stroke="#7d8794" stroke-width="1.5" fill="none"/>
+  </g>
+  <image x="258" y="226" width="58" height="31" xlink:href="ASSET:SendButton"/>
+  <text x="287" y="246" font-family="Helvetica" font-size="14.5" font-weight="bold" fill="#ffffff" text-anchor="middle">Send</text>
+
+  <!-- ===== sticker panel, 216pt ===== -->
+  <g clip-path="url(#panelclip)">
+    <rect x="0" y="264" width="320" height="216" fill="#dfe4eb"/>
+
+    <!-- section header 26pt -->
+    <image x="0" y="264" width="320" height="26" xlink:href="ASSET:CategoryDividerFirst"/>
+    <text x="10" y="281" font-family="Helvetica" font-size="12" font-weight="bold" fill="#697487">FREQUENTLY USED</text>
+
+    <!-- row 1: Cell102 plate, 78pt -->
+    <image x="0" y="290" width="320" height="78" xlink:href="ASSET:Cell102"/>
+    <g transform="translate(2,293)">
+      <rect x="0" y="0" width="72" height="72" fill="none"/>
+      <circle cx="36" cy="36" r="28" fill="#ffd24d"/>
+      <circle cx="26" cy="30" r="3.5" fill="#2b2b2b"/><circle cx="46" cy="30" r="3.5" fill="#2b2b2b"/>
+      <path d="M22 44 q14 16 28 0" stroke="#2b2b2b" stroke-width="3" fill="none" stroke-linecap="round"/>
+    </g>
+    <g transform="translate(78,293)">
+      <path d="M22 12 q-10 -6 -12 6 q-2 12 14 24 q16 -12 14 -24 q-2 -12 -12 -6 z" fill="#e8453c" transform="translate(10,8)"/>
+    </g>
+    <g transform="translate(154,293)">
+      <rect x="20" y="30" width="12" height="26" rx="3" fill="#f0b27a"/>
+      <path d="M30 32 v-14 q0 -6 6 -6 q5 0 4 7 l-2 9 h12 q6 0 5 6 l-4 18 q-1 4 -6 4 h-15 z" fill="#f6c495"/>
+    </g>
+    <g transform="translate(230,293)">
+      <circle cx="36" cy="36" r="26" fill="#8fbf5f"/>
+      <ellipse cx="27" cy="31" rx="5" ry="7" fill="#ffffff"/><ellipse cx="45" cy="31" rx="5" ry="7" fill="#ffffff"/>
+      <circle cx="27" cy="33" r="2.6" fill="#1d2b12"/><circle cx="45" cy="33" r="2.6" fill="#1d2b12"/>
+      <path d="M28 48 q8 7 16 0" stroke="#33501d" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+      <!-- animated: first frame only, tiny play pip bottom-right of the tile -->
+      <circle cx="62" cy="62" r="7" fill="#000000" opacity="0.35"/>
+      <path d="M60 58.5 l5 3.5 l-5 3.5 z" fill="#ffffff"/>
+    </g>
+
+    <!-- section header for the set -->
+    <image x="0" y="368" width="320" height="26" xlink:href="ASSET:CategoryDivider"/>
+    <text x="10" y="385" font-family="Helvetica" font-size="12" font-weight="bold" fill="#697487">GREAT MINDS</text>
+
+    <!-- row 2 -->
+    <image x="0" y="394" width="320" height="78" xlink:href="ASSET:Cell102"/>
+    <g transform="translate(2,397)">
+      <rect x="10" y="14" width="52" height="46" rx="8" fill="#7fb4e8"/>
+      <circle cx="26" cy="34" r="4" fill="#123a5e"/><circle cx="46" cy="34" r="4" fill="#123a5e"/>
+      <path d="M24 48 h24" stroke="#123a5e" stroke-width="3" stroke-linecap="round"/>
+    </g>
+    <g transform="translate(78,397)">
+      <circle cx="36" cy="36" r="27" fill="#f37fb0"/>
+      <path d="M24 28 l8 6 M48 28 l-8 6" stroke="#5a1f3a" stroke-width="2.6" stroke-linecap="round"/>
+      <ellipse cx="36" cy="48" rx="9" ry="6" fill="#5a1f3a"/>
+    </g>
+    <g transform="translate(154,397)">
+      <rect x="12" y="18" width="48" height="38" rx="6" fill="#c8a06a"/>
+      <path d="M12 24 l24 18 l24 -18" fill="none" stroke="#7a5b33" stroke-width="2.4"/>
+    </g>
+    <g transform="translate(230,397)">
+      <circle cx="36" cy="36" r="27" fill="#9b8ff0"/>
+      <circle cx="27" cy="32" r="4" fill="#241f52"/><circle cx="45" cy="32" r="4" fill="#241f52"/>
+      <path d="M26 46 q10 -8 20 0" stroke="#241f52" stroke-width="2.8" fill="none" stroke-linecap="round"/>
+      <circle cx="62" cy="62" r="7" fill="#000000" opacity="0.35"/>
+      <path d="M60 58.5 l5 3.5 l-5 3.5 z" fill="#ffffff"/>
+    </g>
+  </g>
+
+  <!-- tab strip: group button bar, 30pt, pinned to the bottom of the panel -->
+  <image x="0" y="450" width="54" height="30" xlink:href="ASSET:ButtonGroupLeft"/>
+  <image x="54" y="450" width="54" height="30" xlink:href="ASSET:ButtonGroupCenter"/>
+  <image x="108" y="450" width="53" height="30" xlink:href="ASSET:ButtonGroupCenter_Highlighted"/>
+  <image x="161" y="450" width="53" height="30" xlink:href="ASSET:ButtonGroupCenter"/>
+  <image x="214" y="450" width="53" height="30" xlink:href="ASSET:ButtonGroupCenter"/>
+  <image x="267" y="450" width="53" height="30" xlink:href="ASSET:ButtonGroupRight"/>
+  <image x="54" y="450" width="2" height="30" xlink:href="ASSET:ButtonGroupDivider"/>
+  <image x="108" y="450" width="2" height="30" xlink:href="ASSET:ButtonGroupDivider"/>
+  <image x="161" y="450" width="2" height="30" xlink:href="ASSET:ButtonGroupDivider"/>
+  <image x="214" y="450" width="2" height="30" xlink:href="ASSET:ButtonGroupDivider"/>
+  <image x="267" y="450" width="2" height="30" xlink:href="ASSET:ButtonGroupDivider"/>
+  <!-- tab glyphs, 22x22 centred in each 53pt segment -->
+  <g transform="translate(16,454)">
+    <path d="M11 0 l3.4 7 l7.6 1 l-5.5 5.4 l1.3 7.6 l-6.8 -3.6 l-6.8 3.6 l1.3 -7.6 l-5.5 -5.4 l7.6 -1 z" fill="#6c7a8a"/>
+  </g>
+  <g transform="translate(70,454)">
+    <circle cx="11" cy="11" r="10" fill="none" stroke="#6c7a8a" stroke-width="1.6"/>
+    <path d="M11 5 v6 l4 3" stroke="#6c7a8a" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+  </g>
+  <g transform="translate(123,454)">
+    <circle cx="11" cy="11" r="10" fill="#8fbf5f"/>
+    <circle cx="7.5" cy="9" r="1.6" fill="#1d2b12"/><circle cx="14.5" cy="9" r="1.6" fill="#1d2b12"/>
+    <path d="M7 15 q4 3 8 0" stroke="#33501d" stroke-width="1.6" fill="none"/>
+  </g>
+  <g transform="translate(176,454)"><circle cx="11" cy="11" r="10" fill="#f37fb0"/><path d="M6 8 l4 3 M16 8 l-4 3" stroke="#5a1f3a" stroke-width="1.4"/></g>
+  <g transform="translate(229,454)"><rect x="1" y="3" width="20" height="16" rx="4" fill="#c8a06a"/></g>
+  <g transform="translate(282,454)"><circle cx="11" cy="11" r="10" fill="#9b8ff0"/><text x="11" y="15" font-family="Helvetica" font-size="12" font-weight="bold" fill="#ffffff" text-anchor="middle">+</text></g>
+  <!-- trending unread badge on the last tab -->
+  <image x="292" y="450" width="20" height="16" xlink:href="ASSET:DialogListUnreadBadge"/>
+  <text x="302" y="462" font-family="Helvetica" font-size="10" font-weight="bold" fill="#ffffff" text-anchor="middle">3</text>
+</svg>

@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="320" height="480">
+  <defs>
+    <linearGradient id="nav" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7699c0"/>
+      <stop offset="1" stop-color="#42678f"/>
+    </linearGradient>
+    <linearGradient id="hdr" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#eef2f7"/>
+      <stop offset="1" stop-color="#e4e9f0"/>
+    </linearGradient>
+    <linearGradient id="tray" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f4f6f9"/>
+      <stop offset="1" stop-color="#dfe4eb"/>
+    </linearGradient>
+    <linearGradient id="q1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#93aec8"/><stop offset="1" stop-color="#3f5a72"/></linearGradient>
+    <linearGradient id="q2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#dcc59d"/><stop offset="1" stop-color="#8f7146"/></linearGradient>
+    <linearGradient id="q3" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#abc793"/><stop offset="1" stop-color="#4d6b39"/></linearGradient>
+    <linearGradient id="q4" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#cba5b7"/><stop offset="1" stop-color="#73465b"/></linearGradient>
+    <linearGradient id="q5" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#a3b9cb"/><stop offset="1" stop-color="#33516a"/></linearGradient>
+    <linearGradient id="q6" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e2d6ba"/><stop offset="1" stop-color="#877a5b"/></linearGradient>
+    <linearGradient id="q7" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#bccbd8"/><stop offset="1" stop-color="#586d80"/></linearGradient>
+    <linearGradient id="q8" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#c9b4d1"/><stop offset="1" stop-color="#59456e"/></linearGradient>
+    <g id="play2">
+      <circle cx="0" cy="0" r="11" fill="#000000" opacity="0.35"/>
+      <path d="M-3.5 -5.5 L6 0 L-3.5 5.5 Z" fill="#ffffff"/>
+    </g>
+  </defs>
+
+  <rect x="0" y="0" width="320" height="480" fill="#ffffff"/>
+
+  <!-- status bar -->
+  <rect x="0" y="0" width="320" height="20" fill="#000000"/>
+  <text x="8" y="14" font-family="Helvetica" font-weight="bold" font-size="11" fill="#ffffff">•••••  Telegram</text>
+  <text x="146" y="14" font-family="Helvetica" font-weight="bold" font-size="11" fill="#ffffff">14:26</text>
+  <rect x="286" y="6" width="22" height="9" rx="2" fill="none" stroke="#ffffff" stroke-width="1"/>
+  <rect x="288" y="8" width="15" height="5" fill="#ffffff"/>
+
+  <!-- nav bar -->
+  <rect x="0" y="20" width="320" height="44" fill="url(#nav)"/>
+  <rect x="0" y="63" width="320" height="1" fill="#2f4d70"/>
+  <image x="5" y="27" width="56" height="30" xlink:href="ASSET:BackButton"/>
+  <text x="31" y="46" font-family="Helvetica" font-weight="bold" font-size="12" fill="#ffffff" text-anchor="middle">Info</text>
+  <text x="160" y="43" font-family="Helvetica" font-weight="bold" font-size="16" fill="#ffffff" text-anchor="middle">Shared Media</text>
+  <text x="160" y="57" font-family="Helvetica" font-size="13" fill="#c9dcf2" text-anchor="middle">1 248 photos and videos</text>
+  <image x="264" y="27" width="51" height="30" xlink:href="ASSET:HeaderButton"/>
+  <text x="289" y="46" font-family="Helvetica" font-weight="bold" font-size="12" fill="#ffffff" text-anchor="middle">Select</text>
+
+  <!-- grid: continuous tiling, 79pt tiles, 1pt gutter, first row starts at 64 -->
+  <rect x="0" y="64" width="79" height="79" fill="url(#q1)"/>
+  <rect x="80" y="64" width="79" height="79" fill="url(#q2)"/>
+  <rect x="160" y="64" width="79" height="79" fill="url(#q3)"/>
+  <rect x="240" y="64" width="80" height="79" fill="url(#q4)"/>
+
+  <rect x="0" y="144" width="79" height="79" fill="url(#q5)"/>
+  <rect x="80" y="144" width="79" height="79" fill="url(#q6)"/>
+  <rect x="160" y="144" width="79" height="79" fill="url(#q7)"/>
+  <rect x="240" y="144" width="80" height="79" fill="url(#q8)"/>
+  <use xlink:href="#play2" x="39" y="183"/>
+  <rect x="2" y="207" width="27" height="13" fill="#000000" opacity="0.4"/>
+  <text x="5" y="217" font-family="Helvetica" font-weight="bold" font-size="10" fill="#ffffff">0:22</text>
+
+  <rect x="0" y="224" width="79" height="79" fill="url(#q3)"/>
+  <rect x="80" y="224" width="79" height="79" fill="url(#q8)"/>
+  <rect x="160" y="224" width="79" height="79" fill="url(#q2)"/>
+  <rect x="240" y="224" width="80" height="79" fill="url(#q5)"/>
+
+  <rect x="0" y="304" width="79" height="79" fill="url(#q7)"/>
+  <rect x="80" y="304" width="79" height="79" fill="url(#q4)"/>
+  <rect x="160" y="304" width="79" height="79" fill="url(#q6)"/>
+  <rect x="240" y="304" width="80" height="79" fill="url(#q1)"/>
+  <!-- placeholder tile: thumb not decoded yet -->
+  <rect x="80" y="304" width="79" height="79" fill="#e4e9f0"/>
+  <rect x="80" y="304" width="79" height="79" fill="none" stroke="#d5dee5" stroke-width="1"/>
+  <circle cx="119" cy="343" r="8" fill="none" stroke="#b6c1cd" stroke-width="2"/>
+
+  <rect x="0" y="384" width="79" height="52" fill="url(#q2)"/>
+  <rect x="80" y="384" width="79" height="52" fill="url(#q5)"/>
+  <rect x="160" y="384" width="79" height="52" fill="url(#q1)"/>
+  <rect x="240" y="384" width="80" height="52" fill="url(#q3)"/>
+
+  <!-- sticky month strip pinned at the top of the scroll area -->
+  <rect x="0" y="64" width="320" height="25" fill="url(#hdr)"/>
+  <rect x="0" y="88" width="320" height="1" fill="#d5dee5"/>
+  <text x="10" y="82" font-family="Helvetica" font-weight="bold" font-size="15" fill="#ffffff">August 2026</text>
+  <text x="10" y="81" font-family="Helvetica" font-weight="bold" font-size="15" fill="#697487">August 2026</text>
+  <text x="310" y="81" font-family="Helvetica" font-size="13" fill="#697487" text-anchor="end">64 items</text>
+
+  <!-- docked 44pt download tray -->
+  <rect x="0" y="436" width="320" height="44" fill="url(#tray)"/>
+  <rect x="0" y="436" width="320" height="1" fill="#d5dee5"/>
+  <image x="8" y="443" width="30" height="30" xlink:href="ASSET:filetype_icon_mp4"/>
+  <text x="46" y="455" font-family="Helvetica" font-weight="bold" font-size="15" fill="#516691">Downloading 3 files</text>
+  <text x="46" y="470" font-family="Helvetica" font-size="13" fill="#888888">7.6 MB of 18.2 MB · 320 KB/s</text>
+  <rect x="46" y="473" width="200" height="2" fill="#d5dee5"/>
+  <rect x="46" y="473" width="84" height="2" fill="#0779d0"/>
+  <image x="256" y="447" width="35" height="22" xlink:href="ASSET:MenuButtonCenter"/>
+  <text x="273" y="462" font-family="Helvetica" font-weight="bold" font-size="12" fill="#4a6587" text-anchor="middle">II</text>
+  <path d="M301 448 L306 453 L301 458" fill="none" stroke="#9aa4b0" stroke-width="2" stroke-linecap="round"/>
+</svg>

@@ -8,4 +8,15 @@
 #import <UIKit/UIKit.h>
 
 @interface TGChatListViewController : UITableViewController <UIActionSheetDelegate>
+
+- (void)actionsTapped;
+
+- (void)selectChatListWithFolderId:(NSInteger)folderId;
+
+- (void)addStory;
+
+- (void)markCurrentListAsRead;
+
+- (void)openFolderManagement;
+
 @end

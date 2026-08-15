@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="320" height="480">
+  <defs>
+    <linearGradient id="navbg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7699c0"/>
+      <stop offset="1" stop-color="#42678f"/>
+    </linearGradient>
+    <clipPath id="thumbA"><rect x="206" y="133" width="52" height="52" rx="4" ry="4"/></clipPath>
+    <clipPath id="thumbB"><rect x="206" y="296" width="52" height="52" rx="4" ry="4"/></clipPath>
+    <linearGradient id="ph1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5b7ea6"/><stop offset="1" stop-color="#2d4360"/>
+    </linearGradient>
+    <linearGradient id="ph2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#c98a3d"/><stop offset="1" stop-color="#7a4a18"/>
+    </linearGradient>
+  </defs>
+
+  <!-- chat wallpaper -->
+  <rect x="0" y="0" width="320" height="480" fill="#d9ded4"/>
+
+  <!-- status bar -->
+  <rect x="0" y="0" width="320" height="20" fill="#000000"/>
+  <text x="6" y="14" font-family="Helvetica" font-size="12" font-weight="bold" fill="#ffffff">Telegram</text>
+  <text x="160" y="14" font-family="Helvetica" font-size="12" font-weight="bold" fill="#ffffff" text-anchor="middle">9:41</text>
+  <text x="314" y="14" font-family="Helvetica" font-size="12" font-weight="bold" fill="#ffffff" text-anchor="end">78%</text>
+
+  <!-- navigation bar -->
+  <rect x="0" y="20" width="320" height="44" fill="url(#navbg)"/>
+  <image x="5" y="27" width="62" height="30" xlink:href="ASSET:BackButton"/>
+  <text x="41" y="46" font-family="Helvetica" font-size="12" font-weight="bold" fill="#ffffff" text-anchor="middle">Chats</text>
+  <text x="160" y="41" font-family="Helvetica" font-size="16" font-weight="bold" fill="#ffffff" text-anchor="middle">Alexey Petrov</text>
+  <text x="160" y="56" font-family="Helvetica" font-size="13" fill="#e0eefd" text-anchor="middle">online</text>
+  <image x="262" y="27" width="53" height="30" xlink:href="ASSET:HeaderButton"/>
+  <text x="288" y="46" font-family="Helvetica" font-size="12" font-weight="bold" fill="#ffffff" text-anchor="middle">Info</text>
+
+  <!-- incoming plain bubble -->
+  <path d="M4 90 L12 84 L12 96 Z" fill="#ffffff" stroke="rgba(0,0,0,0.12)" stroke-width="1"/>
+  <rect x="8" y="70" width="168" height="31" rx="14" ry="14" fill="#ffffff" stroke="#000000" stroke-opacity="0.12"/>
+  <text x="18" y="91" font-family="Helvetica" font-size="15" fill="#141617">Look what they shipped</text>
+
+  <!-- incoming bubble with compact link preview -->
+  <rect x="8" y="105" width="260" height="101" rx="14" ry="14" fill="#ffffff" stroke="#000000" stroke-opacity="0.12"/>
+  <text x="18" y="124" font-family="Helvetica" font-size="15" fill="#0779d0">theverge.com/2013/telegram</text>
+
+  <!-- preview: 2pt accent bar + text column + 52 thumb -->
+  <rect x="18" y="133" width="2" height="66" fill="#0e7acd"/>
+  <rect x="206" y="133" width="52" height="52" rx="4" ry="4" fill="url(#ph1)"/>
+  <g clip-path="url(#thumbA)">
+    <circle cx="222" cy="150" r="9" fill="#9fb8d4" opacity="0.7"/>
+    <path d="M206 178 L226 160 L242 178 L258 168 L258 185 L206 185 Z" fill="#1d2f45" opacity="0.85"/>
+  </g>
+  <text x="28" y="145" font-family="Helvetica" font-size="14" font-weight="bold" fill="#0e7acd">The Verge</text>
+  <text x="28" y="162" font-family="Helvetica" font-size="14" font-weight="bold" fill="#141617">Telegram rebuilds its iOS</text>
+  <text x="28" y="178" font-family="Helvetica" font-size="14" font-weight="bold" fill="#141617">client for older iPhones</text>
+  <text x="28" y="194" font-family="Helvetica" font-size="14" fill="#62768a">A ground-up rewrite that…</text>
+  <text x="258" y="203" font-family="Helvetica" font-size="11" fill="#232d37" text-anchor="end">19:04</text>
+
+  <!-- outgoing plain bubble -->
+  <rect x="202" y="212" width="110" height="31" rx="14" ry="14" fill="#effedd" stroke="#000000" stroke-opacity="0.12"/>
+  <path d="M316 232 L308 226 L308 238 Z" fill="#effedd" stroke="rgba(0,0,0,0.12)" stroke-width="1"/>
+  <text x="212" y="233" font-family="Helvetica" font-size="15" fill="#141617">Opening it</text>
+  <image x="270" y="233" width="18" height="11" xlink:href="ASSET:DialogListRead"/>
+  <text x="302" y="238" font-family="Helvetica" font-size="11" fill="#232d37" text-anchor="end">19:05</text>
+
+  <!-- incoming bubble: user-type preview, no article body -->
+  <rect x="8" y="249" width="260" height="118" rx="14" ry="14" fill="#ffffff" stroke="#000000" stroke-opacity="0.12"/>
+  <text x="18" y="268" font-family="Helvetica" font-size="15" fill="#141617">and the changelog is here</text>
+  <text x="18" y="287" font-family="Helvetica" font-size="15" fill="#0779d0">t.me/telegram/243</text>
+
+  <rect x="18" y="296" width="2" height="52" fill="#0e7acd"/>
+  <rect x="206" y="296" width="52" height="52" rx="4" ry="4" fill="url(#ph2)"/>
+  <g clip-path="url(#thumbB)">
+    <text x="232" y="332" font-family="Helvetica" font-size="26" font-weight="bold" fill="#ffffff" text-anchor="middle" opacity="0.9">T</text>
+  </g>
+  <text x="28" y="308" font-family="Helvetica" font-size="14" font-weight="bold" fill="#0e7acd">Telegram</text>
+  <text x="28" y="325" font-family="Helvetica" font-size="14" font-weight="bold" fill="#141617">Telegram News</text>
+  <text x="28" y="341" font-family="Helvetica" font-size="14" fill="#62768a">Channel · 1 243 210</text>
+  <text x="258" y="364" font-family="Helvetica" font-size="11" fill="#232d37" text-anchor="end">19:06</text>
+
+  <!-- input panel -->
+  <image x="0" y="437" width="320" height="43" xlink:href="ASSET:ConversationInputPanel_Background"/>
+  <rect x="0" y="437" width="320" height="1" fill="#a3aab1"/>
+  <image x="6" y="444" width="29" height="29" xlink:href="ASSET:AttachBtn"/>
+  <rect x="41" y="443" width="212" height="31" rx="5" ry="5" fill="#ffffff" stroke="#a9b0b7"/>
+  <text x="49" y="464" font-family="Helvetica" font-size="16" fill="#9da7b3">Message</text>
+  <image x="259" y="444" width="55" height="29" xlink:href="ASSET:SendButton"/>
+  <text x="286" y="463" font-family="Helvetica" font-size="14.5" font-weight="bold" fill="#ffffff" text-anchor="middle">Send</text>
+</svg>

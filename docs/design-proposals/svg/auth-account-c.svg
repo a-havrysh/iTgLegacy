@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="320" height="480">
+  <defs>
+    <linearGradient id="nav" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7699c0"/>
+      <stop offset="1" stop-color="#42678f"/>
+    </linearGradient>
+    <clipPath id="screen"><rect x="0" y="0" width="320" height="480"/></clipPath>
+  </defs>
+  <g clip-path="url(#screen)">
+  <rect x="0" y="0" width="320" height="480" fill="#ffffff"/>
+
+  <!-- status bar -->
+  <rect x="0" y="0" width="320" height="20" fill="#000000"/>
+  <text x="8" y="14" font-family="Helvetica" font-size="11" font-weight="bold" fill="#ffffff">•••••  Telegram</text>
+  <text x="147" y="14" font-family="Helvetica" font-size="11" font-weight="bold" fill="#ffffff">09:41</text>
+  <rect x="286" y="6" width="22" height="9" rx="2" fill="none" stroke="#ffffff" stroke-width="1"/>
+  <rect x="288" y="8" width="14" height="5" fill="#ffffff"/>
+
+  <!-- navigation bar -->
+  <rect x="0" y="20" width="320" height="44" fill="url(#nav)"/>
+  <image x="5" y="27" width="72" height="30" preserveAspectRatio="none" xlink:href="ASSET:BackButton"/>
+  <text x="45" y="47" font-family="Helvetica" font-size="12" font-weight="bold" fill="#3d5c81" text-anchor="middle">Settings</text>
+  <text x="45" y="46" font-family="Helvetica" font-size="12" font-weight="bold" fill="#ffffff" text-anchor="middle">Settings</text>
+  <image x="265" y="27" width="50" height="30" preserveAspectRatio="none" xlink:href="ASSET:HeaderButton"/>
+  <text x="290" y="47" font-family="Helvetica" font-size="12" font-weight="bold" fill="#3d5c81" text-anchor="middle">Edit</text>
+  <text x="290" y="46" font-family="Helvetica" font-size="12" font-weight="bold" fill="#ffffff" text-anchor="middle">Edit</text>
+  <text x="160" y="50" font-family="Helvetica" font-size="16" font-weight="bold" fill="#3d5c81" text-anchor="middle">Accounts</text>
+  <text x="160" y="49" font-family="Helvetica" font-size="16" font-weight="bold" fill="#ffffff" text-anchor="middle">Accounts</text>
+
+  <!-- section divider, 26pt -->
+  <image x="0" y="64" width="320" height="26" preserveAspectRatio="none" xlink:href="ASSET:CategoryDividerFirst"/>
+  <text x="10" y="83" font-family="Helvetica" font-size="15" font-weight="bold" fill="#ffffff">On this iPhone</text>
+  <text x="10" y="82" font-family="Helvetica" font-size="15" font-weight="bold" fill="#697487">On this iPhone</text>
+
+  <!-- account row 1, current, 51pt -->
+  <image x="0" y="90" width="320" height="51" preserveAspectRatio="none" xlink:href="ASSET:Cell102"/>
+  <rect x="5" y="95" width="40" height="40" rx="4" ry="4" fill="#0f94ed"/>
+  <text x="25" y="121" font-family="Helvetica" font-size="17" font-weight="bold" fill="#ffffff" text-anchor="middle">AH</text>
+  <text x="49" y="112" font-family="Helvetica" font-size="19" fill="#111111">Alexander Havrysh</text>
+  <text x="50" y="129" font-family="Helvetica" font-size="13" fill="#888888">+44 7700 900112  ·  signed in</text>
+  <image x="286" y="105" width="20" height="20" xlink:href="ASSET:ListCheck"/>
+
+  <!-- account row 2, 51pt -->
+  <image x="0" y="141" width="320" height="51" preserveAspectRatio="none" xlink:href="ASSET:Cell102"/>
+  <rect x="5" y="146" width="40" height="40" rx="4" ry="4" fill="#e09602"/>
+  <text x="25" y="172" font-family="Helvetica" font-size="17" font-weight="bold" fill="#ffffff" text-anchor="middle">RW</text>
+  <text x="49" y="163" font-family="Helvetica" font-size="19" fill="#111111">Work</text>
+  <text x="50" y="180" font-family="Helvetica" font-size="13" fill="#888888">+380 63 555 0198  ·  last used Tue</text>
+  <image x="266" y="156" width="30" height="21" preserveAspectRatio="none" xlink:href="ASSET:DialogListUnreadBadge"/>
+  <text x="281" y="171" font-family="Helvetica" font-size="14" font-weight="bold" fill="#8091a6" text-anchor="middle">12</text>
+  <text x="281" y="170" font-family="Helvetica" font-size="14" font-weight="bold" fill="#ffffff" text-anchor="middle">12</text>
+
+  <!-- add-account section -->
+  <image x="0" y="192" width="320" height="26" preserveAspectRatio="none" xlink:href="ASSET:CategoryDivider"/>
+
+  <image x="0" y="218" width="320" height="44" preserveAspectRatio="none" xlink:href="ASSET:Cell102"/>
+  <rect x="0" y="218" width="320" height="1" fill="#e5e5e5"/>
+  <text x="10" y="246" font-family="Helvetica" font-size="17" font-weight="bold" fill="#0779d0">Add Account by Phone Number</text>
+  <image x="300" y="233" width="9" height="14" xlink:href="ASSET:MenuDisclosureIndicator"/>
+
+  <image x="0" y="262" width="320" height="44" preserveAspectRatio="none" xlink:href="ASSET:Cell102"/>
+  <rect x="0" y="262" width="320" height="1" fill="#e5e5e5"/>
+  <text x="10" y="290" font-family="Helvetica" font-size="17" font-weight="bold" fill="#0779d0">Add Account by QR Code</text>
+  <image x="300" y="277" width="9" height="14" xlink:href="ASSET:MenuDisclosureIndicator"/>
+
+  <!-- closing footer plate -->
+  <image x="0" y="306" width="320" height="44" preserveAspectRatio="none" xlink:href="ASSET:Footer"/>
+
+  <!-- comment text under the group, system 14 #697487 with #dae0e8 (0,+1) shadow -->
+  <text x="14" y="333" font-family="Helvetica" font-size="14" fill="#dae0e8">Only one account is connected at a time.</text>
+  <text x="14" y="332" font-family="Helvetica" font-size="14" fill="#697487">Only one account is connected at a time.</text>
+  <text x="14" y="351" font-family="Helvetica" font-size="14" fill="#dae0e8">Tapping another account reconnects to it;</text>
+  <text x="14" y="350" font-family="Helvetica" font-size="14" fill="#697487">Tapping another account reconnects to it;</text>
+  <text x="14" y="369" font-family="Helvetica" font-size="14" fill="#dae0e8">this takes a few seconds and its badge</text>
+  <text x="14" y="368" font-family="Helvetica" font-size="14" fill="#697487">this takes a few seconds and its badge</text>
+  <text x="14" y="387" font-family="Helvetica" font-size="14" fill="#dae0e8">count is the last one we saw.</text>
+  <text x="14" y="386" font-family="Helvetica" font-size="14" fill="#697487">count is the last one we saw.</text>
+
+  <!-- switching progress, shown in place of the check while reconnecting -->
+  <image x="0" y="404" width="320" height="44" preserveAspectRatio="none" xlink:href="ASSET:Cell102"/>
+  <rect x="0" y="404" width="320" height="1" fill="#e5e5e5"/>
+  <circle cx="22" cy="426" r="8" fill="none" stroke="#b6bcc4" stroke-width="2"/>
+  <path d="M22 418 A8 8 0 0 1 30 426" fill="none" stroke="#516691" stroke-width="2"/>
+  <text x="40" y="431" font-family="Helvetica" font-size="16" fill="#516691">Connecting to Work…</text>
+
+  </g>
+</svg>

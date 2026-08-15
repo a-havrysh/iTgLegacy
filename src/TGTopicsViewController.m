@@ -43,7 +43,21 @@ static NSString *TGTopicDate(NSTimeInterval unix) {
 	return [full stringFromDate:date];
 }
 
-static UIImage *TGTopicAvatarImage(NSString *initials, CGFloat size, NSInteger rgb) {
+static UIImage *TGTopicPlateImage(void) {
+	static UIImage *plate = nil;
+	if (!plate)
+		plate = [[UIImage imageNamed:@"DialogListCell.png"] stretchableImageWithLeftCapWidth:1 topCapHeight:0];
+	return plate;
+}
+
+static UIColor *TGTopicRGB(NSInteger rgb) {
+	return [UIColor colorWithRed:((rgb >> 16) & 0xff) / 255.0f
+						   green:((rgb >> 8) & 0xff) / 255.0f
+							blue:(rgb & 0xff) / 255.0f
+						   alpha:1.0f];
+}
+
+static UIImage *TGTopicDrawAvatar(NSString *initials, CGFloat size, NSInteger rgb) {
 	UIGraphicsBeginImageContextWithOptions(CGSizeMake(size, size), NO, 0);
 	CGContextRef ctx = UIGraphicsGetCurrentContext();
 
@@ -76,6 +90,26 @@ static UIImage *TGTopicAvatarImage(NSString *initials, CGFloat size, NSInteger r
 
 	UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
 	UIGraphicsEndImageContext();
+	return image;
+}
+
+static UIImage *TGTopicAvatarImage(NSString *initials, CGFloat size, NSInteger rgb) {
+	static NSMutableDictionary *cache = nil;
+	if (!cache)
+		cache = [[NSMutableDictionary alloc] init];
+
+	unichar letter = initials.length ? [initials characterAtIndex:0] : (unichar)'?';
+	NSString *key = [NSString stringWithFormat:@"%ld.%d.%d", (long)rgb, (int)letter, (int)size];
+	UIImage *cached = [cache objectForKey:key];
+	if (cached)
+		return cached;
+
+	UIImage *image = TGTopicDrawAvatar(initials, size, rgb);
+	if (image){
+		if (cache.count > 48)
+			[cache removeAllObjects];
+		[cache setObject:image forKey:key];
+	}
 	return image;
 }
 
@@ -220,6 +254,12 @@ static const NSInteger kTopicDeleteAlert = 93;
 @interface TGTopicsViewController () <UIAlertViewDelegate>
 @property (nonatomic, strong) NSArray *topics;
 @property (nonatomic, strong) UILabel *emptyLabel;
+@property (nonatomic, strong) UILabel *emptyText;
+@property (nonatomic, strong) UILabel *subtitleLabel;
+@property (nonatomic, strong) NSDictionary *nextOffset;
+@property (nonatomic, assign) NSInteger totalCount;
+@property (nonatomic, assign) BOOL loadingMore;
+@property (nonatomic, assign) BOOL reachedEnd;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @property (nonatomic, assign) BOOL loading;
 @property (nonatomic, assign) BOOL loadedOnce;
@@ -240,7 +280,8 @@ static const NSInteger kTopicDeleteAlert = 93;
 	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
 		self.edgesForExtendedLayout = UIRectEdgeNone;
 
-	self.title = self.chatTitle ?: @"Topics";
+	self.title = @"Topics";
+	[self buildTitleView];
 	self.topics = @[];
 	self.tableView.rowHeight = kTopicRowHeight;
 	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
@@ -257,14 +298,28 @@ static const NSInteger kTopicDeleteAlert = 93;
 	background.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
 
 	self.emptyLabel = [[UILabel alloc] initWithFrame:
-			CGRectMake(0, 120, background.bounds.size.width, 22)];
+			CGRectMake(0, 150, background.bounds.size.width, 20)];
 	self.emptyLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	self.emptyLabel.backgroundColor = [UIColor clearColor];
 	self.emptyLabel.textAlignment = NSTextAlignmentCenter;
-	self.emptyLabel.font = [UIFont systemFontOfSize:15];
-	self.emptyLabel.textColor = [[TGTheme shared] secondaryTextColour];
+	self.emptyLabel.font = [UIFont boldSystemFontOfSize:15];
+	self.emptyLabel.textColor = TGTopicRGB(0x8b97a5);
+	self.emptyLabel.text = @"No Topics Yet";
 	self.emptyLabel.hidden = YES;
 	[background addSubview:self.emptyLabel];
+
+	self.emptyText = [[UILabel alloc] initWithFrame:
+			CGRectMake(35, 178, background.bounds.size.width - 70, 40)];
+	self.emptyText.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	self.emptyText.backgroundColor = [UIColor clearColor];
+	self.emptyText.textAlignment = NSTextAlignmentCenter;
+	self.emptyText.numberOfLines = 0;
+	self.emptyText.lineBreakMode = NSLineBreakByWordWrapping;
+	self.emptyText.font = [UIFont systemFontOfSize:14];
+	self.emptyText.textColor = TGTopicRGB(0x8b97a5);
+	self.emptyText.text = @"Topics keep separate conversations in one group.";
+	self.emptyText.hidden = YES;
+	[background addSubview:self.emptyText];
 
 	self.spinner = [[UIActivityIndicatorView alloc]
 			initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleGray];
@@ -324,13 +379,51 @@ static const NSInteger kTopicDeleteAlert = 93;
 	[TGPopupMenu dismiss];
 }
 
+- (void)buildTitleView {
+	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 200, 40)];
+
+	UILabel *name = [[UILabel alloc] initWithFrame:CGRectMake(0, 1, 200, 20)];
+	name.text = self.chatTitle.length ? self.chatTitle : @"Topics";
+	name.font = [UIFont boldSystemFontOfSize:17];
+	name.textColor = [[TGTheme shared] barTitleColour];
+	name.backgroundColor = [UIColor clearColor];
+	name.textAlignment = NSTextAlignmentCenter;
+	if (![TGTheme shared].isFlat){
+		name.shadowColor = [UIColor colorWithWhite:0.0f alpha:0.4f];
+		name.shadowOffset = CGSizeMake(0, -1);
+	}
+	[header addSubview:name];
+
+	self.subtitleLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 21, 200, 14)];
+	self.subtitleLabel.font = [UIFont systemFontOfSize:12];
+	self.subtitleLabel.textColor = [TGTheme shared].isFlat
+			? [[TGTheme shared] secondaryTextColour]
+			: [UIColor colorWithWhite:1.0f alpha:0.75f];
+	self.subtitleLabel.backgroundColor = [UIColor clearColor];
+	self.subtitleLabel.textAlignment = NSTextAlignmentCenter;
+	[header addSubview:self.subtitleLabel];
+
+	self.navigationItem.titleView = header;
+}
+
+- (void)updateSubtitle {
+	NSInteger count = MAX(self.totalCount, (NSInteger)self.topics.count);
+	if (count <= 0)
+		self.subtitleLabel.text = @"";
+	else if (count == 1)
+		self.subtitleLabel.text = @"1 topic";
+	else
+		self.subtitleLabel.text = [NSString stringWithFormat:@"%ld topics", (long)count];
+}
+
 - (void)themeChanged {
 	TGTheme *theme = [TGTheme shared];
 	[theme styleNavigationBar:self.navigationController.navigationBar];
 	self.tableView.backgroundColor = [theme listBackgroundColour];
 	self.tableView.separatorColor = [theme separatorColour];
 	self.tableView.backgroundView.backgroundColor = [theme listBackgroundColour];
-	self.emptyLabel.textColor = [theme secondaryTextColour];
+	[self buildTitleView];
+	[self updateSubtitle];
 	BOOL plainPlate = (!theme.isDark && theme.importedName == nil);
 	self.tableView.separatorStyle = plainPlate
 			? UITableViewCellSeparatorStyleNone
@@ -345,11 +438,21 @@ static const NSInteger kTopicDeleteAlert = 93;
 
 	if (!self.loadedOnce){
 		self.emptyLabel.hidden = YES;
+		self.emptyText.hidden = YES;
 		[self.spinner startAnimating];
 	}
 
+	self.nextOffset = nil;
+	self.reachedEnd = NO;
+
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] forumTopicRowsForChat:self.chatId completion:^(NSArray *topics){
+	[[TGClient shared] forumTopicsForChat:self.chatId
+									query:nil
+							   offsetDate:0
+						  offsetMessageId:0
+							offsetTopicId:0
+									limit:40
+							   completion:^(NSArray *topics, NSDictionary *nextOffset, NSInteger totalCount){
 		TGTopicsViewController *me = weakSelf;
 		if (!me)
 			return;
@@ -359,30 +462,114 @@ static const NSInteger kTopicDeleteAlert = 93;
 		if ([me respondsToSelector:@selector(refreshControl)])
 			[me.refreshControl endRefreshing];
 
-		NSMutableArray *clean = [NSMutableArray array];
-		if ([topics isKindOfClass:NSArray.class]){
-			for (id topic in topics){
-				if ([topic isKindOfClass:NSDictionary.class])
-					[clean addObject:topic];
-			}
-		}
-		NSMutableArray *ordered = [NSMutableArray arrayWithCapacity:clean.count];
-		for (NSDictionary *topic in clean){
-			if ([topic[@"isPinned"] boolValue])
-				[ordered addObject:topic];
-		}
-		for (NSDictionary *topic in clean){
-			if (![topic[@"isPinned"] boolValue])
-				[ordered addObject:topic];
-		}
-		me.topics = ordered;
+		me.totalCount = totalCount;
+		me.nextOffset = nextOffset;
+		NSArray *clean = [me cleanedTopics:topics];
+		me.reachedEnd = (clean.count == 0 || nextOffset == nil);
+		me.topics = [me orderedTopics:clean];
 
-		me.emptyLabel.text = @"No topics";
-		me.emptyLabel.hidden = (clean.count > 0);
-
+		[me updateEmptyState];
+		[me updateSubtitle];
 		[me.tableView reloadData];
 		NSLog(@"TDLIB TOPICS: %lu", (unsigned long)clean.count);
 	}];
+}
+
+- (NSArray *)cleanedTopics:(NSArray *)topics {
+	NSMutableArray *clean = [NSMutableArray array];
+	if ([topics isKindOfClass:NSArray.class]){
+		for (id topic in topics){
+			if ([topic isKindOfClass:NSDictionary.class])
+				[clean addObject:topic];
+		}
+	}
+	return clean;
+}
+
+- (NSArray *)orderedTopics:(NSArray *)topics {
+	NSMutableArray *ordered = [NSMutableArray arrayWithCapacity:topics.count];
+	for (NSDictionary *topic in topics){
+		if ([topic[@"isPinned"] boolValue])
+			[ordered addObject:topic];
+	}
+	for (NSDictionary *topic in topics){
+		if (![topic[@"isPinned"] boolValue])
+			[ordered addObject:topic];
+	}
+	return ordered;
+}
+
+- (void)updateEmptyState {
+	BOOL empty = (self.topics.count == 0 && self.loadedOnce);
+	self.emptyLabel.hidden = !empty;
+	self.emptyText.hidden = !empty;
+}
+
+- (void)loadMoreTopics {
+	if (self.loading || self.loadingMore || self.reordering || self.reachedEnd)
+		return;
+	NSDictionary *offset = self.nextOffset;
+	if (![offset isKindOfClass:NSDictionary.class]){
+		self.reachedEnd = YES;
+		return;
+	}
+
+	self.loadingMore = YES;
+	NSInteger offsetDate = [offset[@"date"] respondsToSelector:@selector(integerValue)]
+			? [offset[@"date"] integerValue] : 0;
+	int64_t offsetMessageId = [offset[@"messageId"] respondsToSelector:@selector(longLongValue)]
+			? [offset[@"messageId"] longLongValue] : 0;
+	int32_t offsetTopicId = [offset[@"topicId"] respondsToSelector:@selector(intValue)]
+			? (int32_t)[offset[@"topicId"] intValue] : 0;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] forumTopicsForChat:self.chatId
+									query:nil
+							   offsetDate:offsetDate
+						  offsetMessageId:offsetMessageId
+							offsetTopicId:offsetTopicId
+									limit:40
+							   completion:^(NSArray *topics, NSDictionary *nextOffset, NSInteger totalCount){
+		TGTopicsViewController *me = weakSelf;
+		if (!me)
+			return;
+		me.loadingMore = NO;
+
+		NSArray *page = [me cleanedTopics:topics];
+		if (page.count == 0 || nextOffset == nil)
+			me.reachedEnd = YES;
+		if (page.count == 0)
+			return;
+
+		if (totalCount > 0)
+			me.totalCount = totalCount;
+		me.nextOffset = nextOffset;
+
+		NSMutableSet *known = [NSMutableSet set];
+		for (NSDictionary *topic in me.topics)
+			[known addObject:@([me topicIdOf:topic])];
+
+		NSMutableArray *combined = [me.topics mutableCopy];
+		for (NSDictionary *topic in page){
+			NSNumber *identifier = @([me topicIdOf:topic]);
+			if ([known containsObject:identifier])
+				continue;
+			[known addObject:identifier];
+			[combined addObject:topic];
+		}
+		me.topics = [me orderedTopics:combined];
+
+		[me updateEmptyState];
+		[me updateSubtitle];
+		[me.tableView reloadData];
+	}];
+}
+
+- (void)tableView:(UITableView *)tableView
+		willDisplayCell:(UITableViewCell *)cell
+	  forRowAtIndexPath:(NSIndexPath *)indexPath {
+	if (indexPath.row >= (NSInteger)self.topics.count - 3)
+		[self loadMoreTopics];
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
@@ -425,18 +612,32 @@ static const NSInteger kTopicDeleteAlert = 93;
 	BOOL hidden = [t[@"isHidden"] boolValue];
 
 	cell.titleLabel.text = title;
-	if (closed)
-		cell.previewLabel.text = preview.length
-				? [NSString stringWithFormat:@"Closed · %@", preview]
-				: @"Closed";
-	else if (hidden)
+	if (closed){
+		cell.previewLabel.text = @"Topic closed";
+		if (plainPlate)
+			cell.previewLabel.textColor = TGTopicRGB(0x536c8c);
+	} else if (hidden){
 		cell.previewLabel.text = preview.length
 				? [NSString stringWithFormat:@"Hidden · %@", preview]
 				: @"Hidden";
-	else
+	} else {
 		cell.previewLabel.text = preview;
+	}
 	cell.dateLabel.text = TGTopicDate([t[@"date"] doubleValue]);
 	cell.pinIcon.hidden = ![t[@"isPinned"] boolValue];
+
+	if (plainPlate){
+		UIImageView *plate = (UIImageView *)cell.backgroundView;
+		if (unread > 0){
+			plate.image = nil;
+			plate.backgroundColor = TGTopicRGB(0xebf0f5);
+			if (!closed)
+				cell.previewLabel.textColor = TGTopicRGB(0x5b646e);
+		} else {
+			plate.image = TGTopicPlateImage();
+			plate.backgroundColor = [UIColor clearColor];
+		}
+	}
 
 	NSString *initials = [title substringToIndex:1].uppercaseString;
 	NSInteger rgb = [t[@"iconColor"] respondsToSelector:@selector(integerValue)]

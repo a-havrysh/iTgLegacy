@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="320" height="480">
+  <defs>
+    <linearGradient id="nav" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7699c0"/>
+      <stop offset="1" stop-color="#42678f"/>
+    </linearGradient>
+    <clipPath id="screen"><rect x="0" y="0" width="320" height="480"/></clipPath>
+    <g id="star">
+      <polygon points="0,-7 1.76,-2.43 6.66,-2.16 2.85,0.93 4.11,5.66 0,3 -4.11,5.66 -2.85,0.93 -6.66,-2.16 -1.76,-2.43"/>
+    </g>
+    <g id="bookmark">
+      <path d="M -9 -12 L 9 -12 L 9 12 L 0 4 L -9 12 Z"/>
+    </g>
+  </defs>
+  <g clip-path="url(#screen)">
+  <rect x="0" y="0" width="320" height="480" fill="#ffffff"/>
+
+  <!-- status bar -->
+  <rect x="0" y="0" width="320" height="20" fill="#000000"/>
+  <text x="6" y="14" font-family="Helvetica" font-size="11" fill="#ffffff">Telegram</text>
+  <text x="160" y="14" font-family="Helvetica" font-size="11" font-weight="bold" fill="#ffffff" text-anchor="middle">4:21 PM</text>
+  <text x="314" y="14" font-family="Helvetica" font-size="11" fill="#ffffff" text-anchor="end">86%</text>
+
+  <!-- navigation bar -->
+  <rect x="0" y="20" width="320" height="44" fill="url(#nav)"/>
+  <image x="5" y="27" width="62" height="30" preserveAspectRatio="none" xlink:href="ASSET:BackButton"/>
+  <text x="45" y="46" font-family="Helvetica" font-size="12" font-weight="bold" fill="#ffffff" text-anchor="middle">Chats</text>
+  <image x="259" y="27" width="56" height="30" preserveAspectRatio="none" xlink:href="ASSET:HeaderButton"/>
+  <text x="287" y="46" font-family="Helvetica" font-size="12" font-weight="bold" fill="#ffffff" text-anchor="middle">Edit</text>
+  <text x="160" y="48" font-family="Helvetica" font-size="16" font-weight="bold" fill="#ffffff" text-anchor="middle">Saved Messages</text>
+
+  <!-- search bar, 44pt -->
+  <image x="0" y="64" width="320" height="44" preserveAspectRatio="none" xlink:href="ASSET:SearchBarBackground"/>
+  <image x="8" y="70" width="304" height="32" preserveAspectRatio="none" xlink:href="ASSET:SearchInputField"/>
+  <image x="17" y="78" width="15" height="16" xlink:href="ASSET:SearchBarIcon"/>
+  <text x="38" y="91" font-family="Helvetica" font-size="16" fill="#8d9298">Search saved messages</text>
+
+  <!-- section: Pinned -->
+  <image x="0" y="108" width="320" height="26" preserveAspectRatio="none" xlink:href="ASSET:CategoryDividerFirst"/>
+  <text x="10" y="126" font-family="Helvetica" font-size="15" font-weight="bold" fill="#697487">Pinned</text>
+
+  <!-- row: My Notes (pinned background #EBF0F5) -->
+  <rect x="0" y="134" width="320" height="73" fill="#ebf0f5"/>
+  <rect x="0" y="206.5" width="320" height="0.5" fill="#d5dee5"/>
+  <rect x="8" y="142" width="56" height="56" rx="5" ry="5" fill="#0f94ed"/>
+  <use xlink:href="#bookmark" transform="translate(36,170) scale(1.15)" fill="#ffffff"/>
+  <text x="73" y="163" font-family="Helvetica" font-size="16" font-weight="bold" fill="#111111">My Notes</text>
+  <text x="303" y="161" font-family="Helvetica" font-size="13" fill="#337acc" text-anchor="end">14:19</text>
+  <text x="73" y="182" font-family="Helvetica" font-size="14" fill="#888888">buy tickets on Friday</text>
+  <text x="73" y="198" font-family="Helvetica" font-size="14" fill="#536c8c">Photo</text>
+  <image x="266" y="176" width="27" height="21" preserveAspectRatio="none" xlink:href="ASSET:DialogListUnreadBadge"/>
+  <text x="279" y="191" font-family="Helvetica" font-size="14" font-weight="bold" fill="#ffffff" text-anchor="middle">31</text>
+
+  <!-- section: Saved from -->
+  <image x="0" y="207" width="320" height="26" preserveAspectRatio="none" xlink:href="ASSET:CategoryDivider"/>
+  <text x="10" y="225" font-family="Helvetica" font-size="15" font-weight="bold" fill="#697487">Saved from</text>
+
+  <!-- row: Alice Kovalenko -->
+  <rect x="0" y="233" width="320" height="73" fill="#ffffff"/>
+  <rect x="0" y="305.5" width="320" height="0.5" fill="#d5dee5"/>
+  <rect x="8" y="241" width="56" height="56" rx="5" ry="5" fill="#ee4928"/>
+  <text x="36" y="278" font-family="Helvetica" font-size="22" font-weight="bold" fill="#ffffff" text-anchor="middle">AK</text>
+  <text x="73" y="262" font-family="Helvetica" font-size="16" font-weight="bold" fill="#111111">Alice Kovalenko</text>
+  <text x="303" y="260" font-family="Helvetica" font-size="13" fill="#337acc" text-anchor="end">14:02</text>
+  <text x="73" y="281" font-family="Helvetica" font-size="14" fill="#888888">deploy checklist lives in the wiki</text>
+  <text x="73" y="297" font-family="Helvetica" font-size="14" fill="#888888">under Release/2014</text>
+  <image x="266" y="275" width="27" height="21" preserveAspectRatio="none" xlink:href="ASSET:DialogListUnreadBadge"/>
+  <text x="279" y="290" font-family="Helvetica" font-size="14" font-weight="bold" fill="#ffffff" text-anchor="middle">7</text>
+
+  <!-- row: Design Team -->
+  <rect x="0" y="306" width="320" height="73" fill="#ffffff"/>
+  <rect x="0" y="378.5" width="320" height="0.5" fill="#d5dee5"/>
+  <rect x="8" y="314" width="56" height="56" rx="5" ry="5" fill="#41a903"/>
+  <text x="36" y="351" font-family="Helvetica" font-size="22" font-weight="bold" fill="#ffffff" text-anchor="middle">DT</text>
+  <image x="73" y="340" width="12" height="12" xlink:href="ASSET:DialogListGroupChatIcon"/>
+  <text x="89" y="351" font-family="Helvetica" font-size="16" font-weight="bold" fill="#111111">Design Team</text>
+  <text x="303" y="349" font-family="Helvetica" font-size="13" fill="#337acc" text-anchor="end">Mon</text>
+  <text x="73" y="370" font-family="Helvetica" font-size="14" fill="#888888"><tspan font-weight="bold" fill="#345f8f">Nadia: </tspan>the type scale is frozen</text>
+  <image x="266" y="348" width="27" height="21" preserveAspectRatio="none" xlink:href="ASSET:DialogListUnreadBadge"/>
+  <text x="279" y="363" font-family="Helvetica" font-size="14" font-weight="bold" fill="#ffffff" text-anchor="middle">12</text>
+
+  <!-- row: Hidden Author -->
+  <rect x="0" y="379" width="320" height="73" fill="#ffffff"/>
+  <rect x="0" y="451.5" width="320" height="0.5" fill="#d5dee5"/>
+  <rect x="8" y="387" width="56" height="56" rx="5" ry="5" fill="#8b97a5"/>
+  <text x="36" y="424" font-family="Helvetica" font-size="22" font-weight="bold" fill="#ffffff" text-anchor="middle">?</text>
+  <text x="73" y="408" font-family="Helvetica" font-size="16" font-weight="bold" fill="#111111">Hidden Author</text>
+  <text x="303" y="406" font-family="Helvetica" font-size="13" fill="#337acc" text-anchor="end">9 Aug</text>
+  <text x="73" y="427" font-family="Helvetica" font-size="14" fill="#536c8c">Video</text>
+  <image x="266" y="421" width="27" height="21" preserveAspectRatio="none" xlink:href="ASSET:DialogListUnreadBadge"/>
+  <text x="279" y="436" font-family="Helvetica" font-size="14" font-weight="bold" fill="#ffffff" text-anchor="middle">3</text>
+
+  <!-- row: partial -->
+  <rect x="0" y="452" width="320" height="28" fill="#ffffff"/>
+  <rect x="8" y="460" width="56" height="20" rx="5" ry="5" fill="#e09602"/>
+  <text x="73" y="481" font-family="Helvetica" font-size="16" font-weight="bold" fill="#111111">Pavel Kuznetsov</text>
+  </g>
+</svg>

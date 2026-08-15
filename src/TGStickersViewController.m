@@ -13,31 +13,164 @@
 static const CGFloat kSetRowHeight = 51.0f;
 static const CGFloat kPlainRowHeight = 44.0f;
 static const CGFloat kCoverSide = 40.0f;
-static const CGFloat kTileSide = 64.0f;
+
+static const CGFloat kTileSide = 72.0f;
+static const CGFloat kTileGap = 4.0f;
+static const CGFloat kTileInset = 2.0f;
+static const CGFloat kGridRowHeight = 78.0f;
+
+static const CGFloat kTrendRowHeight = 78.0f;
+static const CGFloat kTrendCoverSide = 34.0f;
+static const NSInteger kTrendCoverCount = 5;
+
 static const NSInteger kArchivedPageSize = 20;
 static const NSInteger kTrendingPageSize = 20;
-static const NSInteger kSetPageSize = 40;
 
-static const CGFloat kBottomBarHeight = 48.0f;
+static const CGFloat kBottomBarHeight = 45.0f;
+static const NSUInteger kCoverCacheLimit = 220;
+
+static UIImage *TGStickersStretch(NSString *name, int leftCap) {
+	UIImage *raw = [UIImage imageNamed:name];
+	if (!raw)
+		return nil;
+	return [raw stretchableImageWithLeftCapWidth:leftCap topCapHeight:0];
+}
 
 static CGFloat TGStickersRetinaPixel(void) {
 	return [UIScreen mainScreen].scale > 1.0f ? 0.5f : 0.0f;
 }
 
-static dispatch_queue_t TGStickersDecodeQueue(void) {
-	static dispatch_queue_t queue = NULL;
-	static dispatch_once_t once;
-	dispatch_once(&once, ^{
-		queue = dispatch_queue_create("org.itglegacy.stickers.decode", NULL);
-	});
-	return queue;
+static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
+	return [NSString stringWithFormat:@"%d-%d", (int)fileId, (int)side];
 }
 
-@interface TGStickersViewController () <UITableViewDataSource, UITableViewDelegate,
-		UIScrollViewDelegate>
+@interface TGStickerTilesCell : UITableViewCell
+
+@property (nonatomic, strong) NSMutableArray *tiles;
+
+- (UIButton *)tileAtIndex:(NSInteger)index;
+- (void)hideTilesFromIndex:(NSInteger)index;
+
+@end
+
+@implementation TGStickerTilesCell
+
+- (id)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)reuseIdentifier {
+	self = [super initWithStyle:UITableViewCellStyleDefault reuseIdentifier:reuseIdentifier];
+	if (!self)
+		return nil;
+
+	self.selectionStyle = UITableViewCellSelectionStyleNone;
+	self.tiles = [NSMutableArray array];
+
+	if (![[TGTheme shared] isFlat]){
+		UIImage *plate = TGStickersStretch(@"Cell102.png", 1);
+		if (plate)
+			self.backgroundView = [[UIImageView alloc] initWithImage:plate];
+	}
+	self.backgroundColor = [[TGTheme shared] isDark]
+			? [[TGTheme shared] listBackgroundColour] : [UIColor whiteColor];
+	return self;
+}
+
+- (UIButton *)tileAtIndex:(NSInteger)index {
+	while ((NSInteger)self.tiles.count <= index){
+		UIButton *tile = [UIButton buttonWithType:UIButtonTypeCustom];
+		tile.backgroundColor = [UIColor clearColor];
+		tile.titleLabel.font = [UIFont systemFontOfSize:34];
+		tile.imageView.contentMode = UIViewContentModeScaleAspectFit;
+		[self.contentView addSubview:tile];
+		[self.tiles addObject:tile];
+	}
+	UIButton *tile = self.tiles[index];
+	tile.hidden = NO;
+	return tile;
+}
+
+- (void)hideTilesFromIndex:(NSInteger)index {
+	for (NSInteger i = index; i < (NSInteger)self.tiles.count; i++){
+		UIButton *tile = self.tiles[i];
+		tile.hidden = YES;
+		[tile setImage:nil forState:UIControlStateNormal];
+		[tile setTitle:@"" forState:UIControlStateNormal];
+	}
+}
+
+@end
+
+@interface TGStickerTrendCell : UITableViewCell
+
+@property (nonatomic, strong) UILabel *packTitleLabel;
+@property (nonatomic, strong) UILabel *packCountLabel;
+@property (nonatomic, strong) NSMutableArray *coverViews;
+@property (nonatomic, strong) UIButton *addButton;
+
+@end
+
+@implementation TGStickerTrendCell
+
+- (id)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)reuseIdentifier {
+	self = [super initWithStyle:UITableViewCellStyleDefault reuseIdentifier:reuseIdentifier];
+	if (!self)
+		return nil;
+
+	self.packTitleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	self.packTitleLabel.backgroundColor = [UIColor clearColor];
+	self.packTitleLabel.font = [UIFont boldSystemFontOfSize:15];
+	[self.contentView addSubview:self.packTitleLabel];
+
+	self.packCountLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	self.packCountLabel.backgroundColor = [UIColor clearColor];
+	self.packCountLabel.font = [UIFont systemFontOfSize:13 + TGStickersRetinaPixel()];
+	self.packCountLabel.textColor = TGStickersRGB(0x888888);
+	[self.contentView addSubview:self.packCountLabel];
+
+	self.coverViews = [NSMutableArray array];
+	for (NSInteger i = 0; i < kTrendCoverCount; i++){
+		UIImageView *cover = [[UIImageView alloc] initWithFrame:CGRectZero];
+		cover.contentMode = UIViewContentModeScaleAspectFit;
+		[self.contentView addSubview:cover];
+		[self.coverViews addObject:cover];
+	}
+
+	self.addButton = [UIButton buttonWithType:UIButtonTypeCustom];
+	self.addButton.titleLabel.font = [UIFont boldSystemFontOfSize:14];
+	self.addButton.titleLabel.shadowOffset = CGSizeMake(0, -1);
+	[self.addButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+	[self.addButton setTitleColor:TGStickersRGB(0x8b97a5) forState:UIControlStateDisabled];
+	[self.addButton setTitleShadowColor:
+			[UIColor colorWithRed:0.05f green:0.15f blue:0.30f alpha:0.4f]
+						 forState:UIControlStateNormal];
+	[self.addButton setBackgroundImage:TGStickersStretch(@"GroupedActionButtonGreen.png", 33)
+							  forState:UIControlStateNormal];
+	[self.addButton setBackgroundImage:
+			TGStickersStretch(@"GroupedActionButtonGreen_Highlighted.png", 33)
+							  forState:UIControlStateHighlighted];
+	[self.contentView addSubview:self.addButton];
+	return self;
+}
+
+- (void)layoutSubviews {
+	[super layoutSubviews];
+	CGFloat width = self.contentView.bounds.size.width;
+
+	self.addButton.frame = CGRectMake(width - 80, 7, 70, 30);
+	self.packTitleLabel.frame = CGRectMake(10, 6, width - 100, 20);
+	self.packCountLabel.frame = CGRectMake(10, 24, width - 100, 16);
+
+	NSInteger index = 0;
+	for (UIImageView *cover in self.coverViews){
+		cover.frame = CGRectMake(10 + index * (kTrendCoverSide + 14), 40,
+				kTrendCoverSide, kTrendCoverSide);
+		index++;
+	}
+}
+
+@end
+
+@interface TGStickersViewController () <UITableViewDataSource, UITableViewDelegate>
 
 @property (nonatomic, strong) UITableView *table;
-@property (nonatomic, strong) UIScrollView *grid;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @property (nonatomic, strong) UIView *placeholder;
 @property (nonatomic, strong) UILabel *placeholderTitle;
@@ -47,8 +180,6 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 @property (nonatomic, strong) NSArray *stickers;
 @property (nonatomic, strong) NSMutableDictionary *covers;
 @property (nonatomic, strong) NSMutableSet *coversInFlight;
-@property (nonatomic, strong) NSMutableArray *tiles;
-@property (nonatomic, strong) NSArray *allStickers;
 @property (nonatomic, strong) UIView *bottomBar;
 @property (nonatomic, strong) UIView *bottomBarLine;
 @property (nonatomic, strong) UIButton *bottomButton;
@@ -60,7 +191,6 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 @property (nonatomic, assign) NSInteger trendingNewCount;
 @property (nonatomic, assign) NSInteger totalRemote;
 @property (nonatomic, assign) NSInteger trendingOffset;
-@property (nonatomic, assign) NSInteger visibleStickerCount;
 
 @property (nonatomic, assign) BOOL loaded;
 @property (nonatomic, assign) BOOL failed;
@@ -83,7 +213,6 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 		_sets = [NSMutableArray array];
 		_covers = [NSMutableDictionary dictionary];
 		_coversInFlight = [NSMutableSet set];
-		_tiles = [NSMutableArray array];
 	}
 	return self;
 }
@@ -115,10 +244,7 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 
 	self.view.backgroundColor = [[TGTheme shared] listBackgroundColour];
 
-	if ([self isGridPage])
-		[self buildGrid];
-	else
-		[self buildTable];
+	[self buildTable];
 
 	if ([self showsBottomBar])
 		[self buildBottomBar];
@@ -167,43 +293,44 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 
 - (void)didReceiveMemoryWarning {
 	[super didReceiveMemoryWarning];
-	if (![self isGridPage])
-		return;
 	[self.covers removeAllObjects];
-	for (UIButton *tile in self.tiles){
-		if (tile.superview && CGRectIntersectsRect(tile.frame, [self visibleGridRect]))
-			continue;
-		[tile setImage:nil forState:UIControlStateNormal];
-		[tile setTitle:tile.accessibilityLabel forState:UIControlStateNormal];
-	}
+	[self.table reloadData];
 }
 
 #pragma mark - chrome
 
 - (void)buildTable {
-	self.table = [[UITableView alloc] initWithFrame:self.view.bounds
-											  style:UITableViewStyleGrouped];
+	UITableViewStyle style = [self isGridPage] ? UITableViewStylePlain
+											  : UITableViewStyleGrouped;
+	self.table = [[UITableView alloc] initWithFrame:self.view.bounds style:style];
 	self.table.autoresizingMask = UIViewAutoresizingFlexibleWidth |
 			UIViewAutoresizingFlexibleHeight;
 	self.table.dataSource = self;
 	self.table.delegate = self;
-	self.table.rowHeight = kPlainRowHeight;
-	self.table.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	self.table.rowHeight = [self isGridPage] ? kGridRowHeight : kPlainRowHeight;
 	self.table.separatorColor = [[TGTheme shared] separatorColour];
+
+	if ([self isGridPage]){
+		self.table.separatorStyle = UITableViewCellSeparatorStyleNone;
+		self.table.backgroundColor = [[TGTheme shared] isDark]
+				? [[TGTheme shared] listBackgroundColour] : [UIColor whiteColor];
+		self.table.tableFooterView = [self gridFooterView];
+	} else {
+		self.table.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	}
 	if ([[TGTheme shared] isDark])
 		self.table.backgroundView = nil;
 	[self.view addSubview:self.table];
 }
 
-- (void)buildGrid {
-	self.grid = [[UIScrollView alloc] initWithFrame:self.view.bounds];
-	self.grid.autoresizingMask = UIViewAutoresizingFlexibleWidth |
-			UIViewAutoresizingFlexibleHeight;
-	self.grid.delegate = self;
-	self.grid.alwaysBounceVertical = YES;
-	self.grid.backgroundColor = [[TGTheme shared] isDark]
-			? [[TGTheme shared] listBackgroundColour] : [UIColor whiteColor];
-	[self.view addSubview:self.grid];
+- (UIView *)gridFooterView {
+	UIImage *plate = TGStickersStretch(@"Footer.png", 1);
+	if (!plate || [[TGTheme shared] isFlat])
+		return [[UIView alloc] initWithFrame:CGRectMake(0, 0, 320, 1)];
+	UIImageView *footer = [[UIImageView alloc] initWithImage:plate];
+	footer.frame = CGRectMake(0, 0, self.view.bounds.size.width, plate.size.height);
+	footer.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	return footer;
 }
 
 - (BOOL)showsBottomBar {
@@ -218,8 +345,13 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 	self.bottomBar = [[UIView alloc] initWithFrame:CGRectZero];
 	self.bottomBar.autoresizingMask = UIViewAutoresizingFlexibleWidth |
 			UIViewAutoresizingFlexibleTopMargin;
-	self.bottomBar.backgroundColor = [[TGTheme shared] isDark]
-			? [[TGTheme shared] listBackgroundColour] : TGStickersRGB(0xf7f7f7);
+
+	UIImage *plate = TGStickersStretch(@"Footer.png", 1);
+	if (plate && ![[TGTheme shared] isFlat] && ![[TGTheme shared] isDark])
+		self.bottomBar.backgroundColor = [UIColor colorWithPatternImage:plate];
+	else
+		self.bottomBar.backgroundColor = [[TGTheme shared] isDark]
+				? [[TGTheme shared] listBackgroundColour] : TGStickersRGB(0xf7f7f7);
 
 	self.bottomBarLine = [[UIView alloc] initWithFrame:CGRectZero];
 	self.bottomBarLine.autoresizingMask = UIViewAutoresizingFlexibleWidth;
@@ -245,20 +377,19 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 
 	BOOL installed = [self currentSetInstalled];
 	NSString *asset = installed ? @"MenuRedButton" : @"GroupedActionButtonGreen";
-	CGFloat cap = installed ? 12 : 33;
-	UIImage *plate = [[UIImage imageNamed:[asset stringByAppendingString:@".png"]]
-			stretchableImageWithLeftCapWidth:(NSInteger)cap topCapHeight:0];
-	UIImage *platePressed = [[UIImage imageNamed:
-			[asset stringByAppendingString:@"_Highlighted.png"]]
-			stretchableImageWithLeftCapWidth:(NSInteger)cap topCapHeight:0];
-	[self.bottomButton setBackgroundImage:plate forState:UIControlStateNormal];
-	[self.bottomButton setBackgroundImage:platePressed forState:UIControlStateHighlighted];
+	int cap = installed ? 12 : 33;
+	[self.bottomButton setBackgroundImage:
+			TGStickersStretch([asset stringByAppendingString:@".png"], cap)
+								 forState:UIControlStateNormal];
+	[self.bottomButton setBackgroundImage:
+			TGStickersStretch([asset stringByAppendingString:@"_Highlighted.png"], cap)
+								 forState:UIControlStateHighlighted];
 	UIColor *shadow = installed
 			? [UIColor colorWithRed:0.64f green:0.06f blue:0.04f alpha:0.2f]
 			: [UIColor colorWithRed:0.05f green:0.15f blue:0.30f alpha:0.4f];
 	[self.bottomButton setTitleShadowColor:shadow forState:UIControlStateNormal];
 
-	NSInteger count = (NSInteger)self.allStickers.count;
+	NSInteger count = (NSInteger)self.stickers.count;
 	if (count == 0)
 		count = [self.set[@"count"] integerValue];
 	NSString *noun = count == 1 ? @"Sticker" : @"Stickers";
@@ -270,7 +401,7 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 		title = installed ? @"Remove Stickers" : @"Add Stickers";
 	[self.bottomButton setTitle:title forState:UIControlStateNormal];
 
-	self.bottomBar.hidden = !self.loaded || self.grid.hidden;
+	self.bottomBar.hidden = !self.loaded || self.table.hidden;
 	[self layoutChrome];
 }
 
@@ -291,31 +422,43 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 	self.bottomButton.frame = CGRectMake(10,
 			floorf((kBottomBarHeight - buttonHeight) / 2), buttonWidth, buttonHeight);
 
-	UIEdgeInsets insets = self.grid.contentInset;
+	UIEdgeInsets insets = self.table.contentInset;
 	insets.bottom = self.bottomBar.hidden ? 0 : kBottomBarHeight;
-	self.grid.contentInset = insets;
-	self.grid.scrollIndicatorInsets = insets;
+	self.table.contentInset = insets;
+	self.table.scrollIndicatorInsets = insets;
 }
 
 - (void)buildPlaceholder {
-	self.placeholder = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 250, 0)];
+	self.placeholder = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 260, 70)];
 	self.placeholder.backgroundColor = [UIColor clearColor];
 	self.placeholder.hidden = YES;
 
+	BOOL plain = ![[TGTheme shared] isFlat] && ![[TGTheme shared] isDark];
+	UIColor *colour = [[TGTheme shared] isDark] ? [[TGTheme shared] sectionHeaderColour]
+												: TGStickersRGB(0x8694a4);
+
 	self.placeholderTitle = [[UILabel alloc] initWithFrame:CGRectZero];
 	self.placeholderTitle.backgroundColor = [UIColor clearColor];
-	self.placeholderTitle.font = [UIFont boldSystemFontOfSize:15];
-	self.placeholderTitle.textColor = TGStickersRGB(0x8b97a5);
+	self.placeholderTitle.font = [UIFont boldSystemFontOfSize:14];
+	self.placeholderTitle.textColor = colour;
 	self.placeholderTitle.textAlignment = NSTextAlignmentCenter;
+	if (plain){
+		self.placeholderTitle.shadowColor = [UIColor colorWithWhite:1.0f alpha:0.5f];
+		self.placeholderTitle.shadowOffset = CGSizeMake(0, 1);
+	}
 	[self.placeholder addSubview:self.placeholderTitle];
 
 	self.placeholderBody = [[UILabel alloc] initWithFrame:CGRectZero];
 	self.placeholderBody.backgroundColor = [UIColor clearColor];
 	self.placeholderBody.font = [UIFont systemFontOfSize:14];
-	self.placeholderBody.textColor = TGStickersRGB(0x8b97a5);
+	self.placeholderBody.textColor = colour;
 	self.placeholderBody.textAlignment = NSTextAlignmentCenter;
 	self.placeholderBody.lineBreakMode = NSLineBreakByWordWrapping;
 	self.placeholderBody.numberOfLines = 0;
+	if (plain){
+		self.placeholderBody.shadowColor = [UIColor colorWithWhite:1.0f alpha:0.5f];
+		self.placeholderBody.shadowOffset = CGSizeMake(0, 1);
+	}
 	[self.placeholder addSubview:self.placeholderBody];
 
 	[self.view addSubview:self.placeholder];
@@ -347,34 +490,30 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 	self.spinner.center = CGPointMake(floorf(width / 2), floorf(height / 2));
 
 	if (!self.placeholder.hidden){
-		CGFloat containerWidth = 250;
+		CGFloat containerWidth = 260;
 		CGSize titleSize = [self.placeholderTitle.text
 				sizeWithFont:self.placeholderTitle.font];
 		CGSize bodySize = [self.placeholderBody.text
 				sizeWithFont:self.placeholderBody.font
-		   constrainedToSize:CGSizeMake(232, 1000)
+		   constrainedToSize:CGSizeMake(containerWidth, 1000)
 			   lineBreakMode:NSLineBreakByWordWrapping];
 
 		self.placeholderTitle.frame = CGRectMake(0, 0, containerWidth, titleSize.height);
-		self.placeholderBody.frame = CGRectMake(floorf((containerWidth - 232) / 2),
-				titleSize.height + 8, 232, bodySize.height);
-		CGFloat containerHeight = titleSize.height + 8 + bodySize.height;
+		self.placeholderBody.frame = CGRectMake(0, 26, containerWidth, bodySize.height);
+		CGFloat containerHeight = 26 + bodySize.height;
 		self.placeholder.frame = CGRectMake(floorf((width - containerWidth) / 2),
 				floorf((height - containerHeight) / 2), containerWidth, containerHeight);
 	}
 
 	[self layoutBottomBar];
-
-	if ([self isGridPage])
-		[self layoutTiles];
 }
 
 #pragma mark - state
 
 - (void)showLoading {
 	self.placeholder.hidden = YES;
-	self.table.hidden = (self.sets.count == 0 && self.page != TGStickersPageRoot);
-	self.grid.hidden = (self.tiles.count == 0);
+	self.table.hidden = (self.sets.count == 0 && self.stickers.count == 0 &&
+			self.page != TGStickersPageRoot);
 	[self.spinner startAnimating];
 	[self layoutChrome];
 }
@@ -385,7 +524,6 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 	self.placeholderBody.text = body;
 	self.placeholder.hidden = NO;
 	self.table.hidden = YES;
-	self.grid.hidden = YES;
 	self.bottomBar.hidden = YES;
 	[self layoutChrome];
 }
@@ -394,7 +532,6 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 	[self.spinner stopAnimating];
 	self.placeholder.hidden = YES;
 	self.table.hidden = NO;
-	self.grid.hidden = NO;
 	self.bottomBar.hidden = ![self showsBottomBar];
 	[self layoutChrome];
 }
@@ -629,7 +766,7 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 			return;
 		}
 		[strongSelf showContent];
-		[strongSelf rebuildTiles];
+		[strongSelf.table reloadData];
 	}];
 }
 
@@ -656,24 +793,26 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 			merged[@"installed"] = @YES;
 		strongSelf.set = merged;
 		strongSelf.title = [strongSelf pageTitle];
-		strongSelf.allStickers = set[@"stickers"];
-		strongSelf.visibleStickerCount = MIN((NSInteger)strongSelf.allStickers.count,
-				kSetPageSize);
-		strongSelf.stickers = [strongSelf.allStickers
-				subarrayWithRange:NSMakeRange(0, (NSUInteger)strongSelf.visibleStickerCount)];
+		strongSelf.stickers = set[@"stickers"];
 		[strongSelf refreshSetBarButton];
-		if (strongSelf.allStickers.count == 0){
+		if (strongSelf.stickers.count == 0){
 			[strongSelf showTitle:@"Empty Set" body:@"This sticker set has no stickers in it."];
 			[strongSelf refreshBottomBar];
 			return;
 		}
 		[strongSelf showContent];
-		[strongSelf rebuildTiles];
+		[strongSelf.table reloadData];
 		[strongSelf refreshBottomBar];
 	}];
 }
 
-#pragma mark - covers
+#pragma mark - images
+
+- (void)pruneCoversIfNeeded {
+	if (self.covers.count <= kCoverCacheLimit)
+		return;
+	[self.covers removeAllObjects];
+}
 
 - (UIImage *)scale:(UIImage *)image toSide:(CGFloat)side {
 	if (!image)
@@ -695,28 +834,19 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 	return result;
 }
 
-- (NSInteger)coverFileIdForSet:(NSDictionary *)set {
-	NSArray *covers = set[@"covers"];
-	for (NSDictionary *sticker in covers){
-		if ([sticker[@"isAnimated"] boolValue] || [sticker[@"isVideo"] boolValue])
-			continue;
-		return [sticker[@"fileId"] integerValue];
-	}
-	return 0;
+- (BOOL)stickerIsStill:(NSDictionary *)sticker {
+	return !([sticker[@"isAnimated"] boolValue] || [sticker[@"isVideo"] boolValue]);
 }
 
-- (UIImage *)coverForSet:(NSDictionary *)set atIndexPath:(NSIndexPath *)indexPath {
-	NSNumber *key = set[@"id"];
-	if (!key)
+- (UIImage *)imageForFileId:(NSInteger)fileId side:(CGFloat)side
+				  indexPath:(NSIndexPath *)indexPath {
+	if (fileId == 0)
 		return nil;
+	NSString *key = TGStickersCacheKey(fileId, side);
 	UIImage *cached = self.covers[key];
 	if (cached)
 		return cached;
 	if ([self.coversInFlight containsObject:key])
-		return nil;
-
-	NSInteger fileId = [self coverFileIdForSet:set];
-	if (fileId == 0)
 		return nil;
 	[self.coversInFlight addObject:key];
 
@@ -729,141 +859,99 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 		if (!path)
 			return;
 		UIImage *decoded = [UIImage convertFromWebP:path compressedData:nil error:nil];
-		UIImage *small = [strongSelf scale:decoded toSide:kCoverSide];
+		UIImage *small = [strongSelf scale:decoded toSide:side];
 		if (!small)
 			return;
 		strongSelf.covers[key] = small;
-		if (indexPath.row < [strongSelf.table numberOfRowsInSection:indexPath.section])
-			[strongSelf.table reloadRowsAtIndexPaths:@[indexPath]
-									withRowAnimation:UITableViewRowAnimationNone];
+		[strongSelf pruneCoversIfNeeded];
+		if (!indexPath)
+			return;
+		if (indexPath.section >= [strongSelf.table numberOfSections])
+			return;
+		if (indexPath.row >= [strongSelf.table numberOfRowsInSection:indexPath.section])
+			return;
+		if (![strongSelf.table cellForRowAtIndexPath:indexPath])
+			return;
+		[strongSelf.table reloadRowsAtIndexPaths:@[indexPath]
+								withRowAnimation:UITableViewRowAnimationNone];
 	}];
 	return nil;
 }
 
+- (NSInteger)coverFileIdForSet:(NSDictionary *)set {
+	NSArray *covers = set[@"covers"];
+	for (NSDictionary *sticker in covers){
+		if (![self stickerIsStill:sticker])
+			continue;
+		return [sticker[@"fileId"] integerValue];
+	}
+	return 0;
+}
+
+- (UIImage *)coverForSet:(NSDictionary *)set atIndexPath:(NSIndexPath *)indexPath {
+	return [self imageForFileId:[self coverFileIdForSet:set] side:kCoverSide
+					  indexPath:indexPath];
+}
+
 #pragma mark - grid
 
-- (CGRect)visibleGridRect {
-	return CGRectMake(0, self.grid.contentOffset.y - kTileSide,
-			self.grid.bounds.size.width, self.grid.bounds.size.height + kTileSide * 2);
-}
-
-- (void)rebuildTiles {
-	for (UIView *tile in self.tiles)
-		[tile removeFromSuperview];
-	[self.tiles removeAllObjects];
-
-	NSInteger index = 0;
-	for (NSDictionary *sticker in self.stickers){
-		UIButton *tile = [UIButton buttonWithType:UIButtonTypeCustom];
-		tile.tag = index;
-		tile.backgroundColor = [UIColor clearColor];
-		tile.titleLabel.font = [UIFont systemFontOfSize:34];
-		tile.imageView.contentMode = UIViewContentModeScaleAspectFit;
-		tile.accessibilityLabel = sticker[@"emoji"];
-		[tile setTitle:sticker[@"emoji"] forState:UIControlStateNormal];
-		[tile addTarget:self action:@selector(tileTapped:)
-	   forControlEvents:UIControlEventTouchUpInside];
-		[self.grid addSubview:tile];
-		[self.tiles addObject:tile];
-		index++;
-	}
-	[self layoutTiles];
-}
-
-- (void)layoutTiles {
-	if (!self.grid || self.tiles.count == 0)
-		return;
-	CGFloat width = self.grid.bounds.size.width;
-	NSInteger columns = (NSInteger)floorf(width / (kTileSide + 8));
+- (NSInteger)gridColumns {
+	CGFloat width = self.table.bounds.size.width;
+	if (width <= 0)
+		width = self.view.bounds.size.width;
+	NSInteger columns = (NSInteger)floorf((width - kTileInset * 2 + kTileGap) /
+			(kTileSide + kTileGap));
 	if (columns < 3)
 		columns = 3;
-	CGFloat gutter = floorf((width - columns * kTileSide) / (columns + 1));
-	if (gutter < 1)
-		gutter = 1;
-
-	NSInteger index = 0;
-	for (UIButton *tile in self.tiles){
-		NSInteger column = index % columns;
-		NSInteger row = index / columns;
-		tile.frame = CGRectMake(gutter + column * (kTileSide + gutter),
-				gutter + row * (kTileSide + gutter), kTileSide, kTileSide);
-		index++;
-	}
-	NSInteger rows = (self.tiles.count + columns - 1) / columns;
-	self.grid.contentSize = CGSizeMake(width, gutter + rows * (kTileSide + gutter));
-	[self loadVisibleTiles];
+	return columns;
 }
 
-- (void)loadVisibleTiles {
-	CGRect visible = [self visibleGridRect];
-	for (UIButton *tile in self.tiles){
-		if (!CGRectIntersectsRect(tile.frame, visible))
-			continue;
-		if (tile.imageView.image)
-			continue;
-		NSInteger index = tile.tag;
+- (NSInteger)gridRowCount {
+	NSInteger columns = [self gridColumns];
+	return ((NSInteger)self.stickers.count + columns - 1) / columns;
+}
+
+- (UITableViewCell *)tilesCellForTable:(UITableView *)tableView
+							 indexPath:(NSIndexPath *)indexPath {
+	TGStickerTilesCell *cell = (TGStickerTilesCell *)
+			[tableView dequeueReusableCellWithIdentifier:@"tiles"];
+	if (!cell)
+		cell = [[TGStickerTilesCell alloc] initWithStyle:UITableViewCellStyleDefault
+										 reuseIdentifier:@"tiles"];
+
+	NSInteger columns = [self gridColumns];
+	NSInteger first = indexPath.row * columns;
+	NSInteger placed = 0;
+
+	for (NSInteger column = 0; column < columns; column++){
+		NSInteger index = first + column;
 		if (index >= (NSInteger)self.stickers.count)
-			continue;
+			break;
 		NSDictionary *sticker = self.stickers[index];
-		if ([sticker[@"isAnimated"] boolValue] || [sticker[@"isVideo"] boolValue])
-			continue;
 
-		NSNumber *key = sticker[@"fileId"];
-		if (!key || [key integerValue] == 0)
-			continue;
-		UIImage *cached = self.covers[key];
-		if (cached){
+		UIButton *tile = [cell tileAtIndex:column];
+		tile.frame = CGRectMake(kTileInset + column * (kTileSide + kTileGap), 3,
+				kTileSide, kTileSide);
+		tile.tag = index;
+		[tile removeTarget:self action:NULL forControlEvents:UIControlEventTouchUpInside];
+		[tile addTarget:self action:@selector(tileTapped:)
+	   forControlEvents:UIControlEventTouchUpInside];
+
+		UIImage *image = nil;
+		if ([self stickerIsStill:sticker])
+			image = [self imageForFileId:[sticker[@"fileId"] integerValue] side:kTileSide
+							   indexPath:indexPath];
+		if (image){
 			[tile setTitle:@"" forState:UIControlStateNormal];
-			[tile setImage:cached forState:UIControlStateNormal];
-			continue;
+			[tile setImage:image forState:UIControlStateNormal];
+		} else {
+			[tile setImage:nil forState:UIControlStateNormal];
+			[tile setTitle:sticker[@"emoji"] forState:UIControlStateNormal];
 		}
-		if ([self.coversInFlight containsObject:key])
-			continue;
-		[self.coversInFlight addObject:key];
-
-		__weak typeof(self) weakSelf = self;
-		__weak UIButton *weakTile = tile;
-		[[TGClient shared] downloadFile:[key integerValue] completion:^(NSString *path){
-			__strong typeof(weakSelf) strongSelf = weakSelf;
-			__strong UIButton *strongTile = weakTile;
-			if (!strongSelf)
-				return;
-			[strongSelf.coversInFlight removeObject:key];
-			if (!path)
-				return;
-			UIImage *decoded = [UIImage convertFromWebP:path compressedData:nil error:nil];
-			UIImage *small = [strongSelf scale:decoded toSide:kTileSide];
-			if (!small)
-				return;
-			strongSelf.covers[key] = small;
-			if (!strongTile)
-				return;
-			[strongTile setTitle:@"" forState:UIControlStateNormal];
-			[strongTile setImage:small forState:UIControlStateNormal];
-		}];
+		placed++;
 	}
-}
-
-- (void)growSetPageIfNeeded {
-	if (self.page != TGStickersPageSet)
-		return;
-	if (self.visibleStickerCount >= (NSInteger)self.allStickers.count)
-		return;
-	CGFloat bottom = self.grid.contentOffset.y + self.grid.bounds.size.height;
-	if (bottom < self.grid.contentSize.height - kTileSide * 2)
-		return;
-	self.visibleStickerCount = MIN((NSInteger)self.allStickers.count,
-			self.visibleStickerCount + kSetPageSize);
-	self.stickers = [self.allStickers
-			subarrayWithRange:NSMakeRange(0, (NSUInteger)self.visibleStickerCount)];
-	[self rebuildTiles];
-}
-
-- (void)scrollViewDidScroll:(UIScrollView *)scrollView {
-	if (scrollView != self.grid)
-		return;
-	[self growSetPageIfNeeded];
-	[self loadVisibleTiles];
+	[cell hideTilesFromIndex:placed];
+	return cell;
 }
 
 - (void)tileTapped:(UIButton *)tile {
@@ -1058,7 +1146,7 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 				   body:@"Hold a sticker in a chat and add it to favourites to keep it here."];
 		return;
 	}
-	[self rebuildTiles];
+	[self.table reloadData];
 }
 
 #pragma mark - reordering
@@ -1146,10 +1234,11 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 
 #pragma mark - captions
 
-- (UILabel *)captionLabel {
+- (UILabel *)commentLabel {
 	UILabel *label = [[UILabel alloc] init];
 	label.backgroundColor = [UIColor clearColor];
 	label.font = [UIFont systemFontOfSize:14];
+	label.textAlignment = NSTextAlignmentCenter;
 	label.textColor = [[TGTheme shared] isDark] ? [[TGTheme shared] sectionHeaderColour]
 												: TGStickersRGB(0x697487);
 	if (![[TGTheme shared] isFlat] && ![[TGTheme shared] isDark]){
@@ -1160,7 +1249,7 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 	return label;
 }
 
-- (CGFloat)captionHeightFor:(NSString *)text width:(CGFloat)width {
+- (CGFloat)commentHeightFor:(NSString *)text width:(CGFloat)width {
 	return [text sizeWithFont:[UIFont systemFontOfSize:14]
 			constrainedToSize:CGSizeMake(width, 1000)
 				lineBreakMode:NSLineBreakByWordWrapping].height;
@@ -1179,10 +1268,10 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 		if (self.sets.count == 0)
 			return self.loaded ? @"You have no sticker sets yet. Trending sets are a good place to start."
 							   : @"Loading...";
-		return @"Tap a set to see its stickers. Swipe one away to archive or remove it, or press Edit to reorder.";
+		return @"Tap a set to see its stickers, hold Edit to reorder. Sets are managed through @stickers.";
 	}
 	if (self.page == TGStickersPageArchived && section == 0 && self.sets.count)
-		return @"Archived sets are kept out of the panel until you add them back. Tap a set to look through it first, or swipe it to add it back or delete it.";
+		return @"Archived sets are kept out of the panel until you add them back.";
 	if (self.page == TGStickersPageTrending && section == 0 && self.sets.count)
 		return @"Sets other people are using right now. Tap one to see its stickers before you add it.";
 	return nil;
@@ -1195,6 +1284,8 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	if ([self isGridPage])
+		return [self gridRowCount];
 	if (self.page != TGStickersPageRoot)
 		return (NSInteger)self.sets.count;
 	if (section == 0)
@@ -1205,58 +1296,73 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
+	if ([self isGridPage])
+		return kGridRowHeight;
+	if (self.page == TGStickersPageTrending)
+		return kTrendRowHeight;
 	if (self.page != TGStickersPageRoot)
 		return kSetRowHeight;
 	return indexPath.section == 1 ? kSetRowHeight : kPlainRowHeight;
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
-	NSString *title = [self headerTitleForSection:section];
-	if (!title)
-		return 12;
-	return [self captionHeightFor:title width:tableView.bounds.size.width - 42] + 18;
+	if ([self isGridPage])
+		return 0;
+	return [self headerTitleForSection:section] ? 46 : 14;
 }
 
 - (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
 	NSString *title = [self headerTitleForSection:section];
 	if (!title)
 		return nil;
-	CGFloat width = tableView.bounds.size.width - 42;
-	CGFloat height = [self captionHeightFor:title width:width];
-	UIView *container = [[UIView alloc] initWithFrame:
-			CGRectMake(0, 0, tableView.bounds.size.width, height + 18)];
-	container.backgroundColor = [UIColor clearColor];
-	UILabel *label = [self captionLabel];
+	UILabel *label = [[UILabel alloc] init];
+	label.backgroundColor = [UIColor clearColor];
+	label.font = [UIFont boldSystemFontOfSize:17];
 	label.text = title;
-	label.frame = CGRectMake(21, 6 + TGStickersRetinaPixel(), width, height);
+	label.textColor = [[TGTheme shared] isDark] ? [[TGTheme shared] sectionHeaderColour]
+												: TGStickersRGB(0x697487);
+	if (![[TGTheme shared] isFlat] && ![[TGTheme shared] isDark]){
+		label.shadowColor = TGStickersRGB(0xdae0e8);
+		label.shadowOffset = CGSizeMake(0, 1);
+	}
+	[label sizeToFit];
+	label.frame = CGRectMake(21, 16, label.frame.size.width, label.frame.size.height);
+
+	UIView *container = [[UIView alloc] initWithFrame:
+			CGRectMake(0, 0, tableView.bounds.size.width, 46)];
+	container.backgroundColor = [UIColor clearColor];
 	[container addSubview:label];
 	return container;
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForFooterInSection:(NSInteger)section {
+	if ([self isGridPage])
+		return 0;
 	NSString *title = [self footerTitleForSection:section];
 	if (!title)
 		return 1;
-	return [self captionHeightFor:title width:tableView.bounds.size.width - 42] + 14;
+	return [self commentHeightFor:title width:tableView.bounds.size.width - 20] + 14;
 }
 
 - (UIView *)tableView:(UITableView *)tableView viewForFooterInSection:(NSInteger)section {
 	NSString *title = [self footerTitleForSection:section];
 	if (!title)
 		return nil;
-	CGFloat width = tableView.bounds.size.width - 42;
-	CGFloat height = [self captionHeightFor:title width:width];
+	CGFloat width = tableView.bounds.size.width - 20;
+	CGFloat height = [self commentHeightFor:title width:width];
 	UIView *container = [[UIView alloc] initWithFrame:
 			CGRectMake(0, 0, tableView.bounds.size.width, height + 14)];
 	container.backgroundColor = [UIColor clearColor];
-	UILabel *label = [self captionLabel];
+	UILabel *label = [self commentLabel];
 	label.text = title;
-	label.frame = CGRectMake(21, 7 + TGStickersRetinaPixel(), width, height);
+	label.frame = CGRectMake(10, 7 + TGStickersRetinaPixel(), width, height);
 	[container addSubview:label];
 	return container;
 }
 
 - (NSDictionary *)setAtIndexPath:(NSIndexPath *)indexPath {
+	if ([self isGridPage])
+		return nil;
 	if (self.page == TGStickersPageRoot && indexPath.section != 1)
 		return nil;
 	if (indexPath.row >= (NSInteger)self.sets.count)
@@ -1264,28 +1370,53 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 	return self.sets[indexPath.row];
 }
 
-- (NSString *)countTextForSet:(NSDictionary *)set {
+- (NSInteger)stickerCountForSet:(NSDictionary *)set {
 	NSInteger count = [set[@"count"] integerValue];
 	if (count == 0)
 		count = (NSInteger)[set[@"stickers"] count];
+	return count;
+}
+
+- (NSString *)countTextForSet:(NSDictionary *)set {
+	NSInteger count = [self stickerCountForSet:set];
 	return count == 1 ? @"1 sticker" : [NSString stringWithFormat:@"%d stickers", (int)count];
 }
 
 - (NSString *)addButtonTitle {
-	return self.page == TGStickersPageArchived ? @"Add Back" : @"Add";
+	return self.page == TGStickersPageArchived ? @"ADD BACK" : @"ADD";
 }
 
 - (UIButton *)addButton {
 	UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
 	button.frame = CGRectMake(0, 0,
-			self.page == TGStickersPageArchived ? 72 : 54, 30);
-	button.titleLabel.font = [UIFont boldSystemFontOfSize:13];
+			self.page == TGStickersPageArchived ? 86 : 70, 30);
+	button.titleLabel.font = [UIFont boldSystemFontOfSize:14];
+	button.titleLabel.shadowOffset = CGSizeMake(0, -1);
 	[button setTitle:[self addButtonTitle] forState:UIControlStateNormal];
-	[button setTitleColor:[[TGTheme shared] accentColour] forState:UIControlStateNormal];
+	[button setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
 	[button setTitleColor:TGStickersRGB(0x8b97a5) forState:UIControlStateDisabled];
+	[button setTitleShadowColor:[UIColor colorWithRed:0.05f green:0.15f blue:0.30f alpha:0.4f]
+					   forState:UIControlStateNormal];
+	[button setBackgroundImage:TGStickersStretch(@"GroupedActionButtonGreen.png", 33)
+					  forState:UIControlStateNormal];
+	[button setBackgroundImage:TGStickersStretch(@"GroupedActionButtonGreen_Highlighted.png", 33)
+					  forState:UIControlStateHighlighted];
 	[button addTarget:self action:@selector(addButtonTapped:)
 	 forControlEvents:UIControlEventTouchUpInside];
 	return button;
+}
+
+- (void)configureAddButton:(UIButton *)button forRow:(NSInteger)row installed:(BOOL)installed {
+	button.tag = row;
+	button.enabled = !installed;
+	if (installed){
+		[button setBackgroundImage:nil forState:UIControlStateNormal];
+		[button setTitle:@"ADDED" forState:UIControlStateDisabled];
+	} else {
+		[button setBackgroundImage:TGStickersStretch(@"GroupedActionButtonGreen.png", 33)
+						  forState:UIControlStateNormal];
+		[button setTitle:[self addButtonTitle] forState:UIControlStateNormal];
+	}
 }
 
 - (void)addButtonTapped:(UIButton *)button {
@@ -1293,7 +1424,8 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 	if (row >= (NSInteger)self.sets.count)
 		return;
 	button.enabled = NO;
-	[button setTitle:@"Added" forState:UIControlStateDisabled];
+	[button setBackgroundImage:nil forState:UIControlStateDisabled];
+	[button setTitle:@"ADDED" forState:UIControlStateDisabled];
 	[self installSet:self.sets[row] fromRow:row button:button];
 }
 
@@ -1305,7 +1437,7 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 	[[TGTheme shared] styleCell:cell];
 	cell.accessoryView = nil;
 	cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-	cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+	cell.textLabel.font = [UIFont systemFontOfSize:19];
 	cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
 	cell.detailTextLabel.font = [UIFont systemFontOfSize:16];
 	cell.detailTextLabel.textColor = [[TGTheme shared] cellDetailColour];
@@ -1319,11 +1451,12 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 	if (!cell){
 		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
 									  reuseIdentifier:@"set"];
-		cell.textLabel.font = [UIFont boldSystemFontOfSize:16];
-		cell.detailTextLabel.font = [UIFont systemFontOfSize:13];
+		cell.textLabel.font = [UIFont systemFontOfSize:19];
+		cell.detailTextLabel.font = [UIFont systemFontOfSize:13 + TGStickersRetinaPixel()];
 	}
 	[[TGTheme shared] styleCell:cell];
 	cell.shouldIndentWhileEditing = NO;
+	cell.textLabel.font = [UIFont systemFontOfSize:19];
 	cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
 	cell.detailTextLabel.textColor = TGStickersRGB(0x888888);
 
@@ -1347,14 +1480,46 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 		cell.accessoryView = nil;
 		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 	} else {
-		BOOL installed = [set[@"installed"] boolValue];
 		UIButton *add = [self addButton];
-		add.tag = indexPath.row;
-		add.enabled = !installed;
-		if (installed)
-			[add setTitle:@"Added" forState:UIControlStateDisabled];
+		[self configureAddButton:add forRow:indexPath.row
+					   installed:[set[@"installed"] boolValue]];
 		cell.accessoryType = UITableViewCellAccessoryNone;
 		cell.accessoryView = add;
+	}
+	return cell;
+}
+
+- (UITableViewCell *)trendCellForTable:(UITableView *)tableView
+							 indexPath:(NSIndexPath *)indexPath {
+	TGStickerTrendCell *cell = (TGStickerTrendCell *)
+			[tableView dequeueReusableCellWithIdentifier:@"trend"];
+	if (!cell){
+		cell = [[TGStickerTrendCell alloc] initWithStyle:UITableViewCellStyleDefault
+										 reuseIdentifier:@"trend"];
+		[cell.addButton addTarget:self action:@selector(addButtonTapped:)
+				 forControlEvents:UIControlEventTouchUpInside];
+	}
+	[[TGTheme shared] styleCell:cell];
+
+	NSDictionary *set = [self setAtIndexPath:indexPath];
+	cell.packTitleLabel.text = set[@"title"];
+	cell.packTitleLabel.textColor = [[TGTheme shared] primaryTextColour];
+	cell.packCountLabel.text = [self countTextForSet:set];
+	[self configureAddButton:cell.addButton forRow:indexPath.row
+				   installed:[set[@"installed"] boolValue]];
+
+	NSArray *covers = set[@"covers"];
+	NSInteger index = 0;
+	for (UIImageView *view in cell.coverViews){
+		UIImage *image = nil;
+		if (index < (NSInteger)covers.count){
+			NSDictionary *sticker = covers[index];
+			if ([self stickerIsStill:sticker])
+				image = [self imageForFileId:[sticker[@"fileId"] integerValue]
+										side:kTrendCoverSide indexPath:indexPath];
+		}
+		view.image = image;
+		index++;
 	}
 	return cell;
 }
@@ -1364,13 +1529,14 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 	if (!cell){
 		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
 									  reuseIdentifier:@"clear"];
-		cell.textLabel.font = [UIFont boldSystemFontOfSize:16];
+		cell.textLabel.font = [UIFont systemFontOfSize:19];
 		cell.textLabel.textAlignment = NSTextAlignmentCenter;
 	}
 	[[TGTheme shared] styleCell:cell];
 	cell.accessoryView = nil;
 	cell.accessoryType = UITableViewCellAccessoryNone;
 	cell.imageView.image = nil;
+	cell.textLabel.font = [UIFont systemFontOfSize:19];
 	cell.textLabel.text = @"Clear Recent Stickers";
 	cell.textLabel.textColor = TGStickersRGB(0xd0021b);
 	return cell;
@@ -1378,6 +1544,10 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
 		 cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	if ([self isGridPage])
+		return [self tilesCellForTable:tableView indexPath:indexPath];
+	if (self.page == TGStickersPageTrending)
+		return [self trendCellForTable:tableView indexPath:indexPath];
 	if (self.page != TGStickersPageRoot)
 		return [self setCellForTable:tableView indexPath:indexPath];
 
@@ -1388,17 +1558,17 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 
 	UITableViewCell *cell = [self plainCellForTable:tableView];
 	if (indexPath.row == 0){
-		cell.textLabel.text = @"Favourite Stickers";
-		cell.detailTextLabel.text = self.favouriteCount
-				? [NSString stringWithFormat:@"%d", (int)self.favouriteCount] : @"";
-	} else if (indexPath.row == 1){
 		cell.textLabel.text = @"Trending Stickers";
 		cell.detailTextLabel.text = self.trendingNewCount
 				? [NSString stringWithFormat:@"%d new", (int)self.trendingNewCount] : @"";
-	} else {
+	} else if (indexPath.row == 1){
 		cell.textLabel.text = @"Archived Stickers";
 		cell.detailTextLabel.text = self.archivedCount
 				? [NSString stringWithFormat:@"%d", (int)self.archivedCount] : @"";
+	} else {
+		cell.textLabel.text = @"Favourite Stickers";
+		cell.detailTextLabel.text = self.favouriteCount
+				? [NSString stringWithFormat:@"%d", (int)self.favouriteCount] : @"";
 	}
 	return cell;
 }
@@ -1407,6 +1577,9 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+
+	if ([self isGridPage])
+		return;
 
 	if (self.page != TGStickersPageRoot){
 		NSDictionary *set = [self setAtIndexPath:indexPath];
@@ -1417,11 +1590,11 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 
 	if (indexPath.section == 0){
 		if (indexPath.row == 0)
-			[self openPage:TGStickersPageFavourites];
-		else if (indexPath.row == 1)
 			[self openPage:TGStickersPageTrending];
-		else
+		else if (indexPath.row == 1)
 			[self openPage:TGStickersPageArchived];
+		else
+			[self openPage:TGStickersPageFavourites];
 		return;
 	}
 	if (indexPath.section == 1){
@@ -1455,6 +1628,8 @@ static dispatch_queue_t TGStickersDecodeQueue(void) {
 }
 
 - (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
+	if ([self isGridPage])
+		return NO;
 	if (self.page == TGStickersPageArchived)
 		return YES;
 	return self.page == TGStickersPageRoot && indexPath.section == 1;

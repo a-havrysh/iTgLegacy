@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="320" height="480">
+  <defs>
+    <linearGradient id="nav" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7699c0"/>
+      <stop offset="1" stop-color="#42678f"/>
+    </linearGradient>
+    <linearGradient id="rowg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#f4f6f8"/>
+    </linearGradient>
+    <linearGradient id="swon" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a76d2"/>
+      <stop offset="1" stop-color="#3f9be8"/>
+    </linearGradient>
+    <linearGradient id="swoff" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e2e4e7"/>
+      <stop offset="1" stop-color="#fbfcfd"/>
+    </linearGradient>
+    <linearGradient id="knob" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#e6e8ea"/>
+    </linearGradient>
+    <g id="swON">
+      <rect x="0" y="0" width="79" height="27" rx="13.5" fill="url(#swon)" stroke="#1160ad" stroke-width="1"/>
+      <text x="16" y="18" font-family="Helvetica" font-weight="bold" font-size="12" fill="#ffffff">ON</text>
+      <circle cx="65" cy="13.5" r="12" fill="url(#knob)" stroke="#9aa0a6" stroke-width="0.5"/>
+    </g>
+    <g id="swOFF">
+      <rect x="0" y="0" width="79" height="27" rx="13.5" fill="url(#swoff)" stroke="#b9bec4" stroke-width="1"/>
+      <text x="46" y="18" font-family="Helvetica" font-weight="bold" font-size="12" fill="#8b929a">OFF</text>
+      <circle cx="14" cy="13.5" r="12" fill="url(#knob)" stroke="#9aa0a6" stroke-width="0.5"/>
+    </g>
+  </defs>
+
+  <rect x="0" y="0" width="320" height="480" fill="#c8ccd1"/>
+  <rect x="0" y="0" width="320" height="480" fill="#bdc3ca" opacity="0.35"/>
+
+  <rect x="0" y="0" width="320" height="20" fill="#000000"/>
+  <text x="8" y="14" font-family="Helvetica" font-weight="bold" font-size="11" fill="#ffffff">•••••  Telegram</text>
+  <text x="146" y="14" font-family="Helvetica" font-weight="bold" font-size="11" fill="#ffffff">14:26</text>
+  <rect x="286" y="6" width="22" height="9" rx="2" fill="none" stroke="#ffffff" stroke-width="1"/>
+  <rect x="288" y="8" width="15" height="5" fill="#ffffff"/>
+
+  <rect x="0" y="20" width="320" height="44" fill="url(#nav)"/>
+  <rect x="0" y="63" width="320" height="1" fill="#2f4d70"/>
+  <image x="5" y="27" width="58" height="30" xlink:href="ASSET:BackButton"/>
+  <text x="30" y="46" font-family="Helvetica" font-weight="bold" font-size="12" fill="#ffffff" text-anchor="middle">Group</text>
+  <text x="160" y="49" font-family="Helvetica" font-weight="bold" font-size="20" fill="#ffffff" text-anchor="middle">Permissions</text>
+
+  <text x="20" y="82" font-family="Helvetica" font-size="14" fill="#dfe4ea">Pick a preset, or set each right by hand.</text>
+  <text x="20" y="81" font-family="Helvetica" font-size="14" fill="#697487">Pick a preset, or set each right by hand.</text>
+
+  <!-- preset group: 4 x 44 -->
+  <rect x="10" y="92" width="300" height="176" rx="8" fill="url(#rowg)" stroke="#a9b0b7" stroke-width="1"/>
+  <line x1="10" y1="136" x2="310" y2="136" stroke="#cfd4d9" stroke-width="1"/>
+  <line x1="10" y1="180" x2="310" y2="180" stroke="#cfd4d9" stroke-width="1"/>
+  <line x1="10" y1="224" x2="310" y2="224" stroke="#cfd4d9" stroke-width="1"/>
+
+  <text x="20" y="120" font-family="Helvetica" font-weight="bold" font-size="17" fill="#16181a">Open group</text>
+  <text x="20" y="164" font-family="Helvetica" font-weight="bold" font-size="17" fill="#16181a">Text only</text>
+  <text x="20" y="208" font-family="Helvetica" font-weight="bold" font-size="17" fill="#16181a">Read-only</text>
+  <text x="20" y="252" font-family="Helvetica" font-weight="bold" font-size="17" fill="#16181a">Custom</text>
+  <image x="286" y="243" width="15" height="14" xlink:href="ASSET:ListCheck"/>
+
+  <text x="20" y="287" font-family="Helvetica" font-size="14" fill="#dae0e8">Custom: 9 rights below. Changing any of</text>
+  <text x="20" y="286" font-family="Helvetica" font-size="14" fill="#697487">Custom: 9 rights below. Changing any of</text>
+  <text x="20" y="303" font-family="Helvetica" font-size="14" fill="#dae0e8">them moves the tick here.</text>
+  <text x="20" y="302" font-family="Helvetica" font-size="14" fill="#697487">them moves the tick here.</text>
+
+  <!-- detail group, runs off the bottom edge -->
+  <rect x="10" y="314" width="300" height="180" rx="8" fill="url(#rowg)" stroke="#a9b0b7" stroke-width="1"/>
+  <line x1="10" y1="358" x2="310" y2="358" stroke="#cfd4d9" stroke-width="1"/>
+  <line x1="10" y1="402" x2="310" y2="402" stroke="#cfd4d9" stroke-width="1"/>
+  <line x1="10" y1="446" x2="310" y2="446" stroke="#cfd4d9" stroke-width="1"/>
+
+  <text x="20" y="342" font-family="Helvetica" font-weight="bold" font-size="17" fill="#16181a">Send Messages</text>
+  <use xlink:href="#swON" x="221" y="322"/>
+  <text x="20" y="386" font-family="Helvetica" font-weight="bold" font-size="17" fill="#16181a">Send Photos</text>
+  <use xlink:href="#swON" x="221" y="366"/>
+  <text x="20" y="430" font-family="Helvetica" font-weight="bold" font-size="17" fill="#16181a">Send Videos</text>
+  <use xlink:href="#swOFF" x="221" y="410"/>
+  <text x="20" y="474" font-family="Helvetica" font-weight="bold" font-size="17" fill="#16181a">Send Stickers &amp; GIFs</text>
+  <use xlink:href="#swOFF" x="221" y="454"/>
+</svg>

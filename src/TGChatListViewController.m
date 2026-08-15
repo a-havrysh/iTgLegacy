@@ -5,6 +5,8 @@
 #import "TGClient+ChatList.h"
 #import "TGClient+Notifications.h"
 #import "TGClient+Messages.h"
+#import "TGClient+Stories.h"
+#import "TGClient+Files.h"
 #import "TGFoldersViewController.h"
 #import "TGTheme.h"
 #import "TGIcons.h"
@@ -199,6 +201,402 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 
 @end
 
+#pragma mark - settings
+
+static NSString *const TGChatListStoriesTrayKey = @"TGShowStoriesTray";
+static NSString *const TGChatListFolderStyleKey = @"TGChatListFolderStyle";
+
+static const NSInteger TGChatListFolderStyleChooser = 0;
+static const NSInteger TGChatListFolderStyleStrip = 1;
+
+static const CGFloat kStoryTrayHeight = 82.0f;
+static const CGFloat kStoryCellWidth = 68.0f;
+static const CGFloat kStoryAvatar = 56.0f;
+static const CGFloat kFolderStripHeight = 36.0f;
+
+static BOOL TGStoriesTrayEnabled(void) {
+	id stored = [[NSUserDefaults standardUserDefaults] objectForKey:TGChatListStoriesTrayKey];
+	return stored ? [stored boolValue] : YES;
+}
+
+static NSInteger TGChatListFolderStyle(void) {
+	id stored = [[NSUserDefaults standardUserDefaults] objectForKey:TGChatListFolderStyleKey];
+	return stored ? [stored integerValue] : TGChatListFolderStyleStrip;
+}
+
+static UIImage *TGTitleCaretImage(void) {
+	static UIImage *caret = nil;
+	if (caret)
+		return caret;
+	CGSize size = CGSizeMake(10, 6);
+	if (UIGraphicsBeginImageContextWithOptions != NULL)
+		UIGraphicsBeginImageContextWithOptions(size, NO, 0.0f);
+	else
+		UIGraphicsBeginImageContext(size);
+	CGContextRef ctx = UIGraphicsGetCurrentContext();
+	CGContextSetFillColorWithColor(ctx, [UIColor whiteColor].CGColor);
+	CGContextMoveToPoint(ctx, 0, 0);
+	CGContextAddLineToPoint(ctx, size.width, 0);
+	CGContextAddLineToPoint(ctx, size.width / 2, size.height);
+	CGContextClosePath(ctx);
+	CGContextFillPath(ctx);
+	caret = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return caret;
+}
+
+static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
+	if (!source || bounds.width < 1 || bounds.height < 1)
+		return source;
+	CGFloat scale = MIN(bounds.width / source.size.width, bounds.height / source.size.height);
+	if (scale >= 1.0f)
+		return source;
+	CGSize target = CGSizeMake((int)(source.size.width * scale), (int)(source.size.height * scale));
+	if (UIGraphicsBeginImageContextWithOptions != NULL)
+		UIGraphicsBeginImageContextWithOptions(target, YES, 1.0f);
+	else
+		UIGraphicsBeginImageContext(target);
+	[source drawInRect:CGRectMake(0, 0, target.width, target.height)];
+	UIImage *scaled = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return scaled ?: source;
+}
+
+#pragma mark - story viewer
+
+@interface TGStoryViewController : UIViewController <UIActionSheetDelegate, UIAlertViewDelegate>
+@property (nonatomic, strong) NSArray *posters;
+@property (nonatomic, assign) NSInteger posterIndex;
+@property (nonatomic, assign) NSInteger storyIndex;
+@property (nonatomic, strong) UIView *bars;
+@property (nonatomic, strong) UIImageView *photo;
+@property (nonatomic, strong) UIView *captionPlate;
+@property (nonatomic, strong) UILabel *captionLabel;
+@property (nonatomic, strong) UILabel *titleLine;
+@property (nonatomic, strong) UILabel *subtitleLine;
+@property (nonatomic, strong) UIButton *replyButton;
+@property (nonatomic, strong) UIButton *reactButton;
+@property (nonatomic, strong) NSDictionary *current;
+@property (nonatomic, assign) NSInteger openedStoryId;
+@property (nonatomic, assign) int64_t openedChatId;
+@property (nonatomic, strong) NSArray *sheetItems;
+@end
+
+@implementation TGStoryViewController
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+	self.view.backgroundColor = [UIColor blackColor];
+
+	UIView *titleView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 180, 40)];
+	self.titleLine = [[UILabel alloc] initWithFrame:CGRectMake(0, 2, 180, 18)];
+	self.titleLine.backgroundColor = [UIColor clearColor];
+	self.titleLine.font = [UIFont boldSystemFontOfSize:16];
+	self.titleLine.textColor = [UIColor whiteColor];
+	self.titleLine.textAlignment = NSTextAlignmentCenter;
+	[titleView addSubview:self.titleLine];
+
+	self.subtitleLine = [[UILabel alloc] initWithFrame:CGRectMake(0, 20, 180, 15)];
+	self.subtitleLine.backgroundColor = [UIColor clearColor];
+	self.subtitleLine.font = [UIFont systemFontOfSize:13];
+	self.subtitleLine.textColor = [UIColor colorWithRed:0xE0 / 255.0f green:0xEE / 255.0f
+												   blue:0xFD / 255.0f alpha:1.0f];
+	self.subtitleLine.textAlignment = NSTextAlignmentCenter;
+	[titleView addSubview:self.subtitleLine];
+	self.navigationItem.titleView = titleView;
+
+	UIButton *more = [TGIcons headerButtonWithTitle:@"More" bold:NO
+											 target:self action:@selector(moreTapped)];
+	self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:more];
+
+	self.bars = [[UIView alloc] initWithFrame:CGRectZero];
+	self.bars.backgroundColor = [UIColor clearColor];
+	[self.view addSubview:self.bars];
+
+	self.photo = [[UIImageView alloc] initWithFrame:CGRectZero];
+	self.photo.contentMode = UIViewContentModeScaleAspectFit;
+	self.photo.backgroundColor = [UIColor blackColor];
+	[self.view addSubview:self.photo];
+
+	self.captionPlate = [[UIView alloc] initWithFrame:CGRectZero];
+	self.captionPlate.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45f];
+	self.captionPlate.hidden = YES;
+	[self.view addSubview:self.captionPlate];
+
+	self.captionLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	self.captionLabel.backgroundColor = [UIColor clearColor];
+	self.captionLabel.font = [UIFont systemFontOfSize:15];
+	self.captionLabel.textColor = [UIColor whiteColor];
+	self.captionLabel.numberOfLines = 2;
+	self.captionLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+	[self.view addSubview:self.captionLabel];
+
+	self.replyButton = [self footerButtonWithTitle:@"Reply" action:@selector(replyTapped)];
+	self.reactButton = [self footerButtonWithTitle:@"♥" action:@selector(reactTapped)];
+
+	UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc]
+			initWithTarget:self action:@selector(viewTapped:)];
+	[self.view addGestureRecognizer:tap];
+
+	[self showCurrentStory];
+}
+
+- (UIButton *)footerButtonWithTitle:(NSString *)title action:(SEL)action {
+	UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+	[button setTitle:title forState:UIControlStateNormal];
+	[button setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+	button.titleLabel.font = [UIFont boldSystemFontOfSize:12];
+	button.titleLabel.shadowColor = [UIColor colorWithRed:0x0e / 255.0f green:0x28 / 255.0f
+													 blue:0x4d / 255.0f alpha:0.4f];
+	button.titleLabel.shadowOffset = CGSizeMake(0, -1);
+	button.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.15f];
+	button.layer.cornerRadius = 4;
+	[button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
+	[self.view addSubview:button];
+	return button;
+}
+
+- (void)viewDidLayoutSubviews {
+	[super viewDidLayoutSubviews];
+	CGRect bounds = self.view.bounds;
+	CGFloat w = bounds.size.width;
+	CGFloat h = bounds.size.height;
+
+	self.bars.frame = CGRectMake(0, 6, w, 3);
+	[self layoutBars];
+
+	CGFloat footerTop = h - 40;
+	self.photo.frame = CGRectMake(0, 15, w, footerTop - 20);
+	self.replyButton.frame = CGRectMake(10, footerTop, 145, 30);
+	self.reactButton.frame = CGRectMake(165, footerTop, 145, 30);
+
+	CGRect plate = CGRectMake(0, CGRectGetMaxY(self.photo.frame) - 50, w, 50);
+	self.captionPlate.frame = plate;
+	self.captionLabel.frame = CGRectInset(plate, 10, 6);
+}
+
+- (void)layoutBars {
+	for (UIView *bar in [self.bars.subviews copy])
+		[bar removeFromSuperview];
+
+	NSArray *stories = [self currentPoster][@"stories"];
+	NSInteger count = (NSInteger)stories.count;
+	if (count <= 0)
+		return;
+	CGFloat width = self.bars.bounds.size.width - 8;
+	CGFloat gap = 2;
+	CGFloat each = (width - gap * (count - 1)) / count;
+	for (NSInteger i = 0; i < count; i++){
+		UIView *bar = [[UIView alloc] initWithFrame:CGRectMake(4 + i * (each + gap), 0, each, 3)];
+		bar.backgroundColor = [UIColor colorWithWhite:1.0f
+												alpha:(i <= self.storyIndex ? 1.0f : 0.3f)];
+		[self.bars addSubview:bar];
+	}
+}
+
+- (NSDictionary *)currentPoster {
+	if (self.posterIndex < 0 || self.posterIndex >= (NSInteger)self.posters.count)
+		return nil;
+	return self.posters[self.posterIndex];
+}
+
+- (void)closeOpenStory {
+	if (!self.openedStoryId)
+		return;
+	[[TGClient shared] closeStory:self.openedStoryId inChat:self.openedChatId];
+	self.openedStoryId = 0;
+	self.openedChatId = 0;
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+	[super viewWillDisappear:animated];
+	[self closeOpenStory];
+}
+
+- (void)showCurrentStory {
+	NSDictionary *poster = [self currentPoster];
+	if (!poster){
+		[self.navigationController popViewControllerAnimated:YES];
+		return;
+	}
+
+	NSArray *stories = poster[@"stories"];
+	if (self.storyIndex >= (NSInteger)stories.count)
+		self.storyIndex = (NSInteger)stories.count - 1;
+	if (self.storyIndex < 0)
+		self.storyIndex = 0;
+	if (!stories.count)
+		return;
+
+	int64_t chatId = [poster[@"chatId"] longLongValue];
+	NSInteger storyId = [stories[self.storyIndex][@"id"] integerValue];
+
+	[self closeOpenStory];
+	[[TGClient shared] openStory:storyId inChat:chatId];
+	self.openedStoryId = storyId;
+	self.openedChatId = chatId;
+
+	self.titleLine.text = poster[@"title"];
+	self.subtitleLine.text = [NSString stringWithFormat:@"%ld of %lu",
+			(long)(self.storyIndex + 1), (unsigned long)stories.count];
+	[self layoutBars];
+	self.photo.image = nil;
+	self.captionLabel.text = @"";
+	self.captionPlate.hidden = YES;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] storyWithId:storyId inChat:chatId completion:^(NSDictionary *story){
+		TGStoryViewController *me = weakSelf;
+		if (!me || !story)
+			return;
+		if (me.openedStoryId != storyId)
+			return;
+		me.current = story;
+		NSString *caption = story[@"caption"];
+		me.captionLabel.text = caption ?: @"";
+		me.captionPlate.hidden = (caption.length == 0);
+		NSInteger reactions = [story[@"reactions"] integerValue];
+		[me.reactButton setTitle:(reactions > 0
+				? [NSString stringWithFormat:@"♥ %ld", (long)reactions] : @"♥")
+						forState:UIControlStateNormal];
+
+		NSNumber *photoId = story[@"photoId"];
+		if (!photoId)
+			return;
+		[[TGClient shared] downloadFile:[photoId integerValue] completion:^(NSString *path){
+			TGStoryViewController *inner = weakSelf;
+			if (!inner || !path || inner.openedStoryId != storyId)
+				return;
+			UIImage *raw = [UIImage imageWithContentsOfFile:path];
+			if (!raw)
+				return;
+			inner.photo.image = TGStoryScaledImage(raw, inner.photo.bounds.size);
+		}];
+	}];
+}
+
+- (void)viewTapped:(UITapGestureRecognizer *)tap {
+	CGFloat x = [tap locationInView:self.view].x;
+	CGFloat w = self.view.bounds.size.width;
+	if (x < w * 0.4f)
+		[self stepBy:-1];
+	else if (x > w * 0.6f)
+		[self stepBy:1];
+}
+
+- (void)stepBy:(NSInteger)delta {
+	NSArray *stories = [self currentPoster][@"stories"];
+	NSInteger next = self.storyIndex + delta;
+	if (next < 0){
+		if (self.posterIndex == 0)
+			return;
+		self.posterIndex -= 1;
+		self.storyIndex = (NSInteger)[[self currentPoster][@"stories"] count] - 1;
+	} else if (next >= (NSInteger)stories.count){
+		if (self.posterIndex + 1 >= (NSInteger)self.posters.count){
+			[self closeOpenStory];
+			[self.navigationController popViewControllerAnimated:YES];
+			return;
+		}
+		self.posterIndex += 1;
+		self.storyIndex = 0;
+	} else {
+		self.storyIndex = next;
+	}
+	[self showCurrentStory];
+}
+
+- (void)replyTapped {
+	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Reply"
+													message:nil
+												   delegate:self
+										  cancelButtonTitle:@"Cancel"
+										  otherButtonTitles:@"Send", nil];
+	alert.alertViewStyle = UIAlertViewStylePlainTextInput;
+	alert.tag = 1;
+	[alert show];
+}
+
+- (void)alertView:(UIAlertView *)alertView didDismissWithButtonIndex:(NSInteger)buttonIndex {
+	if (alertView.tag != 1 || buttonIndex == alertView.cancelButtonIndex)
+		return;
+	NSString *text = [alertView textFieldAtIndex:0].text;
+	if (!text.length)
+		return;
+	[[TGClient shared] replyToStory:self.openedStoryId inChat:self.openedChatId text:text];
+}
+
+- (void)reactTapped {
+	NSString *mine = self.current[@"myReaction"];
+	NSString *next = mine.length ? nil : @"❤";
+	[[TGClient shared] reactToStory:self.openedStoryId inChat:self.openedChatId emoji:next];
+	NSMutableDictionary *updated = [(self.current ?: @{}) mutableCopy];
+	NSInteger reactions = [updated[@"reactions"] integerValue] + (next ? 1 : -1);
+	if (reactions < 0)
+		reactions = 0;
+	updated[@"reactions"] = @(reactions);
+	updated[@"myReaction"] = next ?: @"";
+	self.current = updated;
+	[self.reactButton setTitle:(reactions > 0
+			? [NSString stringWithFormat:@"♥ %ld", (long)reactions] : @"♥")
+					  forState:UIControlStateNormal];
+}
+
+- (void)moreTapped {
+	NSMutableArray *items = [NSMutableArray array];
+	NSString *name = [self currentPoster][@"title"] ?: @"this person";
+	[items addObject:@{@"kind" : @"hide",
+					   @"title" : [NSString stringWithFormat:@"Hide Stories from %@", name]}];
+	[items addObject:@{@"kind" : @"report", @"title" : @"Report"}];
+	if ([self.current[@"canDelete"] boolValue])
+		[items addObject:@{@"kind" : @"delete", @"title" : @"Delete Story"}];
+	self.sheetItems = items;
+
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
+													  delegate:self
+											 cancelButtonTitle:nil
+										destructiveButtonTitle:nil
+											 otherButtonTitles:nil];
+	for (NSDictionary *item in items)
+		[sheet addButtonWithTitle:item[@"title"]];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	[sheet showInView:self.view];
+}
+
+- (void)actionSheet:(UIActionSheet *)sheet didDismissWithButtonIndex:(NSInteger)index {
+	if (index == sheet.cancelButtonIndex || index < 0 || index >= (NSInteger)self.sheetItems.count)
+		return;
+	NSString *kind = self.sheetItems[index][@"kind"];
+	int64_t chatId = self.openedChatId;
+	NSInteger storyId = self.openedStoryId;
+
+	if ([kind isEqualToString:@"hide"]){
+		[[TGClient shared] setUser:chatId storiesHidden:YES];
+		[self closeOpenStory];
+		[self.navigationController popViewControllerAnimated:YES];
+	} else if ([kind isEqualToString:@"delete"]){
+		[[TGClient shared] deleteStory:storyId inChat:chatId];
+		[self closeOpenStory];
+		[self.navigationController popViewControllerAnimated:YES];
+	} else if ([kind isEqualToString:@"report"]){
+		[[TGClient shared] reportStory:storyId inChat:chatId optionId:nil text:nil
+							completion:^(NSDictionary *result){
+			NSString *status = result[@"status"];
+			NSString *message = [status isEqualToString:@"ok"]
+					? @"Thank you. The story has been reported."
+					: @"Reporting this story needs the full report form, which this client does not have.";
+			UIAlertView *done = [[UIAlertView alloc] initWithTitle:@"Report"
+														   message:message
+														  delegate:nil
+												 cancelButtonTitle:@"OK"
+												 otherButtonTitles:nil];
+			[done show];
+		}];
+	}
+}
+
+@end
+
 #pragma mark - controller
 
 @interface TGChatListViewController () <UISearchBarDelegate, UIAlertViewDelegate, UIActionSheetDelegate>
@@ -221,6 +619,11 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 @property (nonatomic, assign) NSInteger folderLimit;
 @property (nonatomic, assign) BOOL loadingMore;
 @property (nonatomic, strong) NSMutableSet *sponsoredSeen;
+@property (nonatomic, strong) NSArray *storyPosters;
+@property (nonatomic, strong) NSMutableDictionary *storyPostersById;
+@property (nonatomic, assign) NSInteger storyProbesPending;
+@property (nonatomic, assign) NSTimeInterval lastStorySweep;
+@property (nonatomic, strong) UILabel *titleLabelView;
 @end
 
 @implementation TGChatListViewController
@@ -230,9 +633,9 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 
 	self.title = [self defaultTitle];
 	if (!self.showsArchive){
-		UIButton *folders = [TGIcons headerButtonWithTitle:@"Folders" bold:NO
-													 target:self action:@selector(foldersTapped)];
-		self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:folders];
+		UIButton *edit = [TGIcons headerButtonWithTitle:@"Edit" bold:NO
+												  target:self action:@selector(listOptionsTapped)];
+		self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:edit];
 	} else {
 		UIButton *options = [TGIcons headerButtonWithTitle:@"Edit" bold:NO
 													target:self action:@selector(archiveOptionsTapped)];
@@ -243,7 +646,10 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 	self.avatarsRequested = [NSMutableSet set];
 	self.listUnread = [NSMutableDictionary dictionary];
 	self.sponsoredSeen = [NSMutableSet set];
+	self.storyPostersById = [NSMutableDictionary dictionary];
 	self.folderLimit = 60;
+	if (!self.showsArchive && TGStoriesTrayEnabled())
+		[[TGClient shared] loadActiveStoriesArchived:NO];
 
 	// Without this there is no way to start a conversation at all - you can
 	// only reply to chats that already exist.
@@ -291,6 +697,8 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 		[weakSelf applySeparatorStyle];
 		[[TGTheme shared] styleTabBar:weakSelf.tabBarController.tabBar];
 		[weakSelf styleSearchBar];
+		[weakSelf applyTitleView];
+		[weakSelf rebuildTableHeader];
 		[weakSelf.tableView reloadData];
 	}];
 
@@ -307,6 +715,7 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 	self.emptyLabel.userInteractionEnabled = NO;
 	[self.tableView addSubview:self.emptyLabel];
 
+	[self applyTitleView];
 	[self installClientHandlers];
 	[self reload];
 }
@@ -348,9 +757,60 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 	return @"Messages";
 }
 
+- (BOOL)hasFolders {
+	return [TGClient shared].folders.count > 0;
+}
+
+- (BOOL)usesFolderStrip {
+	return !self.showsArchive && [self hasFolders] &&
+		   TGChatListFolderStyle() == TGChatListFolderStyleStrip;
+}
+
+- (BOOL)usesFolderChooser {
+	return !self.showsArchive && [self hasFolders] &&
+		   TGChatListFolderStyle() == TGChatListFolderStyleChooser;
+}
+
+- (void)applyTitleView {
+	self.title = [self defaultTitle];
+	if (![self usesFolderChooser]){
+		self.navigationItem.titleView = nil;
+		self.titleLabelView = nil;
+		return;
+	}
+
+	NSString *text = [self defaultTitle];
+	UIFont *font = [UIFont boldSystemFontOfSize:20];
+	CGFloat textWidth = MIN(180, (int)[text sizeWithFont:font].width);
+	UIImage *caret = TGTitleCaretImage();
+	CGFloat width = textWidth + 6 + caret.size.width;
+
+	UIView *holder = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, 40)];
+	self.titleLabelView = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, textWidth, 40)];
+	self.titleLabelView.backgroundColor = [UIColor clearColor];
+	self.titleLabelView.font = font;
+	self.titleLabelView.textColor = [UIColor whiteColor];
+	self.titleLabelView.shadowColor = [UIColor colorWithWhite:0 alpha:0.4f];
+	self.titleLabelView.shadowOffset = CGSizeMake(0, -1);
+	self.titleLabelView.textAlignment = NSTextAlignmentCenter;
+	self.titleLabelView.text = text;
+	[holder addSubview:self.titleLabelView];
+
+	UIImageView *arrow = [[UIImageView alloc] initWithImage:caret];
+	arrow.frame = CGRectMake(textWidth + 6, 22, caret.size.width, caret.size.height);
+	[holder addSubview:arrow];
+
+	holder.userInteractionEnabled = YES;
+	[holder addGestureRecognizer:[[UITapGestureRecognizer alloc]
+			initWithTarget:self action:@selector(foldersTapped)]];
+	self.navigationItem.titleView = holder;
+}
+
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
 	[self installClientHandlers];
+	[self applyTitleView];
+	[self rebuildTableHeader];
 	NSIndexPath *selected = [self.tableView indexPathForSelectedRow];
 	if (selected)
 		[self.tableView deselectRowAtIndexPath:selected animated:animated];
@@ -424,16 +884,26 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 	CGFloat width = self.tableView.bounds.size.width ?: 320;
 	BOOL showArchive = !self.showsArchive && self.folderId == 0 &&
 					   [TGClient shared].archivedChats.count > 0;
-	CGFloat height = 44 + (showArchive ? kRowHeight : 0);
+	BOOL showTray = !self.showsArchive && TGStoriesTrayEnabled() && self.storyPosters.count > 0;
+	BOOL showStrip = [self usesFolderStrip];
+	CGFloat trayHeight = showTray ? kStoryTrayHeight : 0;
+	CGFloat stripHeight = showStrip ? kFolderStripHeight : 0;
+	CGFloat rowsTop = 44 + trayHeight + stripHeight;
+	CGFloat height = rowsTop + (showArchive ? kRowHeight : 0);
 
 	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, height)];
 	self.searchBar.frame = CGRectMake(0, 0, width, 44);
 	[header addSubview:self.searchBar];
 
+	if (showTray)
+		[header addSubview:[self storyTrayWithWidth:width top:44]];
+	if (showStrip)
+		[header addSubview:[self folderStripWithWidth:width top:44 + trayHeight]];
+
 	if (showArchive){
 		TGChatCell *row = [[TGChatCell alloc] initWithStyle:UITableViewCellStyleDefault
 											reuseIdentifier:nil];
-		row.frame = CGRectMake(0, 44, width, kRowHeight);
+		row.frame = CGRectMake(0, rowsTop, width, kRowHeight);
 		row.titleLabel.text = @"Archived Chats";
 		row.titleLabel.textColor = [[TGTheme shared] primaryTextColour];
 		row.previewLabel.text = [NSString stringWithFormat:@"%lu chats",
@@ -475,10 +945,256 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 - (void)hideHeaderAboveFrom:(CGFloat)previousHeight {
 	if (self.tableView.contentSize.height <= self.tableView.bounds.size.height)
 		return;
+	CGFloat hidden = MIN(44.0f, self.headerHeight);
 	CGFloat y = self.tableView.contentOffset.y;
-	if (y > 0.5f && fabs(y - previousHeight) > 0.5f)
+	if (y > 0.5f && fabs(y - MIN(44.0f, previousHeight)) > 0.5f)
 		return;   // the user has scrolled somewhere of their own; leave it
-	self.tableView.contentOffset = CGPointMake(0, self.headerHeight);
+	self.tableView.contentOffset = CGPointMake(0, hidden);
+}
+
+/// The strip of folders under the search bar, drawn with the search bar's own
+/// scope-button artwork and the exact text attributes the original dialog list
+/// gave its scope buttons.
+- (UIView *)folderStripWithWidth:(CGFloat)width top:(CGFloat)top {
+	UIView *strip = [[UIView alloc] initWithFrame:CGRectMake(0, top, width, kFolderStripHeight)];
+	UIImage *background = [UIImage imageNamed:@"SearchBarBackground.png"];
+	if (background){
+		UIImageView *plate = [[UIImageView alloc] initWithImage:
+				[background stretchableImageWithLeftCapWidth:1 topCapHeight:0]];
+		plate.frame = strip.bounds;
+		[strip addSubview:plate];
+	} else {
+		strip.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	}
+
+	UIScrollView *scroller = [[UIScrollView alloc] initWithFrame:strip.bounds];
+	scroller.backgroundColor = [UIColor clearColor];
+	scroller.showsHorizontalScrollIndicator = NO;
+	[strip addSubview:scroller];
+
+	UIImage *normalPlate = [[UIImage imageNamed:@"SearchBarScopeButton.png"]
+			stretchableImageWithLeftCapWidth:6 topCapHeight:0];
+	UIImage *selectedPlate = [[UIImage imageNamed:@"SearchBarScopeButton_Highlighted.png"]
+			stretchableImageWithLeftCapWidth:6 topCapHeight:0];
+
+	NSMutableArray *entries = [NSMutableArray array];
+	[entries addObject:@{@"title" : @"All Chats", @"folder" : @0}];
+	for (NSDictionary *folder in [TGClient shared].folders)
+		[entries addObject:@{@"title" : (folder[@"title"] ?: @"Folder"),
+							 @"folder" : (folder[@"id"] ?: @0)}];
+
+	UIFont *font = [UIFont boldSystemFontOfSize:12];
+	CGFloat x = 4;
+	for (NSUInteger i = 0; i < entries.count; i++){
+		NSDictionary *entry = entries[i];
+		NSInteger listId = [entry[@"folder"] integerValue];
+		NSString *caption = [entry[@"title"] stringByAppendingString:
+				[self unreadSuffixForList:(TGChatListId)(listId ?: TGChatListMain)]];
+		BOOL selected = (listId == self.folderId);
+
+		CGFloat buttonWidth = (int)[caption sizeWithFont:font].width + 24;
+		UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+		button.frame = CGRectMake(x, 3, buttonWidth, 30);
+		[button setBackgroundImage:(selected ? selectedPlate : normalPlate)
+						  forState:UIControlStateNormal];
+		[button setTitle:caption forState:UIControlStateNormal];
+		button.titleLabel.font = font;
+		if (selected){
+			[button setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+			button.titleLabel.shadowColor = [UIColor colorWithRed:0x11 / 255.0f
+															green:0x2e / 255.0f
+															 blue:0x5c / 255.0f alpha:0.2f];
+			button.titleLabel.shadowOffset = CGSizeMake(0, -1);
+		} else {
+			[button setTitleColor:[UIColor colorWithRed:0x5c / 255.0f green:0x70 / 255.0f
+												   blue:0x8b / 255.0f alpha:1.0f]
+						 forState:UIControlStateNormal];
+			button.titleLabel.shadowColor = [UIColor colorWithWhite:1.0f alpha:0.25f];
+			button.titleLabel.shadowOffset = CGSizeMake(0, 1);
+		}
+		button.tag = listId;
+		[button addTarget:self action:@selector(folderButtonTapped:)
+		 forControlEvents:UIControlEventTouchUpInside];
+		[scroller addSubview:button];
+		x += buttonWidth + 4;
+	}
+	scroller.contentSize = CGSizeMake(x + 4, kFolderStripHeight);
+
+	UIView *hair = [[UIView alloc] initWithFrame:
+			CGRectMake(0, kFolderStripHeight - 0.5f, width, 0.5f)];
+	hair.backgroundColor = [UIColor colorWithRed:0xD5 / 255.0f green:0xDE / 255.0f
+											blue:0xE5 / 255.0f alpha:1.0f];
+	[strip addSubview:hair];
+	return strip;
+}
+
+- (void)folderButtonTapped:(UIButton *)button {
+	if (self.folderId == button.tag)
+		return;
+	self.folderId = button.tag;
+	self.folderLimit = 60;
+	[self applyTitleView];
+	[self reload];
+}
+
+/// The tray of posters with live stories. It exists only while somebody has
+/// one, so an account with no stories keeps the 2013 screen exactly as it was.
+- (UIView *)storyTrayWithWidth:(CGFloat)width top:(CGFloat)top {
+	TGTheme *theme = [TGTheme shared];
+	UIScrollView *tray = [[UIScrollView alloc] initWithFrame:
+			CGRectMake(0, top, width, kStoryTrayHeight)];
+	tray.showsHorizontalScrollIndicator = NO;
+	tray.backgroundColor = theme.isDark
+			? [UIColor colorWithWhite:0.11f alpha:1.0f]
+			: [UIColor colorWithRed:0xE4 / 255.0f green:0xE9 / 255.0f
+							   blue:0xF0 / 255.0f alpha:1.0f];
+
+	CGFloat x = 8;
+	for (NSUInteger i = 0; i < self.storyPosters.count; i++){
+		NSDictionary *poster = self.storyPosters[i];
+		BOOL unread = [poster[@"unread"] boolValue];
+
+		UIView *cell = [[UIView alloc] initWithFrame:CGRectMake(x, 0, kStoryCellWidth, kStoryTrayHeight)];
+		cell.backgroundColor = [UIColor clearColor];
+		cell.tag = (NSInteger)i;
+
+		UIView *ring = [[UIView alloc] initWithFrame:CGRectMake(4, 4, kStoryAvatar + 4, kStoryAvatar + 4)];
+		ring.backgroundColor = [UIColor clearColor];
+		ring.layer.cornerRadius = 7;
+		ring.layer.borderWidth = 2;
+		ring.layer.borderColor = unread
+				? [theme accentColour].CGColor
+				: [UIColor colorWithRed:0xC3 / 255.0f green:0xCB / 255.0f
+								   blue:0xD6 / 255.0f alpha:1.0f].CGColor;
+		[cell addSubview:ring];
+
+		UIImageView *avatar = [[UIImageView alloc] initWithFrame:
+				CGRectMake(6, 6, kStoryAvatar, kStoryAvatar)];
+		avatar.layer.cornerRadius = 5;
+		avatar.clipsToBounds = YES;
+		avatar.contentMode = UIViewContentModeScaleAspectFill;
+		NSNumber *fileId = poster[@"photoFileId"];
+		UIImage *photo = fileId ? self.avatars[fileId] : nil;
+		if (!photo){
+			NSString *title = poster[@"title"] ?: @"";
+			photo = [TGIcons avatarWithInitials:(title.length
+					? [title substringToIndex:1].uppercaseString : @"?")
+										   size:kStoryAvatar
+									   colourId:[poster[@"chatId"] longLongValue]];
+		}
+		avatar.image = photo;
+		[cell addSubview:avatar];
+
+		UILabel *name = [[UILabel alloc] initWithFrame:CGRectMake(0, 64, kStoryCellWidth, 13)];
+		name.backgroundColor = [UIColor clearColor];
+		name.font = [UIFont systemFontOfSize:11];
+		name.textAlignment = NSTextAlignmentCenter;
+		name.lineBreakMode = NSLineBreakByTruncatingTail;
+		name.textColor = unread ? [theme primaryTextColour] : [theme secondaryTextColour];
+		name.text = poster[@"title"];
+		[cell addSubview:name];
+
+		[cell addGestureRecognizer:[[UITapGestureRecognizer alloc]
+				initWithTarget:self action:@selector(storyCellTapped:)]];
+		[tray addSubview:cell];
+		x += kStoryCellWidth;
+	}
+	tray.contentSize = CGSizeMake(x + 8, kStoryTrayHeight);
+
+	UIView *hair = [[UIView alloc] initWithFrame:
+			CGRectMake(0, kStoryTrayHeight - 0.5f, width, 0.5f)];
+	hair.backgroundColor = [UIColor colorWithRed:0xD5 / 255.0f green:0xDE / 255.0f
+											blue:0xE5 / 255.0f alpha:1.0f];
+	[tray addSubview:hair];
+	return tray;
+}
+
+- (void)storyCellTapped:(UITapGestureRecognizer *)tap {
+	NSInteger index = tap.view.tag;
+	if (index < 0 || index >= (NSInteger)self.storyPosters.count)
+		return;
+
+	TGStoryViewController *viewer = [[TGStoryViewController alloc] init];
+	viewer.posters = self.storyPosters;
+	viewer.posterIndex = index;
+	viewer.storyIndex = 0;
+	[self.navigationController pushViewController:viewer animated:YES];
+}
+
+/// TDLib has no "who has stories" list of its own, so the tray is built by
+/// asking each chat near the top of the list whether it has active stories -
+/// the same shape as the unread sweep above.
+- (void)refreshStoryPosters {
+	if (self.showsArchive || !TGStoriesTrayEnabled()){
+		if (self.storyPosters.count){
+			self.storyPosters = nil;
+			[self rebuildTableHeader];
+		}
+		return;
+	}
+
+	NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+	if (now - self.lastStorySweep < 20.0 && self.storyPosters)
+		return;
+	self.lastStorySweep = now;
+
+	NSArray *candidates = self.chats;
+	if (candidates.count > 40)
+		candidates = [candidates subarrayWithRange:NSMakeRange(0, 40)];
+
+	self.storyPostersById = [NSMutableDictionary dictionary];
+	self.storyProbesPending = (NSInteger)candidates.count;
+	if (!candidates.count){
+		[self commitStoryPosters];
+		return;
+	}
+
+	__weak typeof(self) weakSelf = self;
+	for (NSDictionary *chat in candidates){
+		int64_t chatId = [chat[@"id"] longLongValue];
+		NSString *title = chat[@"title"] ?: @"";
+		NSNumber *fileId = chat[@"photoFileId"];
+		[[TGClient shared] activeStoriesForChat:chatId completion:^(NSDictionary *active){
+			TGChatListViewController *me = weakSelf;
+			if (!me)
+				return;
+			NSArray *stories = active[@"stories"];
+			if (stories.count && ![active[@"archived"] boolValue]){
+				NSMutableDictionary *poster = [NSMutableDictionary dictionary];
+				poster[@"chatId"] = @(chatId);
+				poster[@"title"] = title;
+				poster[@"stories"] = stories;
+				poster[@"order"] = active[@"order"] ?: @0;
+				poster[@"unread"] = active[@"unread"] ?: @NO;
+				if (fileId)
+					poster[@"photoFileId"] = fileId;
+				me.storyPostersById[@(chatId)] = poster;
+			}
+			me.storyProbesPending -= 1;
+			if (me.storyProbesPending <= 0)
+				[me commitStoryPosters];
+		}];
+	}
+}
+
+- (void)commitStoryPosters {
+	NSArray *sorted = [self.storyPostersById.allValues sortedArrayUsingComparator:
+			^NSComparisonResult(NSDictionary *a, NSDictionary *b){
+		BOOL unreadA = [a[@"unread"] boolValue];
+		BOOL unreadB = [b[@"unread"] boolValue];
+		if (unreadA != unreadB)
+			return unreadA ? NSOrderedAscending : NSOrderedDescending;
+		long long orderA = [a[@"order"] longLongValue];
+		long long orderB = [b[@"order"] longLongValue];
+		if (orderA == orderB)
+			return NSOrderedSame;
+		return orderA > orderB ? NSOrderedAscending : NSOrderedDescending;
+	}];
+
+	BOOL had = self.storyPosters.count > 0;
+	self.storyPosters = sorted;
+	if (had || sorted.count)
+		[self rebuildTableHeader];
 }
 
 /// The bar in the header is a way in, not a place to type: touching it hands
@@ -544,6 +1260,7 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 			[me rebuildTableHeader];
 			[me fetchMissingAvatars];
 			[me refreshUnreadCounters];
+			[me refreshStoryPosters];
 		}];
 		return;
 	}
@@ -554,6 +1271,7 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 	[self rebuildTableHeader];
 	[self fetchMissingAvatars];
 	[self refreshUnreadCounters];
+	[self refreshStoryPosters];
 }
 
 - (void)refreshUnreadCounters {
@@ -665,20 +1383,19 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 
 	NSMutableArray *items = [NSMutableArray array];
 	[items addObject:@{@"kind"   : @"list",
-					   @"title"  : [@"All Chats" stringByAppendingString:
+					   @"title"  : [NSString stringWithFormat:@"%@All Chats%@",
+										   (self.folderId == 0 ? @"✓ " : @""),
 										   [self unreadSuffixForList:TGChatListMain]],
 					   @"folder" : @0}];
 	for (NSDictionary *f in folders){
 		NSInteger listId = [f[@"id"] integerValue];
 		NSString *name = f[@"title"] ?: @"Folder";
 		[items addObject:@{@"kind"   : @"list",
-						   @"title"  : [name stringByAppendingString:
+						   @"title"  : [NSString stringWithFormat:@"%@%@%@",
+											   (self.folderId == listId ? @"✓ " : @""), name,
 											   [self unreadSuffixForList:(TGChatListId)listId]],
 						   @"folder" : f[@"id"] ?: @0}];
 	}
-	[items addObject:@{@"kind" : @"markAllRead", @"title" : @"Mark All as Read"}];
-	[items addObject:@{@"kind" : @"editFolders",
-					   @"title" : folders.count ? @"Edit Folders" : @"Create a Folder"}];
 	self.sheetItems = items;
 
 	UIActionSheet *sheet = [[UIActionSheet alloc]
@@ -689,6 +1406,29 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 		otherButtonTitles:nil];
 	sheet.tag = 1;
 	for (NSDictionary *item in items)
+		[sheet addButtonWithTitle:item[@"title"]];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	[self presentSheet:sheet];
+}
+
+/// The left header button, where the original dialog list kept Edit: the list's
+/// own actions, never the folder chooser - that is the title in one style and
+/// the strip in the other, and it is absent entirely when there are no folders.
+- (void)listOptionsTapped {
+	NSArray *folders = [TGClient shared].folders;
+	self.sheetItems = @[
+		@{@"kind" : @"markAllRead", @"title" : @"Mark All as Read"},
+		@{@"kind" : @"editFolders",
+		  @"title" : (folders.count ? @"Edit Folders" : @"Create a Folder")},
+	];
+
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
+													  delegate:self
+											 cancelButtonTitle:nil
+										destructiveButtonTitle:nil
+											 otherButtonTitles:nil];
+	sheet.tag = 1;
+	for (NSDictionary *item in self.sheetItems)
 		[sheet addButtonWithTitle:item[@"title"]];
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 	[self presentSheet:sheet];
@@ -770,7 +1510,8 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 
 	if ([kind isEqualToString:@"list"]){
 		self.folderId = [item[@"folder"] integerValue];
-		self.title = [self defaultTitle];
+		self.folderLimit = 60;
+		[self applyTitleView];
 		[self reload];
 	} else if ([kind isEqualToString:@"markAllRead"]){
 		[self markCurrentListAsRead];

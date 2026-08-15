@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="320" height="480">
+  <defs>
+    <linearGradient id="nav" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7699c0"/>
+      <stop offset="1" stop-color="#42678f"/>
+    </linearGradient>
+    <pattern id="paper" width="16" height="16" patternUnits="userSpaceOnUse">
+      <rect width="16" height="16" fill="#e9e2d4"/>
+      <path d="M0 16 L16 0" stroke="#ffffff" stroke-opacity="0.22" stroke-width="1"/>
+      <path d="M0 8 L8 0" stroke="#d9d0bd" stroke-opacity="0.35" stroke-width="1"/>
+      <path d="M8 16 L16 8" stroke="#d9d0bd" stroke-opacity="0.35" stroke-width="1"/>
+    </pattern>
+    <symbol id="thumb" viewBox="0 0 24 24">
+      <rect x="2.5" y="10" width="5" height="11" rx="1.2" fill="#e2952a"/>
+      <path d="M9 10 L12.8 3.2 C13.8 1.6 16.4 2.6 16 4.8 L15.1 9 H20.4 C21.9 9 22.9 10.2 22.6 11.6 L21.2 18.8 C20.9 20.2 19.9 21 18.6 21 H9 Z" fill="#f7c34a"/>
+    </symbol>
+    <symbol id="heart" viewBox="0 0 24 24">
+      <path d="M12 21.2 C1.8 14.2 3 5 8 5 C10.3 5 12 6.9 12 8.4 C12 6.9 13.7 5 16 5 C21 5 22.2 14.2 12 21.2 Z" fill="#e8402a"/>
+    </symbol>
+    <symbol id="fire" viewBox="0 0 24 24">
+      <path d="M12 1.8 C13.2 7 18.2 8.2 18.2 13.6 C18.2 17.8 15.4 21.2 12 21.2 C8.6 21.2 5.8 17.8 5.8 13.6 C5.8 10.4 8 9 9.1 6.4 C9.9 8.8 10.6 9.6 11 10.2 C11.5 8 11.6 4.8 12 1.8 Z" fill="#f5891f"/>
+      <path d="M12 10.8 C13.1 13.4 15.1 14.6 15.1 16.7 C15.1 18.9 13.7 20.4 12 20.4 C10.3 20.4 8.9 18.9 8.9 16.7 C8.9 15 10.5 13.4 12 10.8 Z" fill="#f7d046"/>
+    </symbol>
+    <symbol id="joy" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10.2" fill="#f7ce46"/>
+      <path d="M5.6 11.6 C8.4 18.4 15.6 18.4 18.4 11.6 Z" fill="#7a4a12"/>
+      <path d="M6.6 12.2 C9 12.9 15 12.9 17.4 12.2 C16.4 13.1 7.6 13.1 6.6 12.2 Z" fill="#ffffff"/>
+      <path d="M6 8.4 C7 6.6 9.4 6.6 10.4 8.4" stroke="#7a4a12" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+      <path d="M13.6 8.4 C14.6 6.6 17 6.6 18 8.4" stroke="#7a4a12" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+    </symbol>
+  </defs>
+
+  <rect x="0" y="0" width="320" height="480" fill="url(#paper)"/>
+
+  <rect x="0" y="0" width="320" height="20" fill="#000000"/>
+  <text x="160" y="14" font-family="Helvetica" font-size="12" font-weight="bold" fill="#ffffff" text-anchor="middle">9:41</text>
+  <rect x="286" y="6" width="22" height="8" fill="none" stroke="#ffffff" stroke-width="1"/>
+  <rect x="288" y="8" width="15" height="4" fill="#ffffff"/>
+
+  <rect x="0" y="20" width="320" height="44" fill="url(#nav)"/>
+  <rect x="0" y="63" width="320" height="1" fill="#2f4c6e"/>
+  <image x="5" y="27" width="27" height="30" xlink:href="ASSET:BackButton"/>
+  <text x="20" y="46" font-family="Helvetica" font-size="12" font-weight="bold" fill="#ffffff" text-anchor="middle">Chats</text>
+  <text x="160" y="38" font-family="Helvetica" font-size="16" font-weight="bold" fill="#ffffff" text-anchor="middle">Design Team</text>
+  <text x="160" y="53" font-family="Helvetica" font-size="13" fill="#e0eefd" text-anchor="middle">8 members, 3 online</text>
+
+  <!-- plain incoming message, untouched bubble metrics -->
+  <rect x="6" y="84" width="30" height="30" rx="5" fill="#fc4380"/>
+  <text x="21" y="105" font-family="Helvetica" font-size="15" font-weight="bold" fill="#ffffff" text-anchor="middle">N</text>
+  <path d="M46 76 H182 A6 6 0 0 1 188 82 V116 A6 6 0 0 1 182 122 H46 A6 6 0 0 1 40 116 V88 L34 92 L40 82 A6 6 0 0 1 46 76 Z" fill="#fbfbfb" stroke="#c9c9c9" stroke-width="0.5"/>
+  <text x="50" y="93" font-family="Helvetica" font-size="13" font-weight="bold" fill="#fc4380">Nastya</text>
+  <text x="50" y="112" font-family="Helvetica" font-size="15" fill="#141617">Shipping Friday?</text>
+  <text x="180" y="117" font-family="Helvetica" font-size="11" fill="#232d37" text-anchor="end">13:41</text>
+
+  <!-- the subject message: bubble unchanged, chips live in the gutter beneath it -->
+  <rect x="6" y="140" width="30" height="30" rx="5" fill="#0f94ed"/>
+  <text x="21" y="161" font-family="Helvetica" font-size="15" font-weight="bold" fill="#ffffff" text-anchor="middle">P</text>
+  <path d="M46 132 H282 A6 6 0 0 1 288 138 V212 A6 6 0 0 1 282 218 H46 A6 6 0 0 1 40 212 V144 L34 148 L40 138 A6 6 0 0 1 46 132 Z" fill="#fbfbfb" stroke="#c9c9c9" stroke-width="0.5"/>
+  <text x="52" y="149" font-family="Helvetica" font-size="13" font-weight="bold" fill="#0f94ed">Pavel</text>
+  <text x="52" y="169" font-family="Helvetica" font-size="15" fill="#141617">New icon set is on the beta build —</text>
+  <text x="52" y="187" font-family="Helvetica" font-size="15" fill="#141617">grab it and tell me what breaks</text>
+  <text x="52" y="205" font-family="Helvetica" font-size="15" fill="#141617">before Friday.</text>
+  <text x="280" y="212" font-family="Helvetica" font-size="11" fill="#232d37" text-anchor="end">13:44</text>
+
+  <!-- gutter row: 20 tall, 4 pt under the bubble, aligned to the bubble's left edge -->
+  <rect x="40" y="222" width="42" height="20" rx="10" fill="#fbfbfb" stroke="#0779d0" stroke-width="1"/>
+  <use xlink:href="#thumb" x="47" y="225" width="14" height="14"/>
+  <text x="64" y="236" font-family="Helvetica" font-size="11" font-weight="bold" fill="#0779d0">5</text>
+  <rect x="86" y="222" width="42" height="20" rx="10" fill="#fbfbfb" stroke="#c9c9c9" stroke-width="0.5"/>
+  <use xlink:href="#heart" x="93" y="225" width="14" height="14"/>
+  <text x="110" y="236" font-family="Helvetica" font-size="11" font-weight="bold" fill="#506e8d">3</text>
+  <rect x="132" y="222" width="42" height="20" rx="10" fill="#fbfbfb" stroke="#c9c9c9" stroke-width="0.5"/>
+  <use xlink:href="#fire" x="139" y="225" width="14" height="14"/>
+  <text x="156" y="236" font-family="Helvetica" font-size="11" font-weight="bold" fill="#506e8d">2</text>
+  <rect x="178" y="222" width="42" height="20" rx="10" fill="#fbfbfb" stroke="#c9c9c9" stroke-width="0.5"/>
+  <use xlink:href="#joy" x="185" y="225" width="14" height="14"/>
+  <text x="202" y="236" font-family="Helvetica" font-size="11" font-weight="bold" fill="#506e8d">1</text>
+  <rect x="224" y="222" width="24" height="20" rx="10" fill="#fbfbfb" stroke="#c9c9c9" stroke-width="0.5"/>
+  <text x="236" y="237" font-family="Helvetica" font-size="15" font-weight="bold" fill="#506e8d" text-anchor="middle">+</text>
+
+  <!-- outgoing message with its own gutter row, right aligned to the bubble -->
+  <path d="M150 254 H308 A6 6 0 0 1 314 260 V294 L320 298 L314 300 A6 6 0 0 1 308 300 H150 A6 6 0 0 1 144 294 V260 A6 6 0 0 1 150 254 Z" fill="#d3fbb1" stroke="#a9d68a" stroke-width="0.5"/>
+  <text x="154" y="276" font-family="Helvetica" font-size="15" fill="#141617">Beta 42 is up, changelog</text>
+  <text x="154" y="294" font-family="Helvetica" font-size="11" fill="#232d37">13:45</text>
+  <rect x="222" y="304" width="42" height="20" rx="10" fill="#d3fbb1" stroke="#a9d68a" stroke-width="0.5"/>
+  <use xlink:href="#thumb" x="229" y="307" width="14" height="14"/>
+  <text x="246" y="318" font-family="Helvetica" font-size="11" font-weight="bold" fill="#506e8d">9</text>
+  <rect x="268" y="304" width="46" height="20" rx="10" fill="#d3fbb1" stroke="#a9d68a" stroke-width="0.5"/>
+  <use xlink:href="#fire" x="275" y="307" width="14" height="14"/>
+  <text x="292" y="318" font-family="Helvetica" font-size="11" font-weight="bold" fill="#506e8d">18</text>
+
+  <!-- floating unread-reactions button, 30x30, right inset 8, 8 above the input panel -->
+  <circle cx="297" cy="414" r="15" fill="#fbfbfb" stroke="#b4bcc4" stroke-width="0.5"/>
+  <use xlink:href="#heart" x="289" y="406" width="16" height="16"/>
+  <image x="292" y="396" width="27" height="21" xlink:href="ASSET:DialogListUnreadBadge"/>
+  <text x="305" y="411" font-family="Helvetica" font-size="14" font-weight="bold" fill="#ffffff" text-anchor="middle">3</text>
+
+  <image x="0" y="437" width="320" height="43" xlink:href="ASSET:ConversationInputPanel_Background"/>
+  <rect x="0" y="437" width="320" height="1" fill="#a3abb5"/>
+  <image x="6" y="444" width="28" height="29" xlink:href="ASSET:AttachBtn"/>
+  <rect x="40" y="444" width="232" height="29" rx="5" fill="#ffffff" stroke="#a9afb6" stroke-width="1"/>
+  <text x="49" y="463" font-family="Helvetica" font-size="16" fill="#9da7b3">Message</text>
+  <image x="279" y="444" width="35" height="29" xlink:href="ASSET:SendButton"/>
+  <text x="296" y="463" font-family="Helvetica" font-size="14.5" font-weight="bold" fill="#ffffff" text-anchor="middle">Send</text>
+</svg>

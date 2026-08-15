@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="320" height="480">
+  <defs>
+    <linearGradient id="nav" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7699c0"/>
+      <stop offset="1" stop-color="#42678f"/>
+    </linearGradient>
+    <linearGradient id="rowg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#f4f6f8"/>
+    </linearGradient>
+    <linearGradient id="hdr" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fbfcfd"/>
+      <stop offset="1" stop-color="#e7ebf0"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="320" height="480" fill="#c8ccd1"/>
+
+  <!-- status bar -->
+  <rect x="0" y="0" width="320" height="20" fill="#000000"/>
+  <text x="8" y="14" font-family="Helvetica" font-weight="bold" font-size="11" fill="#ffffff">•••••  Telegram</text>
+  <text x="146" y="14" font-family="Helvetica" font-weight="bold" font-size="11" fill="#ffffff">14:26</text>
+  <rect x="286" y="6" width="22" height="9" rx="2" fill="none" stroke="#ffffff" stroke-width="1"/>
+  <rect x="288" y="8" width="15" height="5" fill="#ffffff"/>
+
+  <!-- nav bar -->
+  <rect x="0" y="20" width="320" height="44" fill="url(#nav)"/>
+  <rect x="0" y="63" width="320" height="1" fill="#2f4d70"/>
+  <image x="5" y="27" width="62" height="30" xlink:href="ASSET:BackButton"/>
+  <text x="34" y="46" font-family="Helvetica" font-weight="bold" font-size="12" fill="#ffffff" text-anchor="middle">Chat</text>
+  <text x="160" y="49" font-family="Helvetica" font-weight="bold" font-size="20" fill="#ffffff" text-anchor="middle">Info</text>
+  <image x="266" y="27" width="49" height="30" xlink:href="ASSET:HeaderButton"/>
+  <text x="290" y="46" font-family="Helvetica" font-weight="bold" font-size="12" fill="#ffffff" text-anchor="middle">Edit</text>
+
+  <!-- profile header, 86 pt -->
+  <rect x="0" y="64" width="320" height="86" fill="url(#hdr)"/>
+  <rect x="0" y="149" width="320" height="1" fill="#a9b0b7"/>
+  <rect x="9" y="78" width="70" height="70" rx="10" fill="#e09602"/>
+  <text x="44" y="126" font-family="Helvetica" font-weight="bold" font-size="34" fill="#ffffff" text-anchor="middle">AP</text>
+  <text x="94" y="105" font-family="Helvetica" font-weight="bold" font-size="19" fill="#eef1f6">Anna Petrova</text>
+  <text x="94" y="104" font-family="Helvetica" font-weight="bold" font-size="19" fill="#222932">Anna Petrova</text>
+  <text x="212" y="104" font-family="Helvetica" font-size="15">🎄</text>
+  <text x="94" y="125" font-family="Helvetica" font-size="14" fill="#eef1f6">last seen 5 minutes ago</text>
+  <text x="94" y="124" font-family="Helvetica" font-size="14" fill="#6d7d90">last seen 5 minutes ago</text>
+
+  <!-- birthday strip, 25 pt, sticky-section colour -->
+  <rect x="0" y="150" width="320" height="25" fill="#e4e9f0"/>
+  <rect x="0" y="174" width="320" height="1" fill="#d5dee5"/>
+  <text x="10" y="167" font-family="Helvetica" font-size="14">🎂</text>
+  <text x="30" y="167" font-family="Helvetica" font-weight="bold" font-size="14" fill="#697487">Birthday today &#8212; turns 29</text>
+  <text x="310" y="167" font-family="Helvetica" font-weight="bold" font-size="13" fill="#0779d0" text-anchor="end">Send gift</text>
+
+  <!-- grouped details -->
+  <rect x="10" y="187" width="300" height="88" rx="8" fill="url(#rowg)" stroke="#a9b0b7" stroke-width="1"/>
+  <line x1="10" y1="231" x2="310" y2="231" stroke="#cfd4d9" stroke-width="1"/>
+  <text x="20" y="215" font-family="Helvetica" font-weight="bold" font-size="17" fill="#516691">mobile</text>
+  <text x="300" y="215" font-family="Helvetica" font-size="16" fill="#356596" text-anchor="end">+7 916 145 22 08</text>
+  <text x="20" y="259" font-family="Helvetica" font-weight="bold" font-size="17" fill="#516691">username</text>
+  <text x="300" y="259" font-family="Helvetica" font-size="16" fill="#356596" text-anchor="end">@annapetrova</text>
+
+  <!-- personal channel: full-bleed 73 pt chat-list cell -->
+  <text x="20" y="291" font-family="Helvetica" font-size="14" fill="#dfe4ea">Personal channel</text>
+  <text x="20" y="290" font-family="Helvetica" font-size="14" fill="#697487">Personal channel</text>
+  <image x="0" y="298" width="320" height="73" xlink:href="ASSET:DialogListCell"/>
+  <rect x="8" y="306" width="56" height="56" rx="5" fill="#41a903"/>
+  <text x="36" y="344" font-family="Helvetica" font-weight="bold" font-size="26" fill="#ffffff" text-anchor="middle">P</text>
+  <text x="73" y="327" font-family="Helvetica" font-weight="bold" font-size="16" fill="#111111">Petrova Photo</text>
+  <text x="311" y="325" font-family="Helvetica" font-size="13" fill="#337acc" text-anchor="end">Tuesday</text>
+  <text x="73" y="345" font-family="Helvetica" font-size="14" fill="#888888">Three rolls of Portra from the</text>
+  <text x="73" y="361" font-family="Helvetica" font-size="14" fill="#888888">Alfama rooftops, all scanned.</text>
+  <image x="308" y="333" width="7" height="12" xlink:href="ASSET:DialogListArrow"/>
+  <rect x="0" y="370" width="320" height="1" fill="#d5dee5"/>
+
+  <!-- remaining grouped rows -->
+  <rect x="10" y="383" width="300" height="44" rx="8" fill="url(#rowg)" stroke="#a9b0b7" stroke-width="1"/>
+  <text x="20" y="411" font-family="Helvetica" font-weight="bold" font-size="17" fill="#516691">Notifications</text>
+  <text x="300" y="411" font-family="Helvetica" font-size="16" fill="#356596" text-anchor="end">On</text>
+
+  <image x="10" y="437" width="300" height="44" xlink:href="ASSET:GroupedActionButton"/>
+  <text x="160" y="465" font-family="Helvetica" font-weight="bold" font-size="16" fill="#0779d0" text-anchor="middle">Block user</text>
+</svg>

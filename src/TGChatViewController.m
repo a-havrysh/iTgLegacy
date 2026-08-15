@@ -30,6 +30,8 @@
 #import "TGClient+Reactions.h"
 #import "TGClient+Translation.h"
 #import "TGClient+Search.h"
+#import "TGClient+WebLinks.h"
+#import <ImageIO/ImageIO.h>
 
 // Their design system is drawn for Android at 360dp; a 4S is 320pt, so
 // everything taken from it is scaled by 0.889 and rounded to a whole point.
@@ -55,6 +57,630 @@ static const CGFloat kPollRow     = 30.0f;
 // A bubble carrying chips is never narrower than this, so the row they are
 // measured at is the row they are laid out in.
 static const CGFloat kChipsWidth  = 170.0f;
+static const CGFloat kPreviewBar   = 2.0f;
+static const CGFloat kPreviewGap   = 8.0f;
+static const CGFloat kPreviewThumb = 52.0f;
+static const CGFloat kPreviewLargeMax = 160.0f;
+static const CGFloat kInstantHeight   = 33.0f;
+
+static UIColor *TGChatHexColour(unsigned int rgb) {
+	return [UIColor colorWithRed:((rgb >> 16) & 0xFF) / 255.0f
+						   green:((rgb >> 8) & 0xFF) / 255.0f
+							blue:(rgb & 0xFF) / 255.0f
+						   alpha:1.0f];
+}
+
+#pragma mark - link preview block
+
+@interface TGLinkPreviewView : UIView
+@property (nonatomic, copy) NSString *url;
+@property (nonatomic, copy) void (^onOpen)(NSString *url);
+@property (nonatomic, copy) void (^onInstantView)(NSString *url);
++ (CGSize)sizeForPreview:(NSDictionary *)preview
+				   image:(UIImage *)image
+				maxWidth:(CGFloat)maxWidth;
+- (void)configureWithPreview:(NSDictionary *)preview
+					   image:(UIImage *)image
+					outgoing:(BOOL)outgoing
+					maxWidth:(CGFloat)maxWidth;
+@end
+
+@implementation TGLinkPreviewView {
+	UIView *_bar;
+	UILabel *_site;
+	UILabel *_title;
+	UILabel *_text;
+	UIImageView *_thumb;
+	UIButton *_instant;
+}
+
+- (id)initWithFrame:(CGRect)frame {
+	self = [super initWithFrame:frame];
+	if (!self)
+		return nil;
+	self.backgroundColor = [UIColor clearColor];
+
+	_bar = [[UIView alloc] init];
+	[self addSubview:_bar];
+
+	_site = [[UILabel alloc] init];
+	_site.font = [UIFont boldSystemFontOfSize:14];
+	_site.backgroundColor = [UIColor clearColor];
+	[self addSubview:_site];
+
+	_title = [[UILabel alloc] init];
+	_title.font = [UIFont boldSystemFontOfSize:14];
+	_title.numberOfLines = 2;
+	_title.backgroundColor = [UIColor clearColor];
+	_title.textColor = TGChatHexColour(0x141617);
+	[self addSubview:_title];
+
+	_text = [[UILabel alloc] init];
+	_text.font = [UIFont systemFontOfSize:14];
+	_text.numberOfLines = 2;
+	_text.backgroundColor = [UIColor clearColor];
+	_text.textColor = TGChatHexColour(0x62768A);
+	[self addSubview:_text];
+
+	_thumb = [[UIImageView alloc] init];
+	_thumb.contentMode = UIViewContentModeScaleAspectFill;
+	_thumb.clipsToBounds = YES;
+	[self addSubview:_thumb];
+
+	_instant = [UIButton buttonWithType:UIButtonTypeCustom];
+	_instant.titleLabel.font = [UIFont boldSystemFontOfSize:13];
+	[_instant setTitleColor:TGChatHexColour(0x506E8D) forState:UIControlStateNormal];
+	[_instant setTitleShadowColor:[UIColor colorWithWhite:1.0f alpha:0.7f]
+						 forState:UIControlStateNormal];
+	_instant.titleLabel.shadowOffset = CGSizeMake(0, 1);
+	[_instant setTitle:@"INSTANT VIEW" forState:UIControlStateNormal];
+	[_instant addTarget:self action:@selector(instantTapped)
+	   forControlEvents:UIControlEventTouchUpInside];
+	_instant.hidden = YES;
+	[self addSubview:_instant];
+
+	[self addGestureRecognizer:[[UITapGestureRecognizer alloc]
+			initWithTarget:self action:@selector(blockTapped)]];
+	return self;
+}
+
++ (BOOL)preview:(NSDictionary *)preview showsLargeMediaWithImage:(UIImage *)image {
+	if (!image)
+		return NO;
+	return [preview[@"hasLargeMedia"] boolValue] && [preview[@"showLargeMedia"] boolValue];
+}
+
++ (CGSize)largeImageSizeForImage:(UIImage *)image width:(CGFloat)width {
+	if (!image || image.size.width < 1)
+		return CGSizeZero;
+	CGFloat height = image.size.height * (width / image.size.width);
+	return CGSizeMake(width, MIN(height, kPreviewLargeMax));
+}
+
++ (CGSize)sizeForPreview:(NSDictionary *)preview
+				   image:(UIImage *)image
+				maxWidth:(CGFloat)maxWidth
+{
+	if (![preview[@"url"] length])
+		return CGSizeZero;
+
+	CGFloat columnX = kPreviewBar + kPreviewGap;
+	CGFloat columnW = maxWidth - columnX;
+	BOOL large = [self preview:preview showsLargeMediaWithImage:image];
+	BOOL smallThumb = (image != nil && !large);
+	CGFloat textW = smallThumb ? columnW - kPreviewThumb - 6 : columnW;
+	if (textW < 40)
+		textW = columnW;
+
+	CGFloat textH = 0;
+	if ([preview[@"siteName"] length])
+		textH += 17;
+	NSString *title = preview[@"title"];
+	if ([title length]){
+		CGSize s = [title sizeWithFont:[UIFont boldSystemFontOfSize:14]
+					 constrainedToSize:CGSizeMake(textW, 32)
+						 lineBreakMode:NSLineBreakByWordWrapping];
+		textH += MIN(s.height, 32);
+	}
+	NSString *body = preview[@"description"];
+	if ([body length]){
+		CGSize s = [body sizeWithFont:[UIFont systemFontOfSize:14]
+					constrainedToSize:CGSizeMake(textW, 32)
+						lineBreakMode:NSLineBreakByWordWrapping];
+		textH += MIN(s.height, 32);
+	}
+
+	CGFloat height = textH;
+	if (smallThumb)
+		height = MAX(height, kPreviewThumb);
+	if (large)
+		height += [self largeImageSizeForImage:image width:columnW].height + 5;
+	if (height < 1)
+		return CGSizeZero;
+	if ([preview[@"hasInstantView"] boolValue])
+		height += 8 + kInstantHeight;
+
+	CGFloat width = (large || smallThumb) ? maxWidth : columnX + textW;
+	return CGSizeMake(width, ceilf(height));
+}
+
+- (void)configureWithPreview:(NSDictionary *)preview
+					   image:(UIImage *)image
+					outgoing:(BOOL)outgoing
+					maxWidth:(CGFloat)maxWidth
+{
+	self.url = preview[@"url"];
+
+	UIColor *accent = outgoing ? TGChatHexColour(0x3A8E26) : TGChatHexColour(0x0E7ACD);
+	CGFloat columnX = kPreviewBar + kPreviewGap;
+	CGFloat columnW = maxWidth - columnX;
+	BOOL large = [TGLinkPreviewView preview:preview showsLargeMediaWithImage:image];
+	BOOL smallThumb = (image != nil && !large);
+	BOOL mediaAbove = large && [preview[@"showMediaAboveDescription"] boolValue];
+	CGFloat textW = smallThumb ? columnW - kPreviewThumb - 6 : columnW;
+	if (textW < 40)
+		textW = columnW;
+
+	CGFloat y = 0;
+	CGSize largeSize = large
+			? [TGLinkPreviewView largeImageSizeForImage:image width:columnW]
+			: CGSizeZero;
+
+	_thumb.image = image;
+	_thumb.hidden = (image == nil);
+	if (smallThumb){
+		_thumb.frame = CGRectMake(maxWidth - kPreviewThumb, 0, kPreviewThumb, kPreviewThumb);
+		_thumb.layer.cornerRadius = 4;
+	} else if (large){
+		_thumb.layer.cornerRadius = kMediaRadius;
+		if (mediaAbove){
+			_thumb.frame = CGRectMake(columnX, y, largeSize.width, largeSize.height);
+			y += largeSize.height + 5;
+		}
+	}
+
+	NSString *site = preview[@"siteName"];
+	_site.hidden = ![site length];
+	if (!_site.hidden){
+		_site.text = site;
+		_site.textColor = accent;
+		_site.frame = CGRectMake(columnX, y, textW, 17);
+		y += 17;
+	}
+
+	NSString *title = preview[@"title"];
+	_title.hidden = ![title length];
+	if (!_title.hidden){
+		CGSize s = [title sizeWithFont:[UIFont boldSystemFontOfSize:14]
+					 constrainedToSize:CGSizeMake(textW, 32)
+						 lineBreakMode:NSLineBreakByWordWrapping];
+		_title.text = title;
+		_title.frame = CGRectMake(columnX, y, textW, MIN(s.height, 32));
+		y += MIN(s.height, 32);
+	}
+
+	NSString *body = preview[@"description"];
+	_text.hidden = ![body length];
+	if (!_text.hidden){
+		CGSize s = [body sizeWithFont:[UIFont systemFontOfSize:14]
+					constrainedToSize:CGSizeMake(textW, 32)
+						lineBreakMode:NSLineBreakByWordWrapping];
+		_text.text = body;
+		_text.frame = CGRectMake(columnX, y, textW, MIN(s.height, 32));
+		y += MIN(s.height, 32);
+	}
+
+	if (large && !mediaAbove){
+		_thumb.frame = CGRectMake(columnX, y, largeSize.width, largeSize.height);
+		y += largeSize.height + 5;
+	}
+	if (smallThumb)
+		y = MAX(y, kPreviewThumb);
+
+	_instant.hidden = ![preview[@"hasInstantView"] boolValue];
+	if (!_instant.hidden){
+		UIImage *plate = [UIImage imageNamed:@"GroupedActionButton.png"];
+		UIImage *pressed = [UIImage imageNamed:@"GroupedActionButton_Highlighted.png"];
+		if (plate)
+			[_instant setBackgroundImage:[plate stretchableImageWithLeftCapWidth:24 topCapHeight:0]
+								forState:UIControlStateNormal];
+		if (pressed)
+			[_instant setBackgroundImage:[pressed stretchableImageWithLeftCapWidth:24 topCapHeight:0]
+								forState:UIControlStateHighlighted];
+		_instant.frame = CGRectMake(kPreviewBar, y + 8, maxWidth - kPreviewBar, kInstantHeight);
+		y += 8 + kInstantHeight;
+	}
+
+	_bar.backgroundColor = accent;
+	CGFloat barBottom = _instant.hidden ? y : (y - 8 - kInstantHeight);
+	_bar.frame = CGRectMake(0, 0, kPreviewBar, MAX(0, barBottom));
+}
+
+- (void)blockTapped {
+	if (self.onOpen && self.url.length)
+		self.onOpen(self.url);
+}
+
+- (void)instantTapped {
+	if (self.onInstantView && self.url.length)
+		self.onInstantView(self.url);
+}
+
+@end
+
+#pragma mark - instant view reader
+
+@interface TGInstantViewController : UIViewController <UITableViewDataSource, UITableViewDelegate>
+@property (nonatomic, copy) NSString *url;
+@end
+
+@implementation TGInstantViewController {
+	UITableView *_table;
+	NSArray *_blocks;
+	NSMutableArray *_heights;
+	NSMutableDictionary *_images;
+	NSMutableSet *_imagesRequested;
+	UILabel *_placeholder;
+}
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+	self.view.backgroundColor = [UIColor whiteColor];
+	_images = [NSMutableDictionary dictionary];
+	_imagesRequested = [NSMutableSet set];
+	_blocks = @[];
+	_heights = [NSMutableArray array];
+
+	NSString *host = [[NSURL URLWithString:(self.url ?: @"")] host] ?: @"Instant View";
+	self.title = host;
+
+	_table = [[UITableView alloc] initWithFrame:self.view.bounds
+										  style:UITableViewStylePlain];
+	_table.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+	_table.separatorStyle = UITableViewCellSeparatorStyleNone;
+	_table.backgroundColor = [UIColor whiteColor];
+	_table.dataSource = self;
+	_table.delegate = self;
+	[self.view addSubview:_table];
+
+	_placeholder = [[UILabel alloc] initWithFrame:CGRectMake(0, 120, self.view.bounds.size.width, 20)];
+	_placeholder.textAlignment = NSTextAlignmentCenter;
+	_placeholder.backgroundColor = [UIColor clearColor];
+	_placeholder.textColor = TGChatHexColour(0x999999);
+	_placeholder.text = @"Loading...";
+	[self.view addSubview:_placeholder];
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] instantViewForUrl:self.url completion:^(NSDictionary *view){
+		TGInstantViewController *me = weakSelf;
+		if (!me)
+			return;
+		NSArray *blocks = view[@"blocks"];
+		if (!blocks.count){
+			me->_placeholder.text = @"This article has no Instant View.";
+			return;
+		}
+		[me adoptBlocks:blocks];
+	}];
+}
+
+- (void)adoptBlocks:(NSArray *)blocks {
+	__weak typeof(self) weakSelf = self;
+	dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+		NSMutableArray *heights = [NSMutableArray array];
+		for (NSDictionary *block in blocks)
+			[heights addObject:@([TGInstantViewController heightForBlock:block])];
+		dispatch_async(dispatch_get_main_queue(), ^{
+			TGInstantViewController *me = weakSelf;
+			if (!me)
+				return;
+			me->_blocks = blocks;
+			me->_heights = heights;
+			me->_placeholder.hidden = YES;
+			[me->_table reloadData];
+		});
+	});
+}
+
++ (UIFont *)fontForKind:(NSString *)kind {
+	if ([kind isEqualToString:@"title"])          return [UIFont boldSystemFontOfSize:19];
+	if ([kind isEqualToString:@"subtitle"])       return [UIFont systemFontOfSize:15];
+	if ([kind isEqualToString:@"authorDate"])     return [UIFont systemFontOfSize:13];
+	if ([kind isEqualToString:@"kicker"])         return [UIFont boldSystemFontOfSize:12];
+	if ([kind isEqualToString:@"header"])         return [UIFont boldSystemFontOfSize:17];
+	if ([kind isEqualToString:@"sectionHeading"]) return [UIFont boldSystemFontOfSize:17];
+	if ([kind isEqualToString:@"subheader"])      return [UIFont boldSystemFontOfSize:15];
+	if ([kind isEqualToString:@"preformatted"])   return [UIFont fontWithName:@"Courier" size:13];
+	if ([kind isEqualToString:@"blockQuote"] || [kind isEqualToString:@"pullQuote"])
+		return [UIFont italicSystemFontOfSize:15];
+	if ([kind isEqualToString:@"footer"])         return [UIFont systemFontOfSize:13];
+	return [UIFont systemFontOfSize:15];
+}
+
++ (UIColor *)colourForKind:(NSString *)kind {
+	if ([kind isEqualToString:@"kicker"])     return TGChatHexColour(0x0E7ACD);
+	if ([kind isEqualToString:@"subtitle"])   return TGChatHexColour(0x62768A);
+	if ([kind isEqualToString:@"authorDate"]) return TGChatHexColour(0x999999);
+	if ([kind isEqualToString:@"footer"])     return TGChatHexColour(0x697487);
+	return TGChatHexColour(0x141617);
+}
+
++ (BOOL)kindIsText:(NSString *)kind {
+	static NSSet *known = nil;
+	if (!known)
+		known = [NSSet setWithObjects:@"title", @"subtitle", @"authorDate", @"kicker",
+				@"header", @"subheader", @"sectionHeading", @"paragraph", @"preformatted",
+				@"footer", @"blockQuote", @"pullQuote", @"list", nil];
+	return [known containsObject:(kind ?: @"")];
+}
+
++ (NSString *)textOfBlock:(NSDictionary *)block {
+	NSString *kind = block[@"kind"];
+	if ([kind isEqualToString:@"list"]){
+		NSMutableString *lines = [NSMutableString string];
+		for (NSDictionary *item in block[@"items"]){
+			NSString *label = item[@"label"] ?: @"•";
+			NSMutableString *body = [NSMutableString string];
+			for (NSDictionary *nested in item[@"blocks"]){
+				NSString *text = nested[@"text"];
+				if (text.length)
+					[body appendFormat:@"%@ ", text];
+			}
+			[lines appendFormat:@"%@  %@\n", label, [body stringByTrimmingCharactersInSet:
+					[NSCharacterSet whitespaceAndNewlineCharacterSet]]];
+		}
+		return [lines stringByTrimmingCharactersInSet:
+				[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+	}
+	if ([kind isEqualToString:@"blockQuote"] || [kind isEqualToString:@"pullQuote"]){
+		NSString *own = block[@"text"];
+		if (own.length)
+			return own;
+		NSMutableString *body = [NSMutableString string];
+		for (NSDictionary *nested in block[@"blocks"]){
+			NSString *text = nested[@"text"];
+			if (text.length)
+				[body appendFormat:@"%@\n", text];
+		}
+		return [body stringByTrimmingCharactersInSet:
+				[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+	}
+	return block[@"text"] ?: @"";
+}
+
++ (CGFloat)textWidthForKind:(NSString *)kind {
+	CGFloat inset = 15;
+	if ([kind isEqualToString:@"blockQuote"] || [kind isEqualToString:@"pullQuote"])
+		inset += 10;
+	if ([kind isEqualToString:@"list"])
+		inset += 20;
+	return 320 - inset - 15;
+}
+
++ (CGFloat)heightForBlock:(NSDictionary *)block {
+	NSString *kind = block[@"kind"] ?: @"unsupported";
+
+	if ([kind isEqualToString:@"divider"])
+		return 17;
+	if ([kind isEqualToString:@"anchor"])
+		return 0;
+	if ([kind isEqualToString:@"photo"] || [kind isEqualToString:@"cover"] ||
+		[kind isEqualToString:@"animation"] || [kind isEqualToString:@"video"]){
+		CGFloat w = [block[@"width"] floatValue], h = [block[@"height"] floatValue];
+		CGFloat picture = (w > 1 && h > 1) ? MIN(320 * (h / w), 320) : 180;
+		NSString *caption = block[@"captionText"];
+		CGFloat captionH = 0;
+		if (caption.length){
+			CGSize s = [caption sizeWithFont:[UIFont systemFontOfSize:13]
+						   constrainedToSize:CGSizeMake(290, 200)
+							   lineBreakMode:NSLineBreakByWordWrapping];
+			captionH = s.height + 6;
+		}
+		return ceilf(picture) + captionH + 11;
+	}
+	if (![self kindIsText:kind])
+		return 66;
+
+	NSString *text = [self textOfBlock:block];
+	if (!text.length)
+		return 0;
+	CGSize s = [text sizeWithFont:[self fontForKind:kind]
+				constrainedToSize:CGSizeMake([self textWidthForKind:kind], 20000)
+					lineBreakMode:NSLineBreakByWordWrapping];
+	CGFloat top = [kind isEqualToString:@"sectionHeading"] ? 8 : 0;
+	return ceilf(s.height) + 11 + top;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+	return _blocks.count;
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
+	if (indexPath.row >= (NSInteger)_heights.count)
+		return 0;
+	return [_heights[indexPath.row] floatValue];
+}
+
+- (void)fetchImageForBlock:(NSDictionary *)block {
+	NSNumber *fileId = block[@"photoFileId"];
+	if (![fileId isKindOfClass:NSNumber.class] || fileId.integerValue == 0)
+		return;
+	if (_images[fileId] || [_imagesRequested containsObject:fileId])
+		return;
+	[_imagesRequested addObject:fileId];
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] downloadFile:fileId.integerValue completion:^(NSString *path){
+		TGInstantViewController *me = weakSelf;
+		if (!me || !path)
+			return;
+		UIImage *image = nil;
+		CGImageSourceRef source = CGImageSourceCreateWithURL(
+				(__bridge CFURLRef)[NSURL fileURLWithPath:path], NULL);
+		if (source){
+			NSDictionary *options = @{
+				(id)kCGImageSourceCreateThumbnailFromImageAlways : @YES,
+				(id)kCGImageSourceThumbnailMaxPixelSize : @640,
+			};
+			CGImageRef thumb = CGImageSourceCreateThumbnailAtIndex(source, 0,
+					(__bridge CFDictionaryRef)options);
+			if (thumb){
+				image = [UIImage imageWithCGImage:thumb];
+				CGImageRelease(thumb);
+			}
+			CFRelease(source);
+		}
+		if (!image)
+			image = [UIImage imageWithContentsOfFile:path];
+		if (!image)
+			return;
+		me->_images[fileId] = image;
+		[me->_table reloadData];
+	}];
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	static NSString *reuse = @"TGInstantBlock";
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
+	if (!cell){
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+									  reuseIdentifier:reuse];
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		cell.backgroundColor = [UIColor whiteColor];
+
+		UILabel *body = [[UILabel alloc] init];
+		body.tag = 0x8001;
+		body.numberOfLines = 0;
+		body.backgroundColor = [UIColor clearColor];
+		[cell.contentView addSubview:body];
+
+		UIView *bar = [[UIView alloc] init];
+		bar.tag = 0x8002;
+		bar.backgroundColor = TGChatHexColour(0x0E7ACD);
+		bar.hidden = YES;
+		[cell.contentView addSubview:bar];
+
+		UIImageView *picture = [[UIImageView alloc] init];
+		picture.tag = 0x8003;
+		picture.contentMode = UIViewContentModeScaleAspectFill;
+		picture.clipsToBounds = YES;
+		picture.hidden = YES;
+		[cell.contentView addSubview:picture];
+
+		UILabel *caption = [[UILabel alloc] init];
+		caption.tag = 0x8004;
+		caption.numberOfLines = 0;
+		caption.font = [UIFont systemFontOfSize:13];
+		caption.textColor = TGChatHexColour(0x697487);
+		caption.backgroundColor = [UIColor clearColor];
+		caption.hidden = YES;
+		[cell.contentView addSubview:caption];
+	}
+
+	UILabel *body = (UILabel *)[cell.contentView viewWithTag:0x8001];
+	UIView *bar = [cell.contentView viewWithTag:0x8002];
+	UIImageView *picture = (UIImageView *)[cell.contentView viewWithTag:0x8003];
+	UILabel *caption = (UILabel *)[cell.contentView viewWithTag:0x8004];
+	body.hidden = YES;
+	bar.hidden = YES;
+	picture.hidden = YES;
+	caption.hidden = YES;
+	cell.backgroundColor = [UIColor whiteColor];
+
+	if (indexPath.row >= (NSInteger)_blocks.count)
+		return cell;
+	NSDictionary *block = _blocks[indexPath.row];
+	NSString *kind = block[@"kind"] ?: @"unsupported";
+	CGFloat height = [_heights[indexPath.row] floatValue];
+
+	if ([kind isEqualToString:@"divider"]){
+		bar.hidden = NO;
+		bar.backgroundColor = [[TGTheme shared] separatorColour];
+		bar.frame = CGRectMake(15, 8, 290, 1);
+		return cell;
+	}
+
+	if ([kind isEqualToString:@"photo"] || [kind isEqualToString:@"cover"] ||
+		[kind isEqualToString:@"animation"] || [kind isEqualToString:@"video"]){
+		[self fetchImageForBlock:block];
+		NSNumber *fileId = block[@"photoFileId"];
+		UIImage *image = [fileId isKindOfClass:NSNumber.class] ? _images[fileId] : nil;
+		NSString *text = block[@"captionText"];
+		CGFloat captionH = 0;
+		if (text.length){
+			CGSize s = [text sizeWithFont:[UIFont systemFontOfSize:13]
+						constrainedToSize:CGSizeMake(290, 200)
+							lineBreakMode:NSLineBreakByWordWrapping];
+			captionH = s.height + 6;
+		}
+		CGFloat pictureH = MAX(0, height - captionH - 11);
+		picture.hidden = NO;
+		picture.image = image;
+		picture.backgroundColor = image ? [UIColor clearColor] : TGChatHexColour(0xEEF1F4);
+		picture.frame = CGRectMake(0, 5, 320, pictureH);
+		if (text.length){
+			caption.hidden = NO;
+			caption.text = text;
+			caption.frame = CGRectMake(15, 5 + pictureH + 6, 290, captionH - 6);
+		}
+		return cell;
+	}
+
+	if (![TGInstantViewController kindIsText:kind]){
+		body.hidden = NO;
+		body.font = [UIFont systemFontOfSize:15];
+		body.textColor = TGChatHexColour(0x141617);
+		NSString *title = block[@"text"];
+		body.text = title.length
+				? [NSString stringWithFormat:@"%@\nTap to open in Safari", title]
+				: @"Tap to open in Safari";
+		body.frame = CGRectMake(15, 8, 290, 50);
+		cell.backgroundColor = TGChatHexColour(0xEEF1F4);
+		return cell;
+	}
+
+	NSString *text = [TGInstantViewController textOfBlock:block];
+	CGFloat inset = 15;
+	if ([kind isEqualToString:@"blockQuote"] || [kind isEqualToString:@"pullQuote"]){
+		inset += 10;
+		bar.hidden = NO;
+		bar.backgroundColor = TGChatHexColour(0x0E7ACD);
+		bar.frame = CGRectMake(15, 4, kPreviewBar, MAX(0, height - 11));
+	}
+	if ([kind isEqualToString:@"list"])
+		inset += 20;
+
+	CGFloat top = [kind isEqualToString:@"sectionHeading"] ? 12 : 4;
+	body.hidden = NO;
+	body.font = [TGInstantViewController fontForKind:kind];
+	body.textColor = [TGInstantViewController colourForKind:kind];
+	body.text = [kind isEqualToString:@"kicker"] ? text.uppercaseString : text;
+	body.backgroundColor = [kind isEqualToString:@"preformatted"]
+			? TGChatHexColour(0xEEF1F4) : [UIColor clearColor];
+	body.frame = CGRectMake(inset, top, [TGInstantViewController textWidthForKind:kind],
+							MAX(0, height - 11 - (top - 4)));
+	return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	if (indexPath.row >= (NSInteger)_blocks.count)
+		return;
+	NSDictionary *block = _blocks[indexPath.row];
+	if ([TGInstantViewController kindIsText:block[@"kind"]])
+		return;
+	NSString *link = block[@"url"] ?: self.url;
+	if (link.length)
+		[[UIApplication sharedApplication] openURL:[NSURL URLWithString:link]];
+}
+
+- (void)didReceiveMemoryWarning {
+	[super didReceiveMemoryWarning];
+	[_images removeAllObjects];
+	[_imagesRequested removeAllObjects];
+	[_table reloadData];
+}
+
+@end
 
 #pragma mark - bubble cell
 
@@ -257,6 +883,9 @@ static const CGFloat kChipsWidth  = 170.0f;
 @property (nonatomic, strong) UIView *stickerPanel;
 @property (nonatomic, strong) NSMutableDictionary *reactionChips;   // messageId -> chips
 @property (nonatomic, strong) NSMutableSet *reactionChipsRequested;
+@property (nonatomic, strong) NSMutableDictionary *linkPreviews;
+@property (nonatomic, strong) NSMutableSet *linkPreviewsRequested;
+@property (nonatomic, copy) NSString *pendingLinkURL;
 @property (nonatomic, strong) TGMessageActionsSheet *actionsSheet;
 @property (nonatomic, assign) int64_t forwardMessageId;
 @property (nonatomic, strong) NSArray *reportOptions;
@@ -320,6 +949,8 @@ static const CGFloat kChipsWidth  = 170.0f;
 	self.quotesRequested = [NSMutableSet set];
 	self.reactionChips = [NSMutableDictionary dictionary];
 	self.reactionChipsRequested = [NSMutableSet set];
+	self.linkPreviews = [NSMutableDictionary dictionary];
+	self.linkPreviewsRequested = [NSMutableSet set];
 	self.selectedIds = [NSMutableArray array];
 	self.sendStates = [NSMutableDictionary dictionary];
 	self.sendStatesRequested = [NSMutableSet set];
@@ -915,6 +1546,70 @@ static const CGFloat kChipsWidth  = 170.0f;
 	}
 }
 
+- (void)fetchMissingLinkPreviews {
+	__weak typeof(self) weakSelf = self;
+	for (NSDictionary *m in self.messages){
+		NSNumber *messageId = [m[@"id"] isKindOfClass:NSNumber.class] ? m[@"id"] : nil;
+		if (!messageId || [m[@"service"] boolValue])
+			continue;
+		if (![m[@"kind"] isEqualToString:@"messageText"])
+			continue;
+		NSString *text = m[@"text"];
+		if (!text.length)
+			continue;
+		if ([text rangeOfString:@"http" options:NSCaseInsensitiveSearch].location == NSNotFound &&
+			[text rangeOfString:@"t.me/" options:NSCaseInsensitiveSearch].location == NSNotFound)
+			continue;
+		if (self.linkPreviews[messageId] ||
+			[self.linkPreviewsRequested containsObject:messageId])
+			continue;
+		[self.linkPreviewsRequested addObject:messageId];
+
+		[[TGClient shared] linkPreviewForText:text withOptions:nil
+								   completion:^(NSDictionary *preview){
+			TGChatViewController *me = weakSelf;
+			if (!me || ![preview[@"url"] length])
+				return;
+			me.linkPreviews[messageId] = preview;
+			NSNumber *photo = preview[@"photoFileId"];
+			if ([photo isKindOfClass:NSNumber.class] && photo.integerValue != 0 &&
+				!me.images[photo] && ![me.imagesRequested containsObject:photo]){
+				[me.imagesRequested addObject:photo];
+				[[TGClient shared] downloadFile:photo.integerValue completion:^(NSString *path){
+					TGChatViewController *inner = weakSelf;
+					if (!inner || !path)
+						return;
+					UIImage *image = [UIImage imageWithContentsOfFile:path];
+					if (!image)
+						return;
+					inner.images[photo] = image;
+					[inner.table reloadData];
+				}];
+			}
+			[me.table reloadData];
+		}];
+	}
+}
+
+- (NSDictionary *)previewFor:(NSDictionary *)m {
+	NSNumber *messageId = [m[@"id"] isKindOfClass:NSNumber.class] ? m[@"id"] : nil;
+	return messageId ? self.linkPreviews[messageId] : nil;
+}
+
+- (UIImage *)previewImageFor:(NSDictionary *)preview {
+	NSNumber *photo = preview[@"photoFileId"];
+	return [photo isKindOfClass:NSNumber.class] ? self.images[photo] : nil;
+}
+
+- (CGSize)previewSizeFor:(NSDictionary *)m {
+	NSDictionary *preview = [self previewFor:m];
+	if (!preview)
+		return CGSizeZero;
+	return [TGLinkPreviewView sizeForPreview:preview
+									   image:[self previewImageFor:preview]
+									maxWidth:kBubbleMaxW - 2 * kPadH];
+}
+
 /// Chips already known for a message, or nil.
 - (NSArray *)chipsFor:(NSDictionary *)m {
 	NSNumber *messageId = [m[@"id"] isKindOfClass:NSNumber.class] ? m[@"id"] : nil;
@@ -925,6 +1620,7 @@ static const CGFloat kChipsWidth  = 170.0f;
 	__weak typeof(self) weakSelf = self;
 	[self fetchMissingMaps];
 	[self fetchMissingReactionChips];
+	[self fetchMissingLinkPreviews];
 
 	// Animated stickers need the .tgs itself, not the still thumbnail.
 	for (NSDictionary *m in self.messages){
@@ -1973,6 +2669,7 @@ static const NSInteger kSendOptionsSheetTag = 45;
 static const NSInteger kScheduleSheetTag    = 46;
 static const NSInteger kScheduledListSheetTag = 47;
 static const NSInteger kSelectionDeleteSheetTag = 48;
+static const NSInteger kLinkSheetTag        = 49;
 static const NSInteger kReportTextAlertTag  = 61;
 
 - (void)attachTapped {
@@ -2019,6 +2716,17 @@ static const NSInteger kReportTextAlertTag  = 61;
 			[self sendScheduledMessageAtIndex:index];
 		return;
 	}
+	if (sheet.tag == kLinkSheetTag){
+		NSString *link = self.pendingLinkURL;
+		self.pendingLinkURL = nil;
+		if (!link.length)
+			return;
+		if (index == 0)
+			[self openExternalLink:link];
+		else
+			[UIPasteboard generalPasteboard].string = link;
+		return;
+	}
 	if (sheet.tag == kSelectionDeleteSheetTag){
 		NSString *title = [sheet buttonTitleAtIndex:index] ?: @"";
 		[self deleteSelectedForEveryone:
@@ -2030,6 +2738,83 @@ static const NSInteger kReportTextAlertTag  = 61;
 	if (index == 0)      [self pickMedia];
 	else if (index == 1) [self sendCurrentLocation];
 	else                 [self pickContact];
+}
+
+#pragma mark - links
+
+- (void)openLink:(NSString *)url {
+	if (!url.length)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] resolveLink:url completion:^(NSDictionary *link){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		NSString *kind = link[@"kind"];
+		if ([kind isEqualToString:@"message"]){
+			[[TGClient shared] resolveMessageLink:url completion:^(NSDictionary *info){
+				TGChatViewController *inner = weakSelf;
+				if (!inner)
+					return;
+				int64_t messageId = [info[@"messageId"] longLongValue];
+				if (messageId && [info[@"chatId"] longLongValue] == inner.chatId &&
+					[inner scrollToMessageId:messageId])
+					return;
+				[inner confirmExternalLink:url];
+			}];
+			return;
+		}
+		if (link && ![link[@"supported"] boolValue]){
+			[me showAlertTitle:@"" message:@"This link is not supported in this app."];
+			return;
+		}
+		[me confirmExternalLink:url];
+	}];
+}
+
+- (void)confirmExternalLink:(NSString *)url {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] externalLinkInfoForUrl:url completion:^(NSDictionary *info){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		NSString *target = info[@"url"] ?: url;
+		if (info && ![info[@"needsConfirmation"] boolValue]){
+			[me openExternalLink:target];
+			return;
+		}
+		NSString *domain = info[@"domain"];
+		if (!domain.length)
+			domain = [[NSURL URLWithString:url] host] ?: url;
+
+		me.pendingLinkURL = target;
+		UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:domain
+														  delegate:me
+												 cancelButtonTitle:nil
+											destructiveButtonTitle:nil
+												 otherButtonTitles:@"Open in Safari",
+																   @"Copy Link", nil];
+		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+		sheet.tag = kLinkSheetTag;
+		[sheet showInView:me.view];
+	}];
+}
+
+- (void)openExternalLink:(NSString *)url {
+	[[TGClient shared] externalLinkForUrl:url allowWriteAccess:NO
+							   completion:^(NSString *opened){
+		NSURL *target = [NSURL URLWithString:(opened.length ? opened : url)];
+		if (target)
+			[[UIApplication sharedApplication] openURL:target];
+	}];
+}
+
+- (void)openInstantView:(NSString *)url {
+	if (!url.length)
+		return;
+	TGInstantViewController *reader = [[TGInstantViewController alloc] init];
+	reader.url = url;
+	[self.navigationController pushViewController:reader animated:YES];
 }
 
 #pragma mark - message actions
@@ -2897,6 +3682,9 @@ static const NSInteger kReportTextAlertTag  = 61;
 	// they said.
 	if ([self quoteTextFor:m])
 		h += 38;
+	CGFloat previewH = [self previewSizeFor:m].height;
+	if (previewH > 0)
+		h += previewH + 6;
 	NSArray *chips = [self chipsFor:m];
 	if (chips.count)
 		h += [TGReactionChipsView heightForChips:chips width:kChipsWidth] + 3;
@@ -2931,6 +3719,8 @@ static const NSInteger kReportTextAlertTag  = 61;
 - (BOOL)stampFitsInlineFor:(NSDictionary *)m {
 	NSString *text = m[@"text"] ?: @"";
 	if (!text.length || [text rangeOfString:@"\n"].location != NSNotFound)
+		return NO;
+	if ([self previewSizeFor:m].height > 0)
 		return NO;
 
 	CGFloat oneLine = [text sizeWithFont:
@@ -3463,6 +4253,9 @@ static UIColor *TGSenderColour(int64_t userId) {
 		contentW = MAX(contentW, 170);
 	if ([[self chipsFor:m] count])
 		contentW = MAX(contentW, kChipsWidth);
+	CGSize previewSize = [self previewSizeFor:m];
+	if (previewSize.height > 0)
+		contentW = MAX(contentW, previewSize.width);
 	if (inlineStamp)
 		contentW = MAX(contentW, body.width + 6 + timeW);   // they share the last line
 
@@ -3718,6 +4511,31 @@ static UIColor *TGSenderColour(int64_t userId) {
 	[self highlightTimestampInLabel:cell.body];
 	cell.body.frame = CGRectMake(kPadH, y, body.width, body.height);
 
+	CGFloat afterBody = y + body.height;
+	TGLinkPreviewView *previewView = (TGLinkPreviewView *)[cell.bubble viewWithTag:0x9006];
+	NSDictionary *preview = [self previewFor:m];
+	if (preview && previewSize.height > 0){
+		if (!previewView){
+			previewView = [[TGLinkPreviewView alloc] initWithFrame:CGRectZero];
+			previewView.tag = 0x9006;
+			[cell.bubble addSubview:previewView];
+		}
+		previewView.hidden = NO;
+		CGFloat previewW = bubbleW - 2 * kPadH;
+		[previewView configureWithPreview:preview
+									image:[self previewImageFor:preview]
+								 outgoing:mine
+								 maxWidth:previewW];
+		previewView.frame = CGRectMake(kPadH, afterBody + 6, previewW, previewSize.height);
+
+		__weak typeof(self) weakSelf = self;
+		previewView.onOpen = ^(NSString *url){ [weakSelf openLink:url]; };
+		previewView.onInstantView = ^(NSString *url){ [weakSelf openInstantView:url]; };
+		afterBody += previewSize.height + 6;
+	} else {
+		previewView.hidden = YES;
+	}
+
 	// Reactions sit under the message, as they do everywhere else.
 	UILabel *reactions = (UILabel *)[cell.bubble viewWithTag:0x9002];
 	TGReactionChipsView *chipsView = (TGReactionChipsView *)[cell.bubble viewWithTag:0x9005];
@@ -3741,7 +4559,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 		chipsView.messageId = rowMessageId;
 		chipsView.chips = chips;
 		CGFloat chipsH = [TGReactionChipsView heightForChips:chips width:kChipsWidth];
-		chipsView.frame = CGRectMake(kPadH, y + body.height + 3,
+		chipsView.frame = CGRectMake(kPadH, afterBody + 3,
 									 bubbleW - 2 * kPadH, chipsH);
 		__weak typeof(self) weakSelf = self;
 		chipsView.onChipTapped = ^(NSString *emoji, BOOL wasChosen){
@@ -3764,7 +4582,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 		reactions.hidden = NO;
 		reactions.text = reactionText;
 		reactions.textColor = [theme secondaryTextColour];
-		reactions.frame = CGRectMake(kPadH, y + body.height + 2, bubbleW - 2 * kPadH, 16);
+		reactions.frame = CGRectMake(kPadH, afterBody + 2, bubbleW - 2 * kPadH, 16);
 	} else {
 		reactions.hidden = YES;
 		chipsView.hidden = YES;
