@@ -12,6 +12,25 @@
 
 - (void)updateUnreadBadge;
 
++ (BOOL)isPadIdiom;
+
++ (RootViewController *)splitRootController;
+
++ (BOOL)isSplitLayoutActive;
+- (BOOL)isSplitLayoutActive;
+
++ (UINavigationController *)detailNavigationController;
+- (UINavigationController *)detailNavigationController;
+
++ (BOOL)presentInDetail:(UIViewController *)controller;
+- (BOOL)presentInDetail:(UIViewController *)controller;
+
++ (BOOL)pushInDetail:(UIViewController *)controller;
+- (BOOL)pushInDetail:(UIViewController *)controller;
+
++ (void)showDetailEmptyState;
+- (void)showDetailEmptyState;
+
 @end
 
 

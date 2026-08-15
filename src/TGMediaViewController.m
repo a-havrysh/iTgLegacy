@@ -79,6 +79,44 @@ static UIImage *TGMediaTilePlaceholder(void) {
 	return placeholder;
 }
 
+static UIImage *TGMediaMinithumbImage(NSDictionary *item) {
+	NSDictionary *minithumb = item[@"minithumb"];
+	if (![minithumb isKindOfClass:NSDictionary.class])
+		return nil;
+
+	NSString *key = minithumb[@"data"];
+	if (![key isKindOfClass:NSString.class] || key.length == 0)
+		return nil;
+
+	static NSCache *cache = nil;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		cache = [[NSCache alloc] init];
+		cache.countLimit = 64;
+		[[NSNotificationCenter defaultCenter]
+				addObserverForName:UIApplicationDidReceiveMemoryWarningNotification
+							object:nil
+							 queue:[NSOperationQueue mainQueue]
+						usingBlock:^(NSNotification *__unused note){
+			[cache removeAllObjects];
+		}];
+	});
+
+	UIImage *image = [cache objectForKey:key];
+	if (image)
+		return image;
+
+	NSData *bytes = [[TGClient shared] minithumbnailData:minithumb];
+	if (bytes.length == 0)
+		return nil;
+	image = [UIImage imageWithData:bytes];
+	if (!image)
+		return nil;
+
+	[cache setObject:image forKey:key];
+	return image;
+}
+
 static NSMutableDictionary *TGMediaPhotoFields(NSDictionary *content, TGClient *client,
 											   CGFloat scale) {
 	NSArray *sizes = content[@"photo"][@"sizes"];
@@ -571,9 +609,13 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 			[self.contentView addSubview:tile];
 
 		NSNumber *thumbId = item[@"thumbId"];
-		[tile loadWithFileId:[thumbId isKindOfClass:NSNumber.class] ? thumbId : nil
+		if (![thumbId isKindOfClass:NSNumber.class])
+			thumbId = nil;
+
+		UIImage *instant = TGMediaMinithumbImage(item);
+		[tile loadWithFileId:thumbId
 					  square:TGMediaTileSide
-				 placeholder:TGMediaTilePlaceholder()
+				 placeholder:instant ?: TGMediaTilePlaceholder()
 				   forceFade:false];
 
 		if ([item[@"isVideo"] boolValue])
@@ -616,9 +658,6 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	for (NSInteger i = 0; i < (NSInteger)_tiles.count; i++){
 		TGMediaTileView *tile = _tiles[i];
 		if (CGRectContainsPoint(CGRectInset(tile.frame, -2, -2), point)){
-			UIImage *loaded = [tile currentImage];
-			if (loaded == nil || loaded == TGMediaTilePlaceholder())
-				return;
 			[self.gridDelegate gridCell:self tappedItemAtIndex:self.baseIndex + i];
 			return;
 		}
@@ -635,10 +674,15 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 @property (nonatomic, assign) NSInteger pageIndex;
 @property (nonatomic, strong) NSNumber *loadingFileId;
 @property (nonatomic, assign) BOOL showingMinithumb;
+@property (nonatomic, assign) CGSize imageSize;
 
 - (void)setPageImage:(UIImage *)image;
+- (void)setPageImage:(UIImage *)image crossfade:(BOOL)crossfade;
 - (void)resetZoom;
 - (void)layoutImage;
+- (BOOL)isZoomed;
+- (BOOL)canZoom;
+- (void)centerContents;
 
 @end
 
@@ -652,13 +696,18 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 		self.showsVerticalScrollIndicator = NO;
 		self.scrollsToTop = NO;
 		self.bouncesZoom = YES;
+		self.bounces = YES;
+		self.alwaysBounceHorizontal = NO;
+		self.alwaysBounceVertical = NO;
+		self.decelerationRate = UIScrollViewDecelerationRateFast;
 		self.minimumZoomScale = 1.0f;
-		self.maximumZoomScale = 2.0f;
+		self.maximumZoomScale = 1.0f;
 		self.delegate = self;
 		self.pageIndex = -1;
+		_imageSize = CGSizeZero;
 
 		_imageView = [[UIImageView alloc] initWithFrame:self.bounds];
-		_imageView.contentMode = UIViewContentModeScaleAspectFit;
+		_imageView.contentMode = UIViewContentModeScaleToFill;
 		[self addSubview:_imageView];
 	}
 	return self;
@@ -666,18 +715,97 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 
 - (void)setPageImage:(UIImage *)image {
 	_imageView.image = image;
+	_imageSize = image ? image.size : CGSizeZero;
+	_showingMinithumb = NO;
+	[self resetZoom];
+}
+
+- (void)setPageImage:(UIImage *)image crossfade:(BOOL)crossfade {
+	if (!crossfade || !image || !_imageView.image){
+		[self setPageImage:image];
+		return;
+	}
+
+	UIImageView *view = _imageView;
+	[UIView transitionWithView:view
+					  duration:0.15
+					   options:UIViewAnimationOptionTransitionCrossDissolve
+					animations:^{ view.image = image; }
+					completion:nil];
+	_imageSize = image.size;
 	_showingMinithumb = NO;
 	[self resetZoom];
 }
 
 - (void)resetZoom {
-	self.zoomScale = 1.0f;
 	[self layoutImage];
 }
 
+- (void)updateZoomLimits {
+	CGSize bounds = self.bounds.size;
+	if (_imageSize.width < 1.0f || _imageSize.height < 1.0f ||
+		bounds.width < 1.0f || bounds.height < 1.0f){
+		self.minimumZoomScale = 1.0f;
+		self.maximumZoomScale = 1.0f;
+		return;
+	}
+
+	CGFloat scaleWidth = bounds.width / _imageSize.width;
+	CGFloat scaleHeight = bounds.height / _imageSize.height;
+	CGFloat minScale = MIN(scaleWidth, scaleHeight);
+	CGFloat maxScale = minScale < 1.0f ? minScale * 2.0f : minScale;
+
+	self.minimumZoomScale = minScale;
+	self.maximumZoomScale = maxScale;
+}
+
 - (void)layoutImage {
-	self.contentSize = self.bounds.size;
-	_imageView.frame = CGRectMake(0, 0, self.bounds.size.width, self.bounds.size.height);
+	CGSize bounds = self.bounds.size;
+
+	if (_imageSize.width < 1.0f || _imageSize.height < 1.0f){
+		self.minimumZoomScale = 1.0f;
+		self.maximumZoomScale = 1.0f;
+		self.zoomScale = 1.0f;
+		self.contentSize = bounds;
+		_imageView.frame = CGRectMake(0, 0, bounds.width, bounds.height);
+		return;
+	}
+
+	self.minimumZoomScale = 1.0f;
+	self.maximumZoomScale = 1.0f;
+	self.zoomScale = 1.0f;
+	_imageView.frame = CGRectMake(0, 0, _imageSize.width, _imageSize.height);
+	self.contentSize = _imageSize;
+
+	[self updateZoomLimits];
+	self.zoomScale = self.minimumZoomScale;
+
+	[self centerContents];
+
+	CGSize contentSize = self.contentSize;
+	self.contentOffset = CGPointMake(
+			MAX(0.0f, floorf((contentSize.width - bounds.width) / 2.0f)),
+			MAX(0.0f, floorf((contentSize.height - bounds.height) / 2.0f)));
+}
+
+- (void)centerContents {
+	CGSize bounds = self.bounds.size;
+	CGRect frame = _imageView.frame;
+
+	frame.origin.x = bounds.width > frame.size.width
+			? floorf((bounds.width - frame.size.width) / 2.0f) : 0.0f;
+	frame.origin.y = bounds.height > frame.size.height
+			? floorf((bounds.height - frame.size.height) / 2.0f) : 0.0f;
+
+	_imageView.frame = frame;
+}
+
+- (BOOL)isZoomed {
+	return self.zoomScale > self.minimumZoomScale + 0.0001f;
+}
+
+- (BOOL)canZoom {
+	return self.maximumZoomScale > self.minimumZoomScale + 0.0001f;
 }
 
 - (UIView *)viewForZoomingInScrollView:(UIScrollView *)scrollView {
@@ -685,13 +813,13 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 }
 
 - (void)scrollViewDidZoom:(UIScrollView *)scrollView {
-	CGSize bounds = self.bounds.size;
-	CGRect frame = _imageView.frame;
-	frame.origin.x = frame.size.width < bounds.width
-			? (CGFloat)(int)((bounds.width - frame.size.width) / 2.0f) : 0.0f;
-	frame.origin.y = frame.size.height < bounds.height
-			? (CGFloat)(int)((bounds.height - frame.size.height) / 2.0f) : 0.0f;
-	_imageView.frame = frame;
+	[self centerContents];
+}
+
+- (void)scrollViewDidEndZooming:(UIScrollView *)scrollView
+					   withView:(UIView *)view
+						atScale:(float)scale {
+	[self centerContents];
 }
 
 @end
@@ -708,6 +836,8 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 @property (nonatomic, assign) NSInteger currentIndex;
 
 @property (nonatomic, strong) UIScrollView *pagingView;
+@property (nonatomic, strong) UIPanGestureRecognizer *dismissPan;
+@property (nonatomic, assign) CGSize validSize;
 @property (nonatomic, strong) NSMutableDictionary *visiblePages;
 @property (nonatomic, strong) NSMutableArray *pagePool;
 @property (nonatomic, strong) NSMutableDictionary *imageCache;
@@ -1016,7 +1146,10 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc]
 			initWithTarget:self action:@selector(handlePan:)];
 	pan.delegate = self;
+	pan.maximumNumberOfTouches = 1;
 	[self.view addGestureRecognizer:pan];
+	_dismissPan = pan;
+	[_pagingView.panGestureRecognizer requireGestureRecognizerToFail:pan];
 }
 
 - (void)viewDidLoad {
@@ -1064,26 +1197,36 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 
 - (void)layoutPagesPreservingIndex:(NSInteger)index {
 	CGRect bounds = self.view.bounds;
-	if (bounds.size.width < 1)
+	if (bounds.size.width < 1 || _dismissing)
 		return;
+
+	BOOL sizeChanged = !CGSizeEqualToSize(bounds.size, _validSize);
+	_validSize = bounds.size;
 
 	_pagingView.frame = CGRectMake(-TGMediaPageGap / 2.0f, 0,
 								   bounds.size.width + TGMediaPageGap, bounds.size.height);
 	_pagingView.contentSize = CGSizeMake([self pageWidth] * _items.count, bounds.size.height);
 
-	CGFloat wanted = index * [self pageWidth];
-	if (!_pagingView.isDragging && !_pagingView.isDecelerating &&
-		fabs(_pagingView.contentOffset.x - wanted) > 0.5f)
-		_pagingView.contentOffset = CGPointMake(wanted, 0);
+	if (sizeChanged){
+		for (NSNumber *key in _visiblePages.allKeys){
+			TGMediaPageView *page = _visiblePages[key];
+			page.frame = [self frameForPageAtIndex:[key integerValue]];
+			[page layoutImage];
+		}
 
-	for (NSNumber *key in _visiblePages.allKeys){
-		TGMediaPageView *page = _visiblePages[key];
-		page.frame = CGRectMake([key integerValue] * [self pageWidth] + TGMediaPageGap / 2.0f, 0,
-								bounds.size.width, bounds.size.height);
-		[page layoutImage];
+		CGFloat wanted = index * [self pageWidth];
+		if (!_pagingView.isDragging && !_pagingView.isDecelerating &&
+			fabs(_pagingView.contentOffset.x - wanted) > 0.5f)
+			_pagingView.contentOffset = CGPointMake(wanted, 0);
 	}
 
 	[self updateVisiblePages];
+}
+
+- (CGRect)frameForPageAtIndex:(NSInteger)index {
+	CGRect bounds = self.view.bounds;
+	return CGRectMake(index * [self pageWidth] + TGMediaPageGap / 2.0f, 0,
+					  bounds.size.width, bounds.size.height);
 }
 
 - (TGMediaPageView *)takePage {
@@ -1092,7 +1235,27 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 		[_pagePool removeLastObject];
 		return page;
 	}
-	return [[TGMediaPageView alloc] initWithFrame:self.view.bounds];
+	page = [[TGMediaPageView alloc] initWithFrame:self.view.bounds];
+	if (_dismissPan)
+		[page.panGestureRecognizer requireGestureRecognizerToFail:_dismissPan];
+	return page;
+}
+
+- (void)recyclePage:(TGMediaPageView *)page forKey:(NSNumber *)key {
+	[page setPageImage:nil];
+	page.loadingFileId = nil;
+	page.pageIndex = -1;
+	[page removeFromSuperview];
+	[_visiblePages removeObjectForKey:key];
+	if (_pagePool.count < 3)
+		[_pagePool addObject:page];
+}
+
+- (void)trimImageCache {
+	for (NSNumber *key in _imageCache.allKeys){
+		if (labs((long)([key integerValue] - _currentIndex)) > 3)
+			[_imageCache removeObjectForKey:key];
+	}
 }
 
 - (void)updateVisiblePages {
@@ -1109,38 +1272,37 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	for (NSNumber *key in _visiblePages.allKeys){
 		NSInteger index = [key integerValue];
 		if (index < first || index > last){
-			TGMediaPageView *page = _visiblePages[key];
-			[page setPageImage:nil];
-			page.loadingFileId = nil;
-			page.pageIndex = -1;
-			[page removeFromSuperview];
-			[_visiblePages removeObjectForKey:key];
-			if (_pagePool.count < 3)
-				[_pagePool addObject:page];
-			[_imageCache removeObjectForKey:key];
+			[self recyclePage:_visiblePages[key] forKey:key];
 			[_failedPages removeObject:key];
 		}
 	}
 
+	[self trimImageCache];
+	[self cancelDownloadsOutsideWindow];
+
 	for (NSInteger index = first; index <= last; index++){
 		NSNumber *key = @(index);
 		TGMediaPageView *page = _visiblePages[key];
-		if (page)
+		if (page){
+			if (index != _currentIndex && [page isZoomed])
+				[page resetZoom];
 			continue;
+		}
 
 		page = [self takePage];
 		page.pageIndex = index;
-		page.frame = CGRectMake(index * [self pageWidth] + TGMediaPageGap / 2.0f, 0,
-								self.view.bounds.size.width, self.view.bounds.size.height);
-		[page resetZoom];
+		page.frame = [self frameForPageAtIndex:index];
 		[_pagingView addSubview:page];
 		_visiblePages[key] = page;
 
 		UIImage *cached = _imageCache[key];
-		if (cached)
+		if (cached){
 			[page setPageImage:cached];
-		else
+			[self prefetchNeighboursOfIndex:index];
+		} else {
+			[page resetZoom];
 			[self loadImageForPageAtIndex:index];
+		}
 	}
 }
 
@@ -1187,6 +1349,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 
 	CGFloat maxSidePixels = [self fullImageMaxSidePixels];
 
+	[_prefetchedFiles addObject:fileId];
 	[[TGClient shared] startDownloadingFile:[fileId integerValue]
 								   priority:(index == _currentIndex ? 32 : 8)
 								 completion:nil];
@@ -1253,7 +1416,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 					return;
 				}
 				strongMe.imageCache[key] = image;
-				[target setPageImage:image];
+				[target setPageImage:image crossfade:(target.imageView.image != nil)];
 				[strongMe updateLoadingChrome];
 			});
 		});
@@ -1279,12 +1442,40 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 				TGMediaPageView *target = me.visiblePages[key];
 				if (!target || me.imageCache[key])
 					return;
+				if (index >= (NSInteger)me.items.count ||
+					![me.items[index][@"thumbId"] isEqual:thumbId])
+					return;
 				if (target.imageView.image && !target.showingMinithumb)
 					return;
-				[target setPageImage:image];
+				[target setPageImage:image crossfade:target.showingMinithumb];
 			});
 		});
 	}];
+}
+
+- (void)cancelDownloadsOutsideWindow {
+	if (_prefetchedFiles.count == 0 || _spinner.isAnimating)
+		return;
+
+	NSMutableSet *wanted = [NSMutableSet set];
+	for (NSInteger index = _currentIndex - 1; index <= _currentIndex + 1; index++){
+		if (index < 0 || index >= (NSInteger)_items.count)
+			continue;
+		NSDictionary *item = _items[index];
+		NSNumber *fullId = item[@"fullId"];
+		NSNumber *thumbId = item[@"thumbId"];
+		if ([fullId isKindOfClass:NSNumber.class])
+			[wanted addObject:fullId];
+		if ([thumbId isKindOfClass:NSNumber.class])
+			[wanted addObject:thumbId];
+	}
+
+	for (NSNumber *fileId in [_prefetchedFiles copy]){
+		if ([wanted containsObject:fileId])
+			continue;
+		[[TGClient shared] cancelDownloadOfFile:[fileId integerValue] onlyIfPending:NO];
+		[_prefetchedFiles removeObject:fileId];
+	}
 }
 
 - (void)prefetchNeighboursOfIndex:(NSInteger)index {
@@ -1318,33 +1509,41 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	NSNumber *key = @(_currentIndex);
 	TGMediaPageView *page = _visiblePages[key];
 
-	BOOL loading = page && !_imageCache[key] && page.loadingFileId
-			&& ![_failedPages containsObject:key];
+	BOOL failed = page && !_imageCache[key] && [_failedPages containsObject:key];
+	BOOL loading = page && !_imageCache[key] && page.loadingFileId && !failed;
 
-	if (loading){
+	if (loading || failed){
 		NSDictionary *item = [self currentItem];
-		_progressLabel.text = [item[@"isVideo"] boolValue]
-				? @"loading video..." : @"loading full image...";
+		if (failed)
+			_progressLabel.text = @"tap to try again";
+		else
+			_progressLabel.text = [item[@"isVideo"] boolValue]
+					? @"loading video..." : @"loading full image...";
 		[_progressLabel sizeToFit];
 
 		CGFloat panelWidth = _bottomBar.frame.size.width;
 		CGFloat labelWidth = _progressLabel.frame.size.width;
 		CGFloat labelHeight = _progressLabel.frame.size.height;
-		CGFloat labelLeft = (CGFloat)floorf((panelWidth - labelWidth) / 2.0f) + 10.0f;
+		CGFloat labelLeft = (CGFloat)floorf((panelWidth - labelWidth) / 2.0f)
+				+ (failed ? 0.0f : 10.0f);
 		CGFloat labelTop = _authorLabel.text.length > 0 ? 23.0f : 14.0f;
 		CGFloat retinaPixel = ([UIScreen mainScreen].scale > 1.0f) ? 0.5f : 0.0f;
 
 		_progressLabel.frame = CGRectMake(labelLeft, labelTop, labelWidth, labelHeight);
 		_progressSpinner.center = CGPointMake(labelLeft - 19.0f + 7.5f,
 											  labelTop + 1.0f + retinaPixel + 7.5f);
-		[_progressSpinner startAnimating];
+		if (loading)
+			[_progressSpinner startAnimating];
+		else
+			[_progressSpinner stopAnimating];
 	} else {
 		[_progressSpinner stopAnimating];
 	}
 
+	BOOL busy = loading || failed;
 	[UIView animateWithDuration:0.2 animations:^{
-		self.progressContainer.alpha = loading ? 1.0f : 0.0f;
-		self.controlsContainer.alpha = loading ? 0.0f : 1.0f;
+		self.progressContainer.alpha = busy ? 1.0f : 0.0f;
+		self.controlsContainer.alpha = busy ? 0.0f : 1.0f;
 	}];
 }
 
@@ -1431,10 +1630,10 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 		return;
 
 	TGMediaPageView *page = _visiblePages[@(_currentIndex)];
-	if (!page)
+	if (!page || ![page canZoom])
 		return;
 
-	if (page.zoomScale > page.minimumZoomScale + 0.01f){
+	if ([page isZoomed]){
 		[page setZoomScale:page.minimumZoomScale animated:YES];
 		return;
 	}
@@ -1442,9 +1641,9 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	CGPoint point = [recognizer locationInView:page.imageView];
 	CGFloat scale = page.maximumZoomScale;
 	CGSize size = page.bounds.size;
-	CGRect target = CGRectMake(point.x - (size.width / scale) / 2.0f,
-							   point.y - (size.height / scale) / 2.0f,
-							   size.width / scale, size.height / scale);
+	CGFloat width = size.width / scale;
+	CGFloat height = size.height / scale;
+	CGRect target = CGRectMake(point.x - width / 2.0f, point.y - height / 2.0f, width, height);
 	[page zoomToRect:target animated:YES];
 }
 
@@ -1455,12 +1654,14 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 		return YES;
 
 	TGMediaPageView *page = _visiblePages[@(_currentIndex)];
-	if (page && page.zoomScale > 1.01f)
+	if (page && [page isZoomed])
 		return NO;
 	if (_pagingView.isDragging || _pagingView.isDecelerating)
 		return NO;
 
 	CGPoint translation = [(UIPanGestureRecognizer *)recognizer translationInView:self.view];
+	if (fabs(translation.y) < 1.0f)
+		return NO;
 	return fabs(translation.y) > fabs(translation.x);
 }
 
@@ -1497,7 +1698,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 				self.pagingView.transform = CGAffineTransformMakeTranslation(0, target);
 				self.view.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.0f];
 			} completion:^(BOOL finished){
-				[self closeTapped];
+				[self dismissViewControllerAnimated:NO completion:nil];
 			}];
 			return;
 		}
@@ -1699,22 +1900,15 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 		return;
 	}
 
-	for (NSNumber *key in _visiblePages.allKeys){
-		TGMediaPageView *page = _visiblePages[key];
-		[page setPageImage:nil];
-		page.loadingFileId = nil;
-		page.pageIndex = -1;
-		[page removeFromSuperview];
-		[_visiblePages removeObjectForKey:key];
-		if (_pagePool.count < 3)
-			[_pagePool addObject:page];
-	}
+	for (NSNumber *key in _visiblePages.allKeys)
+		[self recyclePage:_visiblePages[key] forKey:key];
 	[_imageCache removeAllObjects];
 	[_failedPages removeAllObjects];
 
 	if (_currentIndex > (NSInteger)_items.count - 1)
 		_currentIndex = (NSInteger)_items.count - 1;
 
+	_validSize = CGSizeZero;
 	[self layoutPagesPreservingIndex:_currentIndex];
 	[self updateChromeForCurrentItem];
 }
@@ -1761,6 +1955,8 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 }
 
 - (void)dealloc {
+	for (NSNumber *fileId in _prefetchedFiles)
+		[[TGClient shared] cancelDownloadOfFile:[fileId integerValue] onlyIfPending:YES];
 	_pagingView.delegate = nil;
 	for (NSNumber *key in _visiblePages.allKeys)
 		[(TGMediaPageView *)_visiblePages[key] setDelegate:nil];

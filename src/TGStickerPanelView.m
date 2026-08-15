@@ -134,7 +134,6 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 @property (nonatomic, assign) NSUInteger imageCacheBytes;
 @property (nonatomic, strong) NSMutableDictionary *pendingImages;
 @property (nonatomic, strong) NSMutableDictionary *imageRequestCounts;
-@property (nonatomic, strong) NSMutableSet *pinnedImageKeys;
 @property (nonatomic, strong) dispatch_queue_t decodeQueue;
 
 @property (nonatomic, copy) NSString *searchQuery;
@@ -174,7 +173,6 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 		_imageCacheOrder = [[NSMutableArray alloc] init];
 		_pendingImages = [[NSMutableDictionary alloc] init];
 		_imageRequestCounts = [[NSMutableDictionary alloc] init];
-		_pinnedImageKeys = [[NSMutableSet alloc] init];
 		_decodeQueue = dispatch_queue_create("tg.stickerpanel.decode", NULL);
 		_columns = 4;
 		_gutter = 12.0f;
@@ -273,7 +271,6 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 	}
 	[self.pendingImages removeAllObjects];
 	[self.imageRequestCounts removeAllObjects];
-	[self.pinnedImageKeys removeAllObjects];
 }
 
 - (void)retainImageKey:(NSString *)key {
@@ -297,7 +294,7 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 	}
 	[self.imageRequestCounts removeObjectForKey:key];
 
-	if (self.pendingImages[key] == nil || [self.pinnedImageKeys containsObject:key])
+	if (self.pendingImages[key] == nil)
 		return;
 
 	[self.pendingImages removeObjectForKey:key];

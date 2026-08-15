@@ -568,13 +568,8 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 - (void)handleErrorObject:(NSDictionary *)obj {
 	NSString *msg = obj[@"message"] ?: @"unknown error";
 	NSLog(@"TGClient: ERROR code=%@ msg=%@", obj[@"code"], msg);
-	if ([obj[@"code"] intValue] == 404){
-		// loadChats answers 404 when the whole list is loaded
-		self.chatListComplete = YES;
-		NSLog(@"TGClient: chat list complete (%lu)",
-				(unsigned long)self.chatsById.count);
+	if ([obj[@"code"] intValue] == 404)
 		return;
-	}
 	NSLog(@"TGClient: error: %@", obj);
 	if (self.onError)
 		self.onError(msg);
@@ -1805,16 +1800,27 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 	NSLog(@"TGClient: loadChats attempt %lu (have %lu)",
 			(unsigned long)self.loadChatsAttempts + 1,
 			(unsigned long)self.chatsById.count);
-	[self send:@{
+	__weak typeof(self) weakLoader = self;
+	[self request:@{
 		@"@type"     : @"loadChats",
 		@"chat_list" : @{@"@type" : @"chatListMain"},
 		@"limit"     : @(50),
+	} completion:^(NSDictionary *result){
+		TGClient *loader = weakLoader;
+		if (!loader)
+			return;
+		if ([result[@"@type"] isEqualToString:@"error"] &&
+			[result[@"code"] intValue] == 404){
+			loader.chatListComplete = YES;
+			NSLog(@"TGClient: chat list complete (%lu)",
+					(unsigned long)loader.chatsById.count);
+		}
 	}];
-	[self send:@{
+	[self request:@{
 		@"@type"     : @"loadChats",
 		@"chat_list" : @{@"@type" : @"chatListArchive"},
 		@"limit"     : @(50),
-	}];
+	} completion:^(NSDictionary *result){ (void)result; }];
 
 	// A batch beyond the first needs a server round trip, so silence for a
 	// second or two means nothing. Keep asking on a timer and stop only when

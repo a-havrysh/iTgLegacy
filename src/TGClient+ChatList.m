@@ -58,6 +58,17 @@ static NSMutableSet *TGMarkedUnreadChatIds(void){
 	return set;
 }
 
+static void TGSetMarkedUnread(TGClient *client, int64_t chatId, BOOL marked){
+	NSNumber *key = @(chatId);
+	if (marked)
+		[TGMarkedUnreadChatIds() addObject:key];
+	else
+		[TGMarkedUnreadChatIds() removeObject:key];
+	NSMutableDictionary *info = client.chatsById[key];
+	if ([info isKindOfClass:NSMutableDictionary.class])
+		info[@"markedUnread"] = @(marked);
+}
+
 static NSCache *TGChatTitleCache(void){
 	static NSCache *titles = nil;
 	if (!titles){
@@ -260,10 +271,7 @@ static void (^TGFoldersChangedBlock)(void) = nil;
 }
 
 - (void)setChat:(int64_t)chatId markedAsUnread:(BOOL)marked {
-	if (marked)
-		[TGMarkedUnreadChatIds() addObject:@(chatId)];
-	else
-		[TGMarkedUnreadChatIds() removeObject:@(chatId)];
+	TGSetMarkedUnread(self, chatId, marked);
 	[self send:@{@"@type" : @"toggleChatIsMarkedAsUnread",
 				 @"chat_id" : @(chatId),
 				 @"is_marked_as_unread" : @(marked)}];
@@ -834,12 +842,19 @@ static void (^TGFoldersChangedBlock)(void) = nil;
 }
 
 - (void)chatMarkedAsUnread:(int64_t)chatId completion:(void (^)(BOOL marked))completion {
+	__weak typeof(self) weakSelf = self;
 	[self request:@{@"@type" : @"getChat", @"chat_id" : @(chatId)}
 	   completion:^(NSDictionary *chat){
-		BOOL marked = NO;
-		if (!TGIsError(chat))
-			marked = [chat[@"is_marked_as_unread"] boolValue];
-		if (marked)
+		TGClient *client = weakSelf;
+		if (TGIsError(chat)){
+			if (completion)
+				completion(client ? [client isChatMarkedAsUnread:chatId] : NO);
+			return;
+		}
+		BOOL marked = [chat[@"is_marked_as_unread"] boolValue];
+		if (client)
+			TGSetMarkedUnread(client, chatId, marked);
+		else if (marked)
 			[TGMarkedUnreadChatIds() addObject:@(chatId)];
 		else
 			[TGMarkedUnreadChatIds() removeObject:@(chatId)];

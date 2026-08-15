@@ -47,8 +47,6 @@ static NSString *TGMsgSenderName(int64_t userId) {
 	return name.length ? name : @"";
 }
 
-// A compact flattening for the replies this category returns. TGClient.m's own
-// flattener is file-static; the keys below are the subset both agree on.
 static NSDictionary *TGMsgBrief(NSDictionary *m) {
 	if (![m isKindOfClass:NSDictionary.class])
 		return nil;

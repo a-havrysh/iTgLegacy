@@ -229,7 +229,10 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 @property (nonatomic, strong) UIImageView *avatarView;
 @property (nonatomic, strong) UIImage *avatarImage;
 @property (nonatomic, strong) UIView *editNameContainer;
+@property (nonatomic, strong) NSArray *labelDisplayNames;
+@property (nonatomic, strong) NSArray *labelIdentifiers;
 @property (nonatomic, assign) BOOL saving;
+@property (nonatomic, assign) BOOL didFocusNameField;
 @end
 
 @implementation TGNewContactViewController
@@ -242,23 +245,51 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 	return self;
 }
 
-- (NSArray *)phoneLabels {
-	static NSArray *labels = nil;
-	if (!labels){
-		NSMutableArray *result = [[NSMutableArray alloc] init];
-		CFStringRef raw[] = { kABPersonPhoneMobileLabel, kABHomeLabel, kABWorkLabel,
-							  kABPersonPhoneMainLabel, kABPersonPhoneHomeFAXLabel,
-							  kABPersonPhoneWorkFAXLabel, kABPersonPhonePagerLabel, kABOtherLabel };
-		for (NSUInteger i = 0; i < sizeof(raw) / sizeof(raw[0]); i++){
-			NSString *localized = (__bridge_transfer NSString *)ABAddressBookCopyLocalizedLabel(raw[i]);
-			if (localized.length && ![result containsObject:localized])
-				[result addObject:localized];
+- (void)buildPhoneLabels {
+	static NSArray *displayLabels = nil;
+	static NSArray *identifiers = nil;
+	if (!displayLabels){
+		NSMutableArray *display = [[NSMutableArray alloc] init];
+		NSMutableArray *raw = [[NSMutableArray alloc] init];
+		CFStringRef constants[] = { kABPersonPhoneMobileLabel, kABPersonPhoneIPhoneLabel,
+									kABHomeLabel, kABWorkLabel, kABPersonPhoneMainLabel,
+									kABPersonPhoneHomeFAXLabel, kABPersonPhoneWorkFAXLabel,
+									kABPersonPhoneOtherFAXLabel, kABPersonPhonePagerLabel,
+									kABOtherLabel };
+		for (NSUInteger i = 0; i < sizeof(constants) / sizeof(constants[0]); i++){
+			if (constants[i] == NULL)
+				continue;
+			NSString *identifier = (__bridge NSString *)constants[i];
+			NSString *localized = (__bridge_transfer NSString *)ABAddressBookCopyLocalizedLabel(constants[i]);
+			if (!localized.length || [display containsObject:localized])
+				continue;
+			[display addObject:localized];
+			[raw addObject:identifier];
 		}
-		if (!result.count)
-			[result addObject:@"mobile"];
-		labels = result;
+		if (!display.count){
+			[display addObject:@"mobile"];
+			[raw addObject:(__bridge NSString *)kABPersonPhoneMobileLabel];
+		}
+		displayLabels = display;
+		identifiers = raw;
 	}
-	return labels;
+	self.labelDisplayNames = displayLabels;
+	self.labelIdentifiers = identifiers;
+}
+
+- (NSArray *)phoneLabels {
+	if (!self.labelDisplayNames)
+		[self buildPhoneLabels];
+	return self.labelDisplayNames;
+}
+
+- (NSString *)addressBookLabelForDisplayLabel:(NSString *)display {
+	if (!self.labelDisplayNames)
+		[self buildPhoneLabels];
+	NSUInteger index = display ? [self.labelDisplayNames indexOfObject:display] : NSNotFound;
+	if (index == NSNotFound)
+		return display.length ? display : (__bridge NSString *)kABPersonPhoneMobileLabel;
+	return [self.labelIdentifiers objectAtIndex:index];
 }
 
 - (NSString *)nextUnusedLabel {
@@ -309,8 +340,7 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 	self.lastNameField  = [self makeFieldWithPlaceholder:@"Last" font:[UIFont boldSystemFontOfSize:16]];
 	self.lastNameField.returnKeyType = UIReturnKeyDefault;
 
-	for (int i = 0; i < 2; i++)
-		[self.phoneEntries addObject:[self makePhoneEntry]];
+	[self.phoneEntries addObject:[self makePhoneEntry]];
 
 	[self buildTableHeader];
 
@@ -318,6 +348,19 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 												 name:UITextFieldTextDidChangeNotification object:nil];
 	[self.tableView setEditing:YES animated:NO];
 	[self updateDoneEnabled];
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+	[super viewDidAppear:animated];
+	if (self.didFocusNameField)
+		return;
+	self.didFocusNameField = YES;
+	[self.firstNameField becomeFirstResponder];
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+	[super viewWillDisappear:animated];
+	[self.view endEditing:YES];
 }
 
 - (void)buildTableHeader {
@@ -471,8 +514,16 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 		[self updateDoneEnabled];
 		return;
 	}
-	if ([self entryForField:object]){
+	NSMutableDictionary *entry = [self entryForField:object];
+	if (entry){
+		BOOL hasText = ((UITextField *)object).text.length > 0;
+		BOOL hadText = [[entry objectForKey:@"hadText"] boolValue];
+		[entry setObject:[NSNumber numberWithBool:hasText] forKey:@"hadText"];
 		[self appendEmptyPhoneRowIfNeeded];
+		if (hasText != hadText){
+			[self.tableView beginUpdates];
+			[self.tableView endUpdates];
+		}
 		[self updateDoneEnabled];
 	}
 }
@@ -505,8 +556,10 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 		NSString *phone = [self trimmed:((UITextField *)[entry objectForKey:@"field"]).text];
 		if (phone.length){
 			NSMutableDictionary *item = [[NSMutableDictionary alloc] init];
+			NSString *display = [entry objectForKey:@"label"];
 			[item setObject:phone forKey:@"phone"];
-			[item setObject:[entry objectForKey:@"label"] forKey:@"label"];
+			[item setObject:display forKey:@"label"];
+			[item setObject:[self addressBookLabelForDisplayLabel:display] forKey:@"abLabel"];
 			[result addObject:item];
 		}
 	}
@@ -551,8 +604,15 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 
 - (void)closeSelf {
 	[self.view endEditing:YES];
-	if (self.navigationController.viewControllers.count > 1)
+	if (self.navigationController.viewControllers.count > 1){
 		[self.navigationController popViewControllerAnimated:YES];
+		return;
+	}
+	UIViewController *presenting = self.presentingViewController;
+	if (!presenting)
+		presenting = self.navigationController.presentingViewController;
+	if (presenting)
+		[presenting dismissViewControllerAnimated:YES completion:nil];
 	else
 		[self dismissViewControllerAnimated:YES completion:nil];
 }
@@ -574,6 +634,8 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 	[self updateDoneEnabled];
 	[self.view endEditing:YES];
 
+	[self saveToAddressBookFirst:first last:last phones:phones];
+
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] addContactWithPhone:primaryPhone firstName:first lastName:last
 								 completion:^(BOOL ok){
@@ -583,9 +645,6 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 			return;
 		me.saving = NO;
 		[me updateDoneEnabled];
-		if (!ok)
-			return;
-		[me saveToAddressBookFirst:first last:last phones:phones];
 		if (me.onDone)
 			me.onDone();
 		[me closeSelf];
@@ -605,6 +664,14 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 	ABAddressBookRequestAccessWithCompletion(book, ^(bool granted, CFErrorRef error){
 		if (!granted){
 			CFRelease(book);
+			dispatch_async(dispatch_get_main_queue(), ^{
+				UIAlertView *alert = [[UIAlertView alloc] initWithTitle:nil
+															   message:@"Telegram does not have access to your contacts."
+															  delegate:nil
+													 cancelButtonTitle:@"OK"
+													 otherButtonTitles:nil];
+				[alert show];
+			});
 			return;
 		}
 		dispatch_async(dispatch_get_main_queue(), ^{
@@ -618,7 +685,7 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 			for (NSDictionary *item in phones){
 				ABMultiValueAddValueAndLabel(phoneValues,
 											 (__bridge CFStringRef)[item objectForKey:@"phone"],
-											 (__bridge CFStringRef)[item objectForKey:@"label"], NULL);
+											 (__bridge CFStringRef)[item objectForKey:@"abLabel"], NULL);
 			}
 			ABRecordSetValue(person, kABPersonPhoneProperty, phoneValues, NULL);
 			CFRelease(phoneValues);
@@ -744,12 +811,28 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 - (BOOL)textField:(UITextField *)textField shouldChangeCharactersInRange:(NSRange)range replacementString:(NSString *)string {
 	if (![self entryForField:textField] || !string.length)
 		return YES;
+
+	NSMutableString *accepted = [[NSMutableString alloc] initWithCapacity:string.length];
 	for (NSUInteger i = 0; i < string.length; i++){
 		unichar c = [string characterAtIndex:i];
-		if (!(c >= '0' && c <= '9') && c != '+')
-			return NO;
+		if ((c >= '0' && c <= '9') || (c == '+' && range.location == 0 && accepted.length == 0))
+			[accepted appendString:[NSString stringWithCharacters:&c length:1]];
 	}
-	return YES;
+	if ([accepted isEqualToString:string])
+		return YES;
+	if (!accepted.length)
+		return NO;
+
+	NSString *current = textField.text ? textField.text : @"";
+	if (range.location + range.length > current.length)
+		return NO;
+	textField.text = [current stringByReplacingCharactersInRange:range withString:accepted];
+	UITextPosition *caret = [textField positionFromPosition:textField.beginningOfDocument
+													offset:(NSInteger)(range.location + accepted.length)];
+	if (caret)
+		textField.selectedTextRange = [textField textRangeFromPosition:caret toPosition:caret];
+	[[NSNotificationCenter defaultCenter] postNotificationName:UITextFieldTextDidChangeNotification object:textField];
+	return NO;
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
@@ -848,18 +931,25 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 	return cell;
 }
 
+- (BOOL)rowCarriesNumber:(NSIndexPath *)indexPath {
+	if (indexPath.section != 0 || indexPath.row >= (NSInteger)self.phoneEntries.count)
+		return NO;
+	NSMutableDictionary *entry = [self.phoneEntries objectAtIndex:(NSUInteger)indexPath.row];
+	return ((UITextField *)[entry objectForKey:@"field"]).text.length > 0;
+}
+
 - (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
-	return indexPath.section == 0 && self.phoneEntries.count > 1;
+	return [self rowCarriesNumber:indexPath];
 }
 
 - (UITableViewCellEditingStyle)tableView:(UITableView *)tableView editingStyleForRowAtIndexPath:(NSIndexPath *)indexPath {
-	if (indexPath.section == 0 && self.phoneEntries.count > 1)
+	if ([self rowCarriesNumber:indexPath])
 		return UITableViewCellEditingStyleDelete;
 	return UITableViewCellEditingStyleNone;
 }
 
 - (BOOL)tableView:(UITableView *)tableView shouldIndentWhileEditingRowAtIndexPath:(NSIndexPath *)indexPath {
-	return indexPath.section == 0;
+	return NO;
 }
 
 - (void)tableView:(UITableView *)tableView commitEditingStyle:(UITableViewCellEditingStyle)editingStyle forRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -872,6 +962,11 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 	[self.phoneEntries removeObjectAtIndex:(NSUInteger)indexPath.row];
 	[tableView deleteRowsAtIndexPaths:[NSArray arrayWithObject:indexPath]
 					 withRowAnimation:UITableViewRowAnimationFade];
+	if (!self.phoneEntries.count){
+		[self.phoneEntries addObject:[self makePhoneEntry]];
+		[tableView insertRowsAtIndexPaths:[NSArray arrayWithObject:[NSIndexPath indexPathForRow:0 inSection:0]]
+						 withRowAnimation:UITableViewRowAnimationFade];
+	}
 	dispatch_async(dispatch_get_main_queue(), ^{
 		[tableView reloadData];
 	});

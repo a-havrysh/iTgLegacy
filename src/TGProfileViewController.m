@@ -23,6 +23,7 @@
 #import "TGChatViewController.h"
 #import "TGMediaViewController.h"
 #import <ImageIO/ImageIO.h>
+#import <QuartzCore/QuartzCore.h>
 
 @interface TGProfilePermissionsController : UITableViewController
 @property (nonatomic, assign) int64_t chatId;
@@ -145,6 +146,8 @@
 @property (nonatomic, strong) NSArray *baseDetailRows;
 @property (nonatomic, strong) NSString *profileBio;
 @property (nonatomic, strong) NSString *profileBirthdayText;
+@property (nonatomic, strong) NSString *birthdayDetail;
+@property (nonatomic, strong) NSString *emojiStatusDetail;
 @property (nonatomic, assign) NSInteger profileCommonGroupCount;
 @property (nonatomic, assign) BOOL fullProfileLoaded;
 @property (nonatomic, strong) NSString *profileNote;
@@ -172,6 +175,7 @@
 @property (nonatomic, assign) NSInteger badgeFileId;
 @property (nonatomic, assign) NSInteger overlayFileId;
 @property (nonatomic, assign) BOOL avatarIsPlaceholder;
+@property (nonatomic, assign) BOOL hasAppearedOnce;
 @end
 
 static const NSInteger kPickerModeChatPhoto = 0;
@@ -183,7 +187,8 @@ static const CGFloat kActionButtonHeight = 45.0f;
 static const CGFloat kButtonsRowHeight = 43.0f;
 static const CGFloat kButtonGutter = 10.0f;
 static const CGFloat kGroupedInset = 9.0f;
-static const CGFloat kTitleContainerHeight = 86.0f;
+static const CGFloat kButtonsRowGutter = 10.0f;
+static const CGFloat kTitleContainerHeight = 89.0f;
 static const CGFloat kProfileAvatarSide = 70.0f;
 static const CGFloat kProfileAvatarRadius = 10.0f;
 static const CGFloat kMemberRowHeight = 49.0f;
@@ -537,25 +542,40 @@ static UIImage *TGProfileStretched(NSString *name) {
 	self.badgeLabel.hidden = NO;
 	self.badgeView.hidden = YES;
 	[self layoutNameBadge];
-	[self setDetail:[self statusRowValueFor:badge emoji:self.badgeLabel.text]
-		   forLabel:@"status"];
+	NSString *statusValue = [self statusRowValueFor:badge emoji:self.badgeLabel.text];
+	self.emojiStatusDetail = statusValue.length ? statusValue : nil;
+	[self setDetail:statusValue forLabel:@"status"];
 
 	NSNumber *thumb = [badge[@"thumbFileId"] isKindOfClass:[NSNumber class]]
 			? badge[@"thumbFileId"] : nil;
 	if (!thumb)
 		thumb = [badge[@"stickerFileId"] isKindOfClass:[NSNumber class]]
 				? badge[@"stickerFileId"] : nil;
-	if ([thumb integerValue] <= 0)
+	NSInteger badgeId = [thumb integerValue];
+	if (badgeId <= 0){
+		self.badgeFileId = 0;
 		return;
+	}
+	if (self.badgeFileId == badgeId){
+		if (self.badgeView.image){
+			self.badgeView.hidden = NO;
+			self.badgeLabel.hidden = YES;
+			[self layoutNameBadge];
+		}
+		return;
+	}
+	self.badgeFileId = badgeId;
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] downloadFile:[thumb integerValue] completion:^(NSString *path){
-		if (!path.length)
+	[[TGClient shared] downloadFile:badgeId completion:^(NSString *path){
+		if (!path.length || weakSelf.badgeFileId != badgeId)
 			return;
 		dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
 			UIImage *image = TGDecodeSquareThumbnail(path, 18.0f);
 			if (!image)
 				return;
 			dispatch_async(dispatch_get_main_queue(), ^{
+				if (weakSelf.badgeFileId != badgeId)
+					return;
 				weakSelf.badgeView.image = image;
 				weakSelf.badgeView.hidden = NO;
 				weakSelf.badgeLabel.hidden = YES;
@@ -645,6 +665,7 @@ static UIImage *TGProfileStretched(NSString *name) {
 		NSString *text = TGProfileText(birthdate[@"text"]);
 		if (!text)
 			return;
+		weakSelf.birthdayDetail = text;
 		[weakSelf setDetail:text forLabel:@"birthday"];
 	}];
 	[[TGClient shared] personalChatForUser:self.userId
@@ -741,6 +762,8 @@ static UIImage *TGProfileStretched(NSString *name) {
 	[self layoutNameBadge];
 
 	self.tableView.tableHeaderView = header;
+	self.tableView.tableFooterView =
+			[[UIView alloc] initWithFrame:CGRectMake(0, 0, width, 7)];
 	self.tableView.backgroundColor = TGProfileListBackground();
 
 	if (self.avatarImage)
@@ -756,8 +779,11 @@ static UIImage *TGProfileStretched(NSString *name) {
 - (void)buildHeaderLabelsInto:(UIView *)header width:(CGFloat)width {
 	TGTheme *theme = [TGTheme shared];
 
+	CGFloat retinaPixel = TGProfileRetinaPixel();
+	CGFloat labelLeft = kProfileAvatarSide + kGroupedInset * 2 + 4;
+
 	UILabel *nameLabel = [[UILabel alloc] initWithFrame:
-			CGRectMake(94, 24, width - 94 - 9, 24)];
+			CGRectMake(labelLeft, 24, width - labelLeft - kGroupedInset, 24)];
 	nameLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	nameLabel.text = TGProfileText(self.name) ?: @"";
 	nameLabel.font = [UIFont boldSystemFontOfSize:19];
@@ -771,19 +797,20 @@ static UIImage *TGProfileStretched(NSString *name) {
 	[header addSubview:nameLabel];
 	self.nameLabel = nameLabel;
 
-	self.badgeLabel = [[UILabel alloc] initWithFrame:CGRectMake(94, 24, 20, 24)];
+	self.badgeLabel = [[UILabel alloc] initWithFrame:CGRectMake(labelLeft, 24, 20, 24)];
 	self.badgeLabel.font = [UIFont systemFontOfSize:17];
 	self.badgeLabel.backgroundColor = [UIColor clearColor];
 	self.badgeLabel.hidden = YES;
 	[header addSubview:self.badgeLabel];
 
-	self.badgeView = [[UIImageView alloc] initWithFrame:CGRectMake(94, 27, 18, 18)];
+	self.badgeView = [[UIImageView alloc] initWithFrame:CGRectMake(labelLeft, 27, 18, 18)];
 	self.badgeView.contentMode = UIViewContentModeScaleAspectFit;
 	self.badgeView.hidden = YES;
 	[header addSubview:self.badgeView];
 
 	self.statusLabel = [[UILabel alloc] initWithFrame:
-			CGRectMake(94, 52, width - 94 - 9, 24)];
+			CGRectMake(labelLeft + 1, 49 + retinaPixel,
+					   width - labelLeft - kGroupedInset, 24)];
 	self.statusLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	self.statusLabel.font = [UIFont systemFontOfSize:14];
 	self.statusLabel.textColor = theme.isDark ? [theme secondaryTextColour]
@@ -824,10 +851,7 @@ static UIImage *TGProfileStretched(NSString *name) {
 }
 
 - (void)cancelAvatarDownload {
-	if (self.avatarFileId > 0){
-		[[TGClient shared] cancelDownloadOfFile:self.avatarFileId onlyIfPending:NO];
-		self.avatarFileId = 0;
-	}
+	self.avatarFileId = 0;
 }
 
 - (void)loadAvatarFile:(NSInteger)fileId {
@@ -857,10 +881,6 @@ static UIImage *TGProfileStretched(NSString *name) {
 }
 
 - (void)dealloc {
-	if (_avatarFileId > 0)
-		[[TGClient shared] cancelDownloadOfFile:_avatarFileId onlyIfPending:NO];
-	if (_badgeFileId > 0)
-		[[TGClient shared] cancelDownloadOfFile:_badgeFileId onlyIfPending:NO];
 	if (_overlayFileId > 0)
 		[[TGClient shared] cancelDownloadOfFile:_overlayFileId onlyIfPending:NO];
 }
@@ -1102,7 +1122,11 @@ static UIImage *TGProfileStretched(NSString *name) {
 		id fileId = [photo isKindOfClass:[NSDictionary class]] ? photo[@"fileId"] : nil;
 		if (![fileId isKindOfClass:[NSNumber class]] || [fileId integerValue] <= 0)
 			return;
-		[[TGClient shared] downloadFile:[fileId integerValue] completion:^(NSString *path){
+		if (weakSelf.photoOverlay != overlay)
+			return;
+		NSInteger fullId = [fileId integerValue];
+		weakSelf.overlayFileId = fullId;
+		[[TGClient shared] downloadFile:fullId completion:^(NSString *path){
 			if (!path.length || weakSelf.photoOverlay != overlay)
 				return;
 			dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
@@ -1110,8 +1134,14 @@ static UIImage *TGProfileStretched(NSString *name) {
 				if (!full)
 					return;
 				dispatch_async(dispatch_get_main_queue(), ^{
-					if (weakSelf.photoOverlay == overlay)
-						big.image = full;
+					if (weakSelf.photoOverlay != overlay)
+						return;
+					weakSelf.overlayFileId = 0;
+					CATransition *fade = [CATransition animation];
+					fade.duration = 0.2;
+					fade.type = kCATransitionFade;
+					[big.layer addAnimation:fade forKey:@"photoFade"];
+					big.image = full;
 				});
 			});
 		}];
@@ -1123,6 +1153,10 @@ static UIImage *TGProfileStretched(NSString *name) {
 	if (!overlay)
 		return;
 	self.photoOverlay = nil;
+	if (self.overlayFileId > 0){
+		[[TGClient shared] cancelDownloadOfFile:self.overlayFileId onlyIfPending:NO];
+		self.overlayFileId = 0;
+	}
 	[UIView animateWithDuration:0.2 animations:^{
 		overlay.alpha = 0;
 	} completion:^(BOOL done){
@@ -1629,8 +1663,10 @@ static UIImage *TGProfileStretched(NSString *name) {
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] groupInfoForChat:self.chatId completion:^(NSDictionary *info){
 		if (![info isKindOfClass:[NSDictionary class]]){
-			weakSelf.managementLoaded = YES;
-			weakSelf.canListMembers = YES;
+			if (!weakSelf.managementLoaded){
+				weakSelf.managementLoaded = YES;
+				weakSelf.canListMembers = !weakSelf.isChannelChat;
+			}
 			[weakSelf rebuildManageRows];
 			return;
 		}
@@ -1638,6 +1674,17 @@ static UIImage *TGProfileStretched(NSString *name) {
 		BOOL admin = [status isEqualToString:@"creator"]
 				|| [status isEqualToString:@"administrator"];
 		weakSelf.isChatAdmin = admin;
+		if (!admin){
+			weakSelf.adminCount = 0;
+			weakSelf.inviteLinkCount = 0;
+			weakSelf.pendingJoinRequests = 0;
+			weakSelf.manageFlagsKnown = NO;
+			weakSelf.signaturesKnown = NO;
+			weakSelf.discussionKnown = NO;
+			weakSelf.canGetStatistics = NO;
+			weakSelf.canHideMembers = NO;
+			weakSelf.canToggleAntiSpam = NO;
+		}
 		weakSelf.canEditChat = TGProfileBool(info[@"canBeEdited"]) || admin;
 		weakSelf.isChannelChat = TGProfileBool(info[@"isChannel"]);
 		weakSelf.isSupergroupChat = TGProfileBool(info[@"isSupergroup"]);
@@ -2482,7 +2529,9 @@ static UIImage *TGProfileStretched(NSString *name) {
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] removePhotoForChat:self.chatId completion:^(BOOL ok){
 		if (ok){
+			[weakSelf cancelAvatarDownload];
 			weakSelf.avatarImage = nil;
+			weakSelf.avatarIsPlaceholder = NO;
 			weakSelf.avatarView.image =
 					[TGIcons avatarWithInitials:TGProfileInitial(weakSelf.name)
 										   size:kProfileAvatarSide
@@ -2696,8 +2745,10 @@ static UIImage *TGProfileStretched(NSString *name) {
 			UIImage *preview = TGDecodeSquareThumbnail(personalPath,
 													   kProfileAvatarSide);
 			if (preview){
+				[weakSelf cancelAvatarDownload];
 				weakSelf.avatarImage = preview;
-				weakSelf.avatarView.image = preview;
+				weakSelf.avatarIsPlaceholder = NO;
+				[weakSelf setAvatarViewImage:preview crossfade:YES];
 			}
 		}
 		if (ok)
@@ -2731,8 +2782,10 @@ static UIImage *TGProfileStretched(NSString *name) {
 		UIImage *preview = TGDecodeSquareThumbnail(path, kProfileAvatarSide);
 		if (!preview)
 			return;
+		[weakSelf cancelAvatarDownload];
 		weakSelf.avatarImage = preview;
-		weakSelf.avatarView.image = preview;
+		weakSelf.avatarIsPlaceholder = NO;
+		[weakSelf setAvatarViewImage:preview crossfade:YES];
 	}];
 }
 
@@ -2852,7 +2905,7 @@ static UIImage *TGProfileStretched(NSString *name) {
 	self.name = [parts componentsJoinedByString:@" "];
 	self.nameLabel.text = self.name;
 	[self layoutNameBadge];
-	if (!self.avatarImage)
+	if (!self.avatarImage && !self.avatarIsPlaceholder)
 		self.avatarView.image =
 				[TGIcons avatarWithInitials:TGProfileInitial(self.name)
 									   size:kProfileAvatarSide
@@ -2891,7 +2944,12 @@ static UIImage *TGProfileStretched(NSString *name) {
 	id photo = user[@"profile_photo"];
 	id small = [photo isKindOfClass:[NSDictionary class]] ? photo[@"small"] : nil;
 	id photoId = [small isKindOfClass:[NSDictionary class]] ? small[@"id"] : nil;
-	if ([photoId isKindOfClass:[NSNumber class]] && !self.avatarImage)
+	if (self.avatarImage)
+		return;
+	if ([photo isKindOfClass:[NSDictionary class]])
+		[self showPlaceholderAvatarFromData:
+				[[TGClient shared] minithumbnailData:photo[@"minithumbnail"]]];
+	if ([photoId isKindOfClass:[NSNumber class]])
 		[self loadAvatarFile:[photoId integerValue]];
 }
 
@@ -2900,9 +2958,11 @@ static UIImage *TGProfileStretched(NSString *name) {
 	NSString *bio = self.profileBio;
 	if (bio)
 		[more insertObject:@[@"about", bio] atIndex:MIN((NSUInteger)2, more.count)];
-	NSString *birthday = self.profileBirthdayText;
+	NSString *birthday = self.profileBirthdayText ?: self.birthdayDetail;
 	if (birthday)
 		[more addObject:@[@"birthday", birthday]];
+	if (self.emojiStatusDetail.length)
+		[more addObject:@[@"status", self.emojiStatusDetail]];
 	if (self.contactRelation.length)
 		[more addObject:@[@"contact", self.contactRelation]];
 	if (self.noteLoaded && (self.isContact || self.profileNote.length))
@@ -3029,6 +3089,9 @@ static UIImage *TGProfileStretched(NSString *name) {
 			[self updateMuteButton];
 		}
 	}
+	if (self.hasAppearedOnce && self.chatId && !self.userId)
+		[self loadManagement];
+	self.hasAppearedOnce = YES;
 	[self refreshStatus];
 }
 
@@ -3096,8 +3159,12 @@ static UIImage *TGProfileStretched(NSString *name) {
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
 	NSString *kind = [self kindForSection:indexPath.section];
 	if ([kind isEqualToString:@"members"]) return kMemberRowHeight;
-	if ([kind isEqualToString:@"actions"] || [kind isEqualToString:@"story"])
+	if ([kind isEqualToString:@"story"])
 		return kButtonsRowHeight;
+	if ([kind isEqualToString:@"actions"]){
+		BOOL lastRow = indexPath.row + 1 >= [self actionRowCount];
+		return lastRow ? kButtonsRowHeight : kButtonsRowHeight + kButtonsRowGutter;
+	}
 	if ([kind isEqualToString:@"delete"]) return kActionButtonHeight;
 	return 44;
 }
@@ -5025,11 +5092,16 @@ static UIImage *TGStatsStretch(NSString *name, int leftCap) {
 	if (!userId)
 		return;
 	NSString *name = TGProfileText([raw objectForKey:@"name"]) ?: @"";
-	TGProfileViewController *profile =
-			[[TGProfileViewController alloc] initWithChatId:self.chatId
-													 userId:userId
-													  title:name];
-	[self.navigationController pushViewController:profile animated:YES];
+	UINavigationController *navigation = self.navigationController;
+	if (!navigation)
+		return;
+	[[TGClient shared] privateChatWithUser:userId completion:^(int64_t chatId){
+		TGProfileViewController *profile =
+				[[TGProfileViewController alloc] initWithChatId:chatId
+														 userId:userId
+														  title:name];
+		[navigation pushViewController:profile animated:YES];
+	}];
 }
 
 @end

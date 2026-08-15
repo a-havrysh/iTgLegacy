@@ -1271,8 +1271,13 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 	}
 }
 
+- (BOOL)hasSearchQuery {
+	return [[self.query stringByTrimmingCharactersInSet:
+			[NSCharacterSet whitespaceAndNewlineCharacterSet]] length] != 0;
+}
+
 - (NSString *)sectionCaptionForMode:(NSInteger)mode {
-	if (self.query.length)
+	if ([self hasSearchQuery])
 		return @"SEARCH RESULTS";
 	switch (mode){
 		case 1: return @"ADMINISTRATORS";
@@ -1873,7 +1878,7 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 	[self updateStatusView];
 	[self updateTitle];
 
-	if (self.query.length){
+	if ([self hasSearchQuery]){
 		[self runSearch];
 		return;
 	}
@@ -1903,7 +1908,7 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 }
 
 - (void)loadMore {
-	if (self.loadingMore || self.loading || self.query.length)
+	if (self.loadingMore || self.loading || [self hasSearchQuery])
 		return;
 	if (self.totalCount <= (NSInteger)self.members.count)
 		return;
@@ -1935,13 +1940,26 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 	}];
 }
 
+- (void)restoreListAfterSearch {
+	self.searchResults = nil;
+	if (self.loading){
+		[self.tableView reloadData];
+		[self updateStatusView];
+		return;
+	}
+	if (self.members.count == 0){
+		[self reload];
+		return;
+	}
+	[self.tableView reloadData];
+	[self updateStatusView];
+}
+
 - (void)runSearch {
 	NSString *text = [self.query stringByTrimmingCharactersInSet:
 			[NSCharacterSet whitespaceAndNewlineCharacterSet]];
 	if (!text.length){
-		self.searchResults = nil;
-		[self.tableView reloadData];
-		[self updateStatusView];
+		[self restoreListAfterSearch];
 		return;
 	}
 
@@ -2011,7 +2029,7 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 
 	NSArray *rows = [self rows];
 	if (rows.count == 0 && self.loaded){
-		if (self.query.length)
+		if ([self hasSearchQuery])
 			[self layoutEmptyPlaceholderWithTitle:@"No results"
 											 help:@"Nobody here matches that name."];
 		else
@@ -2783,10 +2801,8 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 	[NSObject cancelPreviousPerformRequestsWithTarget:self
 											 selector:@selector(runSearch)
 											   object:nil];
-	if (!text.length){
-		self.searchResults = nil;
-		[self.tableView reloadData];
-		[self updateStatusView];
+	if (![self hasSearchQuery]){
+		[self restoreListAfterSearch];
 		return;
 	}
 	[self performSelector:@selector(runSearch) withObject:nil afterDelay:0.3f];
@@ -2807,9 +2823,10 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 - (void)searchBarCancelButtonClicked:(UISearchBar *)searchBar {
 	searchBar.text = @"";
 	self.query = nil;
-	self.searchResults = nil;
-	[self.tableView reloadData];
-	[self updateStatusView];
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+											 selector:@selector(runSearch)
+											   object:nil];
+	[self restoreListAfterSearch];
 	[searchBar resignFirstResponder];
 }
 

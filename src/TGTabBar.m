@@ -14,8 +14,41 @@
 
 @end
 
+static const CGFloat TGTabBarPadHeight = 56.0f;
+static const CGFloat TGTabBarPadItemWidth = 128.0f;
+static const CGFloat TGTabBarPadIconHeight = 36.0f;
+static const CGFloat TGTabBarPadLabelFontSize = 13.0f;
+
 @implementation TGTabBar {
 	int _unreadCount;
+}
+
+- (BOOL)isPadLayout {
+	return UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad;
+}
+
+- (CGFloat)barHeight {
+	return [self isPadLayout] ? TGTabBarPadHeight : 49.0f;
+}
+
+- (CGFloat)itemWidth {
+	NSUInteger count = self.buttonViews.count;
+	CGFloat width = self.frame.size.width;
+	if (count == 0 || width < 1)
+		return 0;
+
+	if ([self isPadLayout])
+		return MIN(TGTabBarPadItemWidth, floorf(width / count));
+
+	float indicatorWidth = floorf(width / count);
+	if (((int)indicatorWidth) % 2 != 0)
+		indicatorWidth -= 1;
+	return indicatorWidth;
+}
+
+- (CGFloat)groupLeft {
+	NSUInteger count = self.buttonViews.count;
+	return floorf((self.frame.size.width - [self itemWidth] * count) / 2);
 }
 
 - (id)initWithFrame:(CGRect)frame {
@@ -23,7 +56,11 @@
 	if (self != nil){
 		self.multipleTouchEnabled = false;
 		self.exclusiveTouch = true;
-		self.backgroundView = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"TabBarBackground"]];
+		UIImage *rawBackgroundImage = [UIImage imageNamed:@"TabBarBackground"];
+		if ([self isPadLayout] && rawBackgroundImage.size.width > 2)
+			rawBackgroundImage = [rawBackgroundImage
+					stretchableImageWithLeftCapWidth:(int)(rawBackgroundImage.size.width / 2) topCapHeight:0];
+		self.backgroundView = [[UIImageView alloc] initWithImage:rawBackgroundImage];
 		self.backgroundView.frame = self.bounds;
 		[self addSubview:self.backgroundView];
 
@@ -49,7 +86,8 @@
 			label.backgroundColor = [UIColor clearColor];
 			label.textColor = [UIColor colorWithRed:0x99 / 255.0f green:0x99 / 255.0f blue:0x99 / 255.0f alpha:1.0f];
 			label.highlightedTextColor = [UIColor whiteColor];
-			label.font = [UIFont boldSystemFontOfSize:10];
+			label.font = [UIFont boldSystemFontOfSize:
+					[self isPadLayout] ? TGTabBarPadLabelFontSize : 10.0f];
 			label.text = names[i];
 			[label sizeToFit];
 			label.isAccessibilityElement = true;
@@ -80,17 +118,29 @@
 	}
 }
 
+- (void)setFrame:(CGRect)frame {
+	if ([self isPadLayout]){
+		CGFloat height = [self barHeight];
+		frame.origin.y += frame.size.height - height;
+		frame.size.height = height;
+	}
+	[super setFrame:frame];
+}
+
 - (void)layoutSelectedView {
 	NSUInteger count = self.buttonViews.count;
 	CGFloat width = self.frame.size.width;
 	if (count == 0 || width < 1)
 		return;
 
-	float indicatorWidth = floorf(width / count);
-	if (((int)indicatorWidth) % 2 != 0)
-		indicatorWidth -= 1;
+	float indicatorWidth = [self itemWidth];
+	float paddingLeft = [self groupLeft];
 
-	float paddingLeft = floorf((width - indicatorWidth * count) / 2);
+	if ([self isPadLayout]){
+		self.selectedView.frame = CGRectMake(paddingLeft + indicatorWidth * _selectedIndex,
+											  0, indicatorWidth, [self barHeight]);
+		return;
+	}
 
 	float additionalWidth = 0;
 	float additionalOffset = 0;
@@ -107,6 +157,17 @@
 	NSUInteger count = self.buttonViews.count;
 	if (count == 0)
 		return -1;
+
+	if ([self isPadLayout]){
+		CGFloat itemWidth = [self itemWidth];
+		if (itemWidth < 1)
+			return -1;
+		CGFloat offset = location.x - [self groupLeft];
+		if (offset < 0 || offset >= itemWidth * count)
+			return -1;
+		return (int)(offset / itemWidth);
+	}
+
 	return MAX(0, MIN((int)count - 1, (int)(location.x / (self.frame.size.width / count))));
 }
 
@@ -228,33 +289,38 @@
 	if (count == 0 || viewSize.width < 1)
 		return;
 
-	float indicatorWidth = floorf(viewSize.width / count);
-	if (((int)indicatorWidth) % 2 != 0)
-		indicatorWidth -= 1;
-
-	float paddingLeft = floorf((viewSize.width - indicatorWidth * count) / 2);
+	float indicatorWidth = [self itemWidth];
+	float paddingLeft = [self groupLeft];
+	BOOL pad = [self isPadLayout];
 	[self layoutSelectedView];
 
 	int index = -1;
-	for (UIView *iconView in self.buttonViews){
+	for (UIImageView *iconView in self.buttonViews){
 		index++;
 
 		CGRect frame = iconView.frame;
+		if (pad){
+			CGSize imageSize = iconView.image.size;
+			if (imageSize.height > 0){
+				CGFloat scale = TGTabBarPadIconHeight / imageSize.height;
+				frame.size = CGSizeMake(floorf(imageSize.width * scale), floorf(imageSize.height * scale));
+			}
+		}
 		frame.origin.x = paddingLeft + index * indicatorWidth + floorf((indicatorWidth - frame.size.width) / 2);
-		frame.origin.y = 4;
+		frame.origin.y = pad ? 1 : 4;
 		iconView.frame = frame;
 
 		if (index == 1 && self.unreadBadgeContainer != nil){
 			CGRect unreadBadgeContainerFrame = self.unreadBadgeContainer.frame;
 			unreadBadgeContainerFrame.origin.x = frame.origin.x + frame.size.width - 9;
-			unreadBadgeContainerFrame.origin.y = 2;
+			unreadBadgeContainerFrame.origin.y = pad ? 0 : 2;
 			self.unreadBadgeContainer.frame = unreadBadgeContainerFrame;
 		}
 
 		UILabel *labelView = self.labelViews[index];
 		CGRect labelFrame = labelView.frame;
 		labelFrame.origin.x = paddingLeft + index * indicatorWidth + floorf((indicatorWidth - labelFrame.size.width) / 2);
-		labelFrame.origin.y = 35;
+		labelFrame.origin.y = pad ? floorf(viewSize.height - labelFrame.size.height - 2) : 35;
 		labelView.frame = labelFrame;
 	}
 }

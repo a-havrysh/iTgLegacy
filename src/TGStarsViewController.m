@@ -459,6 +459,7 @@ enum {
 @property (nonatomic, assign) BOOL balanceKnown;
 @property (nonatomic, assign) long long balance;
 @property (nonatomic, assign) NSInteger giftTotal;
+@property (nonatomic, assign) NSUInteger reloadEpoch;
 @property (nonatomic, strong) NSArray *sectionHeaderViews;
 @property (nonatomic, strong) TGActionSheet *currentActionSheet;
 @end
@@ -520,6 +521,7 @@ enum {
 }
 
 - (void)reloadTapped {
+	self.reloadEpoch = self.reloadEpoch + 1;
 	[self.transactions removeAllObjects];
 	[self.gifts removeAllObjects];
 	[self.subscriptions removeAllObjects];
@@ -550,13 +552,14 @@ enum {
 	if (self.subscriptionsLoading)
 		return;
 	self.subscriptionsLoading = YES;
+	NSUInteger epoch = self.reloadEpoch;
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] starSubscriptionsOnlyExpiring:NO
 											  offset:@""
 										  completion:^(NSDictionary *page)
 	{
 		typeof(self) strongSelf = weakSelf;
-		if (!strongSelf)
+		if (!strongSelf || strongSelf.reloadEpoch != epoch)
 			return;
 		strongSelf.subscriptionsLoading = NO;
 		strongSelf.subscriptionsLoaded = YES;
@@ -584,13 +587,14 @@ enum {
 	if (self.transactionsLoading)
 		return;
 	self.transactionsLoading = YES;
+	NSUInteger epoch = self.reloadEpoch;
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] starTransactionsWithOffset:self.transactionsOffset
 										    limit:kStarsPageSize
 									   completion:^(NSDictionary *page)
 	{
 		typeof(self) strongSelf = weakSelf;
-		if (!strongSelf)
+		if (!strongSelf || strongSelf.reloadEpoch != epoch)
 			return;
 		strongSelf.transactionsLoading = NO;
 		strongSelf.transactionsLoaded = YES;
@@ -628,6 +632,7 @@ enum {
 		return;
 	}
 	self.giftsLoading = YES;
+	NSUInteger epoch = self.reloadEpoch;
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] receivedGiftsForUser:userId
 							   collectionId:0
@@ -636,7 +641,7 @@ enum {
 								 completion:^(NSArray *gifts, NSString *nextOffset, NSInteger total)
 	{
 		typeof(self) strongSelf = weakSelf;
-		if (!strongSelf)
+		if (!strongSelf || strongSelf.reloadEpoch != epoch)
 			return;
 		strongSelf.giftsLoading = NO;
 		strongSelf.giftsLoaded = YES;

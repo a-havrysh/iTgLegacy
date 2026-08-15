@@ -18,14 +18,24 @@ static const CGFloat kStripEmojiFontSize = 24.0f;
 static const NSTimeInterval kStripReopenSuppression = 0.4;
 
 static const CGFloat kChipHeight = 20.0f;
+static const CGFloat kChipRadius = 10.0f;
 static const CGFloat kChipPadding = 7.0f;
 static const CGFloat kChipGap = 4.0f;
 static const CGFloat kChipRowGap = 3.0f;
 static const CGFloat kChipEmojiFontSize = 13.0f;
 static const CGFloat kChipCountFontSize = 11.0f;
 static const CGFloat kChipCountGap = 3.0f;
+static const CGFloat kChipGlyphSlot = 16.0f;
+static const CGFloat kChipGlyphSide = 14.0f;
 
 static const CGFloat kReactionIconSide = 28.0f;
+
+static UIColor *TGReactionColour(unsigned int rgb) {
+	return [UIColor colorWithRed:((rgb >> 16) & 0xff) / 255.0f
+	                       green:((rgb >> 8) & 0xff) / 255.0f
+	                        blue:(rgb & 0xff) / 255.0f
+	                       alpha:1.0f];
+}
 
 static NSString *const kPaidStarGlyph = @"⭐";
 static const NSInteger kPaidUndoSeconds = 5;
@@ -188,8 +198,8 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 	_rightView.frame = CGRectMake(size.width - rightWidth, 0, rightWidth, size.height);
 	_centerView.frame = CGRectMake(leftWidth, 0, MAX(0.0f, size.width - leftWidth - rightWidth), size.height);
 
-	_emojiLabel.frame = CGRectMake(0, 4, size.width, size.height - 8);
-	CGFloat iconSide = MIN(kStripEmojiFontSize + 4.0f, size.height - 10.0f);
+	_emojiLabel.frame = CGRectMake(0, 0, size.width, size.height);
+	CGFloat iconSide = MIN(kStripEmojiFontSize, size.height - 14.0f);
 	_iconView.frame = CGRectMake(floorf((size.width - iconSide) / 2),
 	                             floorf((size.height - iconSide) / 2), iconSide, iconSide);
 	[self bringSubviewToFront:_emojiLabel];
@@ -207,6 +217,8 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 	UIImageView *_arrowBottomView;
 	UIImageView *_topLineView;
 	UIImageView *_bottomLineView;
+	UIImageView *_topLineRightView;
+	UIImageView *_bottomLineRightView;
 	UIActivityIndicatorView *_spinner;
 	UILabel *_noticeLabel;
 	NSMutableArray *_buttons;
@@ -301,10 +313,17 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 		_scrollView.clipsToBounds = YES;
 		[_card addSubview:_scrollView];
 
-		_topLineView = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"MenuButtonTopLine.png"]];
+		UIImage *topLine = [UIImage imageNamed:@"MenuButtonTopLine.png"];
+		UIImage *bottomLine = [UIImage imageNamed:@"MenuButtonBottomLine.png"];
+
+		_topLineView = [[UIImageView alloc] initWithImage:topLine];
 		[_card addSubview:_topLineView];
-		_bottomLineView = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"MenuButtonBottomLine.png"]];
+		_topLineRightView = [[UIImageView alloc] initWithImage:topLine];
+		[_card addSubview:_topLineRightView];
+		_bottomLineView = [[UIImageView alloc] initWithImage:bottomLine];
 		[_card addSubview:_bottomLineView];
+		_bottomLineRightView = [[UIImageView alloc] initWithImage:bottomLine];
+		[_card addSubview:_bottomLineRightView];
 
 		_arrowTopView = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"MenuArrowTop.png"]];
 		[_card addSubview:_arrowTopView];
@@ -479,17 +498,61 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 	[self setEmoji:emoji reason:nil chosen:chosen canAddMore:room];
 }
 
+- (CGFloat)clampedWidth:(CGFloat)width {
+	CGFloat maximumWidth = MAX(60.0f, self.bounds.size.width - 8.0f);
+	width = MIN(width, maximumWidth);
+	if (width < 40.0f)
+		width = 40.0f;
+	return width;
+}
+
+- (void)addPlateOfWidth:(CGFloat)width {
+	UIImage *leftImage = TGReactionStretch(@"MenuButtonLeft.png", -2);
+	UIImage *rightImage = TGReactionStretch(@"MenuButtonRight.png", 0);
+	UIImage *centerImage = TGReactionStretch(@"MenuButtonCenter.png", -1);
+	if (centerImage == nil)
+		return;
+
+	CGFloat leftWidth = leftImage != nil ? leftImage.size.width : 0.0f;
+	CGFloat rightWidth = rightImage != nil ? rightImage.size.width : 0.0f;
+	if (leftWidth + rightWidth > width){
+		leftWidth = 0;
+		rightWidth = 0;
+	}
+
+	UIImageView *center = [[UIImageView alloc] initWithImage:centerImage];
+	center.frame = CGRectMake(leftWidth, 0, MAX(0.0f, width - leftWidth - rightWidth), kStripHeight);
+	[_scrollView addSubview:center];
+
+	if (leftWidth > 0){
+		UIImageView *left = [[UIImageView alloc] initWithImage:leftImage];
+		left.frame = CGRectMake(0, 0, leftWidth, kStripHeight);
+		[_scrollView addSubview:left];
+	}
+	if (rightWidth > 0){
+		UIImageView *right = [[UIImageView alloc] initWithImage:rightImage];
+		right.frame = CGRectMake(width - rightWidth, 0, rightWidth, kStripHeight);
+		[_scrollView addSubview:right];
+	}
+}
+
 - (void)showSpinner {
 	[self clearContent];
 	_loading = YES;
+
+	CGFloat width = [self clampedWidth:64.0f];
+	[self addPlateOfWidth:width];
 
 	_spinner = [[UIActivityIndicatorView alloc]
 			initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhite];
 	[_scrollView addSubview:_spinner];
 	[_spinner startAnimating];
 
-	[self buildPlainCardOfWidth:64.0f];
-	_spinner.center = CGPointMake(32.0f, kStripHeight / 2);
+	_scrollView.contentSize = CGSizeMake(width, kStripHeight);
+	_scrollView.scrollEnabled = NO;
+
+	[self buildPlainCardOfWidth:width];
+	_spinner.center = CGPointMake(floorf(width / 2), floorf(kStripHeight / 2));
 }
 
 - (void)setEmoji:(NSArray *)emoji reason:(NSString *)reason {
@@ -621,10 +684,11 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 
 - (void)buildNoticeWithText:(NSString *)text {
 	UIFont *font = [UIFont boldSystemFontOfSize:14];
-	CGFloat maximumWidth = MAX(80.0f, self.bounds.size.width - 8.0f);
-	CGFloat width = MIN(maximumWidth, [text sizeWithFont:font].width + 34.0f);
+	CGFloat width = [self clampedWidth:[text sizeWithFont:font].width + 34.0f];
 
-	_noticeLabel = [[UILabel alloc] initWithFrame:CGRectMake(10, 0, width - 20, kStripHeight)];
+	[self addPlateOfWidth:width];
+
+	_noticeLabel = [[UILabel alloc] initWithFrame:CGRectMake(12, 0, MAX(10.0f, width - 24), kStripHeight)];
 	_noticeLabel.backgroundColor = [UIColor clearColor];
 	_noticeLabel.font = font;
 	_noticeLabel.textColor = [UIColor whiteColor];
@@ -634,10 +698,6 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 	_noticeLabel.lineBreakMode = NSLineBreakByTruncatingTail;
 	_noticeLabel.text = text;
 
-	UIImage *centerImage = TGReactionStretch(@"MenuButtonCenter.png", -1);
-	UIImageView *plate = [[UIImageView alloc] initWithImage:centerImage];
-	plate.frame = CGRectMake(0, 0, width, kStripHeight);
-	[_scrollView addSubview:plate];
 	[_scrollView addSubview:_noticeLabel];
 
 	_scrollView.contentSize = CGSizeMake(width, kStripHeight);
@@ -647,10 +707,7 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 }
 
 - (void)buildPlainCardOfWidth:(CGFloat)width {
-	CGFloat maximumWidth = MAX(60.0f, self.bounds.size.width - 8.0f);
-	width = MIN(width, maximumWidth);
-	if (width < 40.0f)
-		width = 40.0f;
+	width = [self clampedWidth:width];
 
 	CGRect cardFrame = _card.frame;
 	cardFrame.size = CGSizeMake(width, kStripHeight);
@@ -716,8 +773,6 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 
 	CGFloat topHeight = _topLineView.image.size.height;
 	CGFloat bottomHeight = _bottomLineView.image.size.height;
-	_topLineView.frame = CGRectMake(10, 0, MAX(0.0f, width - 20), topHeight);
-	_bottomLineView.frame = CGRectMake(10, kStripHeight - 4, MAX(0.0f, width - 20), bottomHeight);
 
 	CGFloat arrowWidth = _arrowTopView.image.size.width;
 	CGFloat arrowX = floorf(_arrowLocation - arrowWidth / 2);
@@ -729,6 +784,22 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 
 	_arrowTopView.hidden = !_arrowOnTop;
 	_arrowBottomView.hidden = _arrowOnTop;
+
+	CGFloat lineStart = 10.0f;
+	CGFloat lineEnd = MAX(lineStart, width - 10.0f);
+	CGFloat gapStart = MIN(MAX(lineStart, arrowX), lineEnd);
+	CGFloat gapEnd = MIN(MAX(lineStart, arrowX + arrowWidth), lineEnd);
+
+	CGFloat topLeftWidth = _arrowOnTop ? (gapStart - lineStart) : (lineEnd - lineStart);
+	CGFloat topRightX = _arrowOnTop ? gapEnd : lineEnd;
+	CGFloat bottomLeftWidth = _arrowOnTop ? (lineEnd - lineStart) : (gapStart - lineStart);
+	CGFloat bottomRightX = _arrowOnTop ? lineEnd : gapEnd;
+
+	_topLineView.frame = CGRectMake(lineStart, 0, MAX(0.0f, topLeftWidth), topHeight);
+	_topLineRightView.frame = CGRectMake(topRightX, 0, MAX(0.0f, lineEnd - topRightX), topHeight);
+	_bottomLineView.frame = CGRectMake(lineStart, kStripHeight - 4, MAX(0.0f, bottomLeftWidth), bottomHeight);
+	_bottomLineRightView.frame = CGRectMake(bottomRightX, kStripHeight - 4,
+	                                        MAX(0.0f, lineEnd - bottomRightX), bottomHeight);
 
 	[_card bringSubviewToFront:_arrowTopView];
 	[_card bringSubviewToFront:_arrowBottomView];
@@ -1588,11 +1659,14 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 	self = [super initWithFrame:frame];
 	if (self != nil){
 		_plateView = [[UIImageView alloc] initWithFrame:CGRectZero];
+		_plateView.layer.cornerRadius = kChipRadius;
+		_plateView.layer.masksToBounds = YES;
 		[self addSubview:_plateView];
 
 		_emojiLabel = [[UILabel alloc] initWithFrame:CGRectZero];
 		_emojiLabel.backgroundColor = [UIColor clearColor];
 		_emojiLabel.font = [UIFont systemFontOfSize:kChipEmojiFontSize];
+		_emojiLabel.textAlignment = NSTextAlignmentCenter;
 		[self addSubview:_emojiLabel];
 
 		_countLabel = [[UILabel alloc] initWithFrame:CGRectZero];
@@ -1621,13 +1695,12 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 	CGSize size = self.bounds.size;
 	_plateView.frame = CGRectMake(0, 0, size.width, size.height);
 
-	CGFloat emojiWidth = [_emojiLabel.text sizeWithFont:_emojiLabel.font].width;
-	_emojiLabel.frame = CGRectMake(kChipPadding, 0, emojiWidth, size.height);
-	CGFloat iconSide = MIN(emojiWidth, size.height - 4.0f);
-	_iconView.frame = CGRectMake(kChipPadding + floorf((emojiWidth - iconSide) / 2),
-	                             floorf((size.height - iconSide) / 2), iconSide, iconSide);
+	_emojiLabel.frame = CGRectMake(kChipPadding, 0, kChipGlyphSlot, size.height);
+	_iconView.frame = CGRectMake(kChipPadding + floorf((kChipGlyphSlot - kChipGlyphSide) / 2),
+	                             floorf((size.height - kChipGlyphSide) / 2),
+	                             kChipGlyphSide, kChipGlyphSide);
 
-	CGFloat countX = kChipPadding + emojiWidth + kChipCountGap;
+	CGFloat countX = kChipPadding + kChipGlyphSlot + kChipCountGap;
 	_countLabel.frame = CGRectMake(countX, 0, MAX(0.0f, size.width - countX - kChipPadding), size.height);
 }
 
@@ -1647,10 +1720,9 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 }
 
 + (CGFloat)chipWidthForEmoji:(NSString *)emoji count:(NSInteger)count {
-	CGFloat emojiWidth = [emoji sizeWithFont:[UIFont systemFontOfSize:kChipEmojiFontSize]].width;
 	NSString *countText = [NSString stringWithFormat:@"%d", (int)MAX(1, count)];
 	CGFloat countWidth = [countText sizeWithFont:[UIFont boldSystemFontOfSize:kChipCountFontSize]].width;
-	return floorf(kChipPadding * 2 + emojiWidth + kChipCountGap + countWidth);
+	return ceilf(kChipPadding * 2 + kChipGlyphSlot + kChipCountGap + countWidth);
 }
 
 + (CGFloat)heightForChips:(NSArray *)chips width:(CGFloat)width {
@@ -1691,18 +1763,18 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 	return self;
 }
 
-- (UIImage *)plateChosen:(BOOL)chosen {
-	NSString *name = nil;
-	if (_outgoing)
-		name = chosen ? @"Msg_Out_High_Selected.png" : @"Msg_Out_Selected.png";
-	else
-		name = chosen ? @"Msg_In_High_Selected.png" : @"Msg_In_Selected.png";
+- (void)styleChip:(TGReactionChipView *)view {
+	BOOL chosen = view.chosen;
+	UIColor *fill = TGReactionColour(_outgoing ? 0xAEF57C : 0xDEF0FF);
+	UIColor *accent = TGReactionColour(0x0779D0);
 
-	UIImage *image = [UIImage imageNamed:name];
-	if (image == nil)
-		return nil;
-	int cap = (int)MIN(18.0f, MAX(1.0f, image.size.width / 2 - 1));
-	return [image stretchableImageWithLeftCapWidth:cap topCapHeight:0];
+	view.plateView.image = nil;
+	view.plateView.backgroundColor = fill;
+	view.plateView.layer.cornerRadius = kChipRadius;
+	view.plateView.layer.borderWidth = chosen ? 1.0f : 0.0f;
+	view.plateView.layer.borderColor = chosen ? accent.CGColor : [UIColor clearColor].CGColor;
+
+	view.countLabel.textColor = chosen ? accent : TGReactionColour(0x506E8D);
 }
 
 - (void)setChips:(NSArray *)chips {
@@ -1731,8 +1803,6 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 		return;
 	}
 
-	UIColor *textColour = [[TGTheme shared] primaryTextColour];
-
 	for (NSDictionary *chip in usable){
 		NSString *emoji = [chip objectForKey:@"emoji"];
 		NSInteger count = [[chip objectForKey:@"count"] integerValue];
@@ -1743,11 +1813,9 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 		view.emoji = emoji;
 		view.chosen = chosen;
 		view.custom = custom;
-		view.plateView.image = [self plateChosen:chosen];
 		view.emojiLabel.text = emoji;
-		view.emojiLabel.textColor = textColour;
 		view.countLabel.text = [NSString stringWithFormat:@"%d", (int)MAX(1, count)];
-		view.countLabel.textColor = textColour;
+		[self styleChip:view];
 		[view addTarget:self action:@selector(chipTapped:) forControlEvents:UIControlEventTouchUpInside];
 
 		if (!custom){
@@ -1791,7 +1859,7 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 		return;
 	_outgoing = outgoing;
 	for (TGReactionChipView *view in _chipViews)
-		view.plateView.image = [self plateChosen:view.chosen];
+		[self styleChip:view];
 }
 
 - (void)layoutSubviews {

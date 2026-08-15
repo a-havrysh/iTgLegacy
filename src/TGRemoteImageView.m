@@ -126,6 +126,7 @@ static NSUInteger TGRemoteImageCost(UIImage *image) {
 
 	UIImage *memoryCached = [TGRemoteImageMemoryCache() objectForKey:cacheKey];
 	if (memoryCached){
+		[self stopActiveDownloadUnlessFileId:nil];
 		self.image = memoryCached;
 		return;
 	}
@@ -213,6 +214,8 @@ static NSUInteger TGRemoteImageCost(UIImage *image) {
 
 - (void)cancelLoading {
 	self.cancelled = true;
+	self.loadToken = self.loadToken + 1;
+	[self stopActiveDownloadUnlessFileId:nil];
 }
 
 @end

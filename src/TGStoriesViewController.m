@@ -1663,6 +1663,7 @@ typedef enum
 - (CGRect)captionFrame;
 - (void)beginLoading;
 - (void)showFailure;
+- (BOOL)isRetryPoint:(CGPoint)point;
 
 @end
 
@@ -1744,6 +1745,20 @@ typedef enum
 	[self setNeedsLayout];
 }
 
+- (BOOL)isRetryPoint:(CGPoint)point
+{
+	if (!_failed)
+		return NO;
+	CGRect area = self.bounds;
+	if (area.size.width < 1.0f || area.size.height < 1.0f)
+		return NO;
+	CGRect band = CGRectMake(area.size.width / 3.0f,
+							 CGRectGetMidY(area) - 40.0f,
+							 area.size.width / 3.0f,
+							 80.0f);
+	return CGRectContainsPoint(band, point);
+}
+
 - (UIImage *)image
 {
 	return _imageView.image;
@@ -1793,12 +1808,24 @@ typedef enum
 	_areas = [areas isKindOfClass:[NSArray class]] ? [areas copy] : nil;
 }
 
+- (CGRect)storyFrame
+{
+	CGRect area = self.bounds;
+	CGSize size = CGSizeMake(9.0f, 16.0f);
+	CGFloat scale = MIN(area.size.width / size.width, area.size.height / size.height);
+	CGFloat drawWidth = floorf(size.width * scale);
+	CGFloat drawHeight = floorf(size.height * scale);
+	return CGRectMake(floorf((area.size.width - drawWidth) / 2.0f),
+					  floorf((area.size.height - drawHeight) / 2.0f),
+					  drawWidth, drawHeight);
+}
+
 - (NSDictionary *)areaAtPoint:(CGPoint)point
 {
 	if (_areas.count == 0)
 		return nil;
 
-	CGRect frame = _imageView.frame;
+	CGRect frame = [self storyFrame];
 	if (frame.size.width < 1.0f || frame.size.height < 1.0f)
 		return nil;
 
@@ -1827,7 +1854,11 @@ typedef enum
 	_captionLabel.text = @"";
 	_captionPlate.hidden = YES;
 	_areas = nil;
+	_failed = NO;
+	_statusLabel.hidden = YES;
+	[_spinner stopAnimating];
 	self.itemId = nil;
+	self.photoFileId = nil;
 }
 
 - (CGRect)captionFrame
@@ -1842,17 +1873,13 @@ typedef enum
 	[super layoutSubviews];
 
 	CGRect area = self.bounds;
-	CGSize size = _imageView.image != nil ? _imageView.image.size : CGSizeMake(9.0f, 16.0f);
-	if (size.width <= 0.0f || size.height <= 0.0f)
-		size = CGSizeMake(9.0f, 16.0f);
-
-	CGFloat scale = MIN(area.size.width / size.width, area.size.height / size.height);
-	CGFloat drawWidth = floorf(size.width * scale);
-	CGFloat drawHeight = floorf(size.height * scale);
-	CGRect frame = CGRectMake(floorf((area.size.width - drawWidth) / 2.0f),
-							  floorf((area.size.height - drawHeight) / 2.0f),
-							  drawWidth, drawHeight);
+	CGRect frame = [self storyFrame];
 	_imageView.frame = frame;
+
+	_spinner.center = CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame));
+	_statusLabel.frame = CGRectMake(frame.origin.x,
+									floorf(CGRectGetMidY(frame) - 20.0f),
+									frame.size.width, 40.0f);
 
 	CGFloat plateBottom = MIN(CGRectGetMaxY(frame), area.size.height - _captionBottomInset);
 	CGFloat available = MAX(0.0f, plateBottom - frame.origin.y);
@@ -2532,6 +2559,7 @@ typedef enum
 	}
 	_onScreen = YES;
 	_elapsed = 0.0;
+	[self retryFailedPages];
 	[self updateTimeline];
 }
 
@@ -2550,12 +2578,26 @@ typedef enum
 	[self updateTimeline];
 	[TGReactionPickerView dismiss];
 	[self closeCurrent];
+
+	BOOL leaving = YES;
+	if ([self respondsToSelector:@selector(isMovingFromParentViewController)])
+		leaving = self.isMovingFromParentViewController || self.isBeingDismissed;
+	if (leaving)
+		[self cancelAllPhotoLoads];
 }
 
 - (void)dealloc
 {
 	[_timer invalidate];
 	_timer = nil;
+	for (TGStoryPage *page in _visiblePages)
+	{
+		NSNumber *fileId = page.photoFileId;
+		if (fileId == nil)
+			continue;
+		page.photoFileId = nil;
+		[[TGClient shared] cancelDownloadOfFile:[fileId integerValue] onlyIfPending:NO];
+	}
 }
 
 - (void)didReceiveMemoryWarning
@@ -2570,6 +2612,7 @@ typedef enum
 		TGStoryPage *page = [_visiblePages objectAtIndex:(NSUInteger)i];
 		if (page.pageIndex == _index)
 			continue;
+		[self cancelPhotoForPage:page];
 		[page prepareForReuse];
 		[page removeFromSuperview];
 		[_visiblePages removeObjectAtIndex:(NSUInteger)i];
@@ -2611,6 +2654,7 @@ typedef enum
 
 - (void)recycleSparePage:(TGStoryPage *)page
 {
+	[self cancelPhotoForPage:page];
 	[page prepareForReuse];
 	[page removeFromSuperview];
 	if (_pageQueue.count < TGStoryPageQueueLimit)
@@ -2778,14 +2822,40 @@ typedef enum
 	return [self pageForIndex:_index].image;
 }
 
+- (void)cancelPhotoForPage:(TGStoryPage *)page
+{
+	NSNumber *fileId = page.photoFileId;
+	if (fileId == nil)
+		return;
+	page.photoFileId = nil;
+	[[TGClient shared] cancelDownloadOfFile:[fileId integerValue] onlyIfPending:NO];
+}
+
+- (void)cancelAllPhotoLoads
+{
+	for (TGStoryPage *page in _visiblePages)
+		[self cancelPhotoForPage:page];
+}
+
 - (void)loadPhotoForPage:(TGStoryPage *)page story:(NSDictionary *)story
 {
 	NSNumber *photoId = [story objectForKey:@"photoId"];
 	if (![photoId isKindOfClass:[NSNumber class]])
 	{
+		[self cancelPhotoForPage:page];
 		[page setStoryImage:nil animated:NO];
 		return;
 	}
+
+	if (page.photoFileId != nil && [page.photoFileId isEqualToNumber:photoId] &&
+		page.image != nil)
+	{
+		return;
+	}
+
+	[self cancelPhotoForPage:page];
+	page.photoFileId = photoId;
+	[page beginLoading];
 
 	NSNumber *key = page.itemId;
 	__weak TGStoryPage *weakPage = page;
@@ -2795,31 +2865,60 @@ typedef enum
 							  limit:0
 						 completion:^(NSDictionary *file)
 	{
+		TGStoryPage *page1 = weakPage;
+		if (page1 == nil || ![page1.itemId isEqual:key] ||
+			![page1.photoFileId isEqualToNumber:photoId])
+		{
+			return;
+		}
 		NSString *path = TGStoryString(file, @"path");
 		if (path.length == 0)
+		{
+			page1.photoFileId = nil;
+			[page1 showFailure];
 			return;
-		if (weakPage == nil || ![weakPage.itemId isEqual:key])
-			return;
+		}
 		dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^
 		{
 			@autoreleasepool
 			{
-				if (weakPage == nil || ![weakPage.itemId isEqual:key])
+				TGStoryPage *page2 = weakPage;
+				if (page2 == nil || ![page2.itemId isEqual:key] ||
+					![page2.photoFileId isEqualToNumber:photoId])
+				{
 					return;
+				}
 				UIImage *image = TGDecodeThumbnail(path, TGStoryPhotoPixels);
-				if (image == nil)
-					return;
 				dispatch_async(dispatch_get_main_queue(), ^
 				{
 					TGStoryPage *inner = weakPage;
-					if (inner == nil || ![inner.itemId isEqual:key])
+					if (inner == nil || ![inner.itemId isEqual:key] ||
+						![inner.photoFileId isEqualToNumber:photoId])
+					{
 						return;
+					}
+					if (image == nil)
+					{
+						inner.photoFileId = nil;
+						[inner showFailure];
+						return;
+					}
 					[inner setStoryImage:image animated:YES];
 					[weakSelf updateTimeline];
 				});
 			}
 		});
 	}];
+}
+
+- (void)retryFailedPages
+{
+	for (TGStoryPage *page in _visiblePages)
+	{
+		if (page.image != nil || page.photoFileId != nil)
+			continue;
+		[self loadPage:page];
+	}
 }
 
 - (void)showIndex:(NSInteger)index animated:(BOOL)animated
@@ -3191,6 +3290,12 @@ typedef enum
 	[self setModalPaused:NO];
 
 	TGStoryPage *page = [self pageForIndex:_index];
+	if (page != nil && page.failed &&
+		[page isRetryPoint:[self.view convertPoint:point toView:page]])
+	{
+		[self loadPage:page];
+		return;
+	}
 	if (page != nil && [self handleAreaTapOnPage:page atPoint:point])
 		return;
 

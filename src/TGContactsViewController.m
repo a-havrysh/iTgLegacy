@@ -10,6 +10,7 @@
 #import "TGTheme.h"
 #import "TGImageDecode.h"
 #import "TGNewContactViewController.h"
+#import "RootViewController.h"
 #import "UIView+SafeTint.h"
 #import <QuartzCore/QuartzCore.h>
 #import <AddressBook/AddressBook.h>
@@ -49,6 +50,22 @@ static UIColor *TGContactsRGB(int rgb) {
 						   green:((rgb >> 8) & 0xff) / 255.0f
 							blue:(rgb & 0xff) / 255.0f
 						   alpha:1.0f];
+}
+
+static BOOL TGContactsTabletLayout(void) {
+	return [RootViewController isSplitLayoutActive];
+}
+
+static BOOL TGContactsShowInDetailPane(UIViewController *sender,
+								   UIViewController *target) {
+	(void)sender;
+	if (!target || !TGContactsTabletLayout())
+		return NO;
+	return [RootViewController pushInDetail:target];
+}
+
+static CGFloat TGContactsScreenWidth(void) {
+	return [UIScreen mainScreen].bounds.size.width;
 }
 
 static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
@@ -297,6 +314,7 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 	self.avatarView.layer.cornerRadius = kContactAvatarCorner;
 	self.titleLabel.font = [UIFont systemFontOfSize:19];
 	self.titleLabel.text = @"";
+	self.secondTitleLabel.font = [UIFont boldSystemFontOfSize:19];
 	self.secondTitleLabel.text = @"";
 	self.secondTitleLabel.hidden = YES;
 	self.subtitleLabel.text = @"";
@@ -1085,6 +1103,8 @@ static UIImage *TGSecretKeyImage(NSArray *cells) {
 @property (nonatomic, copy) NSString *myUsernameLink;
 @property (nonatomic, strong) NSDictionary *myBirthdate;
 @property (nonatomic, assign) BOOL myBirthdateKnown;
+@property (nonatomic, assign) BOOL sortByFirstName;
+@property (nonatomic, assign) BOOL displayFirstNameFirst;
 @end
 
 @implementation TGContactsViewController
@@ -1112,26 +1132,43 @@ static NSString *TGContactName(NSDictionary *u) {
 	return TGContactString(u, @"phone");
 }
 
-static NSString *TGContactSortKey(NSDictionary *u) {
-	NSString *last = TGContactString(u, @"last_name");
-	if (last.length)
-		return last;
-	NSString *first = TGContactString(u, @"first_name");
-	if (first.length)
-		return first;
+static NSString *TGContactSortKey(NSDictionary *u, BOOL byFirstName) {
+	NSString *primary = TGContactString(u, byFirstName ? @"first_name" : @"last_name");
+	if (primary.length)
+		return primary;
+	NSString *secondary = TGContactString(u, byFirstName ? @"last_name" : @"first_name");
+	if (secondary.length)
+		return secondary;
 	return TGContactName(u);
 }
 
+- (void)updateContactSortOrder {
+	self.sortByFirstName = (ABPersonGetSortOrdering() != kABPersonSortByLastName);
+	self.displayFirstNameFirst =
+			(ABPersonGetCompositeNameFormat() != kABPersonCompositeNameFormatLastNameFirst);
+}
+
+- (void)addressBookOrderMayHaveChanged {
+	BOOL sortByFirst = self.sortByFirstName;
+	BOOL displayFirst = self.displayFirstNameFirst;
+	[self updateContactSortOrder];
+	if (sortByFirst == self.sortByFirstName && displayFirst == self.displayFirstNameFirst)
+		return;
+	[self refreshTable];
+}
+
 - (void)sortUsers {
+	BOOL byFirstName = self.sortByFirstName;
 	self.users = [self.users sortedArrayUsingComparator:^NSComparisonResult(id a, id b){
-		NSComparisonResult result = [TGContactSortKey(a) caseInsensitiveCompare:TGContactSortKey(b)];
+		NSComparisonResult result = [TGContactSortKey(a, byFirstName)
+				localizedCaseInsensitiveCompare:TGContactSortKey(b, byFirstName)];
 		if (result != NSOrderedSame)
 			return result;
-		NSString *firstA = TGContactString(a, @"first_name");
-		NSString *firstB = TGContactString(b, @"first_name");
-		if (!firstA.length || !firstB.length)
+		NSString *otherA = TGContactString(a, byFirstName ? @"last_name" : @"first_name");
+		NSString *otherB = TGContactString(b, byFirstName ? @"last_name" : @"first_name");
+		if (!otherA.length || !otherB.length)
 			return NSOrderedSame;
-		return [firstA caseInsensitiveCompare:firstB];
+		return [otherA localizedCaseInsensitiveCompare:otherB];
 	}];
 }
 
@@ -1675,11 +1712,11 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 					return;
 				}
 				vc.chatId = chatId;
-				[inner.navigationController pushViewController:vc animated:YES];
+				[inner openTarget:vc];
 			}];
 			return;
 		}
-		[me.navigationController pushViewController:vc animated:YES];
+		[me openTarget:vc];
 	}];
 }
 
@@ -1737,7 +1774,12 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 	sheet.actionSheetStyle = UIActionSheetStyleBlackTranslucent;
 	sheet.tag = 5;
 
-	UIToolbar *bar = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, 320, 44)];
+	CGFloat sheetWidth = self.navigationController.view.bounds.size.width;
+	if (sheetWidth < 1.0f)
+		sheetWidth = self.view.bounds.size.width;
+	if (sheetWidth < 1.0f)
+		sheetWidth = TGContactsScreenWidth();
+	UIToolbar *bar = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, sheetWidth, 44)];
 	bar.barStyle = UIBarStyleBlackTranslucent;
 	UIBarButtonItem *cancel = [[UIBarButtonItem alloc]
 			initWithBarButtonSystemItem:UIBarButtonSystemItemCancel
@@ -1751,7 +1793,8 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 	bar.items = @[cancel, space, done];
 	[sheet addSubview:bar];
 
-	UIDatePicker *picker = [[UIDatePicker alloc] initWithFrame:CGRectMake(0, 44, 320, 216)];
+	UIDatePicker *picker = [[UIDatePicker alloc] initWithFrame:
+			CGRectMake(0, 44, sheetWidth, 216)];
 	picker.datePickerMode = UIDatePickerModeDate;
 	picker.maximumDate = [NSDate date];
 	if (initialDate)
@@ -1761,7 +1804,7 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 	self.birthdaySheet = sheet;
 
 	[sheet showInView:self.navigationController.view];
-	[sheet setBounds:CGRectMake(0, 0, 320, 320)];
+	[sheet setBounds:CGRectMake(0, 0, sheetWidth, 320)];
 }
 
 - (void)dismissBirthdaySheet {
@@ -1893,7 +1936,7 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 		TGChatViewController *vc = [[TGChatViewController alloc] init];
 		vc.chatId = chatId;
 		vc.chatTitle = name;
-		[me.navigationController pushViewController:vc animated:YES];
+		[me openTarget:vc];
 	}];
 }
 
@@ -2238,7 +2281,7 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 	NSMutableArray *titles = [NSMutableArray array];
 	NSMutableArray *groups = [NSMutableArray array];
 	for (NSDictionary *u in self.users){
-		NSString *key = TGContactSortKey(u);
+		NSString *key = TGContactSortKey(u, self.sortByFirstName);
 		NSString *letter = key.length
 				? [key substringToIndex:1].capitalizedString : @"#";
 		if (![letter rangeOfCharacterFromSet:
@@ -2252,8 +2295,6 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 	}
 
 	if (!self.isPickerMode){
-		if (titles.count)
-			titles[0] = [NSNull null];
 		NSArray *actions = [self actionRowIdentifiers];
 		if (actions.count){
 			[titles insertObject:[NSNull null] atIndex:0];
@@ -2350,11 +2391,13 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 	iconView.frame = CGRectMake((CGFloat)(int)((containerWidth - iconSize.width) / 2),
 			-113 + additionalOffset, iconSize.width, iconSize.height);
 
-	CGSize titleSize = [titleLabel sizeThatFits:CGSizeMake(265, 1000)];
+	CGFloat textLimit = MAX(200.0f, overlaySize.width - 55.0f);
+	CGSize titleSize = [titleLabel sizeThatFits:CGSizeMake(MIN(420.0f, textLimit), 1000)];
 	titleLabel.frame = CGRectMake((CGFloat)(int)((containerWidth - titleSize.width) / 2),
 			-10 + additionalOffset, titleSize.width, titleSize.height);
 
-	CGSize subtitleSize = [subtitleLabel sizeThatFits:CGSizeMake(210, 1000)];
+	CGSize subtitleSize = [subtitleLabel sizeThatFits:
+			CGSizeMake(MIN(340.0f, textLimit * 210.0f / 265.0f), 1000)];
 	subtitleLabel.frame = CGRectMake((CGFloat)(int)((containerWidth - subtitleSize.width) / 2),
 			41 + additionalOffset, subtitleSize.width, subtitleSize.height);
 }
@@ -2527,6 +2570,7 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 
 	if (!self.title.length)
 		self.title = @"Contacts";
+	[self updateContactSortOrder];
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
 	self.users = @[];
 	self.photos = [[NSCache alloc] init];
@@ -2573,6 +2617,10 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 	[[NSNotificationCenter defaultCenter] addObserver:self
 			selector:@selector(userStatusChanged:)
 				name:TGUserStatusDidChangeNotification
+			  object:nil];
+	[[NSNotificationCenter defaultCenter] addObserver:self
+			selector:@selector(addressBookOrderMayHaveChanged)
+				name:UIApplicationWillEnterForegroundNotification
 			  object:nil];
 
 	[self updatePhonebookAccess];
@@ -3075,21 +3123,23 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 }
 
 - (NSArray *)sectionIndexTitlesForTableView:(UITableView *)tableView {
-	if (!self.isPickerMode || !self.sectionTitles.count)
+	if (!self.sectionTitles.count || self.filteredUsers)
 		return nil;
-	NSMutableArray *indices = [NSMutableArray arrayWithObject:UITableViewIndexSearch];
+	NSMutableArray *indices = [NSMutableArray array];
+	if (self.searchBar)
+		[indices addObject:UITableViewIndexSearch];
 	for (id title in self.sectionTitles){
 		if ([title isKindOfClass:NSString.class])
 			[indices addObject:title];
 	}
-	return indices.count > 10 ? indices : nil;
+	return (indices.count > 1) ? indices : nil;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView
 		sectionForSectionIndexTitle:(NSString *)title atIndex:(NSInteger)index {
-	if (index == 0){
-		[tableView setContentOffset:CGPointZero animated:NO];
-		return 0;
+	if ([title isEqualToString:UITableViewIndexSearch]){
+		[tableView setContentOffset:CGPointMake(0, -tableView.contentInset.top) animated:NO];
+		return -1;
 	}
 	for (NSUInteger section = 0; section < self.sectionTitles.count; section++){
 		if ([self.sectionTitles[section] isEqual:title])
@@ -3142,14 +3192,22 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 	NSString *last  = [u[@"last_name"] isKindOfClass:NSString.class] ? u[@"last_name"] : @"";
 	BOOL online = [u[@"isOnline"] boolValue];
 
-	if (first.length && last.length){
-		cell.titleLabel.font = [UIFont systemFontOfSize:19];
-		cell.titleLabel.text = first;
-		cell.secondTitleLabel.text = last;
+	UIFont *regular = [UIFont systemFontOfSize:19];
+	UIFont *bold = [UIFont boldSystemFontOfSize:19];
+	NSString *primary = self.displayFirstNameFirst ? first : last;
+	NSString *secondary = self.displayFirstNameFirst ? last : first;
+	BOOL boldPrimary = (self.displayFirstNameFirst == self.sortByFirstName);
+
+	if (primary.length && secondary.length){
+		cell.titleLabel.font = boldPrimary ? bold : regular;
+		cell.secondTitleLabel.font = boldPrimary ? regular : bold;
+		cell.titleLabel.text = primary;
+		cell.secondTitleLabel.text = secondary;
 		cell.secondTitleLabel.hidden = NO;
 	} else {
-		cell.titleLabel.font = [UIFont boldSystemFontOfSize:19];
-		cell.titleLabel.text = TGContactName(u);
+		cell.titleLabel.font = bold;
+		cell.titleLabel.text = primary.length ? primary
+				: (secondary.length ? secondary : TGContactName(u));
 		cell.secondTitleLabel.text = @"";
 		cell.secondTitleLabel.hidden = YES;
 	}
@@ -3227,10 +3285,23 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 	return cell;
 }
 
-- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+- (BOOL)keepsSelectionForDetailPane {
+	return !self.isPickerMode && TGContactsTabletLayout();
+}
 
+- (void)openTarget:(UIViewController *)target {
+	if (!target)
+		return;
+	if (!self.isPickerMode && TGContactsShowInDetailPane(self, target))
+		return;
+	[self.navigationController pushViewController:target animated:YES];
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	NSString *action = [self actionIdentifierAtIndexPath:indexPath];
+	if (action || ![self keepsSelectionForDetailPane])
+		[tableView deselectRowAtIndexPath:indexPath animated:YES];
+
 	if (action){
 		if ([action isEqualToString:TGContactActionInvite])
 			[self inviteFriendsTapped];
@@ -3243,8 +3314,10 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 		return;
 	}
 	NSDictionary *u = [self userAtIndexPath:indexPath];
-	if (!u)
+	if (!u){
+		[tableView deselectRowAtIndexPath:indexPath animated:YES];
 		return;
+	}
 	NSString *name = TGContactName(u);
 	__weak typeof(self) weakSelf = self;
 
@@ -3255,6 +3328,7 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 		if (!me)
 			return;
 		if (chatId == 0){
+			[me.tableView deselectRowAtIndexPath:indexPath animated:YES];
 			[[[UIAlertView alloc] initWithTitle:nil
 									   message:@"Could not open this chat."
 									  delegate:nil
@@ -3265,7 +3339,7 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 		TGChatViewController *vc = [[TGChatViewController alloc] init];
 		vc.chatId = chatId;
 		vc.chatTitle = name;
-		[me.navigationController pushViewController:vc animated:YES];
+		[me openTarget:vc];
 	}];
 }
 

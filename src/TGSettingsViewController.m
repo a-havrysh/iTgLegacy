@@ -1,4 +1,5 @@
 #import "TGSettingsViewController.h"
+#import "RootViewController.h"
 #import "TGClient.h"
 #import "TGTheme.h"
 #import "TGThemeFile.h"
@@ -98,6 +99,29 @@ NSString *const TGSettingsStoriesEnabledChangedNotification =
 		@"TGStoriesEnabledChanged";
 NSString *const TGSettingsChatListLayoutChangedNotification =
 		@"TGChatListLayoutChanged";
+
+static BOOL TGSettingsTabletLayout(void) {
+	return [RootViewController isSplitLayoutActive];
+}
+
+static BOOL TGSettingsShowInDetailPane(UIViewController *sender,
+								   UIViewController *target) {
+	(void)sender;
+	if (!target || !TGSettingsTabletLayout())
+		return NO;
+	return [RootViewController pushInDetail:target];
+}
+
+static CGFloat TGSettingsScreenWidth(void) {
+	return [UIScreen mainScreen].bounds.size.width;
+}
+
+static CGFloat TGSettingsGroupedInset(CGFloat width) {
+	if (width < 400.0f)
+		return 0.0f;
+	CGFloat content = MIN(width, 678.0f);
+	return (CGFloat)(int)((width - content) / 2.0f);
+}
 
 static inline UIColor *TGSettingsRGB(unsigned int value) {
 	return [UIColor colorWithRed:((value >> 16) & 0xff) / 255.0f
@@ -1013,6 +1037,8 @@ static NSString *TGSettingsDuration(double seconds) {
 @property (nonatomic, assign) NSInteger activeProxyId;
 @property (nonatomic, assign) BOOL pickingProfilePhoto;
 @property (nonatomic, strong) NSArray *photoSheetActions;
+@property (nonatomic, assign) BOOL detailPaneShown;
+- (void)openViewController:(UIViewController *)next;
 + (NSString *)pollVoteSource;
 - (void)writeReactionSource:(NSString *)source
 			 pollVoteSource:(NSString *)pollVoteSource
@@ -1248,6 +1274,16 @@ static NSString *TGSettingsDuration(double seconds) {
 - (void)openPage:(TGSettingsPage)page {
 	TGSettingsViewController *next = [[TGSettingsViewController alloc] init];
 	next.page = page;
+	[self openViewController:next];
+}
+
+- (void)openViewController:(UIViewController *)next {
+	if (!next)
+		return;
+	if (self.page == TGSettingsPageRoot && TGSettingsShowInDetailPane(self, next)){
+		self.detailPaneShown = YES;
+		return;
+	}
 	[self.navigationController pushViewController:next animated:YES];
 }
 
@@ -1257,7 +1293,7 @@ static NSString *TGSettingsDuration(double seconds) {
 /// beside it, status underneath. This is your own profile, so the name and the
 /// number are the account's.
 - (void)buildHeader {
-	CGFloat width = self.view.bounds.size.width ?: 320;
+	CGFloat width = self.view.bounds.size.width ?: TGSettingsScreenWidth();
 	UIView *header = [[UIView alloc] initWithFrame:
 			CGRectMake(0, 0, width, kHeaderHeight)];
 	header.backgroundColor = [UIColor clearColor];
@@ -1278,8 +1314,9 @@ static NSString *TGSettingsDuration(double seconds) {
 - (void)buildHeaderAvatarIn:(UIView *)header
 					forName:(NSString *)name
 					account:(NSDictionary *)me {
+	CGFloat inset = TGSettingsGroupedInset(header.bounds.size.width);
 	self.avatarView = [[UIImageView alloc] initWithFrame:
-			CGRectMake(9, 14, kHeaderAvatar, kHeaderAvatar)];
+			CGRectMake(9 + inset, 14, kHeaderAvatar, kHeaderAvatar)];
 	self.avatarView.layer.cornerRadius = 10.0f;
 	self.avatarView.clipsToBounds = YES;
 	self.avatarView.contentMode = UIViewContentModeScaleAspectFill;
@@ -1298,8 +1335,9 @@ static NSString *TGSettingsDuration(double seconds) {
 						 width:(CGFloat)width
 						  dark:(BOOL)dark
 						  name:(NSString *)name {
+	CGFloat inset = TGSettingsGroupedInset(width);
 	UILabel *nameLabel = [[UILabel alloc] initWithFrame:
-			CGRectMake(94, 24, width - 94 - 9, 24)];
+			CGRectMake(94 + inset, 24, MAX(20.0f, width - 94 - 9 - inset * 2), 24)];
 	nameLabel.text = name;
 	nameLabel.font = [UIFont boldSystemFontOfSize:19];
 	nameLabel.textColor = dark ? [[TGTheme shared] primaryTextColour]
@@ -1318,8 +1356,9 @@ static NSString *TGSettingsDuration(double seconds) {
 - (void)buildHeaderStatusLabelIn:(UIView *)header
 						   width:(CGFloat)width
 							dark:(BOOL)dark {
+	CGFloat inset = TGSettingsGroupedInset(width);
 	UILabel *status = [[UILabel alloc] initWithFrame:
-			CGRectMake(94, 52, width - 94 - 9, 24)];
+			CGRectMake(94 + inset, 52, MAX(20.0f, width - 94 - 9 - inset * 2), 24)];
 	status.text = @"online";
 	status.font = [UIFont systemFontOfSize:14];
 	status.textColor = dark ? [[TGTheme shared] secondaryTextColour]
@@ -1394,10 +1433,28 @@ static NSString *TGSettingsDuration(double seconds) {
 	}];
 }
 
+- (void)viewDidLayoutSubviews {
+	[super viewDidLayoutSubviews];
+	[self layoutHeaderForWidth:self.tableView.bounds.size.width];
+}
+
+- (void)layoutHeaderForWidth:(CGFloat)width {
+	UIView *header = self.tableView.tableHeaderView;
+	if (!header || !self.headerNameLabel || width <= 0)
+		return;
+	if (fabs(header.bounds.size.width - width) > 0.5f)
+		header.frame = CGRectMake(0, 0, width, kHeaderHeight);
+	CGFloat inset = TGSettingsGroupedInset(width);
+	self.avatarView.frame = CGRectMake(9 + inset, 14, kHeaderAvatar, kHeaderAvatar);
+	CGFloat labelWidth = MAX(20.0f, width - 94 - 9 - inset * 2);
+	self.headerNameLabel.frame = CGRectMake(94 + inset, 24, labelWidth, 24);
+	self.headerStatusLabel.frame = CGRectMake(94 + inset, 52, labelWidth, 24);
+}
+
 - (void)buildVersionFooter {
 	NSDictionary *info = [NSBundle mainBundle].infoDictionary;
 	UILabel *label = [[UILabel alloc] initWithFrame:
-			CGRectMake(0, 0, self.view.bounds.size.width ?: 320, 40)];
+			CGRectMake(0, 0, self.view.bounds.size.width ?: TGSettingsScreenWidth(), 40)];
 	label.text = [NSString stringWithFormat:@"iTgLegacy %@ (%@) armv7",
 			info[@"CFBundleShortVersionString"] ?: @"", info[@"CFBundleVersion"] ?: @""];
 	label.font = [UIFont systemFontOfSize:14];
@@ -1435,9 +1492,10 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 }
 
 - (CGFloat)commentHeightForCaption:(NSString *)caption {
-	CGFloat width = self.tableView.bounds.size.width ?: 320;
+	CGFloat width = self.tableView.bounds.size.width ?: TGSettingsScreenWidth();
+	CGFloat inset = TGSettingsGroupedInset(width);
 	CGSize size = [caption sizeWithFont:[UIFont systemFontOfSize:14]
-					  constrainedToSize:CGSizeMake(width - 12 * 2, 1000)
+					  constrainedToSize:CGSizeMake(MAX(40.0f, width - 12 * 2 - inset * 2), 1000)
 						  lineBreakMode:NSLineBreakByWordWrapping];
 	return size.height + 7 * 2;
 }
@@ -1449,14 +1507,16 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	if (!caption.length)
 		return nil;
 
-	CGFloat width = self.tableView.bounds.size.width ?: 320;
+	CGFloat width = self.tableView.bounds.size.width ?: TGSettingsScreenWidth();
+	CGFloat inset = TGSettingsGroupedInset(width);
 	UIView *container = [[UIView alloc] initWithFrame:
 			CGRectMake(0, 0, width, [self commentHeightForCaption:caption])];
 	container.backgroundColor = [UIColor clearColor];
 	container.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 
 	UILabel *label = [[UILabel alloc] initWithFrame:
-			CGRectMake(12, 7, width - 24, container.bounds.size.height - 14)];
+			CGRectMake(12 + inset, 7, MAX(40.0f, width - 24 - inset * 2),
+					container.bounds.size.height - 14)];
 	label.autoresizingMask = UIViewAutoresizingFlexibleWidth
 			| UIViewAutoresizingFlexibleHeight;
 	label.contentMode = UIViewContentModeCenter;
@@ -2538,7 +2598,8 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	if (!rows)
 		rows = @[@[@"Notifications and Sounds", @"notifications"],
 				 @[@"Blocked Users",            @"privacy"],
-				 @[@"Chat Settings",            @"chat"]];
+				 @[@"Chat Settings",            @"chat"],
+				 @[@"Chat Folders",             @"folder"]];
 	return rows;
 }
 
@@ -2549,7 +2610,6 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 				 @[@"Privacy and Security",     @"privacy"],
 				 @[@"Data and Storage",         @"data"],
 				 @[@"Stickers",                 @"react"],
-				 @[@"Folders",                  @"folder"],
 				 @[@"Chat List",                @"folder"],
 				 @[@"Proxy",                    @"data"],
 				 @[@"Devices",                  @"devices"],
@@ -3897,8 +3957,18 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	self.detailPaneShown = NO;
+	[self handleSelectionAtIndexPath:indexPath inTable:tableView];
+	if (self.detailPaneShown){
+		[tableView selectRowAtIndexPath:indexPath animated:NO
+						 scrollPosition:UITableViewScrollPositionNone];
+		return;
+	}
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+}
 
+- (void)handleSelectionAtIndexPath:(NSIndexPath *)indexPath
+						   inTable:(UITableView *)tableView {
 	if ((NSInteger)self.page == TGSettingsPageAutoDownload){
 		[self tapAutoDownload:indexPath];
 		return;
@@ -3959,7 +4029,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 
 	if (kind == TGSettingsRootKindAccount){
 		UIViewController *profile = [[TGEditProfileViewController alloc] init];
-		[self.navigationController pushViewController:profile animated:YES];
+		[self openViewController:profile];
 		return;
 	}
 
@@ -3996,18 +4066,23 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 }
 
 - (void)tapGeneralRow:(NSInteger)row {
-	if (row == 0)
+	if (row == 0){
 		[self openPage:TGSettingsPageNotifications];
-	else if (row == 1)
+	} else if (row == 1){
 		[self openPage:TGSettingsPageBlocked];
-	else
+	} else if (row == 2){
 		[self openPage:TGSettingsPageAppearance];
+	} else {
+		TGFoldersViewController *folders = [[TGFoldersViewController alloc] init];
+		folders.page = TGFoldersPageList;
+		[self openViewController:folders];
+	}
 }
 
 - (void)tapData:(NSIndexPath *)indexPath {
 	if (indexPath.section == 0 && indexPath.row == 0){
 		TGStorageViewController *storage = [[TGStorageViewController alloc] init];
-		[self.navigationController pushViewController:storage animated:YES];
+		[self openViewController:storage];
 	} else if (indexPath.section == 0 && indexPath.row == 1){
 		[self openPage:(TGSettingsPage)TGSettingsPageDataUsage];
 	} else if (indexPath.section == 0 && indexPath.row == 2){
@@ -4024,7 +4099,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		case 0: {
 			TGAccountSettingsViewController *account =
 					[[TGAccountSettingsViewController alloc] init];
-			[self.navigationController pushViewController:account animated:YES];
+			[self openViewController:account];
 			break;
 		}
 		case 1: [self openPage:TGSettingsPagePrivacy]; break;
@@ -4033,27 +4108,20 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 			TGStickersViewController *stickers =
 					[[TGStickersViewController alloc] init];
 			stickers.page = TGStickersPageRoot;
-			[self.navigationController pushViewController:stickers animated:YES];
+			[self openViewController:stickers];
 			break;
 		}
-		case 4: {
-			TGFoldersViewController *folders =
-					[[TGFoldersViewController alloc] init];
-			folders.page = TGFoldersPageList;
-			[self.navigationController pushViewController:folders animated:YES];
-			break;
-		}
-		case 5:
+		case 4:
 			[self openPage:(TGSettingsPage)TGSettingsPageChatListLayout];
 			break;
-		case 6: {
+		case 5: {
 			TGProxyViewController *proxy = [[TGProxyViewController alloc] init];
-			[self.navigationController pushViewController:proxy animated:YES];
+			[self openViewController:proxy];
 			break;
 		}
-		case 7: {
+		case 6: {
 			UIViewController *sessions = [[TGSessionsViewController alloc] init];
-			[self.navigationController pushViewController:sessions animated:YES];
+			[self openViewController:sessions];
 			break;
 		}
 		default: [self openPage:TGSettingsPageLanguage]; break;
@@ -4093,7 +4161,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	else
 		next = [[TGSavedMessagesTagsViewController alloc] initWithTopicId:0];
 	if (next)
-		[self.navigationController pushViewController:next animated:YES];
+		[self openViewController:next];
 }
 
 /// The three group screens all want a chat, and settings has none, so the row
@@ -4155,7 +4223,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		events.chatTitle = title;
 		next = events;
 	}
-	[self.navigationController pushViewController:next animated:YES];
+	[self openViewController:next];
 }
 
 - (void)openHelp:(NSInteger)row {
@@ -4201,7 +4269,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	@catch (NSException *exception) {
 		return;
 	}
-	[self.navigationController pushViewController:chat animated:YES];
+	[self openViewController:chat];
 }
 
 - (void)tapPrivacy:(NSIndexPath *)indexPath {

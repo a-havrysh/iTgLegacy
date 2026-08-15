@@ -34,6 +34,12 @@ static const CGFloat kSwipeEdgeDistance = 6.0f;
 static const CGFloat kSwipeButtonTop = 20.0f;
 static const CGFloat kSwipeButtonGap = 6.0f;
 
+@protocol TGChatListSplitHost <NSObject>
+@optional
+- (BOOL)isSplitLayoutActive;
+- (void)showDetailController:(UIViewController *)controller;
+@end
+
 static UIColor *TGChatListTitleColour(void) {
 	static UIColor *colour = nil;
 	if (!colour)
@@ -731,6 +737,7 @@ static const CGFloat kFolderStripHeight = 44.0f;
 static const CGFloat kLoginBannerHeight = 76.0f;
 static const CGFloat kFolderBannerHeight = 62.0f;
 static const NSUInteger kRowDetailCacheLimit = 200;
+static const NSInteger kAvatarPrefetchRows = 4;
 
 static BOOL TGStoriesTrayEnabled(void) {
 	id stored = [[NSUserDefaults standardUserDefaults] objectForKey:TGChatListStoriesTrayKey];
@@ -809,6 +816,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 @property (nonatomic, strong) NSDictionary *current;
 @property (nonatomic, assign) NSInteger openedStoryId;
 @property (nonatomic, assign) int64_t openedChatId;
+@property (nonatomic, assign) NSInteger loadingPhotoFileId;
 @property (nonatomic, strong) NSArray *sheetItems;
 @end
 
@@ -931,6 +939,10 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 }
 
 - (void)closeOpenStory {
+	if (self.loadingPhotoFileId){
+		[[TGClient shared] cancelDownloadOfFile:self.loadingPhotoFileId onlyIfPending:NO];
+		self.loadingPhotoFileId = 0;
+	}
 	if (!self.openedStoryId)
 		return;
 	[[TGClient shared] closeStory:self.openedStoryId inChat:self.openedChatId];
@@ -1002,11 +1014,17 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	id photoId = story[@"photoId"];
 	if (![photoId isKindOfClass:[NSNumber class]])
 		return;
+	NSInteger photoFileId = [photoId integerValue];
+	self.loadingPhotoFileId = photoFileId;
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] downloadFile:[photoId integerValue] completion:^(NSString *reply){
+	[[TGClient shared] downloadFile:photoFileId completion:^(NSString *reply){
 		TGStoryViewController *inner = weakSelf;
+		if (!inner || inner.openedStoryId != storyId)
+			return;
+		if (inner.loadingPhotoFileId == photoFileId)
+			inner.loadingPhotoFileId = 0;
 		NSString *path = TGReplyString(reply);
-		if (!inner || !path.length || inner.openedStoryId != storyId)
+		if (!path.length)
 			return;
 		UIImage *raw = [UIImage imageWithContentsOfFile:path];
 		if (!raw)
@@ -1212,7 +1230,12 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 /// Search sits above the list, the way every client puts it - pull down or
 /// just start typing.
 - (void)buildSearchBar {
-	self.searchBar = [[UISearchBar alloc] initWithFrame:CGRectMake(0, 0, 320, 44)];
+	CGFloat searchWidth = self.view.bounds.size.width;
+	if (searchWidth < 1)
+		searchWidth = self.tableView.bounds.size.width;
+	if (searchWidth < 1)
+		searchWidth = [UIScreen mainScreen].applicationFrame.size.width;
+	self.searchBar = [[UISearchBar alloc] initWithFrame:CGRectMake(0, 0, searchWidth, 44)];
 	self.searchBar.delegate = self;
 	self.searchBar.placeholder = @"Search";
 	[self styleSearchBar];
@@ -1459,7 +1482,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	[self applyTitleView];
 	[self rebuildTableHeader];
 	NSIndexPath *selected = [self.tableView indexPathForSelectedRow];
-	if (selected)
+	if (selected && ![self splitLayoutActive])
 		[self.tableView deselectRowAtIndexPath:selected animated:animated];
 	if ([self.tabBarController isKindOfClass:[RootViewController class]])
 		[(RootViewController *)self.tabBarController updateUnreadBadge];
@@ -1481,6 +1504,20 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	if (self.emptyContainer && !self.emptyContainer.hidden)
 		[self updateEmptyState];
 	[self loadMoreIfNeeded];
+	[self fetchMissingAvatarsThrottled];
+}
+
+- (void)scrollViewDidEndDragging:(UIScrollView *)scrollView willDecelerate:(BOOL)decelerate {
+	if (!decelerate)
+		[self fetchMissingAvatars];
+}
+
+- (void)scrollViewDidEndDecelerating:(UIScrollView *)scrollView {
+	[self fetchMissingAvatars];
+}
+
+- (void)scrollViewDidEndScrollingAnimation:(UIScrollView *)scrollView {
+	[self fetchMissingAvatars];
 }
 
 - (void)viewDidLayoutSubviews {
@@ -1604,10 +1641,15 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 }
 
 - (void)rebuildTableHeader {
-	CGFloat width = self.tableView.bounds.size.width ?: 320;
+	CGFloat width = self.tableView.bounds.size.width;
+	if (width < 1)
+		width = self.view.bounds.size.width;
+	if (width < 1)
+		width = [UIScreen mainScreen].applicationFrame.size.width;
 	NSUInteger archivedCount = TGReplyArray([TGClient shared].archivedChats).count;
 	BOOL showArchive = !self.showsArchive && self.folderId == 0 && archivedCount > 0;
-	BOOL showTray = !self.showsArchive && TGStoriesTrayEnabled() && self.storyPosters.count > 0;
+	BOOL showTray = !self.showsArchive && TGStoriesTrayEnabled() &&
+			TGReplyArray(self.storyPosters).count > 0;
 	BOOL showStrip = [self usesFolderStrip];
 	BOOL showLogin = !self.showsArchive && self.unconfirmedSession != nil;
 	BOOL showFolderBanner = !self.showsArchive && self.folderId != 0 &&
@@ -2109,7 +2151,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 - (UIButton *)folderStripOptionsButtonWithFont:(UIFont *)font
 										   left:(CGFloat)left
 									normalPlate:(UIImage *)normalPlate {
-	NSString *caption = @"Edit Folders…";
+	NSString *caption = @"Edit";
 	CGFloat buttonWidth = (int)[caption sizeWithFont:font].width + 24;
 	UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
 	button.frame = CGRectMake(left, (int)((kFolderStripHeight - 30) / 2), buttonWidth, 30);
@@ -2117,7 +2159,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	[button setTitle:caption forState:UIControlStateNormal];
 	button.titleLabel.font = font;
 	[self styleFolderStripButton:button selected:NO];
-	[button addTarget:self action:@selector(listOptionsTapped)
+	[button addTarget:self action:@selector(openFolderManagement)
 	 forControlEvents:UIControlEventTouchUpInside];
 	return button;
 }
@@ -2181,8 +2223,6 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	[self reload];
 }
 
-/// The tray of posters with live stories. It exists only while somebody has
-/// one, so an account with no stories keeps the 2013 screen exactly as it was.
 - (UIView *)storyTrayWithWidth:(CGFloat)width top:(CGFloat)top {
 	TGTheme *theme = [TGTheme shared];
 	UIView *band = [[UIView alloc] initWithFrame:CGRectMake(0, top, width, kStoryTrayHeight)];
@@ -2294,7 +2334,8 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	}
 
 	NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
-	if (now - self.lastStorySweep < 20.0 && self.storyPosters)
+	if (now - self.lastStorySweep < 20.0 &&
+		(self.storyPosters || self.storyProbesPending > 0))
 		return;
 	self.lastStorySweep = now;
 
@@ -2385,6 +2426,27 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	}
 }
 
+- (BOOL)splitLayoutActive {
+	id<TGChatListSplitHost> root = (id<TGChatListSplitHost>)self.tabBarController;
+	if (![root isKindOfClass:[RootViewController class]])
+		return NO;
+	if (![root respondsToSelector:@selector(isSplitLayoutActive)])
+		return NO;
+	return [root isSplitLayoutActive];
+}
+
+- (void)presentChatController:(UIViewController *)controller {
+	if (![self splitLayoutActive]){
+		[self.navigationController pushViewController:controller animated:YES];
+		return;
+	}
+	id<TGChatListSplitHost> root = (id<TGChatListSplitHost>)self.tabBarController;
+	if ([root respondsToSelector:@selector(showDetailController:)])
+		[root showDetailController:controller];
+	else
+		[self.navigationController pushViewController:controller animated:YES];
+}
+
 /// Saved Messages is your own chat; it is not always in the list, and every
 /// client keeps a way in regardless.
 - (void)openSavedMessages {
@@ -2394,10 +2456,30 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	TGChatViewController *vc = [[TGChatViewController alloc] init];
 	vc.chatId = chatId;
 	vc.chatTitle = @"Saved Messages";
-	[self.navigationController pushViewController:vc animated:YES];
+	[self presentChatController:vc];
 }
 
 - (void)composeTapped {
+	UIView *host = self.navigationController.view;
+	UIView *button = self.navigationItem.rightBarButtonItem.customView;
+	CGPoint where = button != nil
+			? [button convertPoint:CGPointMake(CGRectGetMidX(button.bounds),
+											   CGRectGetMaxY(button.bounds)) toView:host]
+			: CGPointMake(host.bounds.size.width - 30, 54);
+
+	NSArray *items = @[@{@"title": @"New Message"}, @{@"title": @"Add Story"}];
+
+	__weak typeof(self) weakSelf = self;
+	[TGPopupMenu showItems:items atPoint:where inView:host
+				  onChoice:^(NSInteger choice, NSString *title){
+		if (choice == 1)
+			[weakSelf addStory];
+		else
+			[weakSelf startNewMessage];
+	}];
+}
+
+- (void)startNewMessage {
 	TGContactsViewController *contacts = [[TGContactsViewController alloc] init];
 	contacts.title = @"New Message";
 	contacts.isPickerMode = YES;
@@ -2425,9 +2507,9 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 			me.loadingMore = NO;
 			me.chats = TGChatRows(reply);
 			[me.tableView reloadData];
+			[me refreshUnreadCounters];
 			[me rebuildTableHeader];
 			[me fetchMissingAvatars];
-			[me refreshUnreadCounters];
 			[me refreshStoryPosters];
 			[me refreshFolderNewChats];
 		}];
@@ -2437,9 +2519,9 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	self.chats = TGChatRows([TGClient shared].chats);
 	self.loadingMore = NO;
 	[self.tableView reloadData];
+	[self refreshUnreadCounters];
 	[self rebuildTableHeader];
 	[self fetchMissingAvatars];
-	[self refreshUnreadCounters];
 	[self refreshStoryPosters];
 	[self refreshFolderNewChats];
 }
@@ -2591,20 +2673,12 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 							cancelTitle:@"Cancel"];
 }
 
-/// The left header button, where the original dialog list kept Edit: the list's
-/// own actions, never the folder chooser - that is the title in one style and
-/// the strip in the other, and it is absent entirely when there are no folders.
 - (void)listOptionsTapped {
-	NSArray *folders = [self folderList];
 	self.sheetItems = @[
 		@{@"kind" : @"markAllRead", @"title" : @"Mark All as Read"},
-		@{@"kind" : @"addStory", @"title" : @"Add Story"},
-		@{@"kind" : @"folderLink", @"title" : @"Add Folder from Link…"},
-		@{@"kind" : @"editFolders",
-		  @"title" : (folders.count ? @"Edit Folders" : @"Create a Folder")},
 	];
 
-	[self presentSheetForItemsWithTitle:nil cancelTitle:@"Cancel"];
+	[self presentSheetForItemsWithTitle:[self defaultTitle] cancelTitle:@"Cancel"];
 }
 
 - (void)actionsTapped {
@@ -2613,43 +2687,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 		[self archiveOptionsTapped];
 		return;
 	}
-
-	UIView *host = self.navigationController.view ?: self.view;
-	UIView *anchor = self.navigationItem.leftBarButtonItem.customView;
-	__weak typeof(self) weakSelf = self;
-	void (^onAction)(NSString *, NSInteger) = ^(NSString *action, NSInteger folderId){
-		TGChatListViewController *me = weakSelf;
-		if (!me)
-			return;
-		if ([action isEqualToString:TGActionsMenuSelectList])
-			[me selectChatListWithFolderId:folderId];
-		else if ([action isEqualToString:TGActionsMenuAddStory])
-			[me addStory];
-		else if ([action isEqualToString:TGActionsMenuMarkAllRead])
-			[me markCurrentListAsRead];
-		else if ([action isEqualToString:TGActionsMenuEditFolders])
-			[me openFolderManagement];
-	};
-	NSString *(^titleForList)(NSInteger, NSString *) = ^NSString *(NSInteger listId, NSString *title){
-		TGChatListViewController *me = weakSelf;
-		if (!me)
-			return title;
-		return [(title ?: @"") stringByAppendingString:
-				[me unreadSuffixForList:(TGChatListId)listId]];
-	};
-
-	if (anchor)
-		[TGActionsMenu showFromView:anchor
-							 inView:host
-					currentFolderId:self.folderId
-					   titleForList:titleForList
-						   onAction:onAction];
-	else
-		[TGActionsMenu showFromRect:CGRectMake(10, 20, 60, 24)
-							 inView:host
-					currentFolderId:self.folderId
-					   titleForList:titleForList
-						   onAction:onAction];
+	[self listOptionsTapped];
 }
 
 - (void)selectChatListWithFolderId:(NSInteger)folderId {
@@ -2827,32 +2865,132 @@ static UIImage *TGAvatarThumbnail(UIImage *source, CGFloat sidePoints) {
 	}
 }
 
-/// Avatars are fetched once each and cached by file id.
-- (void)fetchMissingAvatars {
-	__weak typeof(self) weakSelf = self;
-	for (NSDictionary *c in self.chats){
-		id fileId = c[@"photoFileId"];
-		if (![fileId isKindOfClass:[NSNumber class]])
-			continue;
-		if (self.avatars[fileId] || [self.avatarsRequested containsObject:fileId])
-			continue;
-		[self.avatarsRequested addObject:fileId];
+- (NSSet *)avatarFileIdsWanted {
+	NSMutableSet *wanted = [NSMutableSet set];
+	NSArray *rows = [self visibleChats];
+	NSInteger headerCount = (NSInteger)[self headerRows].count;
 
-		[[TGClient shared] downloadFile:[fileId integerValue] completion:^(NSString *reply){
-			TGChatListViewController *me = weakSelf;
-			NSString *path = TGReplyString(reply);
-			if (!me || !path.length)
-				return;
-			UIImage *img = nil;
+	NSInteger first = NSIntegerMax;
+	NSInteger last = -1;
+	for (NSIndexPath *path in ([self.tableView indexPathsForVisibleRows] ?: @[])){
+		first = MIN(first, path.row);
+		last = MAX(last, path.row);
+	}
+	if (last < 0){
+		first = headerCount;
+		last = headerCount + kAvatarPrefetchRows;
+	} else {
+		first -= kAvatarPrefetchRows;
+		last += kAvatarPrefetchRows;
+	}
+
+	for (NSInteger row = first; row <= last; row++){
+		NSInteger index = row - headerCount;
+		if (index < 0 || index >= (NSInteger)rows.count)
+			continue;
+		id fileId = rows[index][@"photoFileId"];
+		if ([fileId isKindOfClass:[NSNumber class]])
+			[wanted addObject:fileId];
+	}
+	for (NSDictionary *poster in (self.storyPosters ?: @[])){
+		id fileId = poster[@"photoFileId"];
+		if ([fileId isKindOfClass:[NSNumber class]])
+			[wanted addObject:fileId];
+	}
+	return wanted;
+}
+
+- (BOOL)storyPostersUseAvatarFileId:(NSNumber *)fileId {
+	for (NSDictionary *poster in (self.storyPosters ?: @[]))
+		if ([fileId isEqual:poster[@"photoFileId"]])
+			return YES;
+	return NO;
+}
+
+- (void)applyArrivedAvatar:(UIImage *)image forFileId:(NSNumber *)fileId {
+	NSArray *rows = [self visibleChats];
+	NSInteger headerCount = (NSInteger)[self headerRows].count;
+	for (NSIndexPath *path in ([self.tableView indexPathsForVisibleRows] ?: @[])){
+		NSInteger index = path.row - headerCount;
+		if (index < 0 || index >= (NSInteger)rows.count)
+			continue;
+		NSDictionary *c = rows[index];
+		if (![fileId isEqual:c[@"photoFileId"]] || [c[@"isSaved"] boolValue])
+			continue;
+		UITableViewCell *raw = [self.tableView cellForRowAtIndexPath:path];
+		if (![raw isKindOfClass:[TGChatCell class]])
+			continue;
+		TGChatCell *cell = (TGChatCell *)raw;
+		if (cell.avatar.image == image)
+			continue;
+		UIImageView *target = cell.avatar;
+		[UIView transitionWithView:target
+						  duration:0.2
+						   options:UIViewAnimationOptionTransitionCrossDissolve
+						animations:^{ target.image = image; }
+						completion:nil];
+	}
+	if ([self storyPostersUseAvatarFileId:fileId])
+		[self rebuildTableHeader];
+}
+
+- (void)startAvatarDownload:(NSNumber *)fileId {
+	[self.avatarsRequested addObject:fileId];
+	[self.avatarsInFlight addObject:fileId];
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] downloadFile:[fileId integerValue] completion:^(NSString *reply){
+		TGChatListViewController *me = weakSelf;
+		if (!me)
+			return;
+		[me.avatarsInFlight removeObject:fileId];
+
+		NSString *path = TGReplyString(reply);
+		UIImage *img = nil;
+		if (path.length){
 			@autoreleasepool {
 				img = TGAvatarThumbnail([UIImage imageWithContentsOfFile:path], kAvatar);
 			}
-			if (!img)
+		}
+		if (!img){
+			if (![me.avatarsRequested containsObject:fileId])
 				return;
-			me.avatars[fileId] = img;
-			[me.tableView reloadData];
-		}];
+			if (![me.avatarsFailedOnce containsObject:fileId]){
+				[me.avatarsFailedOnce addObject:fileId];
+				[me.avatarsRequested removeObject:fileId];
+			}
+			return;
+		}
+		[me.avatarsFailedOnce removeObject:fileId];
+		me.avatars[fileId] = img;
+		[me applyArrivedAvatar:img forFileId:fileId];
+	}];
+}
+
+- (void)fetchMissingAvatars {
+	self.lastAvatarSweep = [NSDate timeIntervalSinceReferenceDate];
+	NSSet *wanted = [self avatarFileIdsWanted];
+
+	for (NSNumber *fileId in [self.avatarsInFlight allObjects]){
+		if ([wanted containsObject:fileId])
+			continue;
+		[self.avatarsInFlight removeObject:fileId];
+		[self.avatarsRequested removeObject:fileId];
+		[[TGClient shared] cancelDownloadOfFile:[fileId integerValue] onlyIfPending:NO];
 	}
+
+	for (NSNumber *fileId in wanted){
+		if (self.avatars[fileId] || [self.avatarsRequested containsObject:fileId])
+			continue;
+		[self startAvatarDownload:fileId];
+	}
+}
+
+- (void)fetchMissingAvatarsThrottled {
+	NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+	if (now - self.lastAvatarSweep < 0.15)
+		return;
+	[self fetchMissingAvatars];
 }
 
 - (void)describeCell:(TGChatCell *)cell unread:(NSInteger)unread muted:(BOOL)muted {
@@ -3955,6 +4093,10 @@ static const NSInteger kChatActionsTag = 77;
 	if (!c)
 		return;
 	[self fetchRowDetailForChat:c];
+	NSNumber *avatarFileId = c[@"photoFileId"];
+	if ([avatarFileId isKindOfClass:[NSNumber class]] && !self.avatars[avatarFileId] &&
+		![self.avatarsRequested containsObject:avatarFileId])
+		[self startAvatarDownload:avatarFileId];
 	if (![c[@"sponsored"] boolValue])
 		return;
 	NSNumber *uniqueId = c[@"uniqueId"];
@@ -3962,6 +4104,20 @@ static const NSInteger kChatActionsTag = 77;
 		return;
 	[self.sponsoredSeen addObject:uniqueId];
 	[[TGClient shared] viewSponsoredChat:[uniqueId longLongValue]];
+}
+
+- (void)tableView:(UITableView *)tableView didEndDisplayingCell:(UITableViewCell *)cell
+		forRowAtIndexPath:(NSIndexPath *)indexPath {
+	if (!self.avatarsInFlight.count)
+		return;
+	NSSet *wanted = [self avatarFileIdsWanted];
+	for (NSNumber *fileId in [self.avatarsInFlight allObjects]){
+		if ([wanted containsObject:fileId])
+			continue;
+		[self.avatarsInFlight removeObject:fileId];
+		[self.avatarsRequested removeObject:fileId];
+		[[TGClient shared] cancelDownloadOfFile:[fileId integerValue] onlyIfPending:NO];
+	}
 }
 
 - (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -4061,34 +4217,50 @@ static const NSInteger kChatActionsTag = 77;
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	if (![self splitLayoutActive])
+		[tableView deselectRowAtIndexPath:indexPath animated:YES];
+
+	BOOL split = [self splitLayoutActive];
 
 	if (self.openSwipeCell){
+		if (split)
+			[tableView deselectRowAtIndexPath:indexPath animated:YES];
 		[self closeOpenSwipeCellAnimated:YES];
 		return;
 	}
 
 	NSArray *header = [self headerRows];
 	NSArray *rows = [self visibleChats];
-	if (indexPath.row >= (NSInteger)(header.count + rows.count))
+	if (indexPath.row >= (NSInteger)(header.count + rows.count)){
+		if (split)
+			[tableView deselectRowAtIndexPath:indexPath animated:YES];
 		return;
+	}
 	if (indexPath.row < (NSInteger)header.count){
-		if ([header[indexPath.row] isEqualToString:@"archive"])
+		if ([header[indexPath.row] isEqualToString:@"archive"]){
+			if (split)
+				[tableView deselectRowAtIndexPath:indexPath animated:YES];
 			[self openArchive];
-		else
+		} else {
 			[self openSavedMessages];
+		}
 		return;
 	}
 
 	NSDictionary *c = rows[indexPath.row - header.count];
 	int64_t chatId = [c[@"id"] longLongValue];
-	if (!chatId)
+	if (!chatId){
+		if (split)
+			[tableView deselectRowAtIndexPath:indexPath animated:YES];
 		return;
+	}
 	if ([c[@"sponsored"] boolValue] && [c[@"uniqueId"] longLongValue])
 		[[TGClient shared] openSponsoredChat:[c[@"uniqueId"] longLongValue]];
 	NSLog(@"open chat: group=%@ forum=%@", c[@"isGroup"], c[@"isForum"] ?: @"(absent)");
 
 	if ([c[@"isForum"] boolValue]){
+		if (split)
+			[tableView deselectRowAtIndexPath:indexPath animated:YES];
 		TGTopicsViewController *topics = [[TGTopicsViewController alloc] init];
 		topics.chatId = chatId;
 		topics.chatTitle = TGReplyString(c[@"title"]);
@@ -4100,7 +4272,7 @@ static const NSInteger kChatActionsTag = 77;
 	vc.chatId = chatId;
 	vc.chatTitle = TGReplyString(c[@"title"]);
 	vc.isGroup = [c[@"isGroup"] boolValue];
-	[self.navigationController pushViewController:vc animated:YES];
+	[self presentChatController:vc];
 }
 
 @end
