@@ -1,5 +1,6 @@
 #import "TGProfileViewController.h"
 #import "TGClient.h"
+#import "TGClient+Files.h"
 #import "TGTheme.h"
 #import "TGIcons.h"
 #import "TGCallViewController.h"
@@ -167,6 +168,10 @@
 @property (nonatomic, assign) BOOL isForumChat;
 @property (nonatomic, assign) BOOL forumTopicsKnown;
 @property (nonatomic, assign) NSInteger forumTopicCount;
+@property (nonatomic, assign) NSInteger avatarFileId;
+@property (nonatomic, assign) NSInteger badgeFileId;
+@property (nonatomic, assign) NSInteger overlayFileId;
+@property (nonatomic, assign) BOOL avatarIsPlaceholder;
 @end
 
 static const NSInteger kPickerModeChatPhoto = 0;
@@ -796,23 +801,68 @@ static UIImage *TGProfileStretched(NSString *name) {
 	[header addSubview:self.statusLabel];
 }
 
+- (void)setAvatarViewImage:(UIImage *)image crossfade:(BOOL)crossfade {
+	if (!image)
+		return;
+	if (crossfade && self.avatarView.image){
+		CATransition *fade = [CATransition animation];
+		fade.duration = 0.2;
+		fade.type = kCATransitionFade;
+		[self.avatarView.layer addAnimation:fade forKey:@"avatarFade"];
+	}
+	self.avatarView.image = image;
+}
+
+- (void)showPlaceholderAvatarFromData:(NSData *)data {
+	if (!data.length || self.avatarImage)
+		return;
+	UIImage *tiny = [UIImage imageWithData:data];
+	if (!tiny)
+		return;
+	self.avatarIsPlaceholder = YES;
+	[self setAvatarViewImage:tiny crossfade:NO];
+}
+
+- (void)cancelAvatarDownload {
+	if (self.avatarFileId > 0){
+		[[TGClient shared] cancelDownloadOfFile:self.avatarFileId onlyIfPending:NO];
+		self.avatarFileId = 0;
+	}
+}
+
 - (void)loadAvatarFile:(NSInteger)fileId {
 	if (fileId <= 0)
 		return;
+	if (self.avatarFileId == fileId)
+		return;
+	[self cancelAvatarDownload];
+	self.avatarFileId = fileId;
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] downloadFile:fileId completion:^(NSString *path){
-		if (!path.length)
+		if (!path.length || weakSelf.avatarFileId != fileId)
 			return;
 		dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
 			UIImage *image = TGDecodeSquareThumbnail(path, kProfileAvatarSide);
 			if (!image)
 				return;
 			dispatch_async(dispatch_get_main_queue(), ^{
+				if (weakSelf.avatarFileId != fileId)
+					return;
 				weakSelf.avatarImage = image;
-				weakSelf.avatarView.image = image;
+				weakSelf.avatarIsPlaceholder = NO;
+				[weakSelf setAvatarViewImage:image crossfade:YES];
 			});
 		});
 	}];
+}
+
+- (void)dealloc {
+	if (_avatarFileId > 0)
+		[[TGClient shared] cancelDownloadOfFile:_avatarFileId onlyIfPending:NO];
+	if (_badgeFileId > 0)
+		[[TGClient shared] cancelDownloadOfFile:_badgeFileId onlyIfPending:NO];
+	if (_overlayFileId > 0)
+		[[TGClient shared] cancelDownloadOfFile:_overlayFileId onlyIfPending:NO];
 }
 
 - (void)refreshStatus {

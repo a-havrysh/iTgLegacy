@@ -1,11 +1,14 @@
 #import "TGRemoteImageView.h"
 #import "TGClient.h"
+#import "TGClient+Files.h"
 #import "TGImageDecode.h"
 
 @interface TGRemoteImageView ()
 @property (nonatomic, strong) UIImage *placeholderImage;
 @property (nonatomic, assign) BOOL cancelled;
 @property (nonatomic, strong) NSString *currentCacheKey;
+@property (nonatomic, assign) NSUInteger loadToken;
+@property (nonatomic, strong) NSNumber *activeDownloadFileId;
 @end
 
 static NSCache *TGRemoteImageMemoryCache(void) {
@@ -52,14 +55,16 @@ static NSUInteger TGRemoteImageCost(UIImage *image) {
 	[self cancelLoading];
 	self.fileId = nil;
 	self.currentCacheKey = nil;
-	self.image = self.placeholderImage;
+	self.image = nil;
+	self.placeholderImage = nil;
 }
 
 - (void)prepareForRecycle:(TGViewRecycler *)__unused recycler {
 	[self cancelLoading];
 	self.fileId = nil;
 	self.currentCacheKey = nil;
-	self.image = self.placeholderImage;
+	self.image = nil;
+	self.placeholderImage = nil;
 }
 
 - (UIImage *)currentImage {
@@ -92,7 +97,20 @@ static NSUInteger TGRemoteImageCost(UIImage *image) {
 	}
 }
 
+- (void)stopActiveDownloadUnlessFileId:(NSNumber *)keptFileId {
+	NSNumber *active = self.activeDownloadFileId;
+	if (!active)
+		return;
+	if (keptFileId && [active isEqualToNumber:keptFileId])
+		return;
+	self.activeDownloadFileId = nil;
+	[[TGClient shared] cancelDownloadOfFile:active.integerValue onlyIfPending:YES];
+}
+
 - (void)loadWithFileId:(NSNumber *)fileId square:(CGFloat)side placeholder:(UIImage *)placeholder forceFade:(bool)forceFade {
+	[self stopActiveDownloadUnlessFileId:fileId];
+	self.loadToken = self.loadToken + 1;
+	NSUInteger token = self.loadToken;
 	self.placeholderImage = placeholder;
 	self.fileId = fileId;
 	self.cancelled = false;
@@ -123,8 +141,15 @@ static NSUInteger TGRemoteImageCost(UIImage *image) {
 
 	void (^deliver)(UIImage *) = ^(UIImage *image){
 		TGRemoteImageView *me = weakSelf;
-		if (!me || !image || me.cancelled || ![me.fileId isEqual:fileId] || ![me.currentCacheKey isEqualToString:cacheKey])
+		if (!me || me.loadToken != token || me.cancelled || ![me.fileId isEqual:fileId] || ![me.currentCacheKey isEqualToString:cacheKey])
 			return;
+		me.activeDownloadFileId = nil;
+		if (!image){
+			me.currentCacheKey = nil;
+			if (me.placeholderImage)
+				me.image = me.placeholderImage;
+			return;
+		}
 		[me applyImage:image fade:fade];
 	};
 
@@ -150,15 +175,20 @@ static NSUInteger TGRemoteImageCost(UIImage *image) {
 
 		dispatch_async(dispatch_get_main_queue(), ^{
 			TGRemoteImageView *me = weakSelf;
-			if (!me || me.cancelled || ![me.fileId isEqual:fileId])
+			if (!me || me.loadToken != token || me.cancelled || ![me.fileId isEqual:fileId])
 				return;
+			me.activeDownloadFileId = fileId;
 			[[TGClient shared] downloadFile:fileId.integerValue completion:^(NSString *path){
-				if (path.length == 0)
+				if (path.length == 0){
+					deliver(nil);
 					return;
+				}
 				dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
 					UIImage *thumb = TGDecodeSquareThumbnail(path, side);
-					if (!thumb)
+					if (!thumb){
+						dispatch_async(dispatch_get_main_queue(), ^{ deliver(nil); });
 						return;
+					}
 					@autoreleasepool {
 						NSData *data = UIImagePNGRepresentation(thumb);
 						if (data.length != 0)
@@ -174,6 +204,7 @@ static NSUInteger TGRemoteImageCost(UIImage *image) {
 
 - (void)loadPlaceholder:(UIImage *)placeholder {
 	[self cancelLoading];
+	self.loadToken = self.loadToken + 1;
 	self.fileId = nil;
 	self.currentCacheKey = nil;
 	self.placeholderImage = placeholder;

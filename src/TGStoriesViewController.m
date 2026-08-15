@@ -1650,8 +1650,10 @@ typedef enum
 
 @property (nonatomic, assign) NSInteger pageIndex;
 @property (nonatomic, strong) NSNumber *itemId;
+@property (nonatomic, strong) NSNumber *photoFileId;
 @property (nonatomic, readonly) UIImage *image;
 @property (nonatomic, assign) CGFloat captionBottomInset;
+@property (nonatomic, readonly) BOOL failed;
 
 - (void)setStoryImage:(UIImage *)image animated:(BOOL)animated;
 - (void)setCaption:(NSString *)caption;
@@ -1659,6 +1661,8 @@ typedef enum
 - (NSDictionary *)areaAtPoint:(CGPoint)point;
 - (void)prepareForReuse;
 - (CGRect)captionFrame;
+- (void)beginLoading;
+- (void)showFailure;
 
 @end
 
@@ -1667,6 +1671,8 @@ typedef enum
 	UIImageView *_imageView;
 	UIView *_captionPlate;
 	UILabel *_captionLabel;
+	UIActivityIndicatorView *_spinner;
+	UILabel *_statusLabel;
 	NSArray *_areas;
 }
 
@@ -1696,8 +1702,46 @@ typedef enum
 		_captionLabel.numberOfLines = 2;
 		_captionLabel.lineBreakMode = NSLineBreakByTruncatingTail;
 		[_captionPlate addSubview:_captionLabel];
+
+		_spinner = [[UIActivityIndicatorView alloc]
+				initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhite];
+		_spinner.hidesWhenStopped = YES;
+		_spinner.userInteractionEnabled = NO;
+		[self addSubview:_spinner];
+
+		_statusLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+		_statusLabel.backgroundColor = [UIColor clearColor];
+		_statusLabel.textColor = [UIColor whiteColor];
+		_statusLabel.font = [UIFont systemFontOfSize:14];
+		_statusLabel.textAlignment = NSTextAlignmentCenter;
+		_statusLabel.numberOfLines = 2;
+		_statusLabel.shadowColor = [UIColor colorWithWhite:0.0f alpha:0.5f];
+		_statusLabel.shadowOffset = CGSizeMake(0, -1);
+		_statusLabel.text = @"Photo unavailable\nTap to reload";
+		_statusLabel.hidden = YES;
+		_statusLabel.userInteractionEnabled = NO;
+		[self addSubview:_statusLabel];
 	}
 	return self;
+}
+
+- (void)beginLoading
+{
+	_failed = NO;
+	_statusLabel.hidden = YES;
+	if (_imageView.image == nil)
+		[_spinner startAnimating];
+	[self setNeedsLayout];
+}
+
+- (void)showFailure
+{
+	[_spinner stopAnimating];
+	if (_imageView.image != nil)
+		return;
+	_failed = YES;
+	_statusLabel.hidden = NO;
+	[self setNeedsLayout];
 }
 
 - (UIImage *)image
@@ -1707,6 +1751,12 @@ typedef enum
 
 - (void)setStoryImage:(UIImage *)image animated:(BOOL)animated
 {
+	if (image != nil)
+	{
+		_failed = NO;
+		_statusLabel.hidden = YES;
+		[_spinner stopAnimating];
+	}
 	if (animated && image != nil)
 	{
 		UIImageView *view = _imageView;

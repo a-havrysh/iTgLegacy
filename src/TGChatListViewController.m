@@ -1145,6 +1145,9 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 @property (nonatomic, assign) NSInteger folderId;     // 0 = no folder
 @property (nonatomic, strong) NSMutableDictionary *avatars;   // fileId -> UIImage
 @property (nonatomic, strong) NSMutableSet *avatarsRequested;
+@property (nonatomic, strong) NSMutableSet *avatarsInFlight;
+@property (nonatomic, strong) NSMutableSet *avatarsFailedOnce;
+@property (nonatomic, assign) NSTimeInterval lastAvatarSweep;
 @property (nonatomic, strong) UISearchBar *searchBar;
 @property (nonatomic, strong) NSArray *searchResults;   // nil = not searching
 @property (nonatomic, strong) NSDictionary *actionChat; // long-pressed row
@@ -1193,6 +1196,8 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	self.chats = @[];
 	self.avatars = [NSMutableDictionary dictionary];
 	self.avatarsRequested = [NSMutableSet set];
+	self.avatarsInFlight = [NSMutableSet set];
+	self.avatarsFailedOnce = [NSMutableSet set];
 	self.listUnread = [NSMutableDictionary dictionary];
 	self.sponsoredSeen = [NSMutableSet set];
 	self.storyPostersById = [NSMutableDictionary dictionary];
@@ -2804,6 +2809,11 @@ static UIImage *TGAvatarThumbnail(UIImage *source, CGFloat sidePoints) {
 - (void)dropAvatar:(id)fileId {
 	[self.avatars removeObjectForKey:fileId];
 	[self.avatarsRequested removeObject:fileId];
+	[self.avatarsFailedOnce removeObject:fileId];
+	if ([self.avatarsInFlight containsObject:fileId]){
+		[self.avatarsInFlight removeObject:fileId];
+		[[TGClient shared] cancelDownloadOfFile:[fileId integerValue] onlyIfPending:NO];
+	}
 }
 
 - (void)didReceiveMemoryWarning {

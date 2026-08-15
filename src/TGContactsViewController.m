@@ -5,6 +5,7 @@
 #import "TGClient+SecretChats.h"
 #import "TGClient+UserStatus.h"
 #import "TGClient+Groups.h"
+#import "TGClient+Files.h"
 #import "TGIcons.h"
 #import "TGTheme.h"
 #import "TGImageDecode.h"
@@ -1045,6 +1046,7 @@ static UIImage *TGSecretKeyImage(NSArray *cells) {
 @property (nonatomic, strong) NSArray *sections;
 @property (nonatomic, strong) NSCache *photos;
 @property (nonatomic, strong) NSMutableSet *photosRequested;
+@property (nonatomic, strong) NSMutableSet *photosFailed;
 @property (nonatomic, strong) UISearchBar *searchBar;
 @property (nonatomic, strong) NSString *searchQuery;
 @property (nonatomic, assign) BOOL loaded;
@@ -2531,6 +2533,7 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 	self.photos.countLimit = kContactPhotoCacheCount;
 	self.photos.totalCostLimit = kContactPhotoCacheBytes;
 	self.photosRequested = [NSMutableSet set];
+	self.photosFailed = [NSMutableSet set];
 	self.closeFriendIds = [NSMutableSet set];
 	self.badges = [NSMutableDictionary dictionary];
 	self.badgesRequested = [NSMutableSet set];
@@ -2885,7 +2888,8 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 }
 
 - (void)requestPhotoForFileId:(NSNumber *)fileId cachePath:(NSString *)cachePath {
-	if (!fileId || !cachePath.length || [self.photosRequested containsObject:fileId])
+	if (!fileId || !cachePath.length || [self.photosRequested containsObject:fileId]
+			|| [self.photosFailed containsObject:fileId])
 		return;
 	[self.photosRequested addObject:fileId];
 	__weak typeof(self) weakSelf = self;
@@ -2893,6 +2897,7 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 		if (!path){
 			TGContactsViewController *me = weakSelf;
 			[me.photosRequested removeObject:fileId];
+			[me.photosFailed addObject:fileId];
 			return;
 		}
 		dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
@@ -2903,8 +2908,13 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 													  atomically:YES];
 				dispatch_async(dispatch_get_main_queue(), ^{
 					TGContactsViewController *me = weakSelf;
-					if (!me || !thumb)
+					if (!me)
 						return;
+					[me.photosRequested removeObject:fileId];
+					if (!thumb){
+						[me.photosFailed addObject:fileId];
+						return;
+					}
 					[me.photos setObject:thumb forKey:fileId
 									cost:TGContactPhotoCost(thumb)];
 					[me reloadTableSoon];
@@ -2927,20 +2937,32 @@ static NSString *TGContactSortKey(NSDictionary *u) {
 			[liveKeys addObject:key];
 	}
 	[self pruneThumbCacheKeeping:liveKeys];
+	[self.photosFailed removeAllObjects];
+}
 
-	NSFileManager *fileManager = [NSFileManager defaultManager];
-	for (NSDictionary *u in self.users){
-		NSNumber *fileId = u[@"photoFileId"];
-		NSString *cacheKey = [self thumbCacheKeyForUser:u];
-		if (![fileId isKindOfClass:NSNumber.class] || !cacheKey)
-			continue;
-		if ([self.photosRequested containsObject:fileId])
-			continue;
-		NSString *cachePath = [self thumbCachePathForKey:cacheKey];
-		if ([fileManager fileExistsAtPath:cachePath])
-			continue;
-		[self requestPhotoForFileId:fileId cachePath:cachePath];
+- (BOOL)isPhotoFileVisible:(NSNumber *)fileId {
+	for (NSIndexPath *path in [self.tableView indexPathsForVisibleRows]){
+		NSDictionary *u = [self userAtIndexPath:path];
+		NSNumber *other = [u[@"photoFileId"] isKindOfClass:NSNumber.class]
+				? u[@"photoFileId"] : nil;
+		if (other && [other isEqualToNumber:fileId])
+			return YES;
 	}
+	return NO;
+}
+
+- (void)tableView:(UITableView *)tableView
+		didEndDisplayingCell:(UITableViewCell *)cell
+		   forRowAtIndexPath:(NSIndexPath *)indexPath {
+	NSDictionary *u = [self userAtIndexPath:indexPath];
+	NSNumber *fileId = [u[@"photoFileId"] isKindOfClass:NSNumber.class]
+			? u[@"photoFileId"] : nil;
+	if (!fileId || ![self.photosRequested containsObject:fileId])
+		return;
+	if ([self.photos objectForKey:fileId] || [self isPhotoFileVisible:fileId])
+		return;
+	[self.photosRequested removeObject:fileId];
+	[[TGClient shared] cancelDownloadOfFile:fileId.integerValue onlyIfPending:NO];
 }
 
 - (void)pruneThumbCacheKeeping:(NSSet *)liveKeys {

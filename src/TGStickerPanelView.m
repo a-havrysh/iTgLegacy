@@ -2,6 +2,7 @@
 
 #import "TGClient.h"
 #import "TGClient+Stickers.h"
+#import "TGClient+Files.h"
 #import "TGActionSheet.h"
 #import "TGTheme.h"
 #import "TGViewRecycler.h"
@@ -42,6 +43,8 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 @property (nonatomic, strong) NSDictionary *sticker;
 @property (nonatomic, assign) NSInteger sectionIndex;
 @property (nonatomic, assign) NSInteger itemIndex;
+@property (nonatomic, strong) NSString *imageKey;
+@property (nonatomic, assign) NSInteger imageFileId;
 
 @end
 
@@ -84,13 +87,19 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 - (void)prepareForReuse {
 	self.alpha = 1.0f;
 	self.sticker = nil;
+	self.imageKey = nil;
+	self.imageFileId = 0;
 	self.imageView.image = nil;
+	self.imageView.alpha = 1.0f;
 	self.emojiLabel.text = @"";
 }
 
 - (void)prepareForRecycle:(TGViewRecycler *)recycler {
 	self.sticker = nil;
+	self.imageKey = nil;
+	self.imageFileId = 0;
 	self.imageView.image = nil;
+	self.imageView.alpha = 1.0f;
 	self.emojiLabel.text = @"";
 	[self removeTarget:nil action:NULL forControlEvents:UIControlEventAllEvents];
 	for (UIGestureRecognizer *recogniser in [self.gestureRecognizers copy])
@@ -124,6 +133,8 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 @property (nonatomic, strong) NSMutableArray *imageCacheOrder;
 @property (nonatomic, assign) NSUInteger imageCacheBytes;
 @property (nonatomic, strong) NSMutableDictionary *pendingImages;
+@property (nonatomic, strong) NSMutableDictionary *imageRequestCounts;
+@property (nonatomic, strong) NSMutableSet *pinnedImageKeys;
 @property (nonatomic, strong) dispatch_queue_t decodeQueue;
 
 @property (nonatomic, copy) NSString *searchQuery;
@@ -162,6 +173,8 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 		_imageCache = [[NSMutableDictionary alloc] init];
 		_imageCacheOrder = [[NSMutableArray alloc] init];
 		_pendingImages = [[NSMutableDictionary alloc] init];
+		_imageRequestCounts = [[NSMutableDictionary alloc] init];
+		_pinnedImageKeys = [[NSMutableSet alloc] init];
 		_decodeQueue = dispatch_queue_create("tg.stickerpanel.decode", NULL);
 		_columns = 4;
 		_gutter = 12.0f;
@@ -240,8 +253,68 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 - (void)dealloc {
 	[[NSNotificationCenter defaultCenter] removeObserver:self];
 	[NSObject cancelPreviousPerformRequestsWithTarget:self];
+	[self cancelAllPendingImageLoads];
 	_grid.delegate = nil;
 	_searchBar.delegate = nil;
+}
+
+- (NSInteger)fileIdFromCacheKey:(NSString *)key {
+	NSRange separator = [key rangeOfString:@"@"];
+	if (separator.location == NSNotFound)
+		return 0;
+	return [[key substringToIndex:separator.location] integerValue];
+}
+
+- (void)cancelAllPendingImageLoads {
+	for (NSString *key in [self.pendingImages allKeys]){
+		NSInteger fileId = [self fileIdFromCacheKey:key];
+		if (fileId != 0)
+			[[TGClient shared] cancelDownloadOfFile:fileId onlyIfPending:NO];
+	}
+	[self.pendingImages removeAllObjects];
+	[self.imageRequestCounts removeAllObjects];
+	[self.pinnedImageKeys removeAllObjects];
+}
+
+- (void)retainImageKey:(NSString *)key {
+	if (key == nil)
+		return;
+	NSInteger count = [self.imageRequestCounts[key] integerValue];
+	self.imageRequestCounts[key] = @(count + 1);
+}
+
+- (void)releaseImageKey:(NSString *)key fileId:(NSInteger)fileId {
+	if (key == nil)
+		return;
+	NSNumber *existing = self.imageRequestCounts[key];
+	if (existing == nil)
+		return;
+
+	NSInteger count = [existing integerValue] - 1;
+	if (count > 0){
+		self.imageRequestCounts[key] = @(count);
+		return;
+	}
+	[self.imageRequestCounts removeObjectForKey:key];
+
+	if (self.pendingImages[key] == nil || [self.pinnedImageKeys containsObject:key])
+		return;
+
+	[self.pendingImages removeObjectForKey:key];
+	if (fileId == 0)
+		fileId = [self fileIdFromCacheKey:key];
+	if (fileId != 0)
+		[[TGClient shared] cancelDownloadOfFile:fileId onlyIfPending:NO];
+}
+
+- (void)releaseImageForTile:(TGStickerTile *)tile {
+	NSString *key = tile.imageKey;
+	if (key == nil)
+		return;
+	NSInteger fileId = tile.imageFileId;
+	tile.imageKey = nil;
+	tile.imageFileId = 0;
+	[self releaseImageKey:key fileId:fileId];
 }
 
 - (void)clearImageCache {
@@ -263,8 +336,8 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 	NSInteger generation = self.generation;
 
 	[self clearImageCache];
-	[self.pendingImages removeAllObjects];
 	[self clearTiles];
+	[self cancelAllPendingImageLoads];
 	[self.allSections removeAllObjects];
 	[self.sections removeAllObjects];
 	[self.searchSections removeAllObjects];
@@ -1017,6 +1090,7 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 - (void)clearTiles {
 	for (NSString *key in [self.visibleTiles allKeys]){
 		TGStickerTile *tile = self.visibleTiles[key];
+		[self releaseImageForTile:tile];
 		[self.recycler recycleView:tile];
 	}
 	[self.visibleTiles removeAllObjects];
@@ -1090,6 +1164,7 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 	for (NSString *key in [self.visibleTiles allKeys]){
 		if ([wanted containsObject:key])
 			continue;
+		[self releaseImageForTile:self.visibleTiles[key]];
 		[self.recycler recycleView:self.visibleTiles[key]];
 		[self.visibleTiles removeObjectForKey:key];
 	}
@@ -1145,42 +1220,73 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 }
 
 - (void)configureTile:(TGStickerTile *)tile withSticker:(NSDictionary *)sticker {
-	tile.sticker = sticker;
 	if (sticker == nil){
+		[self releaseImageForTile:tile];
+		tile.sticker = nil;
 		tile.emojiLabel.text = @"";
 		tile.imageView.image = nil;
+		tile.imageView.alpha = 1.0f;
 		return;
 	}
 
 	NSString *emoji = sticker[@"emoji"];
-	tile.emojiLabel.text = emoji.length > 0 ? emoji : @"";
-
 	NSInteger fileId = [self drawableFileIdForSticker:sticker];
+
 	if (fileId == 0){
+		[self releaseImageForTile:tile];
+		tile.sticker = sticker;
+		tile.emojiLabel.text = emoji.length > 0 ? emoji : @"";
 		tile.imageView.image = nil;
+		tile.imageView.alpha = 1.0f;
 		return;
 	}
 
+	NSString *key = [self cacheKeyForFileId:fileId side:TGStickerPanelTileSide];
 	UIImage *cached = [self cachedImageForFileId:fileId side:TGStickerPanelTileSide];
 	if (cached != nil){
-		tile.imageView.image = cached;
+		[self releaseImageForTile:tile];
+		tile.sticker = sticker;
 		tile.emojiLabel.text = @"";
+		tile.imageView.image = cached;
+		tile.imageView.alpha = 1.0f;
 		return;
 	}
 
+	if (tile.sticker == sticker && [tile.imageKey isEqualToString:key])
+		return;
+
+	[self releaseImageForTile:tile];
+	tile.sticker = sticker;
+	tile.emojiLabel.text = emoji.length > 0 ? emoji : @"";
 	tile.imageView.image = nil;
+	tile.imageView.alpha = 1.0f;
+	tile.imageKey = key;
+	tile.imageFileId = fileId;
+	[self retainImageKey:key];
+
 	NSDictionary *requested = sticker;
 	__weak TGStickerPanelView *weakSelf = self;
 	__weak TGStickerTile *weakTile = tile;
 	[self imageForFileId:fileId side:TGStickerPanelTileSide completion:^(UIImage *image){
 		TGStickerPanelView *me = weakSelf;
 		TGStickerTile *target = weakTile;
-		if (me == nil || target == nil || image == nil)
+		if (me == nil || target == nil)
 			return;
-		if (target.sticker != requested)
+		if (target.sticker != requested || ![target.imageKey isEqualToString:key])
 			return;
+		if (image == nil){
+			[me releaseImageForTile:target];
+			return;
+		}
+		target.imageKey = nil;
+		target.imageFileId = 0;
+		[me releaseImageKey:key fileId:fileId];
 		target.imageView.image = image;
 		target.emojiLabel.text = @"";
+		target.imageView.alpha = 0.0f;
+		[UIView animateWithDuration:0.15 animations:^{
+			target.imageView.alpha = 1.0f;
+		}];
 	}];
 }
 

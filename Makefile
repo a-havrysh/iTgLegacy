@@ -144,6 +144,24 @@ APP_SRC_M := \
 	src/RootViewController.m \
 	src/main.m \
 	src/TGClient.m \
+	src/TGCallModel.m \
+	src/TGChatModel.m \
+	src/TGFolderModel.m \
+	src/TGMediaModel.m \
+	src/TGMemberModel.m \
+	src/TGMessageModel.m \
+	src/TGNotificationSettingsModel.m \
+	src/TGPaymentModel.m \
+	src/TGSessionModel.m \
+	src/TGStickerModel.m \
+	src/TGStoryModel.m \
+	src/TGUserModel.m \
+	src/TGChatListCompanion.m \
+	src/TGContactsCompanion.m \
+	src/TGConversationCompanion.m \
+	src/TGProfileCompanion.m \
+	src/TGStickersCompanion.m \
+	src/TGStoriesCompanion.m \
 	src/TGClient+Account.m \
 	src/TGClient+AppSettings.m \
 	src/TGClient+Bots.m \
