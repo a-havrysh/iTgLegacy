@@ -10689,8 +10689,10 @@ static UIColor *TGSenderColour(int64_t userId) {
 						 : (CGRectGetMaxX(box) + 12);
 	CGFloat dateY = CGRectGetMaxY(box) - 22;
 
+	UIImage *tickArt = mine ? [self statusGlyphForMessage:m white:NO] : nil;
+	CGFloat tickW = tickArt ? tickArt.size.width : 0;
 	CGRect badge = mine
-			? CGRectMake(dateX - 5, dateY - 3 - kRetinaPixel, dateW + 29, 21)
+			? CGRectMake(dateX - 5, dateY - 3 - kRetinaPixel, dateW + 5 + 4 + tickW + 8, 21)
 			: CGRectMake(dateX - 10, dateY - 3 - kRetinaPixel, dateW + 16, 21);
 
 	CGFloat over = CGRectGetMaxX(badge) - (tableWidth - 2);
@@ -10711,8 +10713,8 @@ static UIColor *TGSenderColour(int64_t userId) {
 
 	if (mine){
 		cell.ticks.hidden = NO;
-		cell.ticks.image = [self statusGlyphForMessage:m white:NO];
-		CGSize tickSize = cell.ticks.image ? cell.ticks.image.size : CGSizeMake(15, 9);
+		cell.ticks.image = tickArt;
+		CGSize tickSize = tickArt ? tickArt.size : CGSizeMake(15, 9);
 		cell.ticks.frame = CGRectMake(dateX + dateW + 4,
 									  CGRectGetMidY(badge) - tickSize.height / 2,
 									  tickSize.width, tickSize.height);
