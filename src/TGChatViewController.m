@@ -9331,6 +9331,22 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 	if (!pending.count)
 		return;
 
+	// The batch a conversation opens on is one or two messages, and a bubble
+	// that opens as a grey rectangle and fills in a frame later is exactly
+	// what this is meant to avoid. A couple of forty-pixel JPEGs cost about a
+	// millisecond, and no scroll is in progress at that moment.
+	if (pending.count <= 4){
+		for (NSArray *entry in pending){
+			id raw = entry[1];
+			NSData *data = [raw isKindOfClass:NSData.class]
+					? raw : [[TGClient shared] minithumbnailData:raw];
+			UIImage *image = data.length ? [UIImage imageWithData:data] : nil;
+			if (image)
+				self.minithumbnails[entry[0]] = image;
+		}
+		return;
+	}
+
 	__weak typeof(self) weakSelf = self;
 	dispatch_async(TGImageDecodeQueue(), ^{
 		NSMutableDictionary *decoded = [NSMutableDictionary dictionary];

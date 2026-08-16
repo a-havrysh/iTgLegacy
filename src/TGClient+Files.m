@@ -43,9 +43,12 @@ static NSData *TGFilesDataFromBase64(id value) {
 	if (!text.length)
 		return nil;
 
+	// Minithumbnails are decoded off the main thread now, and from more than
+	// one queue. Filling this table under a plain flag let a second thread
+	// read it half-built and turn a picture into nothing.
 	static signed char table[256];
-	static BOOL ready = NO;
-	if (!ready){
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
 		static const char *alphabet =
 				"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 		for (int i = 0; i < 256; i++)
@@ -54,8 +57,7 @@ static NSData *TGFilesDataFromBase64(id value) {
 			table[(unsigned char)alphabet[i]] = (signed char)i;
 		table[(unsigned char)'-'] = 62;
 		table[(unsigned char)'_'] = 63;
-		ready = YES;
-	}
+	});
 
 	NSMutableData *out = nil;
 	@autoreleasepool {

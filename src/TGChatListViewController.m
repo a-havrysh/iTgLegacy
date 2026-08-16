@@ -1318,11 +1318,6 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	[self applyTitleView];
 	[self installClientHandlers];
 	[self reload];
-	if (!self.showsArchive){
-		[self loadCachedAvatarsForFirstFrame];
-		[self warmAvatarPlaceholders];
-		[self.tableView reloadData];
-	}
 }
 
 /// Without this there is no way to start a conversation at all - you can only
@@ -2818,6 +2813,10 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 
 	self.chats = TGChatRows([TGClient shared].chats);
 	self.loadingMore = NO;
+	if (!self.showsArchive){
+		[self loadCachedAvatarsForFirstFrame];
+		[self warmAvatarPlaceholders];
+	}
 	[self.tableView reloadData];
 	[self refreshUnreadCounters];
 	[self rebuildTableHeader];
