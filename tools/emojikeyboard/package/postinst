@@ -1,0 +1,59 @@
+#!/bin/sh
+set -e
+
+PKG="@PACKAGE@"
+PKGDIR="@PKGDIR@"
+DYLIB="@DYLIB@"
+FILTER="@FILTER@"
+FONTFILE="@FONTFILE@"
+FONTPACKAGE="@FONTPACKAGE@"
+PREP="$PKGDIR/emojipaletteprep"
+
+say() { echo "$PKG: $*"; }
+warn() { echo "$PKG: $*" >&2; }
+die() { echo "$PKG: $*" >&2; exit 1; }
+
+[ "$1" = "configure" ] || exit 0
+
+[ -f "$DYLIB" ] || die "$DYLIB is missing; the package did not unpack correctly."
+[ -f "$FILTER" ] || die "$FILTER is missing; the package did not unpack correctly."
+[ -f "$PKGDIR/palette.plist" ] || die "$PKGDIR/palette.plist is missing; the package did not unpack correctly."
+
+if [ ! -d /Library/MobileSubstrate/DynamicLibraries ]; then
+    warn "/Library/MobileSubstrate/DynamicLibraries does not exist."
+    warn "MobileSubstrate does not look installed, so nothing will load this tweak."
+fi
+
+rm -f "$PKGDIR/glyphs.plist"
+
+if [ ! -f "$FONTFILE" ]; then
+    warn ""
+    warn "no modern emoji font found at $FONTFILE."
+    warn "This tweak only offers emoji the installed font can actually draw, so"
+    warn "with Apple's 2012 font it will add close to nothing. Install"
+    warn "$FONTPACKAGE first, then run:"
+    warn "    $PKGDIR/refresh"
+    warn ""
+fi
+
+if [ -x "$PREP" ]; then
+    say "shaping the palette against the installed emoji font, this takes a moment"
+    if "$PREP"; then
+        :
+    else
+        warn "the palette could not be pre-shaped (see the message above)."
+        warn "The tweak will do the work in the background instead, which makes"
+        warn "the first tap on a category slower but changes nothing else."
+    fi
+else
+    warn "$PREP is missing or not executable; skipping the pre-shape step."
+fi
+
+if [ -n "${EMOJIKEYBOARD_NO_RESPRING:-}" ]; then
+    say "EMOJIKEYBOARD_NO_RESPRING is set; respring by hand to load the tweak."
+else
+    say "respringing"
+    "$PKGDIR/respring" 4 >/dev/null 2>&1 &
+fi
+
+exit 0

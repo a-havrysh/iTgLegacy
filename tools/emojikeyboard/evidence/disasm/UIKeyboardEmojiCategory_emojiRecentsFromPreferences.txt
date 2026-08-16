@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/private/tmp/claude-501/-Users-alexanderhavrysh-Git-iOS-iTgLegacy/070bd45d-a71c-432d-8452-8891ef9cd28f/scratchpad/uidis.py", line 202, in <module>
+    disasm(find(sys.argv[1], sys.argv[2]), n, '%s %s' % (sys.argv[1], sys.argv[2]))
+  File "/private/tmp/claude-501/-Users-alexanderhavrysh-Git-iOS-iTgLegacy/070bd45d-a71c-432d-8452-8891ef9cd28f/scratchpad/uidis.py", line 86, in find
+    for k, nm, ty, imp in methods(clsname):
+  File "/private/tmp/claude-501/-Users-alexanderhavrysh-Git-iOS-iTgLegacy/070bd45d-a71c-432d-8452-8891ef9cd28f/scratchpad/uidis.py", line 77, in methods
+    c = CLS[clsname]
+KeyError: 'UIKeyboardEmojiCategory emojiRecentsFromPreferences'

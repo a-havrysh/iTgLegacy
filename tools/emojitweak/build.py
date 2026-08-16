@@ -94,10 +94,35 @@ def plan():
         elif c == KEYCAP:
             art[n] = ("keycap", "")
 
+    unpainted = sorted(cps for cps in idset if glyph_of[cps] not in art)
+    unpainted += sorted((c,) for c in synthetic
+                        if c not in INVISIBLE and gname((c,)) not in art)
+
     meta = dict(ucd=ucd, emoji_ver=emoji_ver, twemoji=tag,
                 identities=identities, aliases=aliases, idset=idset,
-                glyph_of=glyph_of)
+                glyph_of=glyph_of, unpainted=unpainted)
     return glyph_order, cmap, seqs, zero_advance, art, meta
+
+
+def check_artwork(meta):
+    unpainted = meta["unpainted"]
+    if not unpainted:
+        print("  artwork: every emoji has a Twemoji image")
+        return
+    listing = "\n".join("    " + " ".join("%04X" % c for c in cps)
+                        for cps in unpainted[:20])
+    more = "" if len(unpainted) <= 20 else "\n    ... and %d more" % (len(unpainted) - 20)
+    message = (
+        "%d emoji in Unicode Emoji %s have no Twemoji %s artwork and would ship as\n"
+        "blank glyphs:\n%s%s\n\n"
+        "Twemoji is behind this Unicode release. Either wait for a Twemoji release\n"
+        "that covers it, pin an older emoji-test.txt, or set\n"
+        "EMOJITWEAK_ALLOW_MISSING_ART=1 to ship the blanks deliberately."
+        % (len(unpainted), meta["emoji_ver"], meta["twemoji"], listing, more))
+    if os.environ.get("EMOJITWEAK_ALLOW_MISSING_ART"):
+        print("  WARNING: " + message.replace("\n", "\n  "))
+        return
+    raise SystemExit("build.py: " + message)
 
 
 def _render(job):
@@ -146,8 +171,10 @@ def main():
           % (meta["ucd"], meta["emoji_ver"], meta["twemoji"]))
     print("  identities %d  glyphs %d  cmap entries %d  morx sequences %d"
           % (len(meta["idset"]), len(glyph_order), len(cmap), len(seqs)))
+    check_artwork(meta)
 
     print("rasterising")
+    raster.require_tools()
     rendered = rasterise(art, meta["twemoji"])
 
     strikes = {p: {} for p in raster.STRIKES}
@@ -157,7 +184,7 @@ def main():
 
     print("assembling")
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    version = "17.0;twemoji-%s" % meta["twemoji"].lstrip("v")
+    version = "%s;twemoji-%s" % (meta["emoji_ver"], meta["twemoji"].lstrip("v"))
     fontasm.assemble(glyph_order, cmap, strikes, seqs, zero_advance, version, OUT)
 
     size, tables, font = fontasm.report(OUT)

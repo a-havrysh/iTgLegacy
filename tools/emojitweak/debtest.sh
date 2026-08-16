@@ -71,7 +71,7 @@ case "${1:-}" in
 prepare)
     mkdir -p "$HERE/work"
     write_samples
-    [ -x "$HERE/out/emojiprobe2" ] || die "out/emojiprobe2 missing"
+    [ -x "$HERE/out/emojiprobe2" ] || die "out/emojiprobe2 missing -- run: make probe"
     "$SH" push "$HERE/out/emojiprobe2" "$PROBE"
     "$SH" push "$HERE/work/debtest-samples.txt" "$SAMPLES"
     "$SH" "chmod +x $PROBE"

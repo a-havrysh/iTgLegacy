@@ -87,6 +87,7 @@ FRAMEWORKS := -framework UIKit -framework Foundation -framework QuickLook \
               -framework CoreLocation -framework MapKit \
               -framework CoreTelephony -framework ImageIO \
               -framework CoreText -framework AssetsLibrary \
+              -framework CFNetwork \
 
 
 # TDLib is loaded at runtime from libtdjson.dylib, never linked.
@@ -154,6 +155,7 @@ APP_SRC_M := \
 	src/TGMosaicLayout.m \
 	src/TGMessageModel.m \
 	src/TGNotificationManager.m \
+	src/TGBackgroundSession.m \
 	src/TGNotificationSettingsModel.m \
 	src/TGPaymentModel.m \
 	src/TGSessionModel.m \
@@ -214,6 +216,7 @@ APP_SRC_M := \
 	src/TGTopicsViewController.m \
 	src/TGForwardPicker.m \
 	src/TGCallViewController.m \
+	src/TGSystemCall.m \
 	src/TGProfileViewController.m \
 	src/TGEditProfileViewController.m \
 	src/TGPollComposerViewController.m \
@@ -227,6 +230,7 @@ APP_SRC_M := \
 	src/TGPrivacyViewController.m \
 	src/TGStickersViewController.m \
 	src/TGStickerPanelView.m \
+	src/TGStickerThumbnailCache.m \
 	src/TGReactionPickerView.m \
 	src/TGMessageActionsSheet.m \
 	src/TGFoldersViewController.m \

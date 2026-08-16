@@ -92,7 +92,7 @@ restore() {
     say "restored the stock font to $SYSFONT"
     say "the backup is kept at $BACKUP; purging this package deletes it"
 
-    if [ -n "$EMOJITWEAK_NO_RESPRING" ]; then
+    if [ -n "${EMOJITWEAK_NO_RESPRING:-}" ]; then
         say "EMOJITWEAK_NO_RESPRING is set; respring by hand."
     elif [ -x "$PKGDIR/respring" ]; then
         "$PKGDIR/respring" 4 >/dev/null 2>&1 &

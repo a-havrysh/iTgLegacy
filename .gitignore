@@ -49,3 +49,10 @@ src/libtgvoip/stamp-h1
 docs/design-proposals/png/
 docs/design-proposals/gallery*.html
 docs/design-proposals/limits-ru.html
+jailbreak/background-delivery/out/
+
+# Emoji tweak build artefacts (rebuild with tools/emojitweak/make deb)
+tools/emojitweak/out/
+tools/emojitweak/work/
+tools/emojitweak/cache/
+tools/emojitweak/ref/

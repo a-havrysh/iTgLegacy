@@ -109,7 +109,7 @@ chmod 644 "$TMP"
 mv "$TMP" "$SYSFONT"
 say "installed $SYSFONT"
 
-if [ -n "$EMOJITWEAK_NO_RESPRING" ]; then
+if [ -n "${EMOJITWEAK_NO_RESPRING:-}" ]; then
     say "EMOJITWEAK_NO_RESPRING is set; respring by hand to see the new emoji."
 else
     say "respringing"

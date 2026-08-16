@@ -1,0 +1,29 @@
+#!/bin/sh
+set -e
+
+PKG="@PACKAGE@"
+PKGDIR="@PKGDIR@"
+PREP="$PKGDIR/emojipaletteprep"
+
+echo "$PKG: reshaping the palette against the emoji font that is installed now"
+rm -f "$PKGDIR/glyphs.plist"
+
+if [ ! -x "$PREP" ]; then
+    echo "$PKG: $PREP is missing; reinstall the package." >&2
+    exit 1
+fi
+
+"$PREP" || {
+    echo "$PKG: the palette could not be shaped; the tweak will fall back to" >&2
+    echo "     doing the work in the background inside each app." >&2
+    exit 1
+}
+
+if [ -n "${EMOJIKEYBOARD_NO_RESPRING:-}" ]; then
+    echo "$PKG: EMOJIKEYBOARD_NO_RESPRING is set; respring by hand."
+else
+    echo "$PKG: respringing"
+    "$PKGDIR/respring" 2 >/dev/null 2>&1 &
+fi
+
+exit 0

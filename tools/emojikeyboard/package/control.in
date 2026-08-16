@@ -1,0 +1,45 @@
+Package: @PACKAGE@
+Name: @NAME@
+Version: @VERSION@
+Architecture: iphoneos-arm
+Maintainer: @MAINTAINER@
+Author: @AUTHOR@
+Section: Keyboards
+Priority: optional
+Depends: @DEPENDS@
+Recommends: @RECOMMENDS@
+Installed-Size: @INSTALLED_SIZE@
+Homepage: @HOMEPAGE@
+Description: Unicode @EMOJI_VERSION@ emoji in the iOS 6 emoji keyboard
+ The iOS 6 emoji palette is not a plist. It is six hard-coded UTF-16 string
+ constants compiled into UIKit, so replacing the emoji font makes modern emoji
+ drawable but leaves the keyboard offering the same @STOCK_COUNT@ characters
+ it shipped with in 2012.
+ .
+ This package hooks +[UIKeyboardEmojiCategory categoryForType:] and appends
+ the rest of Unicode Emoji @EMOJI_VERSION@ to the five fixed categories:
+ Smileys and People go to People, animals and plants to Nature, food,
+ activities and objects to Objects, travel and flags to Places, and the
+ remaining symbols to Symbols. The palette has exactly six category slots
+ wired into UIKit's artwork and layout, so no seventh tab is added.
+ .
+ This needs a font that can draw those emoji, which is why it depends on
+ @FONTPACKAGE@ (>= @EMOJI_VERSION@) — the two are built from the same
+ Unicode emoji-test.txt and are meant to be installed together. It is also
+ belt and braces: every candidate is offered to CoreText before it is added,
+ single scalars through CTFontGetGlyphsForCharacters and multi-scalar
+ sequences through a CTLine that has to collapse to exactly one glyph in the
+ emoji font itself. Anything the installed font cannot draw as one glyph is
+ dropped, so the grid never shows a tofu box or half of a family. On the
+ stock Apple 2012 font almost nothing passes that test and the keyboard
+ stays as it was, which is the correct outcome rather than a failure.
+ .
+ The candidate list is @CANDIDATES@ sequences generated from the same
+ Unicode emoji-test.txt the font is built from. Shaping runs once at install
+ time and the resulting glyph ids are cached, so opening the keyboard costs
+ a few milliseconds rather than a few seconds.
+ .
+ If a hooked class or selector is not the shape this build expects, the tweak
+ installs nothing at all and the keyboard behaves exactly as it does without
+ the package. Creating /var/lib/emojikeyboard/disabled switches it off
+ without uninstalling.

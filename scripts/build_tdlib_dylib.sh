@@ -87,6 +87,10 @@ cmake "${TDLIB_SRC}" \
 	-DTD_ENABLE_LTO=OFF \
 	-DCMAKE_POLICY_DEFAULT_CMP0074=NEW
 
+# tdclientjson_export_list is not a CMake dependency, so an edit to it never
+# relinks on its own and a newly exported symbol silently stays hidden.
+find "${BUILD_DIR}" -name 'libtdjson*.dylib' -delete
+
 cmake --build . --target tdjson -- -j"$(sysctl -n hw.logicalcpu)"
 
 DYLIB="$(find "${BUILD_DIR}" -name 'libtdjson*.dylib' | head -1)"
