@@ -1,5 +1,6 @@
 #import "TGImageDecode.h"
 #import <ImageIO/ImageIO.h>
+#import "AppDelegate.h"
 
 UIImage *TGDecodeThumbnail(NSString *path, CGFloat maxPixelSize) {
 	NSURL *url = [NSURL fileURLWithPath:path];
@@ -16,13 +17,27 @@ UIImage *TGDecodeThumbnail(NSString *path, CGFloat maxPixelSize) {
 	CFRelease(src);
 	if (!cgImage) return nil;
 	UIImage *image = [UIImage imageWithCGImage:cgImage];
-	NSLog(@"PERF decode %@ max=%d -> %dx%d %.0f KB %@",
-			[path lastPathComponent], (int)maxPixelSize,
-			(int)CGImageGetWidth(cgImage), (int)CGImageGetHeight(cgImage),
-			CGImageGetHeight(cgImage) * CGImageGetBytesPerRow(cgImage) / 1024.0,
-			[NSThread isMainThread] ? @"MAINTHREAD" : @"bg");
+	if (TGPerfLogging())
+		NSLog(@"PERF decode %@ max=%d -> %dx%d %.0f KB %@",
+				[path lastPathComponent], (int)maxPixelSize,
+				(int)CGImageGetWidth(cgImage), (int)CGImageGetHeight(cgImage),
+				CGImageGetHeight(cgImage) * CGImageGetBytesPerRow(cgImage) / 1024.0,
+				[NSThread isMainThread] ? @"MAINTHREAD" : @"bg");
 	CGImageRelease(cgImage);
 	return image;
+}
+
+/// One core. Decoding four photos at once on it finishes no sooner than one
+/// after another, competes with the main thread for it, and holds four sets of
+/// ImageIO buffers at the same time - which is what the resident peak was
+/// made of.
+dispatch_queue_t TGImageDecodeQueue(void) {
+	static dispatch_queue_t queue = NULL;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		queue = dispatch_queue_create("tg.image.decode", DISPATCH_QUEUE_SERIAL);
+	});
+	return queue;
 }
 
 NSUInteger TGImageBitmapBytes(UIImage *image) {

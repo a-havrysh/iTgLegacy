@@ -2468,6 +2468,7 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 @property (nonatomic, strong) NSMutableArray *imageOrder;  // fileId, oldest first
 @property (nonatomic, assign) BOOL tableReloadPending;
 @property (nonatomic, assign) BOOL fetchImagesPending;
+@property (nonatomic, assign) BOOL pendingReloadAnchors;
 @property (nonatomic, strong) NSMutableSet *imagesRequested;
 @property (nonatomic, strong) NSMutableSet *photoFilesInFlight;
 @property (nonatomic, strong) NSMutableSet *photoFilesCancelled;
@@ -3623,7 +3624,7 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 			if (!path.length)
 				return;
 			CGFloat cardPixels = MAX(kMapCardW, kMapCardH) * [UIScreen mainScreen].scale;
-			dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+			dispatch_async(TGImageDecodeQueue(), ^{
 				UIImage *tile = TGDecodeThumbnail(path, cardPixels);
 				if (!tile)
 					return;
@@ -3656,8 +3657,17 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 		if (!me)
 			return;
 		me.tableReloadPending = NO;
+		BOOL anchor = me.pendingReloadAnchors;
+		me.pendingReloadAnchors = NO;
 		[me.table reloadData];
+		if (anchor && me.anchorToBottom)
+			[me scrollToBottomAnimated:NO];
 	});
+}
+
+- (void)setNeedsTableReloadKeepingBottom {
+	self.pendingReloadAnchors = YES;
+	[self setNeedsTableReload];
 }
 
 - (void)setNeedsFetchMissingImages {
@@ -3777,7 +3787,7 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 				[[TGClient shared] downloadFile:photo.integerValue completion:^(NSString *path){
 					if (!path.length)
 						return;
-					dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+					dispatch_async(TGImageDecodeQueue(), ^{
 						UIImage *image = TGDecodeThumbnail(path, limit);
 						if (!image)
 							return;
@@ -3874,9 +3884,7 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 			if (!me || !path)
 				return;
 			me.lottiePaths[docId] = path;
-			[me.table reloadData];
-			if (me.anchorToBottom)
-				[me scrollToBottomAnimated:NO];
+			[me setNeedsTableReloadKeepingBottom];
 		}];
 	}
 
@@ -4013,6 +4021,8 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	}
 	[self dropTileBitmapsOutside:keep];
 
+	if (!TGPerfLogging())
+		return;
 	NSUInteger tiles = 0;
 	for (UIImage *image in [self.tileBitmaps allValues])
 		tiles += TGImageBitmapBytes(image);
@@ -4090,7 +4100,7 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 		// scaled down: TDLib answers on the main thread, and a full-resolution
 		// photo drawn from there is what used to stall the first frame of a
 		// chat for over a second.
-		dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+		dispatch_async(TGImageDecodeQueue(), ^{
 			UIImage *img = nil;
 			@autoreleasepool {
 				img = TGDecodeThumbnail(path, limit);
@@ -4134,9 +4144,7 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 
 - (void)applyArrivedImage:(UIImage *)img forFile:(NSNumber *)fileId {
 	if ([self heightDependsOnBitmapForFile:fileId]){
-		[self.table reloadData];
-		if (self.anchorToBottom)
-			[self scrollToBottomAnimated:NO];
+		[self setNeedsTableReloadKeepingBottom];
 		return;
 	}
 	[self refreshRowsShowingFile:fileId withImage:img];
@@ -4427,7 +4435,7 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	[[TGClient shared] downloadFile:fileId.integerValue completion:^(NSString *path){
 		if (!path.length)
 			return;
-		dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+		dispatch_async(TGImageDecodeQueue(), ^{
 			UIImage *photo = TGDecodeThumbnail(path, avatarPixels);
 			if (!photo)
 				return;
@@ -5185,7 +5193,7 @@ static UIImage *TGPinnedBadgeGlyph(void) {
 		[[TGClient shared] downloadFile:fileId.integerValue completion:^(NSString *path){
 			if (!path.length)
 				return;
-			dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+			dispatch_async(TGImageDecodeQueue(), ^{
 				UIImage *photo = TGDecodeThumbnail(path, sidePixels);
 				if (!photo)
 					return;

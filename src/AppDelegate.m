@@ -66,6 +66,15 @@ static double TGProcessCPUSeconds(void) {
 	return total;
 }
 
+static volatile BOOL TGPerfLoggingOn = NO;
+
+/// The running commentary - a resident-size line four times a second, one line
+/// per image decoded - costs real time on this hardware, so it stays off until
+/// itglegacy://perflog/on asks for it.
+BOOL TGPerfLogging(void) {
+	return TGPerfLoggingOn;
+}
+
 static thread_t TGMainThreadPort = MACH_PORT_NULL;
 static volatile BOOL TGStackSamplingOn = NO;
 
@@ -257,6 +266,10 @@ void TGMarkOpenStage(NSString *stage) {
 	double worstStall = 0;
 	while (1){
 		@autoreleasepool {
+			if (!TGPerfLoggingOn){
+				usleep(250000);
+				continue;
+			}
 			NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
 			double stall = TGMainPingAt > 0 ? (now - TGMainPingAt) : 0;
 			if (stall > worstStall)
@@ -711,6 +724,12 @@ static void TGWatchForIncomingCalls(void) {
 	if ([host isEqualToString:@"regions"]){
 		TGMemMark(arg.length ? arg : @"regions");
 		TGRegionReport(arg.length ? arg : @"regions");
+		return YES;
+	}
+
+	if ([host isEqualToString:@"perflog"]){
+		TGPerfLoggingOn = [arg isEqualToString:@"on"];
+		NSLog(@"PERF perflog %@", TGPerfLoggingOn ? @"on" : @"off");
 		return YES;
 	}
 

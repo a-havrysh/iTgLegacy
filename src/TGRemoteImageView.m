@@ -146,7 +146,7 @@ static NSUInteger TGRemoteImageCost(UIImage *image) {
 		[me applyImage:image fade:fade];
 	};
 
-	dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+	dispatch_async(TGImageDecodeQueue(), ^{
 		UIImage *cached = nil;
 		@autoreleasepool {
 			UIImage *decoded = [TGDiskCache imageForKey:diskKey scale:screenScale];
@@ -171,7 +171,7 @@ static NSUInteger TGRemoteImageCost(UIImage *image) {
 					deliver(nil);
 					return;
 				}
-				dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+				dispatch_async(TGImageDecodeQueue(), ^{
 					UIImage *thumb = TGDecodeSquareThumbnail(path, side);
 					if (!thumb){
 						dispatch_async(dispatch_get_main_queue(), ^{ deliver(nil); });

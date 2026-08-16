@@ -12,6 +12,7 @@ void TGBeginOpenTiming(void);
 
 unsigned long long TGResidentBytes(void);
 void TGMemMark(NSString *tag);
+BOOL TGPerfLogging(void);
 
 @interface AppDelegate : UIResponder <UIApplicationDelegate, UIAlertViewDelegate>
 

@@ -1586,7 +1586,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 			}
 			return;
 		}
-		dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+		dispatch_async(TGImageDecodeQueue(), ^{
 			UIImage *image = TGDecodeThumbnail(path, maxSidePixels);
 			dispatch_async(dispatch_get_main_queue(), ^{
 				typeof(self) strongMe = weakSelf;
@@ -1617,7 +1617,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	[[TGClient shared] downloadFile:[thumbId integerValue] completion:^(NSString *path){
 		if (path.length == 0)
 			return;
-		dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+		dispatch_async(TGImageDecodeQueue(), ^{
 			UIImage *image = TGDecodeThumbnail(path, sidePixels);
 			if (!image)
 				return;
