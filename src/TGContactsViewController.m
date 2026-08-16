@@ -12,6 +12,7 @@
 #import "TGNewContactViewController.h"
 #import "RootViewController.h"
 #import "UIView+SafeTint.h"
+#import "TGEmoji.h"
 #import <QuartzCore/QuartzCore.h>
 #import <AddressBook/AddressBook.h>
 #import <dlfcn.h>
@@ -37,6 +38,7 @@ static NSUInteger TGContactPhotoCost(UIImage *image) {
 }
 
 static NSString *const TGContactsSortByLastSeenKey = @"TGContactsSortByLastSeen";
+static NSString *const TGContactsSortedByPresenceTitle = @"Sorted by Last Seen Time";
 static NSString *const TGContactActionInvite = @"invite";
 static NSString *const TGContactActionNewGroup = @"newGroup";
 static NSString *const TGContactActionSync = @"sync";
@@ -226,8 +228,8 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 
 @interface TGContactRowCell : UITableViewCell
 @property (nonatomic, strong) UIImageView *avatarView;
-@property (nonatomic, strong) UILabel *titleLabel;
-@property (nonatomic, strong) UILabel *secondTitleLabel;
+@property (nonatomic, strong) TGEmojiLabel *titleLabel;
+@property (nonatomic, strong) TGEmojiLabel *secondTitleLabel;
 @property (nonatomic, strong) UILabel *subtitleLabel;
 @property (nonatomic, strong) UIImageView *premiumView;
 @property (nonatomic, strong) UIImageView *verifiedLabel;
@@ -259,14 +261,14 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 	self.avatarView.clipsToBounds = YES;
 	[self.contentView addSubview:self.avatarView];
 
-	self.titleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	self.titleLabel = [[TGEmojiLabel alloc] initWithFrame:CGRectZero];
 	self.titleLabel.backgroundColor = [UIColor clearColor];
 	self.titleLabel.font = [UIFont systemFontOfSize:19];
 	self.titleLabel.textColor = flat ? [[TGTheme shared] primaryTextColour] : [UIColor blackColor];
 	self.titleLabel.highlightedTextColor = [UIColor whiteColor];
 	[self.contentView addSubview:self.titleLabel];
 
-	self.secondTitleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	self.secondTitleLabel = [[TGEmojiLabel alloc] initWithFrame:CGRectZero];
 	self.secondTitleLabel.backgroundColor = [UIColor clearColor];
 	self.secondTitleLabel.font = [UIFont boldSystemFontOfSize:19];
 	self.secondTitleLabel.textColor = flat ? [[TGTheme shared] primaryTextColour] : [UIColor blackColor];
@@ -380,7 +382,8 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 	CGFloat firstLimit = viewSize.width - kContactTextLeft - 5 - 14;
 	CGFloat firstWidth = MIN(titleWidth, firstLimit);
 	if (!self.secondTitleLabel.hidden){
-		CGSize firstSize = [self.titleLabel.text sizeWithFont:self.titleLabel.font];
+		CGSize firstSize = TGEmojiTextSize(self.titleLabel.text, self.titleLabel.font,
+				CGSizeMake(10000, titleHeight), NSLineBreakByWordWrapping, 1);
 		firstWidth = MIN(firstSize.width, firstLimit);
 	}
 	self.titleLabel.frame = CGRectMake(kContactTextLeft, titleY, firstWidth, titleHeight);
@@ -390,7 +393,9 @@ static UIImage *TGContactsScaledImage(NSString *name, CGFloat side) {
 		CGFloat secondX = kContactTextLeft + firstWidth + 4;
 		CGFloat secondWidth = MAX(0.0f, viewSize.width - 5 - [self badgeWidth] - secondX);
 		self.secondTitleLabel.frame = CGRectMake(secondX, titleY, secondWidth, titleHeight);
-		CGSize secondFit = [self.secondTitleLabel.text sizeWithFont:self.secondTitleLabel.font];
+		CGSize secondFit = TGEmojiTextSize(self.secondTitleLabel.text,
+				self.secondTitleLabel.font, CGSizeMake(10000, titleHeight),
+				NSLineBreakByWordWrapping, 1);
 		badgeX = secondX + MIN(secondFit.width, secondWidth) + kContactBadgeGap;
 	} else {
 		CGSize fit = [self.titleLabel sizeThatFits:CGSizeMake(titleWidth, titleHeight)];
@@ -2325,7 +2330,7 @@ static NSString *TGContactSectionLetter(NSDictionary *u, BOOL byFirstName) {
 	NSMutableArray *groups = [NSMutableArray array];
 	if (self.sortByLastSeen && !self.isPickerMode){
 		if (self.users.count){
-			[titles addObject:[NSNull null]];
+			[titles addObject:TGContactsSortedByPresenceTitle];
 			[groups addObject:[self.users mutableCopy]];
 		}
 	} else {
@@ -2775,8 +2780,9 @@ static NSString *TGContactSectionLetter(NSDictionary *u, BOOL byFirstName) {
 }
 
 - (void)loadContactSortMode {
-	self.sortByLastSeen = [[NSUserDefaults standardUserDefaults]
-			boolForKey:TGContactsSortByLastSeenKey];
+	id stored = [[NSUserDefaults standardUserDefaults]
+			objectForKey:TGContactsSortByLastSeenKey];
+	self.sortByLastSeen = stored ? [stored boolValue] : YES;
 }
 
 - (void)sortTapped {
@@ -2796,12 +2802,12 @@ static NSString *TGContactSectionLetter(NSDictionary *u, BOOL byFirstName) {
 	if (index != 0 && index != 1)
 		return;
 	BOOL byLastSeen = (index == 1);
-	if (byLastSeen == self.sortByLastSeen)
-		return;
-	self.sortByLastSeen = byLastSeen;
 	[[NSUserDefaults standardUserDefaults] setBool:byLastSeen
 											forKey:TGContactsSortByLastSeenKey];
 	[[NSUserDefaults standardUserDefaults] synchronize];
+	if (byLastSeen == self.sortByLastSeen)
+		return;
+	self.sortByLastSeen = byLastSeen;
 	[self refreshTable];
 	if (self.tableView.numberOfSections > 0)
 		[self.tableView setContentOffset:CGPointMake(0, -self.tableView.contentInset.top)
@@ -3256,7 +3262,8 @@ static NSString *TGContactSectionLetter(NSDictionary *u, BOOL byFirstName) {
 }
 
 - (NSArray *)sectionIndexTitlesForTableView:(UITableView *)tableView {
-	if (!self.sectionTitles.count || self.filteredUsers || self.sortByLastSeen)
+	if (!self.sectionTitles.count || self.filteredUsers
+			|| (self.sortByLastSeen && !self.isPickerMode))
 		return nil;
 	NSMutableArray *indices = [NSMutableArray array];
 	if (self.searchBar)

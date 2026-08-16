@@ -24,6 +24,7 @@
 #import "TGMediaViewController.h"
 #import <ImageIO/ImageIO.h>
 #import <QuartzCore/QuartzCore.h>
+#import <CoreText/CoreText.h>
 
 @interface TGProfilePermissionsController : UITableViewController
 @property (nonatomic, assign) int64_t chatId;
@@ -191,9 +192,13 @@ static const CGFloat kButtonsRowHeight = 43.0f;
 static const CGFloat kButtonGutter = 10.0f;
 static const CGFloat kGroupedInset = 9.0f;
 static const CGFloat kButtonsRowGutter = 10.0f;
-static const CGFloat kTitleContainerHeight = 89.0f;
+static const CGFloat kTitleContainerHeight = 86.0f;
+static const CGFloat kGroupTitleContainerHeight = 89.0f;
 static const CGFloat kProfileAvatarSide = 70.0f;
+static const CGFloat kProfileAvatarPhotoSide = 69.0f;
 static const CGFloat kProfileAvatarRadius = 10.0f;
+static const CGFloat kProfileNameGap = 15.0f;
+static const CGFloat kGroupNameGap = 13.0f;
 static const CGFloat kMemberRowHeight = 49.0f;
 static const CGFloat kMemberAvatarSide = 36.0f;
 
@@ -257,6 +262,96 @@ static UIImage *TGProfileStretched(NSString *name) {
 	if (!raw)
 		return nil;
 	return [raw stretchableImageWithLeftCapWidth:(int)(raw.size.width / 2) topCapHeight:0];
+}
+
+static UIImage *TGProfileStretchedInCentre(NSString *name) {
+	UIImage *raw = [UIImage imageNamed:name];
+	if (!raw)
+		return nil;
+	return [raw stretchableImageWithLeftCapWidth:(int)(raw.size.width / 2)
+									topCapHeight:(int)(raw.size.height / 2)];
+}
+
+static UIImage *TGProfileAvatarPlate(UIImage *photo) {
+	if (!photo)
+		return nil;
+	CGFloat side = kProfileAvatarSide;
+	CGFloat inner = kProfileAvatarPhotoSide;
+	CGFloat offset = TGProfileRetinaPixel();
+	UIGraphicsBeginImageContextWithOptions(CGSizeMake(side, side), NO, 0.0f);
+	CGRect box = CGRectMake(offset, 0, inner, inner);
+	[[UIBezierPath bezierPathWithRoundedRect:box
+								cornerRadius:kProfileAvatarRadius] addClip];
+	[photo drawInRect:box];
+	UIImage *plate = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return plate ?: photo;
+}
+
+static UIImage *TGProfilePlaceholderPlate(int64_t colourId, BOOL isGroup) {
+	if (isGroup || colourId == 0)
+		return TGProfileStretchedInCentre(@"ProfilePhotoPlaceholder.png")
+				?: [UIImage imageNamed:@"ProfilePhotoPlaceholderGeneric.png"];
+	if (colourId == 777000 || colourId == 333000)
+		return [UIImage imageNamed:@"ProfileAvatarSystem.png"];
+	NSUInteger slot = (NSUInteger)(llabs(colourId) % 8);
+	UIImage *plate = [UIImage imageNamed:
+			[NSString stringWithFormat:@"ProfileAvatar%u.png", (unsigned)(slot + 1)]];
+	return plate ?: [UIImage imageNamed:@"ProfilePhotoPlaceholderGeneric.png"];
+}
+
+static BOOL TGProfileCanRenderText(NSString *text) {
+	if (!text.length)
+		return NO;
+	NSUInteger length = text.length;
+	unichar *chars = (unichar *)malloc(sizeof(unichar) * length);
+	if (!chars)
+		return NO;
+	[text getCharacters:chars range:NSMakeRange(0, length)];
+	CGGlyph *glyphs = (CGGlyph *)calloc(length, sizeof(CGGlyph));
+	BOOL renderable = NO;
+	if (glyphs){
+		NSArray *families = @[@"AppleColorEmoji", @"Helvetica", @"AppleGothic"];
+		for (NSString *family in families){
+			CTFontRef font = CTFontCreateWithName((__bridge CFStringRef)family, 16, NULL);
+			if (!font)
+				continue;
+			BOOL all = CTFontGetGlyphsForCharacters(font, chars, glyphs, (CFIndex)length);
+			CFRelease(font);
+			if (all){
+				renderable = YES;
+				break;
+			}
+		}
+		free(glyphs);
+	}
+	free(chars);
+	return renderable;
+}
+
+static NSString *TGProfileLastSeenText(long long wasOnline) {
+	if (wasOnline <= 0)
+		return nil;
+	NSDate *date = [NSDate dateWithTimeIntervalSince1970:(NSTimeInterval)wasOnline];
+	NSCalendar *calendar = [NSCalendar currentCalendar];
+	NSUInteger units = NSYearCalendarUnit | NSMonthCalendarUnit | NSDayCalendarUnit;
+	NSDateComponents *then = [calendar components:units fromDate:date];
+	NSDateComponents *now = [calendar components:units fromDate:[NSDate date]];
+	NSInteger days = [calendar components:NSDayCalendarUnit
+								 fromDate:[calendar dateFromComponents:then]
+								   toDate:[calendar dateFromComponents:now]
+								  options:0].day;
+
+	NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+	if (then.year != now.year || days < 0 || days > 1){
+		[formatter setDateFormat:@"dd.MM.yy"];
+		return [NSString stringWithFormat:@"last seen %@",
+				[formatter stringFromDate:date]];
+	}
+	[formatter setTimeStyle:NSDateFormatterShortStyle];
+	[formatter setDateStyle:NSDateFormatterNoStyle];
+	return [NSString stringWithFormat:@"last seen %@ at %@",
+			days == 0 ? @"today" : @"yesterday", [formatter stringFromDate:date]];
 }
 
 @implementation TGProfileButtonsCell
@@ -587,59 +682,6 @@ static UIImage *TGProfileStretched(NSString *name) {
 	}];
 }
 
-- (void)applyAccentColours:(NSDictionary *)colours {
-	if (![colours isKindOfClass:[NSDictionary class]])
-		return;
-	id rgb = colours[@"rgb"];
-	if (![rgb isKindOfClass:[NSNumber class]]){
-		NSInteger colourId = [colours[@"colorId"] isKindOfClass:[NSNumber class]]
-				? [colours[@"colorId"] integerValue] : 0;
-		rgb = [TGClient rgbForAccentColorId:colourId];
-	}
-	if ([rgb isKindOfClass:[NSNumber class]])
-		self.nameLabel.textColor = TGProfileColour([rgb intValue]);
-
-	NSInteger profileColourId = [colours[@"profileColorId"] isKindOfClass:[NSNumber class]]
-			? [colours[@"profileColorId"] integerValue] : -1;
-	[self applyHeaderGradient:[TGClient profileGradientForColorId:profileColourId]];
-}
-
-- (void)applyHeaderGradient:(NSArray *)stops {
-	UIView *header = self.tableView.tableHeaderView;
-	if (!header || stops.count < 2)
-		return;
-	id top = stops[0];
-	id bottom = stops[1];
-	if (![top isKindOfClass:[NSNumber class]] || ![bottom isKindOfClass:[NSNumber class]])
-		return;
-	CGFloat height = header.bounds.size.height;
-	if (height < 1)
-		return;
-
-	UIGraphicsBeginImageContextWithOptions(CGSizeMake(1, height), NO, 0.0f);
-	CGContextRef context = UIGraphicsGetCurrentContext();
-	UIImage *image = nil;
-	if (context){
-		UIColor *topColour = [TGProfileColour([top intValue]) colorWithAlphaComponent:0.20f];
-		UIColor *bottomColour =
-				[TGProfileColour([bottom intValue]) colorWithAlphaComponent:0.20f];
-		CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
-		NSArray *colours = @[(id)topColour.CGColor, (id)bottomColour.CGColor];
-		CGGradientRef gradient = CGGradientCreateWithColors(space,
-				(__bridge CFArrayRef)colours, NULL);
-		if (gradient){
-			CGContextDrawLinearGradient(context, gradient, CGPointMake(0, 0),
-					CGPointMake(0, height), 0);
-			CGGradientRelease(gradient);
-		}
-		CGColorSpaceRelease(space);
-		image = UIGraphicsGetImageFromCurrentImageContext();
-	}
-	UIGraphicsEndImageContext();
-	if (image)
-		header.backgroundColor = [UIColor colorWithPatternImage:image];
-}
-
 - (void)loadProfileExtras {
 	if (self.userId){
 		[self loadUserProfileExtras];
@@ -734,39 +776,47 @@ static UIImage *TGProfileStretched(NSString *name) {
 	[self.tableView reloadData];
 }
 
+- (UIImage *)placeholderAvatarPlate {
+	return TGProfilePlaceholderPlate(self.userId, [self isGroupProfile]);
+}
+
+- (void)showPlaceholderAvatarPlate {
+	self.avatarView.image = [self placeholderAvatarPlate];
+	self.avatarOverlayView.hidden = YES;
+}
+
 - (void)buildHeader {
 	CGFloat width = self.view.bounds.size.width;
 	CGFloat side = kProfileAvatarSide;
-	CGFloat height = kTitleContainerHeight;
+	CGFloat height = [self isGroupProfile] ? kGroupTitleContainerHeight
+										   : kTitleContainerHeight;
 
 	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, height)];
 	header.backgroundColor = [UIColor clearColor];
 
 	self.avatarView = [[UIImageView alloc] initWithFrame:
 			CGRectMake(kGroupedInset, 14, side, side)];
-	self.avatarView.layer.cornerRadius = kProfileAvatarRadius;
-	self.avatarView.clipsToBounds = YES;
-	self.avatarView.contentMode = UIViewContentModeScaleAspectFill;
 	self.avatarView.userInteractionEnabled = YES;
 	self.avatarView.exclusiveTouch = YES;
 	[self.avatarView addGestureRecognizer:
 			[[UITapGestureRecognizer alloc] initWithTarget:self
 													action:@selector(avatarTapped)]];
-	self.avatarView.image = self.avatarImage
-			?: [TGIcons avatarWithInitials:TGProfileInitial(self.name)
-									  size:side
-								  colourId:self.userId ?: self.chatId];
 	[header addSubview:self.avatarView];
 
-	UIImage *overlayArt = [UIImage imageNamed:@"ProfileAvatarOverlay.png"];
+	UIImage *overlayArt = TGProfileStretchedInCentre(@"ProfileAvatarOverlay.png");
 	if (overlayArt){
-		UIImageView *overlay = [[UIImageView alloc] initWithImage:
-				[overlayArt stretchableImageWithLeftCapWidth:(int)(overlayArt.size.width / 2)
-												topCapHeight:(int)(overlayArt.size.height / 2)]];
+		UIImageView *overlay = [[UIImageView alloc] initWithImage:overlayArt];
 		overlay.frame = self.avatarView.frame;
 		overlay.userInteractionEnabled = NO;
 		[header addSubview:overlay];
 		self.avatarOverlayView = overlay;
+	}
+
+	if (self.avatarImage){
+		self.avatarView.image = TGProfileAvatarPlate(self.avatarImage);
+		self.avatarOverlayView.hidden = NO;
+	} else {
+		[self showPlaceholderAvatarPlate];
 	}
 
 	[self buildHeaderLabelsInto:header width:width];
@@ -789,11 +839,21 @@ static UIImage *TGProfileStretched(NSString *name) {
 	[self loadAvatarFile:fileId.integerValue];
 }
 
+- (CGFloat)headerNameGap {
+	return [self isGroupProfile] ? kGroupNameGap : kProfileNameGap;
+}
+
+- (CGRect)headerStatusFrameForLeft:(CGFloat)labelLeft width:(CGFloat)available {
+	if ([self isGroupProfile])
+		return CGRectMake(labelLeft + 1, 49 + TGProfileRetinaPixel(), available, 24);
+	CGFloat line = [UIFont systemFontOfSize:14].lineHeight;
+	return CGRectMake(labelLeft, 52, available, ceilf(line));
+}
+
 - (void)buildHeaderLabelsInto:(UIView *)header width:(CGFloat)width {
 	TGTheme *theme = [TGTheme shared];
 
-	CGFloat retinaPixel = TGProfileRetinaPixel();
-	CGFloat labelLeft = kGroupedInset + kProfileAvatarSide + 15;
+	CGFloat labelLeft = kGroupedInset + kProfileAvatarSide + [self headerNameGap];
 
 	UILabel *nameLabel = [[UILabel alloc] initWithFrame:
 			CGRectMake(labelLeft, 24, width - labelLeft - kGroupedInset, 24)];
@@ -822,8 +882,8 @@ static UIImage *TGProfileStretched(NSString *name) {
 	[header addSubview:self.badgeView];
 
 	self.statusLabel = [[UILabel alloc] initWithFrame:
-			CGRectMake(labelLeft + 1, 49 + retinaPixel,
-					   width - labelLeft - kGroupedInset, 24)];
+			[self headerStatusFrameForLeft:labelLeft
+									 width:width - labelLeft - kGroupedInset]];
 	self.statusLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	self.statusLabel.font = [UIFont systemFontOfSize:14];
 	self.statusLabel.textColor = theme.isDark ? [theme secondaryTextColour]
@@ -850,7 +910,8 @@ static UIImage *TGProfileStretched(NSString *name) {
 		fade.type = kCATransitionFade;
 		[self.avatarView.layer addAnimation:fade forKey:@"avatarFade"];
 	}
-	self.avatarView.image = image;
+	self.avatarView.image = TGProfileAvatarPlate(image);
+	self.avatarOverlayView.hidden = NO;
 }
 
 - (void)showPlaceholderAvatarFromData:(NSData *)data {
@@ -2546,10 +2607,7 @@ static UIImage *TGProfileStretched(NSString *name) {
 			[weakSelf cancelAvatarDownload];
 			weakSelf.avatarImage = nil;
 			weakSelf.avatarIsPlaceholder = NO;
-			weakSelf.avatarView.image =
-					[TGIcons avatarWithInitials:TGProfileInitial(weakSelf.name)
-										   size:kProfileAvatarSide
-									   colourId:weakSelf.chatId];
+			[weakSelf showPlaceholderAvatarPlate];
 		}
 		[weakSelf showToast:(ok ? @"Photo removed" : @"Could not remove the photo")];
 	}];
@@ -2921,10 +2979,7 @@ static UIImage *TGProfileStretched(NSString *name) {
 	self.nameLabel.text = self.name;
 	[self layoutNameBadge];
 	if (!self.avatarImage && !self.avatarIsPlaceholder)
-		self.avatarView.image =
-				[TGIcons avatarWithInitials:TGProfileInitial(self.name)
-									   size:kProfileAvatarSide
-								   colourId:self.userId];
+		[self showPlaceholderAvatarPlate];
 }
 
 - (void)appendUsernameRowTo:(NSMutableArray *)rows fromUser:(NSDictionary *)user {

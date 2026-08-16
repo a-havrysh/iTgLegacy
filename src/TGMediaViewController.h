@@ -11,3 +11,12 @@
 
 @interface TGDownloadsViewController : UIViewController <UITableViewDataSource, UITableViewDelegate>
 @end
+
+@interface TGMediaFullscreenController : UIViewController
+
+@property (nonatomic, assign) int64_t chatId;
+@property (nonatomic, copy) void (^onMessageDeleted)(int64_t messageId);
+
+- (instancetype)initWithItems:(NSArray *)items index:(NSInteger)index;
+
+@end

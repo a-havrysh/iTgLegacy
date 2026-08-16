@@ -8,6 +8,7 @@
 #import "TGThemeFile.h"
 #import "TGCapabilities.h"
 #import "TGMosaicLayout.h"
+#import "TGEmoji.h"
 #import <AddressBookUI/AddressBookUI.h>
 #import <CoreLocation/CoreLocation.h>
 #import <AssetsLibrary/AssetsLibrary.h>
@@ -42,10 +43,14 @@
 #import "TGClient+Stickers.h"
 #import "TGClient+Files.h"
 #import "TGClient+ChatList.h"
+#import "TGMediaViewController.h"
+#import <UIKit/UIGestureRecognizerSubclass.h>
 
 // Their design system is drawn for Android at 360dp; a 4S is 320pt, so
 // everything taken from it is scaled by 0.889 and rounded to a whole point.
 static const CGFloat kInputHeight = 43.0f;
+static const CGFloat kInputSwipeDismissDistance = 18.0f;
+static const CGFloat kInputSwipeDismissVelocity = 260.0f;
 // Msg_In.png / Msg_Out.png carry the tail inside the artwork: their body
 // padding is 15+1 on the tail side against 9+1 on the other, so the picture
 // hangs 6pt past the content box.
@@ -142,6 +147,8 @@ static const CGFloat kMosaicMinTileSide = 68.0f;
 static const CGFloat kPollRow     = 30.0f;
 // One row of reaction chips, the height the rulebook fixes them at.
 static const CGFloat kChipsRowHeight = 20.0f;
+static const CGFloat kChipsRowTopGap    = 4.0f;
+static const CGFloat kChipsRowBottomGap = 3.0f;
 static const CGFloat kPreviewBar   = 2.0f;
 static const CGFloat kPreviewGap   = 8.0f;
 static const CGFloat kPreviewThumb = 52.0f;
@@ -792,326 +799,6 @@ static UIColor *TGChatHexColour(unsigned int rgb) {
 
 @end
 
-#pragma mark - full screen photo viewer
-
-static const CGFloat kPhotoPageGap = 20.0f;
-
-@interface TGPhotoPageView : UIScrollView <UIScrollViewDelegate>
-@property (nonatomic, strong) UIImageView *photoView;
-@property (nonatomic, assign) NSInteger pageIndex;
-@property (nonatomic, assign) BOOL wired;
-- (void)setPhoto:(UIImage *)photo;
-- (void)resetZoom;
-- (BOOL)isZoomed;
-@end
-
-@implementation TGPhotoPageView
-
-- (id)initWithFrame:(CGRect)frame {
-	self = [super initWithFrame:frame];
-	if (!self)
-		return nil;
-	self.delegate = self;
-	self.backgroundColor = [UIColor blackColor];
-	self.showsHorizontalScrollIndicator = NO;
-	self.showsVerticalScrollIndicator = NO;
-	self.scrollsToTop = NO;
-	self.bouncesZoom = YES;
-	self.minimumZoomScale = 1.0f;
-	self.maximumZoomScale = 1.0f;
-	self.pageIndex = -1;
-
-	self.photoView = [[UIImageView alloc] initWithFrame:self.bounds];
-	self.photoView.contentMode = UIViewContentModeScaleAspectFit;
-	self.photoView.backgroundColor = [UIColor clearColor];
-	[self addSubview:self.photoView];
-	return self;
-}
-
-- (void)setPhoto:(UIImage *)photo {
-	self.photoView.image = photo;
-	[self resetZoom];
-}
-
-- (void)resetZoom {
-	self.zoomScale = 1.0f;
-	self.minimumZoomScale = 1.0f;
-
-	UIImage *photo = self.photoView.image;
-	CGFloat ceiling = 1.0f;
-	CGSize box = self.bounds.size;
-	if (photo.size.width > 1 && photo.size.height > 1 && box.width > 1 && box.height > 1){
-		CGFloat fit = MIN(box.width / photo.size.width, box.height / photo.size.height);
-		if (fit > 0.0f)
-			ceiling = MAX(2.0f, MIN(1.0f / fit, 4.0f));
-	}
-	self.maximumZoomScale = ceiling;
-	self.photoView.frame = self.bounds;
-	self.contentSize = box;
-	self.contentOffset = CGPointZero;
-}
-
-- (BOOL)isZoomed {
-	return self.zoomScale > self.minimumZoomScale + 0.001f;
-}
-
-- (UIView *)viewForZoomingInScrollView:(UIScrollView *)scrollView {
-	return self.photoView;
-}
-
-- (void)scrollViewDidZoom:(UIScrollView *)scrollView {
-	CGSize box = self.bounds.size;
-	CGRect frame = self.photoView.frame;
-	frame.origin.x = (frame.size.width < box.width)
-			? floorf((box.width - frame.size.width) / 2) : 0;
-	frame.origin.y = (frame.size.height < box.height)
-			? floorf((box.height - frame.size.height) / 2) : 0;
-	self.photoView.frame = frame;
-}
-
-@end
-
-@interface TGPhotoBrowserView : UIView <UIScrollViewDelegate>
-@property (nonatomic, copy) UIImage *(^cachedPhoto)(NSNumber *fileId);
-@property (nonatomic, copy) void (^fetchPhoto)(NSNumber *fileId, void (^done)(UIImage *photo));
-@property (nonatomic, copy) void (^onShowing)(UIImage *photo);
-@property (nonatomic, copy) void (^onDismiss)(void);
-@property (nonatomic, copy) void (^onHold)(void);
-- (id)initWithFrame:(CGRect)frame
-			fileIds:(NSArray *)fileIds
-			  index:(NSInteger)index
-			  photo:(UIImage *)photo;
-- (void)start;
-- (UIImage *)currentPhoto;
-@end
-
-@implementation TGPhotoBrowserView {
-	UIScrollView *_paging;
-	NSArray *_fileIds;
-	UIImage *_openingPhoto;
-	NSInteger _openingIndex;
-	NSInteger _index;
-	NSInteger _pageCount;
-	NSMutableArray *_pages;
-	NSMutableArray *_queue;
-}
-
-- (id)initWithFrame:(CGRect)frame
-			fileIds:(NSArray *)fileIds
-			  index:(NSInteger)index
-			  photo:(UIImage *)photo
-{
-	self = [super initWithFrame:frame];
-	if (!self)
-		return nil;
-
-	_fileIds = fileIds ?: @[];
-	_pageCount = MAX((NSInteger)1, (NSInteger)_fileIds.count);
-	_index = MAX((NSInteger)0, MIN(index, _pageCount - 1));
-	_openingIndex = _index;
-	_openingPhoto = photo;
-	_pages = [NSMutableArray array];
-	_queue = [NSMutableArray array];
-	self.backgroundColor = [UIColor blackColor];
-	self.clipsToBounds = YES;
-
-	_paging = [[UIScrollView alloc] initWithFrame:
-			CGRectMake(-kPhotoPageGap / 2, 0,
-					   frame.size.width + kPhotoPageGap, frame.size.height)];
-	_paging.pagingEnabled = YES;
-	_paging.alwaysBounceHorizontal = YES;
-	_paging.alwaysBounceVertical = NO;
-	_paging.scrollsToTop = NO;
-	_paging.showsHorizontalScrollIndicator = NO;
-	_paging.showsVerticalScrollIndicator = NO;
-	_paging.backgroundColor = [UIColor blackColor];
-	_paging.delegate = self;
-	[self addSubview:_paging];
-	return self;
-}
-
-- (void)start {
-	CGFloat pageW = _paging.bounds.size.width;
-	_paging.contentSize = CGSizeMake(pageW * _pageCount, _paging.bounds.size.height);
-	_paging.contentOffset = CGPointMake(pageW * _index, 0);
-	[self layoutPages];
-	[self announceCurrent];
-}
-
-- (void)layoutSubviews {
-	[super layoutSubviews];
-	CGRect wanted = CGRectMake(-kPhotoPageGap / 2, 0,
-							   self.bounds.size.width + kPhotoPageGap,
-							   self.bounds.size.height);
-	if (CGRectEqualToRect(_paging.frame, wanted))
-		return;
-
-	_paging.frame = wanted;
-	CGFloat pageW = wanted.size.width;
-	_paging.contentSize = CGSizeMake(pageW * _pageCount, wanted.size.height);
-	for (TGPhotoPageView *page in _pages){
-		page.frame = CGRectMake(page.pageIndex * pageW + kPhotoPageGap / 2, 0,
-								pageW - kPhotoPageGap, wanted.size.height);
-		[page resetZoom];
-	}
-	_paging.contentOffset = CGPointMake(pageW * _index, 0);
-}
-
-- (TGPhotoPageView *)pageAtIndex:(NSInteger)index {
-	for (TGPhotoPageView *page in _pages)
-		if (page.pageIndex == index)
-			return page;
-	return nil;
-}
-
-- (UIImage *)currentPhoto {
-	return [self pageAtIndex:_index].photoView.image;
-}
-
-- (void)announceCurrent {
-	if (self.onShowing)
-		self.onShowing([self currentPhoto]);
-}
-
-- (void)layoutPages {
-	CGFloat pageW = _paging.bounds.size.width;
-	CGFloat pageH = _paging.bounds.size.height;
-	NSInteger first = MAX((NSInteger)0, _index - 1);
-	NSInteger last = MIN(_pageCount - 1, _index + 1);
-
-	for (TGPhotoPageView *page in [_pages copy]){
-		if (page.pageIndex >= first && page.pageIndex <= last)
-			continue;
-		[page setPhoto:nil];
-		[page removeFromSuperview];
-		[_pages removeObject:page];
-		[_queue addObject:page];
-	}
-
-	for (NSInteger i = first; i <= last; i++){
-		TGPhotoPageView *page = [self pageAtIndex:i];
-		if (page){
-			if (i != _index && [page isZoomed])
-				[page resetZoom];
-			continue;
-		}
-
-		page = [_queue lastObject];
-		if (page)
-			[_queue removeLastObject];
-		else
-			page = [[TGPhotoPageView alloc] initWithFrame:CGRectZero];
-
-		page.pageIndex = i;
-		page.frame = CGRectMake(i * pageW + kPhotoPageGap / 2, 0,
-								pageW - kPhotoPageGap, pageH);
-		if (!page.wired){
-			page.wired = YES;
-
-			UITapGestureRecognizer *twice = [[UITapGestureRecognizer alloc]
-					initWithTarget:self action:@selector(pageDoubleTapped:)];
-			twice.numberOfTapsRequired = 2;
-			[page addGestureRecognizer:twice];
-
-			UITapGestureRecognizer *once = [[UITapGestureRecognizer alloc]
-					initWithTarget:self action:@selector(pageTapped:)];
-			[once requireGestureRecognizerToFail:twice];
-			[page addGestureRecognizer:once];
-
-			[page addGestureRecognizer:[[UILongPressGestureRecognizer alloc]
-					initWithTarget:self action:@selector(pageHeld:)]];
-		}
-		[_paging addSubview:page];
-		[_pages addObject:page];
-		[self fillPage:page];
-	}
-}
-
-- (void)fillPage:(TGPhotoPageView *)page {
-	NSNumber *fileId = (page.pageIndex >= 0 && page.pageIndex < (NSInteger)_fileIds.count)
-			? _fileIds[page.pageIndex] : nil;
-
-	if (page.pageIndex == _openingIndex && _openingPhoto){
-		[page setPhoto:_openingPhoto];
-		if (fileId == nil)
-			return;
-	}
-
-	if (!fileId)
-		return;
-
-	UIImage *have = self.cachedPhoto ? self.cachedPhoto(fileId) : nil;
-	if (have){
-		[page setPhoto:have];
-		return;
-	}
-	if (!self.fetchPhoto || page.photoView.image)
-		return;
-
-	NSInteger wanted = page.pageIndex;
-	__weak TGPhotoBrowserView *weakSelf = self;
-	__weak TGPhotoPageView *weakPage = page;
-	self.fetchPhoto(fileId, ^(UIImage *photo){
-		TGPhotoBrowserView *me = weakSelf;
-		TGPhotoPageView *target = weakPage;
-		if (!me || !target || !photo || target.pageIndex != wanted)
-			return;
-		[target setPhoto:photo];
-		if (wanted == me->_index)
-			[me announceCurrent];
-	});
-}
-
-- (void)pageTapped:(UITapGestureRecognizer *)tap {
-	if (self.onDismiss)
-		self.onDismiss();
-}
-
-- (void)pageHeld:(UILongPressGestureRecognizer *)hold {
-	if (hold.state != UIGestureRecognizerStateBegan)
-		return;
-	if (self.onHold)
-		self.onHold();
-}
-
-- (void)pageDoubleTapped:(UITapGestureRecognizer *)tap {
-	TGPhotoPageView *page = (TGPhotoPageView *)tap.view;
-	if (![page isKindOfClass:TGPhotoPageView.class])
-		return;
-
-	if ([page isZoomed]){
-		[page setZoomScale:page.minimumZoomScale animated:YES];
-		return;
-	}
-	CGFloat scale = page.maximumZoomScale;
-	if (scale <= page.minimumZoomScale + 0.001f)
-		return;
-
-	CGPoint at = [tap locationInView:page.photoView];
-	CGFloat w = page.bounds.size.width / scale;
-	CGFloat h = page.bounds.size.height / scale;
-	[page zoomToRect:CGRectMake(at.x - w / 2, at.y - h / 2, w, h) animated:YES];
-}
-
-- (void)scrollViewDidScroll:(UIScrollView *)scrollView {
-	if (scrollView != _paging)
-		return;
-	CGFloat pageW = _paging.bounds.size.width;
-	if (pageW < 1)
-		return;
-
-	NSInteger now = (NSInteger)floorf((_paging.contentOffset.x + pageW / 2) / pageW);
-	now = MAX((NSInteger)0, MIN(now, _pageCount - 1));
-	if (now == _index)
-		return;
-
-	_index = now;
-	[self layoutPages];
-	[self announceCurrent];
-}
-
-@end
-
 #pragma mark - bubble cell
 
 @interface TGMosaicTileView : UIImageView
@@ -1137,11 +824,106 @@ static const CGFloat kPhotoPageGap = 20.0f;
 
 @end
 
+static const CGFloat kReplySwipeIconSize = 33.0f;
+static const CGFloat kReplySwipeIncomingTrigger = 45.0f;
+static const CGFloat kReplySwipeOutgoingTrigger = 60.0f;
+static const CGFloat kReplySwipeIncomingInset = -24.0f;
+static const CGFloat kReplySwipeOutgoingInset = 10.0f;
+static const CGFloat kReplySwipeBandRange = 100.0f;
+static const CGFloat kReplySwipeBandCoefficient = 0.4f;
+static const CGFloat kReplySwipeMaxOffset = 180.0f;
+static const CGFloat kReplySwipeDirectionSlop = 2.0f;
+
+static CGFloat TGReplySwipeBandedOffset(CGFloat offset, CGFloat bandingStart) {
+	if (offset < bandingStart)
+		return offset;
+	CGFloat banded = offset - bandingStart;
+	CGFloat eased = 1.0f - (1.0f /
+			((banded * kReplySwipeBandCoefficient / kReplySwipeBandRange) + 1.0f));
+	return bandingStart + eased * kReplySwipeBandRange;
+}
+
+static UIImage *TGReplySwipeArrowImage(void) {
+	static UIImage *image = nil;
+	if (image)
+		return image;
+	const CGFloat s = 28.0f;
+	const CGFloat m = s * 0.18f;
+	UIGraphicsBeginImageContextWithOptions(CGSizeMake(s, s), NO, 0);
+	CGContextRef ctx = UIGraphicsGetCurrentContext();
+	CGContextSetLineWidth(ctx, 1.8f);
+	CGContextSetLineCap(ctx, kCGLineCapRound);
+	CGContextSetLineJoin(ctx, kCGLineJoinRound);
+	CGContextSetRGBStrokeColor(ctx, 1, 1, 1, 1);
+	CGContextMoveToPoint(ctx, m + 5, s * 0.30f);
+	CGContextAddLineToPoint(ctx, m, s * 0.45f);
+	CGContextAddLineToPoint(ctx, m + 5, s * 0.60f);
+	CGContextStrokePath(ctx);
+	CGContextMoveToPoint(ctx, m, s * 0.45f);
+	CGContextAddLineToPoint(ctx, s - m - 5, s * 0.45f);
+	CGContextAddArc(ctx, s - m - 5, s * 0.62f, s * 0.17f, -M_PI_2, 0, 0);
+	CGContextStrokePath(ctx);
+	image = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return image;
+}
+
+@interface TGReplySwipeRecognizer : UIPanGestureRecognizer
+@property (nonatomic, copy) BOOL (^shouldBegin)(void);
+@end
+
+@implementation TGReplySwipeRecognizer {
+	BOOL _validated;
+	CGPoint _firstTouch;
+}
+
+- (id)initWithTarget:(id)target action:(SEL)action {
+	self = [super initWithTarget:target action:action];
+	if (!self)
+		return nil;
+	self.maximumNumberOfTouches = 1;
+	return self;
+}
+
+- (void)reset {
+	[super reset];
+	_validated = NO;
+}
+
+- (void)touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event {
+	[super touchesBegan:touches withEvent:event];
+	if (self.shouldBegin && !self.shouldBegin()){
+		self.state = UIGestureRecognizerStateFailed;
+		return;
+	}
+	_firstTouch = [[touches anyObject] locationInView:self.view];
+}
+
+- (void)touchesMoved:(NSSet *)touches withEvent:(UIEvent *)event {
+	CGPoint here = [[touches anyObject] locationInView:self.view];
+	CGFloat dx = here.x - _firstTouch.x;
+	CGFloat dy = here.y - _firstTouch.y;
+
+	if (!_validated){
+		if (dx > kReplySwipeDirectionSlop)
+			self.state = UIGestureRecognizerStateFailed;
+		else if (fabs(dy) > kReplySwipeDirectionSlop && fabs(dy) > fabs(dx) * 2.0f)
+			self.state = UIGestureRecognizerStateFailed;
+		else if (fabs(dx) > kReplySwipeDirectionSlop && fabs(dy) * 2.0f < fabs(dx))
+			_validated = YES;
+	}
+
+	if (_validated)
+		[super touchesMoved:touches withEvent:event];
+}
+
+@end
+
 @interface TGBubbleCell : UITableViewCell
 @property (nonatomic, strong) UIView *bubble;
 @property (nonatomic, strong) UIView *album;
 @property (nonatomic, strong) NSMutableArray *albumTiles;
-@property (nonatomic, strong) UILabel *body;
+@property (nonatomic, strong) TGEmojiLabel *body;
 @property (nonatomic, strong) UIImageView *picture;
 @property (nonatomic, strong) UILabel *time;
 @property (nonatomic, strong) TGLottieView *lottie;
@@ -1149,9 +931,10 @@ static const CGFloat kPhotoPageGap = 20.0f;
 @property (nonatomic, strong) UILabel *subtitle;    // size / phone number
 @property (nonatomic, strong) UILabel *sender;     // who wrote it, groups only
 @property (nonatomic, strong) UIView  *quoteBar;   // the stripe beside a quote
-@property (nonatomic, strong) UILabel *quote;      // what is being replied to
+@property (nonatomic, strong) TGEmojiLabel *quote;      // what is being replied to
 @property (nonatomic, strong) UIImageView *ticks;  // delivery marks
 @property (nonatomic, strong) UIImageView *senderAvatar;  // groups only
+@property (nonatomic, assign) int64_t avatarUserId;
 @property (nonatomic, strong) UIImageView *tail;         // the curl off the corner
 @property (nonatomic, strong) UIImageView *disc;        // play button on media
 @property (nonatomic, strong) UIImageView *wave;        // voice message bars
@@ -1179,6 +962,9 @@ static const CGFloat kPhotoPageGap = 20.0f;
 @property (nonatomic, strong) UIView *unreadBottomLine;
 @property (nonatomic, strong) UILabel *unreadLabel;
 @property (nonatomic, strong) UIImageView *unreadArrow;
+@property (nonatomic, strong) TGReplySwipeRecognizer *replySwipe;
+@property (nonatomic, strong) UIView *replyArrow;
+@property (nonatomic, strong) UIView *replyArrowPlate;
 @end
 
 @implementation TGBubbleCell
@@ -1213,7 +999,7 @@ static const CGFloat kPhotoPageGap = 20.0f;
 	self.albumTiles = [NSMutableArray array];
 	[self.bubble addSubview:self.album];
 
-	self.body = [[UILabel alloc] init];
+	self.body = [[TGEmojiLabel alloc] init];
 	self.body.numberOfLines = 0;
 	self.body.font = [UIFont systemFontOfSize:TGMessageBaseFontSize()];
 	self.body.backgroundColor = [UIColor clearColor];
@@ -1261,7 +1047,7 @@ static const CGFloat kPhotoPageGap = 20.0f;
 	self.quoteBar.hidden = YES;
 	[self.bubble addSubview:self.quoteBar];
 
-	self.quote = [[UILabel alloc] init];
+	self.quote = [[TGEmojiLabel alloc] init];
 	self.quote.font = [UIFont systemFontOfSize:13];
 	self.quote.numberOfLines = 2;
 	self.quote.backgroundColor = [UIColor clearColor];
@@ -2707,7 +2493,6 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 @property (nonatomic, strong) UILabel *downloadHUD;
 @property (nonatomic, assign) NSInteger downloadingFileId;
 @property (nonatomic, strong) CLLocationManager *locationManager;
-@property (nonatomic, strong) UIImage *fullScreenImage;
 @property (nonatomic, strong) UIImageView *wallpaperView;
 @property (nonatomic, strong) UIButton *stickerButton;
 @property (nonatomic, strong) UIView *stickerPanel;
@@ -2760,10 +2545,13 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 @property (nonatomic, strong) UIView *datePickerPanel;
 @property (nonatomic, strong) UIDatePicker *schedulePicker;
 @property (nonatomic, strong) UIImage *pendingPastedImage;
-@property (nonatomic, strong) UIPanGestureRecognizer *replySwipe;
 @property (nonatomic, strong) UILongPressGestureRecognizer *messageHold;
+@property (nonatomic, strong) UITapGestureRecognizer *backgroundTap;
+@property (nonatomic, strong) UIPanGestureRecognizer *inputBarDismissSwipe;
 @property (nonatomic, assign) NSInteger swipingRow;
-@property (nonatomic, strong) UIImageView *swipeArrow;
+@property (nonatomic, weak) TGBubbleCell *swipingCell;
+@property (nonatomic, assign) CGFloat swipeOffset;
+@property (nonatomic, assign) BOOL swipeArmed;
 @property (nonatomic, strong) NSMutableDictionary *translations;
 @property (nonatomic, copy) NSString *pendingInviteLink;
 @property (nonatomic, assign) int64_t moderationUserId;
@@ -2906,15 +2694,27 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 	doubleTap.numberOfTapsRequired = 2;
 	[self.table addGestureRecognizer:doubleTap];
 
+	self.backgroundTap = [[UITapGestureRecognizer alloc]
+			initWithTarget:self action:@selector(messageBackgroundTapped:)];
+	self.backgroundTap.cancelsTouchesInView = NO;
+	self.backgroundTap.delaysTouchesBegan = NO;
+	self.backgroundTap.delaysTouchesEnded = NO;
+	self.backgroundTap.delegate = self;
+	[self.table addGestureRecognizer:self.backgroundTap];
+
 	self.swipingRow = -1;
-	self.replySwipe = [[UIPanGestureRecognizer alloc]
-			initWithTarget:self action:@selector(replySwiped:)];
-	self.replySwipe.delegate = self;
-	[self.table addGestureRecognizer:self.replySwipe];
 
 	[self.view addSubview:self.table];
 
 	[self buildInputBar:b];
+
+	self.inputBarDismissSwipe = [[UIPanGestureRecognizer alloc]
+			initWithTarget:self action:@selector(inputBarSwiped:)];
+	self.inputBarDismissSwipe.cancelsTouchesInView = NO;
+	self.inputBarDismissSwipe.delaysTouchesBegan = NO;
+	self.inputBarDismissSwipe.delaysTouchesEnded = NO;
+	self.inputBarDismissSwipe.delegate = self;
+	[self.inputBar addGestureRecognizer:self.inputBarDismissSwipe];
 
 	UILongPressGestureRecognizer *sendHold = [[UILongPressGestureRecognizer alloc]
 			initWithTarget:self action:@selector(sendHeld:)];
@@ -3028,7 +2828,7 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 - (void)buildTitleView {
 	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 200, 36)];
 
-	UILabel *name = [[UILabel alloc] initWithFrame:CGRectMake(0, 1, 200, 20)];
+	TGEmojiLabel *name = [[TGEmojiLabel alloc] initWithFrame:CGRectMake(0, 1, 200, 20)];
 	name.text = self.chatTitle ?: @"Chat";
 	name.font = [UIFont boldSystemFontOfSize:17];
 	name.textColor = [[TGTheme shared] barTitleColour];
@@ -3138,7 +2938,8 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 	NSString *statusText = self.titleStatusLabel.hidden || !self.titleStatusLabel.text.length
 			? @"" : self.titleStatusLabel.text;
 
-	CGFloat nameWidth = [nameText sizeWithFont:self.titleNameLabel.font].width;
+	CGFloat nameWidth = TGEmojiTextSize(nameText, self.titleNameLabel.font,
+			CGSizeMake(10000, 40), NSLineBreakByWordWrapping, 1).width;
 	CGFloat statusWidth = statusText.length
 			? [statusText sizeWithFont:self.titleStatusLabel.font].width : 0.0f;
 	CGFloat width = ceilf(MAX(nameWidth, statusWidth));
@@ -3589,9 +3390,6 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	for (NSNumber *key in [self.maps allKeys])
 		if (![keep containsObject:key])
 			[self.maps removeObjectForKey:key];
-
-	if (![[UIApplication sharedApplication].keyWindow viewWithTag:0xF117])
-		self.fullScreenImage = nil;
 }
 
 - (void)dealloc {
@@ -3912,14 +3710,14 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	if (!chips.count)
 		return 0;
 
-	NSNumber *messageId = [m[@"id"] isKindOfClass:NSNumber.class] ? m[@"id"] : nil;
-	NSNumber *cached = messageId ? self.chipsRowWidths[messageId] : nil;
-	if (cached)
-		return [cached floatValue];
-
 	CGFloat maxW = [self maxBubbleWidthFor:m] - 2 * kPadH;
 	if (maxW < 40)
 		maxW = 40;
+
+	NSNumber *messageId = [m[@"id"] isKindOfClass:NSNumber.class] ? m[@"id"] : nil;
+	NSNumber *cached = messageId ? self.chipsRowWidths[messageId] : nil;
+	if (cached)
+		return MIN([cached floatValue], maxW);
 
 	CGFloat width = maxW;
 	if ([TGReactionChipsView heightForChips:chips width:maxW] <= kChipsRowHeight){
@@ -6302,6 +6100,8 @@ static const NSInteger kStickerLinkAlertTag = 102;
 		[self.input resignFirstResponder];
 	else if ([self.chatSearchBar isFirstResponder])
 		[self.chatSearchBar resignFirstResponder];
+	else if (self.stickerPanel)
+		[self toggleStickerPanel];
 }
 
 - (void)openLinkInMessage:(NSDictionary *)m {
@@ -6648,23 +6448,56 @@ static const NSInteger kStickerLinkAlertTag = 102;
 }
 
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)recognizer {
-	if (recognizer != self.replySwipe)
-		return YES;
-	if (self.selecting || self.postingBlocked)
-		return NO;
-
-	CGPoint velocity = [self.replySwipe velocityInView:self.table];
-	if (velocity.x <= 0 || fabs(velocity.x) < fabs(velocity.y) * 1.5f)
-		return NO;
-
-	NSIndexPath *path = [self.table indexPathForRowAtPoint:
-			[self.replySwipe locationInView:self.table]];
-	return (path != nil && [self canReplyToRow:path.row]);
+	if (recognizer == self.inputBarDismissSwipe){
+		if (![self hasDismissableInput])
+			return NO;
+		CGPoint moved = [self.inputBarDismissSwipe translationInView:self.inputBar];
+		return (moved.y > 0 && moved.y > fabs(moved.x));
+	}
+	return YES;
 }
 
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)recognizer
 		shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other {
-	return (recognizer == self.replySwipe || other == self.replySwipe);
+	if ((recognizer == self.backgroundTap && other == self.messageHold) ||
+		(recognizer == self.messageHold && other == self.backgroundTap))
+		return NO;
+	return (recognizer == self.backgroundTap || other == self.backgroundTap ||
+			recognizer == self.inputBarDismissSwipe || other == self.inputBarDismissSwipe);
+}
+
+- (BOOL)hasDismissableInput {
+	return ([self.input isFirstResponder] || [self.chatSearchBar isFirstResponder] ||
+			self.stickerPanel != nil);
+}
+
+- (void)messageBackgroundTapped:(UITapGestureRecognizer *)tap {
+	if (tap.state != UIGestureRecognizerStateEnded)
+		return;
+	if (!self.selecting)
+		[self touchedMessageBackground];
+}
+
+- (void)inputBarSwiped:(UIPanGestureRecognizer *)pan {
+	if (pan.state != UIGestureRecognizerStateChanged &&
+		pan.state != UIGestureRecognizerStateEnded)
+		return;
+
+	CGPoint moved = [pan translationInView:self.inputBar];
+	if (moved.y <= 0 || moved.y <= fabs(moved.x))
+		return;
+
+	BOOL farEnough = (moved.y >= kInputSwipeDismissDistance);
+	BOOL flicked = (pan.state == UIGestureRecognizerStateEnded &&
+					[pan velocityInView:self.inputBar].y >= kInputSwipeDismissVelocity);
+	if (!farEnough && !flicked)
+		return;
+
+	if (pan.state == UIGestureRecognizerStateChanged){
+		pan.enabled = NO;
+		pan.enabled = YES;
+	}
+	[self touchedMessageBackground];
 }
 
 - (BOOL)canReplyToRow:(NSInteger)row {
@@ -6676,39 +6509,198 @@ static const NSInteger kStickerLinkAlertTag = 102;
 	return ([m[@"id"] longLongValue] != 0);
 }
 
-- (void)replySwiped:(UIPanGestureRecognizer *)pan {
-	const CGFloat trigger = 46.0f;
-	const CGFloat limit   = 62.0f;
+- (void)attachReplySwipeTo:(TGBubbleCell *)cell {
+	__weak TGChatViewController *weakSelf = self;
+	__weak TGBubbleCell *weakCell = cell;
+	TGReplySwipeRecognizer *pan = [[TGReplySwipeRecognizer alloc]
+			initWithTarget:self action:@selector(replySwiped:)];
+	pan.shouldBegin = ^BOOL {
+		TGChatViewController *me = weakSelf;
+		return me ? [me canBeginReplySwipeOnCell:weakCell] : NO;
+	};
+	cell.replySwipe = pan;
+	cell.contentView.clipsToBounds = NO;
+	[cell addGestureRecognizer:pan];
+}
+
+- (BOOL)canBeginReplySwipeOnCell:(TGBubbleCell *)cell {
+	if (!cell || self.selecting || self.postingBlocked)
+		return NO;
+	NSIndexPath *path = [self.table indexPathForCell:cell];
+	return (path != nil && [self canReplyToRow:path.row]);
+}
+
+- (void)stopReplySwipeAnimationsInCell:(TGBubbleCell *)cell {
+	if (cell.contentView.layer.animationKeys.count)
+		[cell.contentView.layer removeAllAnimations];
+	if (cell.replyArrow.layer.animationKeys.count)
+		[cell.replyArrow.layer removeAllAnimations];
+	if (cell.replyArrowPlate.layer.animationKeys.count)
+		[cell.replyArrowPlate.layer removeAllAnimations];
+}
+
+- (void)applyReplySwipeOffset:(CGFloat)offset toCell:(TGBubbleCell *)cell {
+	CGRect box = cell.contentView.bounds;
+	if (box.origin.x == offset)
+		return;
+	box.origin.x = offset;
+	cell.contentView.bounds = box;
+}
+
+- (void)resetReplySwipeOnCell:(TGBubbleCell *)cell {
+	[self stopReplySwipeAnimationsInCell:cell];
+	[self applyReplySwipeOffset:0.0f toCell:cell];
+	cell.replyArrow.hidden = YES;
+	cell.replyArrowPlate.alpha = 0.0f;
+}
+
+- (CGFloat)replySwipeTriggerForRow:(NSInteger)row {
+	NSDictionary *m = [self messageAtRow:row];
+	return [m[@"outgoing"] boolValue] ? kReplySwipeOutgoingTrigger
+									  : kReplySwipeIncomingTrigger;
+}
+
+- (CGFloat)replySwipeArrowInsetForRow:(NSInteger)row {
+	NSDictionary *m = [self messageAtRow:row];
+	return [m[@"outgoing"] boolValue] ? kReplySwipeOutgoingInset
+									  : kReplySwipeIncomingInset;
+}
+
+- (void)placeReplyArrowInCell:(TGBubbleCell *)cell forRow:(NSInteger)row {
+	if (!cell.replyArrow){
+		UIView *carrier = [[UIView alloc] initWithFrame:
+				CGRectMake(0, 0, kReplySwipeIconSize, kReplySwipeIconSize)];
+		carrier.backgroundColor = [UIColor clearColor];
+		carrier.userInteractionEnabled = NO;
+
+		UIView *plate = [[UIView alloc] initWithFrame:carrier.bounds];
+		plate.backgroundColor = TGSystemPlateColour();
+		plate.layer.cornerRadius = kReplySwipeIconSize / 2.0f;
+		plate.userInteractionEnabled = NO;
+
+		UIImageView *glyph = [[UIImageView alloc] initWithFrame:plate.bounds];
+		glyph.contentMode = UIViewContentModeCenter;
+		glyph.image = TGReplySwipeArrowImage();
+		[plate addSubview:glyph];
+		[carrier addSubview:plate];
+
+		cell.replyArrow = carrier;
+		cell.replyArrowPlate = plate;
+		[cell.contentView addSubview:carrier];
+	}
+
+	[self stopReplySwipeAnimationsInCell:cell];
+
+	CGRect box = cell.contentView.bounds;
+	cell.replyArrow.transform = CGAffineTransformIdentity;
+	cell.replyArrow.center = CGPointMake(
+			box.size.width + [self replySwipeArrowInsetForRow:row] +
+					kReplySwipeIconSize / 2.0f,
+			(box.size.height + box.origin.y) / 2.0f);
+	cell.replyArrowPlate.transform = CGAffineTransformMakeScale(0.65f, 0.65f);
+	cell.replyArrowPlate.alpha = 0.0f;
+	cell.replyArrow.hidden = NO;
+	[cell.contentView bringSubviewToFront:cell.replyArrow];
+}
+
+- (void)updateReplyArrowInCell:(TGBubbleCell *)cell progress:(CGFloat)progress {
+	UIView *plate = cell.replyArrowPlate;
+	if (!plate)
+		return;
+	progress = MAX(0.0f, MIN(1.0f, progress));
+	CGFloat shown = MIN(1.0f, progress * 1.2f);
+	CGFloat scale = 0.65f + shown * 0.35f;
+	plate.alpha = shown;
+	plate.transform = CGAffineTransformMakeScale(scale, scale);
+
+	if (progress < 1.0f || self.swipeArmed)
+		return;
+	self.swipeArmed = YES;
+	[self popReplyArrowInCell:cell];
+}
+
+- (void)popReplyArrowInCell:(TGBubbleCell *)cell {
+	UIView *carrier = cell.replyArrow;
+	if (!carrier)
+		return;
+	[UIView animateWithDuration:0.2 delay:0.0
+						options:UIViewAnimationOptionCurveEaseOut |
+								UIViewAnimationOptionBeginFromCurrentState
+					 animations:^{
+		carrier.transform = CGAffineTransformMakeScale(1.1f, 1.1f);
+	} completion:^(BOOL finished){
+		if (!finished)
+			return;
+		[UIView animateWithDuration:0.15 delay:0.0
+							options:UIViewAnimationOptionCurveEaseInOut |
+									UIViewAnimationOptionBeginFromCurrentState
+						 animations:^{
+			carrier.transform = CGAffineTransformIdentity;
+		} completion:nil];
+	}];
+}
+
+- (void)springReplySwipeBackInCell:(TGBubbleCell *)cell from:(CGFloat)offset {
+	UIView *carrier = cell.replyArrow;
+	UIView *plate = cell.replyArrowPlate;
+	CGFloat overshoot = MIN(5.0f, offset * 0.12f);
+	__weak TGChatViewController *weakSelf = self;
+
+	[UIView animateWithDuration:0.19 delay:0.0
+						options:UIViewAnimationOptionCurveEaseOut |
+								UIViewAnimationOptionBeginFromCurrentState
+					 animations:^{
+		CGRect box = cell.contentView.bounds;
+		box.origin.x = -overshoot;
+		cell.contentView.bounds = box;
+		plate.alpha = 0.0f;
+		plate.transform = CGAffineTransformMakeScale(0.2f, 0.2f);
+	} completion:^(BOOL finished){
+		TGChatViewController *me = weakSelf;
+		if (!me || cell == me.swipingCell)
+			return;
+		carrier.hidden = YES;
+		[UIView animateWithDuration:0.13 delay:0.0
+							options:UIViewAnimationOptionCurveEaseInOut |
+									UIViewAnimationOptionBeginFromCurrentState
+						 animations:^{
+			CGRect box = cell.contentView.bounds;
+			box.origin.x = 0.0f;
+			cell.contentView.bounds = box;
+		} completion:nil];
+	}];
+}
+
+- (void)replySwiped:(TGReplySwipeRecognizer *)pan {
+	if (![pan.view isKindOfClass:TGBubbleCell.class])
+		return;
+	TGBubbleCell *cell = (TGBubbleCell *)pan.view;
 
 	if (pan.state == UIGestureRecognizerStateBegan){
-		NSIndexPath *path = [self.table indexPathForRowAtPoint:[pan locationInView:self.table]];
+		NSIndexPath *path = [self.table indexPathForCell:cell];
 		self.swipingRow = (path && [self canReplyToRow:path.row]) ? path.row : -1;
 		if (self.swipingRow < 0)
 			return;
-		if (!self.swipeArrow){
-			self.swipeArrow = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, 22, 22)];
-			self.swipeArrow.contentMode = UIViewContentModeCenter;
-			self.swipeArrow.image = [TGIcons menuGlyphNamed:@"reply"];
-			self.swipeArrow.alpha = 0.0f;
-			[self.table addSubview:self.swipeArrow];
-		}
-		CGRect rect = [self.table rectForRowAtIndexPath:
-				[NSIndexPath indexPathForRow:self.swipingRow inSection:0]];
-		self.swipeArrow.center = CGPointMake(14, CGRectGetMidY(rect));
-		self.swipeArrow.hidden = NO;
+		self.swipingCell = cell;
+		self.swipeArmed = NO;
+		self.swipeOffset = 0.0f;
+		[self applyReplySwipeOffset:0.0f toCell:cell];
+		[self placeReplyArrowInCell:cell forRow:self.swipingRow];
 		return;
 	}
 
-	if (self.swipingRow < 0)
+	if (self.swipingRow < 0 || cell != self.swipingCell)
 		return;
 
-	UITableViewCell *cell = [self.table cellForRowAtIndexPath:
-			[NSIndexPath indexPathForRow:self.swipingRow inSection:0]];
-	CGFloat offset = MAX(0.0f, MIN(limit, [pan translationInView:self.table].x));
+	CGFloat trigger = [self replySwipeTriggerForRow:self.swipingRow];
+	CGFloat dragged = MAX(0.0f, -[pan translationInView:cell].x);
 
 	if (pan.state == UIGestureRecognizerStateChanged){
-		cell.contentView.transform = CGAffineTransformMakeTranslation(offset, 0);
-		self.swipeArrow.alpha = MIN(1.0f, offset / trigger);
+		CGFloat offset = MIN(kReplySwipeMaxOffset,
+				TGReplySwipeBandedOffset(dragged, trigger));
+		self.swipeOffset = offset;
+		[self applyReplySwipeOffset:offset toCell:cell];
+		[self updateReplyArrowInCell:cell progress:offset / trigger];
 		return;
 	}
 
@@ -6716,14 +6708,16 @@ static const NSInteger kStickerLinkAlertTag = 102;
 		pan.state == UIGestureRecognizerStateCancelled ||
 		pan.state == UIGestureRecognizerStateFailed){
 		NSInteger row = self.swipingRow;
+		CGFloat travelled = self.swipeOffset;
+		BOOL fired = (pan.state == UIGestureRecognizerStateEnded && dragged > trigger);
+
 		self.swipingRow = -1;
-		[UIView animateWithDuration:0.18 animations:^{
-			cell.contentView.transform = CGAffineTransformIdentity;
-			self.swipeArrow.alpha = 0.0f;
-		} completion:^(BOOL finished){
-			self.swipeArrow.hidden = YES;
-		}];
-		if (pan.state == UIGestureRecognizerStateEnded && offset >= trigger)
+		self.swipingCell = nil;
+		self.swipeArmed = NO;
+		self.swipeOffset = 0.0f;
+
+		[self springReplySwipeBackInCell:cell from:travelled];
+		if (fired)
 			[self beginReplyToRow:row];
 	}
 }
@@ -7673,35 +7667,11 @@ static const NSInteger kStickerLinkAlertTag = 102;
 
 - (void)openPhotoMessage:(NSDictionary *)m {
 	NSNumber *fileId = [m[@"photoId"] isKindOfClass:NSNumber.class] ? m[@"photoId"] : nil;
-	UIImage *img = fileId ? self.images[fileId] : nil;
-	if (img){
-		[self showPhotoWithFileId:fileId image:img];
-		return;
-	}
 	if (!fileId)
 		return;
 	[self.photoFilesFailed removeObject:fileId];
 	[self.photoFilesCancelled removeObject:fileId];
-	[self beginDownloadHUDForFile:[fileId integerValue]];
-	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] downloadFile:[fileId integerValue] completion:^(NSString *path){
-		TGChatViewController *me = weakSelf;
-		if (!me)
-			return;
-		[me endDownloadHUD];
-		UIImage *loaded = path.length ? [UIImage imageWithContentsOfFile:path] : nil;
-		if (!loaded && [path.pathExtension.lowercaseString isEqualToString:@"webp"])
-			loaded = [UIImage convertFromWebP:path compressedData:nil error:nil];
-		if (!loaded){
-			[me.imagesRequested removeObject:fileId];
-			[me.photoFilesFailed addObject:fileId];
-			[me refreshRowsShowingFile:fileId withImage:nil];
-			return;
-		}
-		me.images[fileId] = loaded;
-		[me applyArrivedImage:loaded forFile:fileId];
-		[me showPhotoWithFileId:fileId image:loaded];
-	}];
+	[self showGalleryForMessage:m];
 }
 
 - (void)playMovieMessage:(NSDictionary *)m {
@@ -7996,13 +7966,6 @@ static const NSInteger kStickerLinkAlertTag = 102;
 	}
 }
 
-- (void)saveFullScreenImage {
-	if (!self.fullScreenImage)
-		return;
-	UIImageWriteToSavedPhotosAlbum(self.fullScreenImage, self,
-			@selector(image:didFinishSavingWithError:contextInfo:), NULL);
-}
-
 - (void)image:(UIImage *)image didFinishSavingWithError:(NSError *)error
   contextInfo:(void *)contextInfo {
 	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@""
@@ -8031,104 +7994,91 @@ static const NSInteger kStickerLinkAlertTag = 102;
 	[alert show];
 }
 
-- (NSArray *)photoFileIdsInHistory {
-	NSMutableArray *fileIds = [NSMutableArray array];
-	for (NSDictionary *m in self.messages){
-		if (![m[@"kind"] isEqualToString:@"messagePhoto"])
-			continue;
-		NSNumber *fileId = [m[@"photoId"] isKindOfClass:NSNumber.class] ? m[@"photoId"] : nil;
-		if (fileId && ![fileIds containsObject:fileId])
-			[fileIds addObject:fileId];
-	}
-	return fileIds;
+- (NSDictionary *)galleryItemForMessage:(NSDictionary *)m {
+	NSString *kind = [m[@"kind"] isKindOfClass:NSString.class] ? m[@"kind"] : @"";
+	BOOL isVideo = [kind isEqualToString:@"messageVideo"];
+	if (!isVideo && ![kind isEqualToString:@"messagePhoto"])
+		return nil;
+
+	NSNumber *pictureId = [m[@"photoId"] isKindOfClass:NSNumber.class] ? m[@"photoId"] : nil;
+	NSNumber *movieId = [m[@"docId"] isKindOfClass:NSNumber.class] ? m[@"docId"] : nil;
+	NSNumber *fullId = isVideo ? movieId : pictureId;
+	if (!fullId || [fullId integerValue] <= 0)
+		return nil;
+
+	NSNumber *thumbId = [self pictureFileIdFor:m] ?: (pictureId ?: fullId);
+	NSString *caption = [m[@"text"] isKindOfClass:NSString.class] ? m[@"text"] : @"";
+	NSString *author = [m[@"outgoing"] boolValue]
+			? @"" : ([[TGClient shared] nameForUserId:[m[@"senderId"] longLongValue]] ?: @"");
+
+	NSMutableDictionary *item = [NSMutableDictionary dictionaryWithDictionary:@{
+		@"fullId"    : fullId,
+		@"thumbId"   : thumbId,
+		@"caption"   : caption,
+		@"author"    : author,
+		@"date"      : m[@"date"] ?: @(0),
+		@"messageId" : m[@"id"] ?: @(0),
+		@"duration"  : m[@"duration"] ?: @(0),
+		@"isVideo"   : @(isVideo),
+	}];
+	NSDictionary *minithumb = m[@"minithumbnail"];
+	if ([minithumb isKindOfClass:NSDictionary.class])
+		item[@"minithumb"] = minithumb;
+	return item;
 }
 
-- (void)showPhotoWithFileId:(NSNumber *)fileId image:(UIImage *)image {
-	UIWindow *window = [UIApplication sharedApplication].keyWindow;
-	UIView *host = window;
-	if (TGChatIsPad() && window.rootViewController.view)
-		host = window.rootViewController.view;
+- (NSArray *)galleryItemsForMessageId:(int64_t)messageId index:(NSInteger *)index {
+	NSMutableArray *items = [NSMutableArray array];
+	if (index)
+		*index = 0;
 
-	NSArray *fileIds = fileId ? [self photoFileIdsInHistory] : @[];
-	NSUInteger found = fileId ? [fileIds indexOfObject:fileId] : NSNotFound;
-	if (found == NSNotFound){
-		fileIds = fileId ? @[fileId] : @[];
-		found = 0;
+	for (NSDictionary *m in self.messages){
+		NSDictionary *item = [self galleryItemForMessage:m];
+		if (!item)
+			continue;
+		if (index && messageId != 0 && [m[@"id"] longLongValue] == messageId)
+			*index = (NSInteger)items.count;
+		[items addObject:item];
+	}
+	return items;
+}
+
+- (void)showGalleryForMessage:(NSDictionary *)m {
+	NSInteger index = 0;
+	NSArray *items = [self galleryItemsForMessageId:[m[@"id"] longLongValue] index:&index];
+
+	if (items.count == 0){
+		NSDictionary *only = [self galleryItemForMessage:m];
+		if (!only)
+			return;
+		items = @[only];
+		index = 0;
 	}
 
-	UIView *backdrop = [[UIView alloc] initWithFrame:host.bounds];
-	backdrop.backgroundColor = [UIColor blackColor];
-	backdrop.tag = 0xF117;
-
-	self.fullScreenImage = image;
-
-	TGPhotoBrowserView *browser = [[TGPhotoBrowserView alloc]
-			initWithFrame:backdrop.bounds
-				  fileIds:fileIds
-					index:(NSInteger)found
-					photo:image];
-	browser.autoresizingMask = UIViewAutoresizingFlexibleWidth |
-							   UIViewAutoresizingFlexibleHeight;
+	TGMediaFullscreenController *viewer = [[TGMediaFullscreenController alloc]
+			initWithItems:items index:index];
+	viewer.chatId = self.chatId;
 
 	__weak typeof(self) weakSelf = self;
-	browser.cachedPhoto = ^UIImage *(NSNumber *wanted){
-		TGChatViewController *me = weakSelf;
-		return me ? me.images[wanted] : nil;
+	viewer.onMessageDeleted = ^(int64_t deletedId){
+		[weakSelf dropMessageWithId:deletedId];
 	};
-	browser.fetchPhoto = ^(NSNumber *wanted, void (^done)(UIImage *photo)){
-		TGChatViewController *me = weakSelf;
-		if (!me || !done)
-			return;
-		[[TGClient shared] downloadFile:wanted.integerValue completion:^(NSString *path){
-			TGChatViewController *inner = weakSelf;
-			if (!inner || !path)
-				return;
-			UIImage *loaded = [UIImage imageWithContentsOfFile:path];
-			if (!loaded && [path.pathExtension.lowercaseString isEqualToString:@"webp"])
-				loaded = [UIImage convertFromWebP:path compressedData:nil error:nil];
-			if (!loaded)
-				return;
-			inner.images[wanted] = loaded;
-			done(loaded);
-		}];
-	};
-	browser.onShowing = ^(UIImage *shown){
-		if (shown)
-			weakSelf.fullScreenImage = shown;
-	};
-	browser.onHold = ^{ [weakSelf saveFullScreenImage]; };
-	__weak UIView *weakBackdrop = backdrop;
-	browser.onDismiss = ^{
-		UIView *going = weakBackdrop;
-		if (!going)
-			return;
-		[UIView animateWithDuration:0.2 animations:^{ going.alpha = 0; }
-						 completion:^(BOOL done){
-			[going removeFromSuperview];
-			if (![[UIApplication sharedApplication].keyWindow viewWithTag:0xF117])
-				weakSelf.fullScreenImage = nil;
-		}];
-	};
-	[backdrop addSubview:browser];
-	[browser start];
 
-	UILabel *hint = [[UILabel alloc] initWithFrame:
-			CGRectMake(0, backdrop.bounds.size.height - 34, backdrop.bounds.size.width, 20)];
-	hint.text = @"Hold to save";
-	hint.font = [UIFont systemFontOfSize:12];
-	hint.textAlignment = NSTextAlignmentCenter;
-	hint.textColor = [UIColor colorWithWhite:1 alpha:0.6f];
-	hint.backgroundColor = [UIColor clearColor];
-	hint.userInteractionEnabled = NO;
-	hint.autoresizingMask = UIViewAutoresizingFlexibleWidth |
-							UIViewAutoresizingFlexibleTopMargin;
-	[backdrop addSubview:hint];
+	[self presentViewController:viewer animated:YES completion:nil];
+}
 
-	backdrop.alpha = 0;
-	backdrop.autoresizingMask = UIViewAutoresizingFlexibleWidth |
-								UIViewAutoresizingFlexibleHeight;
-	[host addSubview:backdrop];
-	[UIView animateWithDuration:0.2 animations:^{ backdrop.alpha = 1; }];
+- (void)dropMessageWithId:(int64_t)messageId {
+	NSMutableArray *left = [NSMutableArray arrayWithCapacity:self.messages.count];
+	for (NSDictionary *m in self.messages){
+		if ([m[@"id"] longLongValue] == messageId)
+			continue;
+		[left addObject:m];
+	}
+	if (left.count == self.messages.count)
+		return;
+	self.messages = left;
+	[self.table reloadData];
+	[self updateEmptyState];
 }
 
 - (BOOL)textFieldShouldReturn:(UITextField *)textField {
@@ -8224,9 +8174,10 @@ static const NSInteger kStickerLinkAlertTag = 102;
 	NSArray *chips = [self chipsFor:m];
 	if (chips.count)
 		h += [TGReactionChipsView heightForChips:chips
-										   width:[self chipsRowWidthFor:m]] + 3;
+										   width:[self chipsRowWidthFor:m]] +
+				kChipsRowTopGap + kChipsRowBottomGap;
 	else if ([m[@"reactions"] length])
-		h += 18;
+		h += kChipsRowHeight + kChipsRowTopGap + kChipsRowBottomGap;
 	return h;
 }
 
@@ -8280,6 +8231,7 @@ static const NSInteger kStickerLinkAlertTag = 102;
 /// exactly like one you had been sent directly.
 - (CGFloat)layoutForwardIn:(TGBubbleCell *)cell
 				   message:(NSDictionary *)m
+					   atY:(CGFloat)y
 					 width:(CGFloat)width
 {
 	NSString *from = m[@"forward"];
@@ -8313,7 +8265,7 @@ static const NSInteger kStickerLinkAlertTag = 102;
 	UIColor *nameColour  = mine ? TGChatHexColour(0x169600)
 								: TGChatHexColour(0x0e7acd);
 	cell.forwardLabel.hidden = NO;
-	cell.forwardLabel.frame = CGRectMake(kPadH, kPadV, width - 2 * kPadH, 16);
+	cell.forwardLabel.frame = CGRectMake(kPadH, y, width - 2 * kPadH, 16);
 
 	NSString *line = [NSString stringWithFormat:@"Forwarded from %@", from];
 	if ([cell.forwardLabel respondsToSelector:@selector(setAttributedText:)]){
@@ -8363,6 +8315,47 @@ static const NSInteger kForwardTapTag = 0x9200;
 	}
 	if (cell.forwardUserId)
 		[self openForwardOriginUser:cell.forwardUserId title:cell.forwardTitle];
+}
+
+static const NSInteger kAvatarTapTag = 0x9300;
+
+- (void)attachAvatarTapIn:(TGBubbleCell *)cell sender:(int64_t)senderId {
+	cell.avatarUserId = senderId;
+	cell.senderAvatar.userInteractionEnabled = (senderId > 0 && !self.selecting);
+	if (cell.senderAvatar.tag == kAvatarTapTag)
+		return;
+	UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc]
+			initWithTarget:self action:@selector(senderAvatarTapped:)];
+	[cell.senderAvatar addGestureRecognizer:tap];
+	cell.senderAvatar.tag = kAvatarTapTag;
+}
+
+- (void)senderAvatarTapped:(UITapGestureRecognizer *)tap {
+	if (tap.state != UIGestureRecognizerStateRecognized)
+		return;
+	UIView *view = tap.view;
+	while (view && ![view isKindOfClass:TGBubbleCell.class])
+		view = view.superview;
+	TGBubbleCell *cell = (TGBubbleCell *)view;
+	if (!cell || cell.senderAvatar.hidden || self.selecting)
+		return;
+	[self openProfileForUserId:cell.avatarUserId];
+}
+
+- (void)openProfileForUserId:(int64_t)userId {
+	if (userId <= 0)
+		return;
+	UINavigationController *navigation = self.navigationController;
+	if (!navigation)
+		return;
+	NSString *name = [[TGClient shared] nameForUserId:userId] ?: @"";
+	[[TGClient shared] privateChatWithUser:userId completion:^(int64_t chatId){
+		if (!chatId)
+			return;
+		TGProfileViewController *profile = [[TGProfileViewController alloc]
+				initWithChatId:chatId userId:userId title:name];
+		[navigation pushViewController:profile animated:YES];
+	}];
 }
 
 - (void)openForwardOriginUser:(int64_t)userId title:(NSString *)title {
@@ -8528,9 +8521,8 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 	if (!text.length)
 		return CGSizeZero;
 	CGFloat maxW = [self maxBubbleWidthFor:m] - 2 * kPadH;
-	return [text sizeWithFont:[self bodyFontFor:m]
-			constrainedToSize:CGSizeMake(maxW, 10000)
-				lineBreakMode:NSLineBreakByWordWrapping];
+	return TGEmojiTextSize(text, [self bodyFontFor:m], CGSizeMake(maxW, 10000),
+						   NSLineBreakByWordWrapping, 0);
 }
 
 - (UIImage *)imageFor:(NSDictionary *)m {
@@ -8852,20 +8844,10 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 	return nil;
 }
 
-- (BOOL)albumRowIsBare:(NSInteger)row {
-	NSDictionary *head = [self messageAtRow:row];
-	if (!head)
-		return NO;
-	return ![self albumCaptionMessageAtRow:row] &&
-		   [self decorationHeightFor:head] < 0.5f;
-}
-
 - (CGFloat)albumRowHeight:(NSInteger)row {
 	CGFloat mosaic = [self mosaicHeightForRow:row];
 	if (mosaic < 1)
 		return 0;
-	if ([self albumRowIsBare:row])
-		return mosaic + 3;
 
 	NSDictionary *head = [self messageAtRow:row];
 	NSDictionary *caption = [self albumCaptionMessageAtRow:row];
@@ -9167,7 +9149,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 
 	CGFloat width = MIN([self bubbleWidthBudget],
 			[line sizeWithFont:[UIFont systemFontOfSize:15]].width + 76);
-	CGFloat fwd = [self layoutForwardIn:cell message:m width:width];
+	CGFloat fwd = [self layoutForwardIn:cell message:m atY:kPadV width:width];
 	CGFloat height = 44 + fwd;
 	CGFloat x = mine ? (tableView.bounds.size.width - width - 8) : 8;
 	cell.bubble.frame = CGRectMake(x, 0, width, height);
@@ -9214,7 +9196,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 	// Their file block is 253x87 at 360dp: an 80dp tile on the left, the
 	// name and the size stacked beside it.
 	CGFloat width = 225;
-	CGFloat fwd = [self layoutForwardIn:cell message:m width:width];
+	CGFloat fwd = [self layoutForwardIn:cell message:m atY:kPadV width:width];
 	CGFloat height = kFileTile + 2 * kPadV + fwd;
 	CGFloat x = mine ? (tableView.bounds.size.width - width - 8) : 8;
 	cell.bubble.frame = CGRectMake(x, 0, width, height);
@@ -9389,6 +9371,8 @@ static UIColor *TGSenderColour(int64_t userId) {
 		cell.quote.frame = CGRectMake(textX, y + 17, quoteW, 17);
 		y += 38;
 	} else {
+		cell.quoteBar.hidden = YES;
+		cell.quote.hidden = YES;
 		quoteAuthor.hidden = YES;
 		quoteThumb.hidden = YES;
 	}
@@ -9410,7 +9394,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 	cell.voiceMessageId = [m[@"id"] longLongValue];
 	cell.waveformData = m[@"waveform"];
 
-	CGFloat fwd = [self layoutForwardIn:cell message:m width:bubbleW];
+	CGFloat fwd = [self layoutForwardIn:cell message:m atY:kPadV width:bubbleW];
 
 	cell.disc.hidden = NO;
 	cell.disc.image = [TGIcons mediaDiscOfSide:disc
@@ -9472,7 +9456,8 @@ static UIColor *TGSenderColour(int64_t userId) {
 		CGFloat chipsW = [self chipsRowWidthFor:m];
 		chipsW = MIN(chipsW, MAX(bubbleW - 2 * kPadH, 40));
 		CGFloat chipsH = [TGReactionChipsView heightForChips:chips width:chipsW];
-		chipsView.frame = CGRectMake(kPadH, afterBody + 3, chipsW, chipsH);
+		chipsView.frame = CGRectMake(kPadH, afterBody + kChipsRowTopGap,
+									 chipsW, chipsH);
 		__weak typeof(self) weakSelf = self;
 		chipsView.onChipTapped = ^(NSString *emoji, BOOL wasChosen){
 			TGChatViewController *me = weakSelf;
@@ -9495,7 +9480,8 @@ static UIColor *TGSenderColour(int64_t userId) {
 		reactions.hidden = NO;
 		reactions.text = reactionText;
 		reactions.textColor = [theme secondaryTextColour];
-		reactions.frame = CGRectMake(kPadH, afterBody + 2, bubbleW - 2 * kPadH, 16);
+		reactions.frame = CGRectMake(kPadH, afterBody + kChipsRowTopGap,
+									 bubbleW - 2 * kPadH, kChipsRowHeight);
 	} else {
 		reactions.hidden = YES;
 		chipsView.hidden = YES;
@@ -9561,7 +9547,6 @@ static UIColor *TGSenderColour(int64_t userId) {
 	NSArray *frames = mosaic[@"frames"];
 	CGSize groupSize = [mosaic[@"size"] CGSizeValue];
 	BOOL mine = [head[@"outgoing"] boolValue];
-	BOOL bare = [self albumRowIsBare:indexPath.row];
 	TGTheme *theme = [TGTheme shared];
 
 	NSDictionary *caption = [self albumCaptionMessageAtRow:indexPath.row];
@@ -9580,59 +9565,47 @@ static UIColor *TGSenderColour(int64_t userId) {
 	cell.subtitle.hidden = YES;
 	cell.lottie.hidden = YES;
 	[cell.lottie stop];
+	[cell.bubble viewWithTag:0x9006].hidden = YES;
 	cell.album.hidden = NO;
 	cell.album.layer.cornerRadius = kMediaRadius;
 
-	CGFloat senderH = (senderName.length && !bare) ? 17 : 0;
-	CGFloat bubbleW = bare ? groupSize.width
-						   : MAX(groupSize.width, body.width) + 2 * kPadH;
+	CGFloat senderH = senderName.length ? 17 : 0;
+	CGFloat albumContentW = MAX(groupSize.width, body.width);
+	if ([[self chipsFor:head] count])
+		albumContentW = MAX(albumContentW, [self chipsRowWidthFor:head]);
+	CGFloat bubbleW = albumContentW + 2 * kPadH;
 	CGFloat x = mine ? (tableView.bounds.size.width - bubbleW - 8) : 8;
 	CGFloat avatarX = x - kBubbleTailOverhang + 4;
 	if (senderName.length)
 		x += kAvatarSide + 4;
 	CGFloat top = 0;
-	CGFloat bubbleH = bare ? groupSize.height
-						   : [self albumRowHeight:indexPath.row] - 3;
+	CGFloat bubbleH = [self albumRowHeight:indexPath.row] - 3;
 
 	cell.bubble.frame = CGRectMake(x, top, bubbleW, bubbleH);
 
-	if (bare){
-		cell.bubbleBg.hidden = YES;
-		cell.bubble.backgroundColor = [UIColor clearColor];
-		cell.bubble.layer.borderWidth = 0.0f;
-		cell.bubble.layer.cornerRadius = 0.0f;
-		cell.tail.hidden = YES;
-		cell.sender.hidden = YES;
-		cell.body.hidden = YES;
-		cell.forwardLabel.hidden = YES;
-		cell.quote.hidden = YES;
-		cell.quoteBar.hidden = YES;
-		cell.album.frame = CGRectMake(0, 0, groupSize.width, groupSize.height);
-	} else {
-		UIColor *fill = mine ? [theme bubbleMineColour] : [theme bubbleTheirsColour];
-		cell.bubble.backgroundColor = fill;
-		cell.bubble.layer.borderWidth = [theme bubbleBorderWidth];
-		cell.bubble.layer.borderColor = [theme bubbleBorderColour].CGColor;
-		cell.bubble.layer.cornerRadius = [theme bubbleCornerRadius];
-		cell.tail.hidden = NO;
-		cell.tail.image = [TGIcons bubbleTailForColour:fill outgoing:mine];
-		cell.tail.frame = mine
-				? CGRectMake(x + bubbleW - 1, top + bubbleH - 10, 6, 10)
-				: CGRectMake(x - 5, top + bubbleH - 10, 6, 10);
-		[self applyBubbleArtworkTo:cell outgoing:mine];
+	UIColor *fill = mine ? [theme bubbleMineColour] : [theme bubbleTheirsColour];
+	cell.bubble.backgroundColor = fill;
+	cell.bubble.layer.borderWidth = [theme bubbleBorderWidth];
+	cell.bubble.layer.borderColor = [theme bubbleBorderColour].CGColor;
+	cell.bubble.layer.cornerRadius = [theme bubbleCornerRadius];
+	cell.tail.hidden = NO;
+	cell.tail.image = [TGIcons bubbleTailForColour:fill outgoing:mine];
+	cell.tail.frame = mine
+			? CGRectMake(x + bubbleW - 1, top + bubbleH - 10, 6, 10)
+			: CGRectMake(x - 5, top + bubbleH - 10, 6, 10);
+	[self applyBubbleArtworkTo:cell outgoing:mine];
 
-		cell.sender.hidden = !senderName.length;
-		if (senderName.length){
-			cell.sender.text = senderName;
-			cell.sender.textColor = TGSenderColour(senderId);
-			cell.sender.frame = CGRectMake(kPadH, kPadV + 2, bubbleW - 2 * kPadH, 16);
-		}
-
-		CGFloat y = kPadV + senderH;
-		y += [self layoutForwardIn:cell message:head width:bubbleW];
-		y = [self layoutQuoteIn:cell message:head atY:y bubbleWidth:bubbleW];
-		cell.album.frame = CGRectMake(kPadH, y, groupSize.width, groupSize.height);
+	cell.sender.hidden = !senderName.length;
+	if (senderName.length){
+		cell.sender.text = senderName;
+		cell.sender.textColor = TGSenderColour(senderId);
+		cell.sender.frame = CGRectMake(kPadH, kPadV + 2, bubbleW - 2 * kPadH, 16);
 	}
+
+	CGFloat y = kPadV + senderH;
+	y += [self layoutForwardIn:cell message:head atY:y width:bubbleW];
+	y = [self layoutQuoteIn:cell message:head atY:y bubbleWidth:bubbleW];
+	cell.album.frame = CGRectMake(kPadH, y, groupSize.width, groupSize.height);
 
 	for (NSUInteger i = 0; i < album.count && i < frames.count; i++){
 		NSDictionary *member = album[i];
@@ -9662,39 +9635,19 @@ static UIColor *TGSenderColour(int64_t userId) {
 	cell.senderAvatar.hidden = !senderName.length;
 	if (!cell.senderAvatar.hidden){
 		cell.senderAvatar.image = [self avatarForUser:senderId name:senderName];
+		[self attachAvatarTapIn:cell sender:senderId];
 		cell.senderAvatar.frame = CGRectMake(avatarX,
 											 top + bubbleH - kAvatarSide - 1,
 											 kAvatarSide, kAvatarSide);
 	}
 
 	cell.ticks.hidden = YES;
-	if (bare){
-		NSString *stamp = [self stampFor:head];
-		CGFloat plateW = [stamp sizeWithFont:cell.mediaStamp.font].width +
-				(mine ? 30 : 14);
-		cell.mediaStamp.hidden = NO;
-		cell.mediaStamp.backgroundColor = [theme mediaStampColour];
-		cell.mediaStamp.text = stamp;
-		cell.mediaStamp.frame = CGRectMake(groupSize.width - plateW - 5,
-										   groupSize.height - 21, plateW, 16);
-		if (mine){
-			cell.ticks.hidden = NO;
-			cell.ticks.image = [self statusGlyphForMessage:head white:YES];
-			cell.ticks.frame = CGRectMake(
-					x + CGRectGetMaxX(cell.mediaStamp.frame) - 20,
-					top + CGRectGetMidY(cell.mediaStamp.frame) - 4, 15, 9);
-		}
-		cell.time.text = @"";
-		cell.time.hidden = YES;
-		cell.dateBadge.hidden = YES;
-		return;
-	}
-
 	cell.mediaStamp.hidden = YES;
 	CGFloat afterAlbum = CGRectGetMaxY(cell.album.frame) + 4;
 	cell.body.hidden = (body.height == 0);
 	if (body.height > 0){
 		cell.body.numberOfLines = 0;
+		cell.body.textAlignment = NSTextAlignmentLeft;
 		cell.body.font = [self bodyFontFor:caption];
 		cell.body.textColor = [theme isDark] ? [theme primaryTextColour]
 											 : TGMessageBodyColour();
@@ -9713,11 +9666,13 @@ static UIColor *TGSenderColour(int64_t userId) {
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
 	static NSString *reuse = @"TGBubbleCell";
 	TGBubbleCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
-	if (!cell)
+	if (!cell){
 		cell = [[TGBubbleCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:reuse];
+		[self attachReplySwipeTo:cell];
+	}
 
-	if (indexPath.row != self.swipingRow)
-		cell.contentView.transform = CGAffineTransformIdentity;
+	if (cell != self.swipingCell)
+		[self resetReplySwipeOnCell:cell];
 
 	NSDictionary *m = [self messageAtRow:indexPath.row];
 	if (!m)
@@ -9841,6 +9796,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 		x += kAvatarSide + 4;
 		cell.senderAvatar.hidden = NO;
 		cell.senderAvatar.image = [self avatarForUser:senderId name:senderName];
+		[self attachAvatarTapIn:cell sender:senderId];
 
 		cell.sender.hidden = NO;
 		cell.sender.text = senderName;
@@ -9906,7 +9862,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 	cell.quoteBar.hidden = YES;
 	cell.quote.hidden = YES;
 
-	y += [self layoutForwardIn:cell message:m width:bubbleW];
+	y += [self layoutForwardIn:cell message:m atY:y width:bubbleW];
 
 	y = [self layoutQuoteIn:cell message:m atY:y bubbleWidth:bubbleW];
 
@@ -9938,7 +9894,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 			cell.mediaStamp.backgroundColor = [theme mediaStampColour];
 			cell.mediaStamp.text = stamp;
 			cell.mediaStamp.frame = CGRectMake(
-					kPadH + pic.width - plateW - 5, y + pic.height - 21, plateW, 16);
+					kPadH + pic.width - plateW - 6, y + pic.height - 22, plateW, 16);
 		}
 		y += pic.height + 4;
 	} else {

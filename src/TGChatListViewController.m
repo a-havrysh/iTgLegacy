@@ -18,6 +18,7 @@
 #import "TGSnackbar.h"
 #import "TGSearchViewController.h"
 #import "TGSwipeGestureRecognizer.h"
+#import "TGEmoji.h"
 #import "TGActionsMenu.h"
 #import "TGStoriesViewController.h"
 #import "UIView+SafeTint.h"
@@ -201,8 +202,8 @@ static UIImage *TGDialogListBadgeImage(BOOL highlighted) {
 
 @interface TGChatCell : UITableViewCell
 @property (nonatomic, strong) UIImageView *avatar;
-@property (nonatomic, strong) UILabel *titleLabel;
-@property (nonatomic, strong) UILabel *previewLabel;
+@property (nonatomic, strong) TGEmojiLabel *titleLabel;
+@property (nonatomic, strong) TGEmojiLabel *previewLabel;
 @property (nonatomic, strong) UILabel *authorLabel;
 @property (nonatomic, strong) UILabel *draftLabel;
 @property (nonatomic, strong) UILabel *dateLabel;
@@ -279,7 +280,7 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 }
 
 - (void)buildTextLabels {
-	self.titleLabel = [[UILabel alloc] init];
+	self.titleLabel = [[TGEmojiLabel alloc] init];
 	self.titleLabel.font = [UIFont boldSystemFontOfSize:16];
 	self.titleLabel.textColor = TGChatListTitleColour();
 	self.titleLabel.highlightedTextColor = [UIColor whiteColor];
@@ -287,7 +288,7 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 	self.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
 	[self.contentView addSubview:self.titleLabel];
 
-	self.previewLabel = [[UILabel alloc] init];
+	self.previewLabel = [[TGEmojiLabel alloc] init];
 	self.previewLabel.font = [UIFont systemFontOfSize:14];
 	self.previewLabel.textColor = TGChatListMessageColour();
 	self.previewLabel.highlightedTextColor = [UIColor whiteColor];
@@ -673,7 +674,8 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 	CGFloat titleWidth = (int)(dateX - 4 - left - 18) - iconWidth;
 	if (!self.muteIcon.hidden)
 		titleWidth -= 12;
-	titleWidth = MIN(titleWidth, [self.titleLabel.text sizeWithFont:self.titleLabel.font].width);
+	titleWidth = MIN(titleWidth, TGEmojiTextSize(self.titleLabel.text, self.titleLabel.font,
+			CGSizeMake(10000, 40), NSLineBreakByWordWrapping, 1).width);
 	if (titleWidth < 0)
 		titleWidth = 0;
 	self.titleLabel.frame = CGRectMake(titleX, 6, titleWidth, 20);
@@ -689,11 +691,13 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 		self.authorLabel.frame = CGRectMake(left, 29, w - left - 10 - rightPadding, 20);
 		previewFrame.origin.y += 9;
 		previewFrame.size.height -= 12;
-		CGSize fits = [self.previewLabel.text sizeWithFont:self.previewLabel.font
-										 constrainedToSize:previewFrame.size
-											 lineBreakMode:NSLineBreakByTruncatingTail];
+		CGSize fits = TGEmojiTextSize(self.previewLabel.text, self.previewLabel.font,
+				previewFrame.size, NSLineBreakByTruncatingTail, 2);
 		if (fits.height < 20)
 			previewFrame.origin.y += 9;
+		CGFloat textBottom = kRowHeight - 9;
+		if (CGRectGetMaxY(previewFrame) > textBottom)
+			previewFrame.size.height = textBottom - previewFrame.origin.y;
 	}
 	self.previewLabel.frame = previewFrame;
 
@@ -720,6 +724,7 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 
 static NSString *const TGChatListStoriesTrayKey = @"TGShowStoriesTray";
 static NSString *const TGChatListFolderStyleKey = @"TGChatListFolderStyle";
+static NSString *const TGChatListArchiveCollapsedKey = @"TGArchiveCollapsed";
 
 static const NSInteger TGChatListFolderStyleChooser = 0;
 static const NSInteger TGChatListFolderStyleStrip = 1;
@@ -732,6 +737,7 @@ static const CGFloat kLoginBannerHeight = 76.0f;
 static const CGFloat kFolderBannerHeight = 62.0f;
 static const NSUInteger kRowDetailCacheLimit = 200;
 static const NSInteger kAvatarPrefetchRows = 4;
+static const CGFloat kArchivePullThreshold = 40.0f;
 
 static BOOL TGStoriesTrayEnabled(void) {
 	id stored = [[NSUserDefaults standardUserDefaults] objectForKey:TGChatListStoriesTrayKey];
@@ -741,6 +747,18 @@ static BOOL TGStoriesTrayEnabled(void) {
 static NSInteger TGChatListFolderStyle(void) {
 	id stored = [[NSUserDefaults standardUserDefaults] objectForKey:TGChatListFolderStyleKey];
 	return stored ? [stored integerValue] : TGChatListFolderStyleStrip;
+}
+
+static BOOL TGArchiveCollapsed(void) {
+	return [[NSUserDefaults standardUserDefaults] boolForKey:TGChatListArchiveCollapsedKey];
+}
+
+static void TGSetArchiveCollapsed(BOOL collapsed) {
+	NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+	if ([defaults boolForKey:TGChatListArchiveCollapsedKey] == collapsed)
+		return;
+	[defaults setBool:collapsed forKey:TGChatListArchiveCollapsedKey];
+	[defaults synchronize];
 }
 
 static UIImage *TGScopeBarBackgroundImage(void) {
@@ -1165,6 +1183,10 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 @property (nonatomic, strong) NSDictionary *actionChat; // long-pressed row
 @property (nonatomic, assign) int64_t chatPendingDeletion;
 @property (nonatomic, assign) CGFloat headerHeight;
+@property (nonatomic, assign) BOOL archiveAvailable;
+@property (nonatomic, assign) BOOL archiveRowShown;
+@property (nonatomic, assign) CGFloat archiveRowTop;
+@property (nonatomic, weak) UIView *archiveRowView;
 @property (nonatomic, strong) UIView *emptyContainer;
 @property (nonatomic, strong) UIImageView *emptyIcon;
 @property (nonatomic, strong) UILabel *emptyTitleLabel;
@@ -1500,21 +1522,69 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView {
 	if (self.emptyContainer && !self.emptyContainer.hidden)
 		[self updateEmptyState];
+	[self revealArchiveIfPulled:scrollView];
 	[self loadMoreIfNeeded];
 	[self fetchMissingAvatarsThrottled];
 }
 
 - (void)scrollViewDidEndDragging:(UIScrollView *)scrollView willDecelerate:(BOOL)decelerate {
-	if (!decelerate)
+	if (!decelerate){
+		[self collapseArchiveIfScrolledPast];
 		[self fetchMissingAvatars];
+	}
 }
 
 - (void)scrollViewDidEndDecelerating:(UIScrollView *)scrollView {
+	[self collapseArchiveIfScrolledPast];
 	[self fetchMissingAvatars];
 }
 
 - (void)scrollViewDidEndScrollingAnimation:(UIScrollView *)scrollView {
+	[self collapseArchiveIfScrolledPast];
 	[self fetchMissingAvatars];
+}
+
+- (BOOL)archiveBannerAllowed {
+	return !self.showsArchive && self.folderId == 0 && self.searchResults == nil &&
+			!self.tableView.editing;
+}
+
+- (void)revealArchiveIfPulled:(UIScrollView *)scrollView {
+	if (self.archiveRowShown || !self.archiveAvailable || ![self archiveBannerAllowed])
+		return;
+	if (!scrollView.dragging)
+		return;
+	if (scrollView.contentOffset.y + scrollView.contentInset.top > -kArchivePullThreshold)
+		return;
+
+	CGPoint offset = scrollView.contentOffset;
+	self.archiveRowShown = YES;
+	TGSetArchiveCollapsed(NO);
+	[self rebuildTableHeader];
+	if (!CGPointEqualToPoint(scrollView.contentOffset, offset))
+		scrollView.contentOffset = offset;
+
+	UIView *row = self.archiveRowView;
+	if (row){
+		row.alpha = 0;
+		[UIView animateWithDuration:0.25 animations:^{
+			row.alpha = 1;
+		}];
+	}
+}
+
+- (void)collapseArchiveIfScrolledPast {
+	if (!self.archiveRowShown || ![self archiveBannerAllowed])
+		return;
+	UITableView *table = self.tableView;
+	if (table.contentOffset.y + table.contentInset.top < self.archiveRowTop + kRowHeight)
+		return;
+
+	CGPoint offset = table.contentOffset;
+	TGSetArchiveCollapsed(YES);
+	[self rebuildTableHeader];
+	offset.y -= kRowHeight;
+	table.contentOffset = offset;
 }
 
 - (void)viewDidLayoutSubviews {
@@ -1644,7 +1714,8 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	if (width < 1)
 		width = [UIScreen mainScreen].applicationFrame.size.width;
 	NSUInteger archivedCount = TGReplyArray([TGClient shared].archivedChats).count;
-	BOOL showArchive = !self.showsArchive && self.folderId == 0 && archivedCount > 0;
+	BOOL hasArchive = !self.showsArchive && self.folderId == 0 && archivedCount > 0;
+	BOOL showArchive = hasArchive && !TGArchiveCollapsed();
 	BOOL showTray = !self.showsArchive && TGStoriesTrayEnabled() &&
 			TGReplyArray(self.storyPosters).count > 0;
 	BOOL showStrip = [self usesFolderStrip];
@@ -1676,17 +1747,24 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 													  + trayHeight]];
 
 	if (showArchive){
-		[header addSubview:[self archiveHeaderRowWithWidth:width top:rowsTop
-													 count:archivedCount]];
+		UIView *row = [self archiveHeaderRowWithWidth:width top:rowsTop
+												count:archivedCount];
+		[header addSubview:row];
+		self.archiveRowView = row;
 
 		UIView *hair = [[UIView alloc] initWithFrame:
 				CGRectMake(0, height - 0.5f, width, 0.5f)];
 		hair.backgroundColor = [[TGTheme shared] separatorColour];
 		[header addSubview:hair];
+	} else {
+		self.archiveRowView = nil;
 	}
 
 	self.tableView.tableHeaderView = header;
 	self.headerHeight = height;
+	self.archiveAvailable = hasArchive;
+	self.archiveRowShown = showArchive;
+	self.archiveRowTop = rowsTop;
 }
 
 - (UIView *)archiveHeaderRowWithWidth:(CGFloat)width top:(CGFloat)top count:(NSUInteger)archivedCount {
@@ -2092,11 +2170,6 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 		x += button.frame.size.width + 4;
 	}
 
-	UIButton *options = [self folderStripOptionsButtonWithFont:font
-														  left:(x + 4)
-												   normalPlate:normalPlate];
-	[scroller addSubview:options];
-	x += 4 + options.frame.size.width + 4;
 	scroller.contentSize = CGSizeMake(x, kFolderStripHeight);
 
 	if (!background){
@@ -2143,22 +2216,6 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	 forControlEvents:UIControlEventTouchUpInside];
 	[button addGestureRecognizer:[[UILongPressGestureRecognizer alloc]
 			initWithTarget:self action:@selector(folderButtonHeld:)]];
-	return button;
-}
-
-- (UIButton *)folderStripOptionsButtonWithFont:(UIFont *)font
-										   left:(CGFloat)left
-									normalPlate:(UIImage *)normalPlate {
-	NSString *caption = @"Edit";
-	CGFloat buttonWidth = (int)[caption sizeWithFont:font].width + 24;
-	UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
-	button.frame = CGRectMake(left, (int)((kFolderStripHeight - 30) / 2), buttonWidth, 30);
-	[button setBackgroundImage:normalPlate forState:UIControlStateNormal];
-	[button setTitle:caption forState:UIControlStateNormal];
-	button.titleLabel.font = font;
-	[self styleFolderStripButton:button selected:NO];
-	[button addTarget:self action:@selector(openFolderManagement)
-	 forControlEvents:UIControlEventTouchUpInside];
 	return button;
 }
 
@@ -3778,6 +3835,7 @@ static const NSInteger kChatActionsTag = 77;
 	cell.titleLabel.text = @"";
 	cell.authorLabel.text = @"";
 	cell.tick.image = nil;
+	cell.tick.highlightedImage = nil;
 	cell.pin.image = nil;
 	cell.onlineDot.layer.borderColor = [theme listBackgroundColour].CGColor;
 }
@@ -3872,10 +3930,14 @@ static const NSInteger kChatActionsTag = 77;
 
 - (void)configureStatusIconsInCell:(TGChatCell *)cell chat:(NSDictionary *)c {
 	cell.onlineDot.hidden = ![c[@"isOnline"] boolValue];
-	cell.tick.hidden = ![c[@"outgoing"] boolValue];
-	if (!cell.tick.hidden)
-		cell.tick.image = [UIImage imageNamed:([c[@"outgoingRead"] boolValue]
-				? @"DialogListRead" : @"DialogListSent")];
+	cell.tick.hidden = ![c[@"outgoing"] boolValue] || !cell.draftLabel.hidden ||
+			[c[@"sponsored"] boolValue];
+	if (!cell.tick.hidden){
+		NSString *art = [c[@"outgoingRead"] boolValue] ? @"DialogListRead" : @"DialogListSent";
+		cell.tick.image = [UIImage imageNamed:[art stringByAppendingString:@".png"]];
+		cell.tick.highlightedImage = [UIImage imageNamed:
+				[art stringByAppendingString:@"_Highlighted.png"]];
+	}
 
 	cell.muteIcon.hidden = ![c[@"isMuted"] boolValue];
 	cell.groupIcon.hidden = ![c[@"isGroup"] boolValue];

@@ -1,4 +1,5 @@
 #import "TGClient+Private.h"
+#import "TGClient+Notifications.h"
 #import "TGCall.h"
 #import <UIKit/UIKit.h>
 #include <dlfcn.h>
@@ -311,6 +312,17 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 		NSLog(@"TGClient: first %@", type);
 	}
 
+	if ([type hasPrefix:@"updateNotification"] ||
+		[type isEqualToString:@"updateActiveNotifications"] ||
+		[type isEqualToString:@"updateHavePendingNotifications"] ||
+		[type isEqualToString:@"updateChatNotificationSettings"] ||
+		[type isEqualToString:@"updateScopeNotificationSettings"] ||
+		[type isEqualToString:@"updateChatReadInbox"] ||
+		[type isEqualToString:@"updateUnreadMessageCount"]){
+		[[NSNotificationCenter defaultCenter]
+				postNotificationName:TGNotificationUpdateNotification object:obj];
+	}
+
 	if ([type isEqualToString:@"updateAuthorizationState"]){
 		[self handleAuthState:obj[@"authorization_state"]];
 		return;
@@ -347,6 +359,7 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 		[type isEqualToString:@"updateChatPosition"] ||
 		[type isEqualToString:@"updateChatTitle"] ||
 		[type isEqualToString:@"updateChatReadInbox"] ||
+		[type isEqualToString:@"updateChatReadOutbox"] ||
 		[type isEqualToString:@"updateChatNotificationSettings"]){
 		[self applyChatUpdate:obj];
 		return;
@@ -2619,13 +2632,33 @@ static NSArray *TGPacksFrom(NSDictionary *target) {
 	NSString *draft = chat[@"draft_message"][@"input_message_text"][@"text"][@"text"];
 	info[@"draft"] = draft ?: @"";
 
+	if (chat[@"last_read_outbox_message_id"])
+		info[@"lastReadOutboxId"] = chat[@"last_read_outbox_message_id"];
+
 	NSDictionary *last = chat[@"last_message"];
 	if ([last isKindOfClass:NSDictionary.class]){
 		info[@"text"] = [self previewForLastMessage:last inChat:info];
 		info[@"date"] = last[@"date"] ?: @(0);
+		[self mergeOutgoingStateFromMessage:last into:info];
 	}
 
 	[self rebuildChats];
+}
+
+- (void)mergeOutgoingStateFromMessage:(NSDictionary *)last into:(NSMutableDictionary *)info {
+	info[@"lastMessageId"] = last[@"id"] ?: @(0);
+
+	BOOL hasReader = ![info[@"isSaved"] boolValue] && ![info[@"isChannel"] boolValue];
+	BOOL onItsWay = [last[@"sending_state"] isKindOfClass:NSDictionary.class];
+	info[@"outgoing"] = @([last[@"is_outgoing"] boolValue] && hasReader && !onItsWay);
+
+	[self refreshOutgoingReadStateIn:info];
+}
+
+- (void)refreshOutgoingReadStateIn:(NSMutableDictionary *)info {
+	long long lastId = [info[@"lastMessageId"] longLongValue];
+	info[@"outgoingRead"] = @(lastId != 0 &&
+							  [info[@"lastReadOutboxId"] longLongValue] >= lastId);
 }
 
 /// In a group the list shows who spoke last - "Назар: text" - which is the
@@ -2663,10 +2696,16 @@ static NSArray *TGPacksFrom(NSDictionary *target) {
 	if (update[@"unread_count"])
 		info[@"unread"] = update[@"unread_count"];
 
+	if (update[@"last_read_outbox_message_id"]){
+		info[@"lastReadOutboxId"] = update[@"last_read_outbox_message_id"];
+		[self refreshOutgoingReadStateIn:info];
+	}
+
 	NSDictionary *last = update[@"last_message"];
 	if ([last isKindOfClass:NSDictionary.class]){
 		info[@"text"] = [self previewForLastMessage:last inChat:info];
 		info[@"date"] = last[@"date"] ?: @(0);
+		[self mergeOutgoingStateFromMessage:last into:info];
 	}
 
 	if (update[@"notification_settings"])

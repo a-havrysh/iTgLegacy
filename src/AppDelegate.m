@@ -16,6 +16,7 @@
 #import "TGCallViewController.h"
 #import "TGChatViewController.h"
 #import "TGTopicsViewController.h"
+#import "TGNotificationManager.h"
 #import "TGHacks.h"
 #import "TGIcons.h"
 #import <QuartzCore/QuartzCore.h>
@@ -26,6 +27,10 @@
 @end
 
 @implementation AppDelegate
+
+static UIBackgroundTaskIdentifier TGBackgroundTask;
+static BOOL TGBackgroundTaskActive = NO;
+static int64_t TGPendingNotificationChatId = 0;
 
 /// An incoming call is the one thing that takes over the screen on its own.
 static void TGWatchForIncomingCalls(void) {
@@ -92,6 +97,12 @@ static void TGWatchForIncomingCalls(void) {
 
 	[self startTDLib];
 
+	UILocalNotification *launchNotification =
+			launchOptions[UIApplicationLaunchOptionsLocalNotificationKey];
+	if ([launchNotification isKindOfClass:[UILocalNotification class]])
+		TGPendingNotificationChatId =
+				[[TGNotificationManager shared] chatIdForLocalNotification:launchNotification];
+
 	return YES;
 }
 
@@ -106,6 +117,89 @@ static void TGWatchForIncomingCalls(void) {
 - (void)applicationDidEnterBackground:(UIApplication *)application {
 	[TGIcons flush];
 	[[NSURLCache sharedURLCache] removeAllCachedResponses];
+	[[TGNotificationManager shared] applicationDidEnterBackground];
+
+	if (![application respondsToSelector:@selector(beginBackgroundTaskWithExpirationHandler:)])
+		return;
+	if (TGBackgroundTaskActive)
+		return;
+	TGBackgroundTaskActive = YES;
+	TGBackgroundTask = [application beginBackgroundTaskWithExpirationHandler:^{
+		if (!TGBackgroundTaskActive)
+			return;
+		TGBackgroundTaskActive = NO;
+		[[UIApplication sharedApplication] endBackgroundTask:TGBackgroundTask];
+	}];
+}
+
+- (void)applicationWillEnterForeground:(UIApplication *)application {
+	if (!TGBackgroundTaskActive)
+		return;
+	TGBackgroundTaskActive = NO;
+	[application endBackgroundTask:TGBackgroundTask];
+}
+
+- (void)applicationDidBecomeActive:(UIApplication *)application {
+	[[TGNotificationManager shared] applicationDidBecomeActive];
+	if (!TGPendingNotificationChatId)
+		return;
+	int64_t chatId = TGPendingNotificationChatId;
+	TGPendingNotificationChatId = 0;
+	[self openChatFromNotification:chatId];
+}
+
+- (void)application:(UIApplication *)application
+		didReceiveLocalNotification:(UILocalNotification *)notification {
+	int64_t chatId = [[TGNotificationManager shared]
+			chatIdForLocalNotification:notification];
+	if (!chatId)
+		return;
+	if (application.applicationState == UIApplicationStateActive){
+		[[TGNotificationManager shared] clearNotificationsForChat:chatId];
+		return;
+	}
+	TGPendingNotificationChatId = chatId;
+}
+
+- (void)openChatFromNotification:(int64_t)chatId {
+	if (!chatId)
+		return;
+	dispatch_async(dispatch_get_main_queue(), ^{
+		UITabBarController *tabs = (UITabBarController *)self.rootViewController;
+		if (![tabs isKindOfClass:UITabBarController.class] || tabs.viewControllers.count < 2){
+			TGPendingNotificationChatId = chatId;
+			return;
+		}
+
+		NSDictionary *found = nil;
+		for (id entry in [TGClient shared].chats){
+			if ([entry isKindOfClass:[NSDictionary class]] &&
+				[entry[@"id"] longLongValue] == chatId){
+				found = entry;
+				break;
+			}
+		}
+
+		tabs.selectedIndex = 1;
+		UINavigationController *nc = tabs.viewControllers[1];
+		[nc popToRootViewControllerAnimated:NO];
+
+		if ([found[@"isForum"] boolValue]){
+			TGTopicsViewController *topics = [[TGTopicsViewController alloc] init];
+			topics.chatId = chatId;
+			topics.chatTitle = found[@"title"];
+			[nc pushViewController:topics animated:NO];
+		} else {
+			TGChatViewController *vc = [[TGChatViewController alloc] init];
+			vc.chatId = chatId;
+			vc.chatTitle = found[@"title"] ?: @"Chat";
+			vc.isGroup = [found[@"isGroup"] boolValue];
+			if (![RootViewController presentInDetail:vc])
+				[nc pushViewController:vc animated:NO];
+		}
+
+		[[TGNotificationManager shared] clearNotificationsForChat:chatId];
+	});
 }
 
 #pragma mark - TDLib
@@ -141,6 +235,12 @@ static void TGWatchForIncomingCalls(void) {
 				NSLog(@"TDLIB AUTH: READY");
 				[me.loginVC setBusy:NO];
 				[me showMainUI];
+				[[TGNotificationManager shared] start];
+				if (TGPendingNotificationChatId){
+					int64_t pending = TGPendingNotificationChatId;
+					TGPendingNotificationChatId = 0;
+					[me openChatFromNotification:pending];
+				}
 				break;
 			case TGAuthStateClosed:
 			case TGAuthStateLoggingOut:

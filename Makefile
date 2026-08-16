@@ -86,6 +86,7 @@ FRAMEWORKS := -framework UIKit -framework Foundation -framework QuickLook \
               -framework AddressBookUI -framework MobileCoreServices \
               -framework CoreLocation -framework MapKit \
               -framework CoreTelephony -framework ImageIO \
+              -framework CoreText \
 
 
 # TDLib is loaded at runtime from libtdjson.dylib, never linked.
@@ -151,6 +152,7 @@ APP_SRC_M := \
 	src/TGMemberModel.m \
 	src/TGMosaicLayout.m \
 	src/TGMessageModel.m \
+	src/TGNotificationManager.m \
 	src/TGNotificationSettingsModel.m \
 	src/TGPaymentModel.m \
 	src/TGSessionModel.m \
@@ -252,6 +254,7 @@ APP_SRC_M := \
 	src/TGReusableView.m \
 	src/TGViewRecycler.m \
 	src/TGLabel.m \
+	src/TGEmoji.m \
 	src/TGDateLabel.m \
 	src/TGSwipeGestureRecognizer.m \
 	src/TGRemoteImageView.m \

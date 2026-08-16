@@ -28,6 +28,8 @@ extern const NSInteger TGNotificationMuteForever;
 /// getters below are always safe to re-read on view appearance regardless.
 extern NSString *const TGScopeNotificationSettingsDidChangeNotification;
 
+extern NSString *const TGNotificationUpdateNotification;
+
 @interface TGClient (Notifications)
 
 #pragma mark - scope settings
@@ -174,6 +176,10 @@ extern NSString *const TGScopeNotificationSettingsDidChangeNotification;
 /// "Photo", "Voice message", or the text of a plain message. Pure function,
 /// safe to call on any queue; answers an empty string for anything unknown.
 - (NSString *)previewTextForPushContent:(NSDictionary *)content;
+
+- (NSString *)previewTextForMessageContent:(NSDictionary *)content;
+
+- (NSString *)titleForChatId:(int64_t)chatId;
 
 /// Turn a TDLib "notification" object into what a UILocalNotification needs:
 /// "title" (chat or sender name, may be empty), "body", and "chatId"

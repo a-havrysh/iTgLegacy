@@ -6,6 +6,9 @@ const NSInteger TGNotificationMuteForever = 365 * 24 * 3600;
 NSString *const TGScopeNotificationSettingsDidChangeNotification =
 		@"TGScopeNotificationSettingsDidChangeNotification";
 
+NSString *const TGNotificationUpdateNotification =
+		@"TGNotificationUpdateNotification";
+
 static NSString *TGNotifScopeType(NSString *scope) {
 	if ([scope isEqualToString:@"groups"])   return @"notificationSettingsScopeGroupChats";
 	if ([scope isEqualToString:@"channels"]) return @"notificationSettingsScopeChannelChats";
@@ -632,6 +635,103 @@ static NSDictionary *TGNotifSoundFrom(NSDictionary *sound) {
 	return @"New message";
 }
 
+- (NSString *)previewTextForMessageContent:(NSDictionary *)content {
+	if (![content isKindOfClass:[NSDictionary class]])
+		return @"";
+	NSString *type = content[@"@type"];
+	if (![type isKindOfClass:[NSString class]])
+		return @"";
+
+	if ([type isEqualToString:@"messageText"]){
+		NSDictionary *text = content[@"text"];
+		return [text isKindOfClass:[NSDictionary class]] ? TGNotifString(text, @"text") : @"";
+	}
+
+	NSDictionary *caption = content[@"caption"];
+	NSString *captionText = [caption isKindOfClass:[NSDictionary class]]
+			? TGNotifString(caption, @"text") : @"";
+	if (captionText.length)
+		return captionText;
+
+	if ([type isEqualToString:@"messagePhoto"])
+		return [content[@"is_secret"] boolValue] ? @"Self-destructing photo" : @"Photo";
+	if ([type isEqualToString:@"messageVideo"])
+		return [content[@"is_secret"] boolValue] ? @"Self-destructing video" : @"Video";
+	if ([type isEqualToString:@"messageAnimation"])
+		return @"GIF";
+	if ([type isEqualToString:@"messageVoiceNote"])
+		return @"Voice message";
+	if ([type isEqualToString:@"messageVideoNote"])
+		return @"Video message";
+	if ([type isEqualToString:@"messageSticker"]){
+		NSDictionary *sticker = content[@"sticker"];
+		NSString *emoji = [sticker isKindOfClass:[NSDictionary class]]
+				? TGNotifString(sticker, @"emoji") : @"";
+		return emoji.length ? [emoji stringByAppendingString:@" Sticker"] : @"Sticker";
+	}
+	if ([type isEqualToString:@"messageAnimatedEmoji"]){
+		NSString *emoji = TGNotifString(content, @"emoji");
+		return emoji.length ? emoji : @"Emoji";
+	}
+	if ([type isEqualToString:@"messageDocument"]){
+		NSDictionary *document = content[@"document"];
+		NSString *name = [document isKindOfClass:[NSDictionary class]]
+				? TGNotifString(document, @"file_name") : @"";
+		return name.length ? name : @"File";
+	}
+	if ([type isEqualToString:@"messageAudio"]){
+		NSDictionary *audio = content[@"audio"];
+		NSString *title = [audio isKindOfClass:[NSDictionary class]]
+				? TGNotifString(audio, @"title") : @"";
+		return title.length ? title : @"Audio";
+	}
+	if ([type isEqualToString:@"messageContact"])
+		return @"Contact";
+	if ([type isEqualToString:@"messageVenue"])
+		return @"Venue";
+	if ([type isEqualToString:@"messageLocation"])
+		return [content[@"live_period"] integerValue] > 0 ? @"Live location" : @"Location";
+	if ([type isEqualToString:@"messagePoll"]){
+		NSDictionary *poll = content[@"poll"];
+		NSDictionary *question = [poll isKindOfClass:[NSDictionary class]]
+				? poll[@"question"] : nil;
+		NSString *text = [question isKindOfClass:[NSDictionary class]]
+				? TGNotifString(question, @"text") : @"";
+		return text.length ? [@"Poll: " stringByAppendingString:text] : @"Poll";
+	}
+	if ([type isEqualToString:@"messageGame"])
+		return @"Game";
+	if ([type isEqualToString:@"messageInvoice"])
+		return @"Invoice";
+	if ([type isEqualToString:@"messageCall"])
+		return @"Call";
+	if ([type isEqualToString:@"messageScreenshotTaken"])
+		return @"took a screenshot";
+	if ([type isEqualToString:@"messageChatAddMembers"])
+		return @"added a member";
+	if ([type isEqualToString:@"messageChatDeleteMember"])
+		return @"left the group";
+	if ([type isEqualToString:@"messageChatJoinByLink"] ||
+			[type isEqualToString:@"messageChatJoinByRequest"])
+		return @"joined the group";
+	if ([type isEqualToString:@"messageChatChangeTitle"])
+		return @"renamed the group";
+	if ([type isEqualToString:@"messageChatChangePhoto"])
+		return @"changed the group photo";
+	if ([type isEqualToString:@"messagePinMessage"])
+		return @"pinned a message";
+	return @"New message";
+}
+
+- (NSString *)titleForChatId:(int64_t)chatId {
+	if (!chatId)
+		return nil;
+	id title = self.chatsById[@(chatId)][@"title"];
+	if ([title isKindOfClass:[NSString class]] && [title length])
+		return title;
+	return [self nameForUserId:chatId];
+}
+
 - (NSDictionary *)alertForNotification:(NSDictionary *)notification
                               chatName:(NSString *)chatName {
 	if (![notification isKindOfClass:[NSDictionary class]])
@@ -661,20 +761,17 @@ static NSDictionary *TGNotifSoundFrom(NSDictionary *sound) {
 			if ([sender isKindOfClass:[NSDictionary class]])
 				senderId = [sender[@"user_id"] longLongValue];
 			NSString *name = senderId ? [self nameForUserId:senderId] : nil;
-			if (![type[@"show_preview"] boolValue])
+			if (![type[@"show_preview"] boolValue]){
+				title = @"Telegram";
 				body = @"New message";
-			else {
-				NSDictionary *content = message[@"content"];
-				NSDictionary *text = [content isKindOfClass:[NSDictionary class]]
-						? content[@"text"] : nil;
-				NSString *plain = [text isKindOfClass:[NSDictionary class]]
-						? TGNotifString(text, @"text") : @"";
-				body = plain.length ? plain : @"New message";
+			} else {
+				NSString *preview = [self previewTextForMessageContent:message[@"content"]];
+				body = preview.length ? preview : @"New message";
+				if (name.length && chatName.length && ![name isEqualToString:chatName])
+					body = [NSString stringWithFormat:@"%@: %@", name, body];
+				else if (name.length && !chatName.length)
+					title = name;
 			}
-			if (name.length && chatName.length && ![name isEqualToString:chatName])
-				body = [NSString stringWithFormat:@"%@: %@", name, body];
-			else if (name.length && !chatName.length)
-				title = name;
 		}
 	} else if ([typeName isEqualToString:@"notificationTypeNewSecretChat"]){
 		body = @"New secret chat";

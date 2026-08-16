@@ -24,6 +24,20 @@ static const CGFloat TGMediaScopeHeight = 44.0f;
 static const CGFloat TGMediaScopeButtonHeight = 30.0f;
 static const CGFloat TGMediaSearchBarHeight = 44.0f;
 static const CGFloat TGMediaListRowHeight = 56.0f;
+static const CGFloat TGMediaTopBarFallbackHeight = 44.0f;
+
+static CGFloat TGMediaTopBarHeight(void) {
+	UIImage *panel = [UIImage imageNamed:@"GalleryTopPanel.png"];
+	return panel ? panel.size.height : TGMediaTopBarFallbackHeight;
+}
+
+static CGFloat TGMediaStatusBarInset(void) {
+	CGRect frame = [UIApplication sharedApplication].statusBarFrame;
+	CGFloat inset = MIN(frame.size.width, frame.size.height);
+	if (inset < 1.0f)
+		inset = 20.0f;
+	return inset;
+}
 
 static UIColor *TGMediaPlaceholderColour(void) {
 	static UIColor *colour = nil;
@@ -753,7 +767,9 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	CGFloat scaleWidth = bounds.width / _imageSize.width;
 	CGFloat scaleHeight = bounds.height / _imageSize.height;
 	CGFloat minScale = MIN(scaleWidth, scaleHeight);
-	CGFloat maxScale = minScale < 1.0f ? minScale * 2.0f : minScale;
+	CGFloat maxScale = MAX(MAX(scaleWidth, scaleHeight), minScale * 3.0f);
+	if (fabs(maxScale - minScale) < 0.01f)
+		maxScale = minScale;
 
 	self.minimumZoomScale = minScale;
 	self.maximumZoomScale = maxScale;
@@ -767,6 +783,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 		self.maximumZoomScale = 1.0f;
 		self.zoomScale = 1.0f;
 		self.contentSize = bounds;
+		self.scrollEnabled = NO;
 		_imageView.frame = CGRectMake(0, 0, bounds.width, bounds.height);
 		return;
 	}
@@ -779,6 +796,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 
 	[self updateZoomLimits];
 	self.zoomScale = self.minimumZoomScale;
+	self.scrollEnabled = NO;
 
 	[self centerContents];
 
@@ -814,23 +832,81 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 
 - (void)scrollViewDidZoom:(UIScrollView *)scrollView {
 	[self centerContents];
+	self.scrollEnabled = [self isZoomed];
 }
 
 - (void)scrollViewDidEndZooming:(UIScrollView *)scrollView
 					   withView:(UIView *)view
 						atScale:(float)scale {
 	[self centerContents];
+	self.scrollEnabled = [self isZoomed];
+}
+
+@end
+
+#pragma mark - radial download status
+
+@interface TGMediaProgressRing : UIView
+@property (nonatomic, assign) CGFloat progress;
+@end
+
+@implementation TGMediaProgressRing
+
+- (id)initWithFrame:(CGRect)frame {
+	self = [super initWithFrame:frame];
+	if (self){
+		self.backgroundColor = [UIColor clearColor];
+		self.opaque = NO;
+		self.userInteractionEnabled = NO;
+		_progress = 0.0f;
+	}
+	return self;
+}
+
+- (void)setProgress:(CGFloat)progress {
+	CGFloat clamped = MAX(0.0f, MIN(1.0f, progress));
+	if (fabs(clamped - _progress) < 0.005f)
+		return;
+	_progress = clamped;
+	[self setNeedsDisplay];
+}
+
+- (void)drawRect:(CGRect)rect {
+	CGContextRef ctx = UIGraphicsGetCurrentContext();
+	CGRect box = self.bounds;
+
+	CGContextSetRGBFillColor(ctx, 0.0f, 0.0f, 0.0f, 0.5f);
+	CGContextFillEllipseInRect(ctx, box);
+
+	CGFloat lineWidth = 2.0f;
+	CGRect ring = CGRectInset(box, 8.0f + lineWidth / 2.0f, 8.0f + lineWidth / 2.0f);
+	CGPoint centre = CGPointMake(CGRectGetMidX(ring), CGRectGetMidY(ring));
+	CGFloat radius = ring.size.width / 2.0f;
+
+	CGContextSetLineWidth(ctx, lineWidth);
+	CGContextSetLineCap(ctx, kCGLineCapRound);
+
+	CGContextSetRGBStrokeColor(ctx, 1.0f, 1.0f, 1.0f, 0.25f);
+	CGContextAddArc(ctx, centre.x, centre.y, radius, 0.0f, (CGFloat)(2.0 * M_PI), 0);
+	CGContextStrokePath(ctx);
+
+	if (_progress <= 0.001f)
+		return;
+
+	CGFloat start = (CGFloat)(-M_PI / 2.0);
+	CGContextSetRGBStrokeColor(ctx, 1.0f, 1.0f, 1.0f, 1.0f);
+	CGContextAddArc(ctx, centre.x, centre.y, radius, start,
+					start + (CGFloat)(2.0 * M_PI) * _progress, 0);
+	CGContextStrokePath(ctx);
 }
 
 @end
 
 #pragma mark - fullscreen viewer
 
-@interface TGMediaFullscreenController : UIViewController
+@interface TGMediaFullscreenController ()
 		<UIScrollViewDelegate, UIGestureRecognizerDelegate, UIActionSheetDelegate>
 
-@property (nonatomic, assign) int64_t chatId;
-@property (nonatomic, copy) void (^onMessageDeleted)(int64_t messageId);
 @property (nonatomic, strong) NSMutableArray *items;
 @property (nonatomic, assign) NSInteger startIndex;
 @property (nonatomic, assign) NSInteger currentIndex;
@@ -843,6 +919,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 @property (nonatomic, strong) NSMutableDictionary *imageCache;
 
 @property (nonatomic, strong) UIImageView *topBar;
+@property (nonatomic, strong) UIImageView *topCorners;
 @property (nonatomic, strong) UILabel *counterLabel;
 @property (nonatomic, strong) UILabel *dateLabel;
 @property (nonatomic, strong) UIImageView *bottomBar;
@@ -859,11 +936,16 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 @property (nonatomic, strong) NSMutableSet *prefetchedFiles;
 @property (nonatomic, strong) NSArray *sheetActions;
 
+@property (nonatomic, strong) UILabel *captionLabel;
+@property (nonatomic, strong) UIView *captionPanel;
+@property (nonatomic, strong) TGMediaProgressRing *progressRing;
+@property (nonatomic, strong) NSNumber *ringFileId;
+@property (nonatomic, copy) void (^savedProgressBlock)(NSInteger, float);
+@property (nonatomic, assign) BOOL progressHooked;
+
 @property (nonatomic, assign) BOOL chromeHidden;
 @property (nonatomic, assign) BOOL dismissing;
 @property (nonatomic, assign) BOOL statusBarWasHidden;
-
-- (instancetype)initWithItems:(NSArray *)items index:(NSInteger)index;
 
 @end
 
@@ -881,6 +963,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 		_failedPages = [[NSMutableSet alloc] init];
 		_prefetchedFiles = [[NSMutableSet alloc] init];
 		self.modalPresentationStyle = UIModalPresentationFullScreen;
+		self.wantsFullScreenLayout = YES;
 	}
 	return self;
 }
@@ -893,7 +976,52 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	[self buildPagingView];
 	[self buildTopBar];
 	[self buildBottomBar];
+	[self buildCaptionPanel];
 	[self buildOverlayAndGestures];
+}
+
+- (void)buildCaptionPanel {
+	CGRect bounds = self.view.bounds;
+
+	_captionPanel = [[UIView alloc] initWithFrame:
+			CGRectMake(0, _bottomBar.frame.origin.y, bounds.size.width, 0)];
+	_captionPanel.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.65f];
+	_captionPanel.userInteractionEnabled = NO;
+	_captionPanel.hidden = YES;
+	_captionPanel.autoresizingMask = UIViewAutoresizingFlexibleWidth
+			| UIViewAutoresizingFlexibleTopMargin;
+	[self.view insertSubview:_captionPanel belowSubview:_bottomBar];
+
+	_captionLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	_captionLabel.backgroundColor = [UIColor clearColor];
+	_captionLabel.textColor = [UIColor whiteColor];
+	_captionLabel.font = [UIFont systemFontOfSize:14];
+	_captionLabel.numberOfLines = 3;
+	_captionLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+	_captionLabel.shadowColor = [UIColor colorWithWhite:0.0f alpha:0.5f];
+	_captionLabel.shadowOffset = CGSizeMake(0, -1);
+	_captionLabel.textAlignment = NSTextAlignmentLeft;
+	_captionLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	[_captionPanel addSubview:_captionLabel];
+}
+
+- (void)layoutCaptionPanel {
+	NSString *text = _captionLabel.text;
+	if (text.length == 0){
+		_captionPanel.hidden = YES;
+		return;
+	}
+
+	CGFloat width = self.view.bounds.size.width;
+	CGFloat inset = 10.0f;
+	CGSize wanted = [text sizeWithFont:_captionLabel.font
+					 constrainedToSize:CGSizeMake(width - inset * 2, 3 * 18.0f)
+						 lineBreakMode:_captionLabel.lineBreakMode];
+	CGFloat height = (CGFloat)(int)(wanted.height + 12.0f);
+
+	_captionPanel.hidden = NO;
+	_captionPanel.frame = CGRectMake(0, _bottomBar.frame.origin.y - height, width, height);
+	_captionLabel.frame = CGRectMake(inset, 6.0f, width - inset * 2, height - 12.0f);
 }
 
 - (void)buildPagingView {
@@ -918,11 +1046,12 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	CGRect bounds = self.view.bounds;
 
 	UIImage *topPanelImage = [UIImage imageNamed:@"GalleryTopPanel.png"];
-	CGFloat topPanelHeight = topPanelImage ? topPanelImage.size.height : 44.0f;
+	CGFloat inset = TGMediaStatusBarInset();
 	_topBar = [[UIImageView alloc] initWithFrame:
-			CGRectMake(0, 20, bounds.size.width, topPanelHeight)];
-	_topBar.image = topPanelImage;
-	if (!topPanelImage)
+			CGRectMake(0, inset, bounds.size.width, TGMediaTopBarHeight())];
+	if (topPanelImage)
+		_topBar.image = topPanelImage;
+	else
 		_topBar.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.6f];
 	_topBar.userInteractionEnabled = YES;
 	_topBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
@@ -930,12 +1059,12 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 
 	UIImage *cornersImage = [UIImage imageNamed:@"NavigationBar_Corners.png"];
 	if (cornersImage){
-		UIImageView *corners = [[UIImageView alloc] initWithImage:
+		_topCorners = [[UIImageView alloc] initWithImage:
 				[cornersImage stretchableImageWithLeftCapWidth:(int)(cornersImage.size.width / 2)
 												  topCapHeight:0]];
-		corners.frame = CGRectMake(0, -20, bounds.size.width, cornersImage.size.height);
-		corners.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-		[_topBar addSubview:corners];
+		_topCorners.frame = CGRectMake(0, -inset, bounds.size.width, cornersImage.size.height);
+		_topCorners.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+		[_topBar addSubview:_topCorners];
 	}
 
 	[self buildCloseButton];
@@ -1131,7 +1260,20 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 			initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhiteLarge];
 	_spinner.center = CGPointMake(bounds.size.width / 2, bounds.size.height / 2);
 	_spinner.hidesWhenStopped = YES;
+	_spinner.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin
+			| UIViewAutoresizingFlexibleRightMargin
+			| UIViewAutoresizingFlexibleTopMargin
+			| UIViewAutoresizingFlexibleBottomMargin;
 	[self.view addSubview:_spinner];
+
+	_progressRing = [[TGMediaProgressRing alloc] initWithFrame:CGRectMake(0, 0, 50, 50)];
+	_progressRing.center = CGPointMake(bounds.size.width / 2, bounds.size.height / 2);
+	_progressRing.hidden = YES;
+	_progressRing.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin
+			| UIViewAutoresizingFlexibleRightMargin
+			| UIViewAutoresizingFlexibleTopMargin
+			| UIViewAutoresizingFlexibleBottomMargin;
+	[self.view insertSubview:_progressRing belowSubview:_topBar];
 
 	UITapGestureRecognizer *doubleTap = [[UITapGestureRecognizer alloc]
 			initWithTarget:self action:@selector(handleDoubleTap:)];
@@ -1164,17 +1306,61 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	if (_statusBarWasHidden)
 		[[UIApplication sharedApplication] setStatusBarHidden:NO
 												withAnimation:UIStatusBarAnimationFade];
+	[self installProgressHook];
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
 	[super viewWillDisappear:animated];
 	[[UIApplication sharedApplication] setStatusBarHidden:_statusBarWasHidden
 											withAnimation:UIStatusBarAnimationFade];
+	[self removeProgressHook];
+}
+
+- (void)installProgressHook {
+	if (_progressHooked)
+		return;
+
+	TGClient *client = [TGClient shared];
+	void (^previous)(NSInteger, float) = client.onFileProgress;
+	_savedProgressBlock = previous;
+	_progressHooked = YES;
+
+	__weak typeof(self) weakSelf = self;
+	client.onFileProgress = ^(NSInteger fileId, float progress){
+		if (previous)
+			previous(fileId, progress);
+		typeof(self) me = weakSelf;
+		if (!me || ![me.ringFileId isEqual:@(fileId)])
+			return;
+		me.progressRing.progress = progress;
+	};
+}
+
+- (void)removeProgressHook {
+	if (!_progressHooked)
+		return;
+	[TGClient shared].onFileProgress = _savedProgressBlock;
+	_savedProgressBlock = nil;
+	_progressHooked = NO;
 }
 
 - (void)viewDidLayoutSubviews {
 	[super viewDidLayoutSubviews];
+	[self layoutTopBar];
 	[self layoutPagesPreservingIndex:_currentIndex];
+	[self layoutCaptionPanel];
+}
+
+- (void)layoutTopBar {
+	CGRect bounds = self.view.bounds;
+	if (bounds.size.width < 1)
+		return;
+
+	CGFloat inset = TGMediaStatusBarInset();
+	_topBar.frame = CGRectMake(0, inset, bounds.size.width, TGMediaTopBarHeight());
+	if (_topCorners)
+		_topCorners.frame = CGRectMake(0, -inset, bounds.size.width,
+									   _topCorners.image.size.height);
 }
 
 - (BOOL)shouldAutorotate {
@@ -1545,6 +1731,45 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 		self.progressContainer.alpha = busy ? 1.0f : 0.0f;
 		self.controlsContainer.alpha = busy ? 0.0f : 1.0f;
 	}];
+
+	[self updateProgressRingLoading:loading page:page];
+}
+
+- (void)updateProgressRingLoading:(BOOL)loading page:(TGMediaPageView *)page {
+	if (!loading){
+		_ringFileId = nil;
+		if (!_progressRing.hidden){
+			[UIView animateWithDuration:0.2 animations:^{
+				self.progressRing.alpha = 0.0f;
+			} completion:^(BOOL finished){
+				self.progressRing.hidden = YES;
+				self.progressRing.progress = 0.0f;
+			}];
+		}
+		return;
+	}
+
+	_ringFileId = page.loadingFileId;
+
+	NSDictionary *item = [self currentItem];
+	NSArray *sizes = item[@"sizes"];
+	if ([sizes isKindOfClass:NSArray.class] && sizes.count > 0 &&
+		![item[@"isVideo"] boolValue]){
+		NSDictionary *chosen = [[TGClient shared] bestPhotoSizeIn:sizes
+														 forWidth:self.view.bounds.size.width
+															scale:[UIScreen mainScreen].scale];
+		if ([chosen[@"fileId"] isKindOfClass:NSNumber.class])
+			_ringFileId = chosen[@"fileId"];
+	}
+
+	if (_progressRing.hidden){
+		_progressRing.progress = 0.0f;
+		_progressRing.alpha = 0.0f;
+		_progressRing.hidden = NO;
+		[UIView animateWithDuration:0.2 animations:^{
+			self.progressRing.alpha = 1.0f;
+		}];
+	}
 }
 
 - (void)retryTapped {
@@ -1587,13 +1812,20 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 
 	NSDictionary *item = _items[_currentIndex];
 	NSString *caption = item[@"caption"];
-	_authorLabel.text = [caption isKindOfClass:NSString.class] ? caption : @"";
+	NSString *author = item[@"author"];
+	_captionLabel.text = [caption isKindOfClass:NSString.class] ? caption : @"";
+	_authorLabel.text = [author isKindOfClass:NSString.class] ? author : @"";
 	_dateLabel.text = TGMediaDayForDate([item[@"date"] integerValue]);
+	_dateLabel.frame = CGRectMake(_dateLabel.frame.origin.x,
+								  _authorLabel.text.length > 0 ? 23.0f : 14.0f,
+								  _dateLabel.frame.size.width, _dateLabel.frame.size.height);
+	[self layoutCaptionPanel];
 
 	BOOL isVideo = [item[@"isVideo"] boolValue];
 	_playButton.hidden = !isVideo;
 	_authorLabel.alpha = isVideo ? 0.0f : 1.0f;
 	_dateLabel.alpha = isVideo ? 0.0f : 1.0f;
+	_captionPanel.alpha = (isVideo || _chromeHidden) ? 0.0f : 1.0f;
 	_deleteButton.hidden = (self.chatId == 0 || [item[@"messageId"] longLongValue] == 0);
 
 	[self updateLoadingChrome];
@@ -1604,14 +1836,19 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	CGFloat alpha = hidden ? 0.0f : 1.0f;
 	[[UIApplication sharedApplication] setStatusBarHidden:hidden
 											withAnimation:UIStatusBarAnimationFade];
+	if (!hidden)
+		[self layoutTopBar];
+	CGFloat captionAlpha = [[self currentItem][@"isVideo"] boolValue] ? 0.0f : alpha;
 	if (animated){
 		[UIView animateWithDuration:(hidden ? 0.3 : 0.15) animations:^{
 			self.topBar.alpha = alpha;
 			self.bottomBar.alpha = alpha;
+			self.captionPanel.alpha = captionAlpha;
 		}];
 	} else {
 		_topBar.alpha = alpha;
 		_bottomBar.alpha = alpha;
+		_captionPanel.alpha = captionAlpha;
 	}
 }
 
@@ -1680,9 +1917,12 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 	}
 
 	if (recognizer.state == UIGestureRecognizerStateChanged){
-		_pagingView.transform = CGAffineTransformMakeTranslation(0, translation.y);
-		CGFloat progress = MIN(1.0f, fabs(translation.y) / 200.0f);
-		self.view.backgroundColor = [UIColor colorWithWhite:0.0f alpha:1.0f - progress * 0.8f];
+		CGFloat fade = MIN(1.0f, fabs(translation.y) / 80.0f);
+		CGFloat shrink = 1.0f - MIN(0.2f, fabs(translation.y) / 1000.0f);
+		_pagingView.transform = CGAffineTransformScale(
+				CGAffineTransformMakeTranslation(0, translation.y), shrink, shrink);
+		self.view.backgroundColor = [UIColor colorWithWhite:0.0f alpha:1.0f - fade];
+		_progressRing.alpha = _progressRing.hidden ? 0.0f : 1.0f - fade;
 		return;
 	}
 
@@ -1697,6 +1937,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 			[UIView animateWithDuration:0.2 animations:^{
 				self.pagingView.transform = CGAffineTransformMakeTranslation(0, target);
 				self.view.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.0f];
+				self.progressRing.alpha = 0.0f;
 			} completion:^(BOOL finished){
 				[self dismissViewControllerAnimated:NO completion:nil];
 			}];
@@ -1706,6 +1947,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 		[UIView animateWithDuration:0.25 animations:^{
 			self.pagingView.transform = CGAffineTransformIdentity;
 			self.view.backgroundColor = [UIColor blackColor];
+			self.progressRing.alpha = self.progressRing.hidden ? 0.0f : 1.0f;
 		} completion:^(BOOL finished){
 			self.dismissing = NO;
 			[self setChromeHidden:NO animated:YES];
