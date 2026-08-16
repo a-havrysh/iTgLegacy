@@ -199,6 +199,7 @@ static const CGFloat kTitleContainerHeight = 86.0f;
 static const CGFloat kGroupTitleContainerHeight = 89.0f;
 static const CGFloat kProfileAvatarSide = 70.0f;
 static const CGFloat kProfileAvatarPhotoSide = 69.0f;
+static const CGFloat kProfileAvatarPhotoOffset = 0.5f;
 static const CGFloat kProfileAvatarRadius = 10.0f;
 static const CGFloat kProfileNameGap = 15.0f;
 static const CGFloat kGroupNameGap = 13.0f;
@@ -280,9 +281,8 @@ static UIImage *TGProfileAvatarPlate(UIImage *photo) {
 		return nil;
 	CGFloat side = kProfileAvatarSide;
 	CGFloat inner = kProfileAvatarPhotoSide;
-	CGFloat offset = TGProfileRetinaPixel();
 	UIGraphicsBeginImageContextWithOptions(CGSizeMake(side, side), NO, 0.0f);
-	CGRect box = CGRectMake(offset, 0, inner, inner);
+	CGRect box = CGRectMake(kProfileAvatarPhotoOffset, 0, inner, inner);
 	[[UIBezierPath bezierPathWithRoundedRect:box
 								cornerRadius:kProfileAvatarRadius] addClip];
 	[photo drawInRect:box];
@@ -576,8 +576,8 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 	NSString *text = self.nameLabel.text ?: @"";
 	CGFloat available = self.nameLabel.frame.size.width;
 	CGFloat textWidth = available;
-	if (text.length && [text respondsToSelector:@selector(sizeWithFont:)]){
-		CGSize measured = [text sizeWithFont:self.nameLabel.font];
+	if (text.length){
+		CGSize measured = [self.nameLabel sizeThatFits:CGSizeMake(available, 1000)];
 		textWidth = MIN(measured.width, available);
 	}
 	CGFloat x = self.nameLabel.frame.origin.x + textWidth + 5;
@@ -624,7 +624,8 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 	NSString *emoji = TGProfileText(badge[@"emoji"]);
 	NSString *glyph = emoji ?: @"⭐";
 	self.badgeLabel.text = glyph;
-	self.badgeLabel.hidden = !TGProfileCanRenderText(glyph);
+	self.badgeLabel.hidden = !TGProfileCanRenderText(glyph)
+			&& !TGEmojiTextNeedsSubstitution(glyph);
 	self.badgeView.hidden = YES;
 	[self layoutNameBadge];
 	NSString *statusValue = [self statusRowValueFor:badge emoji:self.badgeLabel.text];
@@ -849,7 +850,7 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 	[header addSubview:nameLabel];
 	self.nameLabel = nameLabel;
 
-	self.badgeLabel = [[UILabel alloc] initWithFrame:CGRectMake(labelLeft, 24, 20, 24)];
+	self.badgeLabel = [[TGEmojiLabel alloc] initWithFrame:CGRectMake(labelLeft, 24, 20, 24)];
 	self.badgeLabel.font = [UIFont systemFontOfSize:17];
 	self.badgeLabel.backgroundColor = [UIColor clearColor];
 	self.badgeLabel.hidden = YES;
@@ -3327,7 +3328,7 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 		CGFloat content = cell.contentView.bounds.size.width;
 		if (content < 1)
 			return;
-		inset = floorf((width - content) / 2);
+		inset = MAX(0, floorf((width - content) / 2) - 1);
 	}
 	if (inset < 0 || fabsf(inset - self.groupedInset) < 0.5f)
 		return;

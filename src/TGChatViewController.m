@@ -141,7 +141,7 @@ static const CGFloat kFileTile    = 71.0f;
 static const CGFloat kFileDisc    = 37.0f;
 // A picture in a bubble is clipped to the same radius their media uses.
 static const CGFloat kMediaRadius = 6.0f;
-static const CGFloat kAlbumBareInset = 2.0f;
+static const CGFloat kAlbumBareInset = 4.0f;
 static const CGFloat kAlbumGap    = 2.0f;
 static const CGFloat kMosaicMinTileSide = 68.0f;
 // One option of a poll: a 16 circle, the text, the share, and the bar under it.
@@ -9677,29 +9677,8 @@ static UIColor *TGSenderColour(int64_t userId) {
 
 	[self layoutReactionsIn:cell message:head atY:afterAlbum bubbleWidth:bubbleW];
 	cell.time.text = [self stampFor:head];
-	if (inset == kAlbumBareInset){
-		cell.time.hidden = YES;
-		cell.ticks.hidden = YES;
-		NSString *stamp = [self stampFor:head];
-		CGFloat plateW = [stamp sizeWithFont:cell.mediaStamp.font].width +
-				(mine ? 30 : 14);
-		cell.mediaStamp.hidden = NO;
-		cell.mediaStamp.backgroundColor = [theme mediaStampColour];
-		cell.mediaStamp.text = stamp;
-		cell.mediaStamp.frame = CGRectMake(
-				inset + groupSize.width - plateW - 6,
-				y + groupSize.height - 22, plateW, 16);
-		if (mine){
-			cell.ticks.hidden = NO;
-			cell.ticks.image = [self statusGlyphForMessage:head white:YES];
-			cell.ticks.frame = CGRectMake(
-					x + CGRectGetMaxX(cell.mediaStamp.frame) - 20,
-					top + CGRectGetMidY(cell.mediaStamp.frame) - 4, 15, 9);
-		}
-	} else {
-		[self placeDateBesideBubbleFor:cell message:head outgoing:mine
-							tableWidth:tableView.bounds.size.width];
-	}
+	[self placeDateBesideBubbleFor:cell message:head outgoing:mine
+						tableWidth:tableView.bounds.size.width];
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
