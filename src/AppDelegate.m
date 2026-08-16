@@ -14,9 +14,11 @@
 #import "TGDeviceViewController.h"
 #import "TGCall.h"
 #import "TGCallViewController.h"
+#import "TGSystemCall.h"
 #import "TGChatViewController.h"
 #import "TGTopicsViewController.h"
 #import "TGNotificationManager.h"
+#import "TGBackgroundSession.h"
 #import "TGMusicPlayer.h"
 #import "TGHacks.h"
 #import "TGIcons.h"
@@ -147,6 +149,22 @@ void TGMarkOpenStage(NSString *stage) {
 	NSLog(@"PERF open +%.0f ms: %@", elapsed * 1000.0, stage);
 }
 
+@interface TGIncomingCallRouter : NSObject
+@end
+
+@implementation TGIncomingCallRouter
+
+- (void)callStateChanged:(NSNotification *)note {
+	if ([TGCall shared].state != TGCallStatePending || [TGCall shared].outgoing)
+		return;
+	int64_t userId = [TGCall shared].peerUserId;
+	[TGCallViewController presentForUserId:userId
+									  name:[[TGClient shared] nameForUserId:userId]
+								  outgoing:NO];
+}
+
+@end
+
 @implementation AppDelegate
 
 + (void)tgPingMainThread {
@@ -177,21 +195,26 @@ static BOOL TGBackgroundTaskActive = NO;
 static int64_t TGPendingNotificationChatId = 0;
 
 /// An incoming call is the one thing that takes over the screen on its own.
+/// This listens on the notification rather than -onStateChanged: the call
+/// screen takes that block for itself while it is up and clears it on the way
+/// out, which would leave the second call of a session with no router at all.
 static void TGWatchForIncomingCalls(void) {
-	[TGCall shared].onStateChanged = ^(TGCallState state){
-		if (state != TGCallStatePending || [TGCall shared].outgoing)
-			return;
-		int64_t userId = [TGCall shared].peerUserId;
-		[TGCallViewController presentForUserId:userId
-										  name:[[TGClient shared] nameForUserId:userId]
-									  outgoing:NO];
-	};
+	static TGIncomingCallRouter *router = nil;
+	if (router)
+		return;
+	router = [[TGIncomingCallRouter alloc] init];
+	[[NSNotificationCenter defaultCenter] addObserver:router
+											 selector:@selector(callStateChanged:)
+												 name:TGCallStateDidChangeNotification
+											   object:nil];
+	[TGSystemCall install];
 }
 
 - (BOOL)application:(UIApplication *)application
 		didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
 {
 	TGMarkLaunchStage(@"didFinishLaunching");
+	[[TGBackgroundSession shared] applicationDidFinishLaunching:application];
 	TGStartMemorySampler();
 	[TGHacks hackSetAnimationDuration];
 
@@ -273,6 +296,7 @@ static void TGWatchForIncomingCalls(void) {
 	[[TGClient shared] saveCachedChats];
 	[[NSURLCache sharedURLCache] removeAllCachedResponses];
 	[[TGNotificationManager shared] applicationDidEnterBackground];
+	[[TGBackgroundSession shared] applicationDidEnterBackground:application];
 
 	if (![application respondsToSelector:@selector(beginBackgroundTaskWithExpirationHandler:)])
 		return;
@@ -288,6 +312,7 @@ static void TGWatchForIncomingCalls(void) {
 }
 
 - (void)applicationWillEnterForeground:(UIApplication *)application {
+	[[TGBackgroundSession shared] applicationWillEnterForeground:application];
 	if (!TGBackgroundTaskActive)
 		return;
 	TGBackgroundTaskActive = NO;
@@ -549,6 +574,12 @@ static void TGWatchForIncomingCalls(void) {
 	if ([host isEqualToString:@"mem"]){
 		TGMemMark(arg.length ? arg : @"probe");
 		TGMemZoneReport(arg.length ? arg : @"probe");
+		return YES;
+	}
+
+	if ([host isEqualToString:@"bgstatus"]){
+		NSLog(@"BGSESSION status %@", [[TGBackgroundSession shared] statusLine]);
+		[[TGBackgroundSession shared] runDiagnosticProbe];
 		return YES;
 	}
 

@@ -18,6 +18,8 @@
 
 using namespace tgvoip;
 
+NSString *const TGCallStateDidChangeNotification = @"TGCallStateDidChangeNotification";
+
 // With TGVOIP_USE_CUSTOM_CRYPTO the library declares this and leaves defining
 // it to whoever links it.
 namespace tgvoip {
@@ -149,6 +151,8 @@ static void TGInstallCrypto(void) {
 		self.establishedAt = [NSDate date];
 	if (self.onStateChanged)
 		self.onStateChanged(state);
+	[[NSNotificationCenter defaultCenter]
+			postNotificationName:TGCallStateDidChangeNotification object:self];
 }
 
 #pragma mark - signalling

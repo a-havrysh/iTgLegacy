@@ -12,6 +12,11 @@
 //
 #import <Foundation/Foundation.h>
 
+/// Posted on the main thread every time the state changes. The object is the
+/// TGCall. Unlike -onStateChanged this has no single owner, so the call screen
+/// and the incoming-call router can both listen without unhooking each other.
+extern NSString *const TGCallStateDidChangeNotification;
+
 typedef NS_ENUM(NSInteger, TGCallState) {
     TGCallStateNone = 0,
     TGCallStatePending,        ///< ringing, either direction

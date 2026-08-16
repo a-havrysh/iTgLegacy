@@ -58,3 +58,6 @@ tools/emojitweak/cache/
 tools/emojitweak/ref/
 tools/emojikeyboard/out/
 tools/emojikeyboard/work/
+tools/systemcall/out/
+tools/systemcall/work/
+tools/pushdaemon/out/

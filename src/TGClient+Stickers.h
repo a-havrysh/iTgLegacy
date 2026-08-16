@@ -13,6 +13,9 @@
 //                "isAnimated"   : NSNumber BOOL, YES for .tgs and .webm
 //                "isVideo"      : NSNumber BOOL, YES for .webm (undrawable here)
 //                "thumbId"      : NSNumber, thumbnail file id or 0
+//                "uniqueId"     : NSString, remote unique id of the sticker file,
+//                                 stable across sessions unlike the file id
+//                "thumbUniqueId": NSString, the same for the thumbnail
 //                "customEmojiId": NSNumber, 0 unless this is a custom emoji }
 //
 //   set      = { "id"        : NSNumber, int64 set id
@@ -25,6 +28,7 @@
 //                "viewed"    : NSNumber BOOL, NO means "new" in the trending list
 //                "isEmoji"   : NSNumber BOOL, custom-emoji set rather than stickers
 //                "thumbId"   : NSNumber, set thumbnail file id or 0
+//                "thumbUniqueId" : NSString, remote unique id of that thumbnail
 //                "covers"    : NSArray of sticker, may be empty
 //                "stickers"  : NSArray of sticker, only filled by the
 //                              stickerSetWithId:/WithName: calls }

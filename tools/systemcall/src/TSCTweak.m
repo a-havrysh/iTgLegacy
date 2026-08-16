@@ -18,6 +18,7 @@ static const NSTimeInterval TSCPayloadMaximumAge = 90.0;
 static const NSTimeInterval TSCWatchdogInterval = 75.0;
 
 @protocol TSCAlertItem <NSObject>
++ (void)activateAlertItem:(id)item;
 - (id)alertSheet;
 - (void)dismiss;
 @end
@@ -38,6 +39,11 @@ static const NSTimeInterval TSCWatchdogInterval = 75.0;
 @protocol TSCApplicationController <NSObject>
 + (id)sharedInstanceIfExists;
 - (id)applicationWithDisplayIdentifier:(NSString *)identifier;
+@end
+
+@protocol TSCAwayController <NSObject>
++ (id)sharedAwayControllerIfExists;
+- (BOOL)isLocked;
 @end
 
 @protocol TSCSpringBoard <NSObject>
@@ -214,10 +220,10 @@ static BOOL TSCDeviceIsLocked(void)
 	Class away = objc_getClass("SBAwayController");
 	if (!TSCClassMethodIs(away, @selector(sharedAwayControllerIfExists), "@", ""))
 		return NO;
-	id controller = [away performSelector:@selector(sharedAwayControllerIfExists)];
+	id controller = [(Class <TSCAwayController>)away sharedAwayControllerIfExists];
 	if (!TSCInstanceMethodIs([controller class], @selector(isLocked), "c", ""))
 		return NO;
-	return [[controller performSelector:@selector(isLocked)] boolValue];
+	return [(id <TSCAwayController>)controller isLocked];
 }
 
 /// Lets go of the alert without touching it. This is the right thing when
@@ -283,6 +289,10 @@ static void TSCConfigure(id self, SEL _cmd, BOOL configure, BOOL requirePasscode
 		id sheet = [(id <TSCAlertItem>)self alertSheet];
 		if (!sheet)
 			return;
+		if (![sheet respondsToSelector:@selector(addButtonWithTitle:)]){
+			TSCLog(@"the alert sheet on this build takes no buttons; leaving it alone");
+			return;
+		}
 
 		if ([sheet respondsToSelector:@selector(setTitle:)])
 			[(id <TSCAlertSheet>)sheet setTitle:gCallerName ?: @"Telegram"];
@@ -443,8 +453,7 @@ static void TSCPresent(void)
 		if (!item)
 			return;
 		gItem = item;
-		[objc_getClass("SBAlertItem") performSelector:@selector(activateAlertItem:)
-										   withObject:item];
+		[(Class <TSCAlertItem>)objc_getClass("SBAlertItem") activateAlertItem:item];
 	}
 	@catch (NSException *exception){
 		gStop = YES;

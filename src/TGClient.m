@@ -2,6 +2,7 @@
 #import "TGClient+Notifications.h"
 #import "TGClient+Stories.h"
 #import "TGCall.h"
+#import "TGBackgroundSession.h"
 #import "TGDiskCache.h"
 #import "TGRemoteImageView.h"
 #import <UIKit/UIKit.h>
@@ -131,6 +132,8 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 	if (exec)
 		exec(NULL, "{\"@type\":\"setLogVerbosityLevel\",\"new_verbosity_level\":1}");
 
+	[[TGBackgroundSession shared] attachToTDLibHandle:self.handle];
+
 	self.client = create();
 	if (!self.client){
 		NSLog(@"TGClient: td_json_client_create returned NULL");
@@ -180,6 +183,8 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 			const char *res = self.td_recv(self.client, self.idlePolling ? 1.0 : 0.05);
 			if (!res)
 				continue;
+
+			[[TGBackgroundSession shared] noteDataReceived];
 
 			NSData *data = [NSData dataWithBytes:res length:strlen(res)];
 			NSError *err = nil;
@@ -551,6 +556,8 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 	}
 
 	self.connectionState = state;
+	if (state == TGConnectionStateReady)
+		[[TGBackgroundSession shared] noteConnectionReady];
 	if (self.onConnectionState)
 		self.onConnectionState(state, text);
 }

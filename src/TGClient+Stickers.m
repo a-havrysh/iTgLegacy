@@ -40,9 +40,14 @@ static NSNumber *TGDouble(id value){
 	return [value isKindOfClass:[NSNumber class]] ? value : @0;
 }
 
+static NSString *TGRemoteUniqueId(NSDictionary *file){
+	return TGString(TGDict(file[@"remote"])[@"unique_id"]) ?: @"";
+}
+
 static NSDictionary *TGFlattenSticker(id object){
 	NSDictionary *sticker = TGDict(object);
-	NSNumber *fileId = TGDict(sticker[@"sticker"])[@"id"];
+	NSDictionary *stickerFile = TGDict(sticker[@"sticker"]);
+	NSNumber *fileId = stickerFile[@"id"];
 	if (![fileId isKindOfClass:[NSNumber class]])
 		return nil;
 
@@ -52,7 +57,8 @@ static NSDictionary *TGFlattenSticker(id object){
 	if ([TGString(fullType[@"@type"]) isEqualToString:@"stickerFullTypeCustomEmoji"])
 		customEmojiId = TGNumber(fullType[@"custom_emoji_id"]);
 
-	NSNumber *thumbId = TGDict(TGDict(sticker[@"thumbnail"])[@"file"])[@"id"];
+	NSDictionary *thumbFile = TGDict(TGDict(sticker[@"thumbnail"])[@"file"]);
+	NSNumber *thumbId = thumbFile[@"id"];
 	if (![thumbId isKindOfClass:[NSNumber class]])
 		thumbId = @0;
 
@@ -65,6 +71,8 @@ static NSDictionary *TGFlattenSticker(id object){
 		@"isAnimated"    : @(![format isEqualToString:@"stickerFormatWebp"]),
 		@"isVideo"       : @([format isEqualToString:@"stickerFormatWebm"]),
 		@"thumbId"       : thumbId,
+		@"uniqueId"      : TGRemoteUniqueId(stickerFile),
+		@"thumbUniqueId" : TGRemoteUniqueId(thumbFile),
 		@"customEmojiId" : customEmojiId,
 	};
 }
@@ -118,7 +126,8 @@ static NSDictionary *TGFlattenStickerSet(id object){
 	if (!set[@"id"])
 		return nil;
 
-	NSNumber *thumbId = TGDict(TGDict(set[@"thumbnail"])[@"file"])[@"id"];
+	NSDictionary *thumbFile = TGDict(TGDict(set[@"thumbnail"])[@"file"]);
+	NSNumber *thumbId = thumbFile[@"id"];
 	if (![thumbId isKindOfClass:[NSNumber class]])
 		thumbId = @0;
 
@@ -139,6 +148,7 @@ static NSDictionary *TGFlattenStickerSet(id object){
 		@"viewed"    : @([set[@"is_viewed"] boolValue]),
 		@"isEmoji"   : @([type isEqualToString:@"stickerTypeCustomEmoji"]),
 		@"thumbId"   : thumbId,
+		@"thumbUniqueId" : TGRemoteUniqueId(thumbFile),
 		@"covers"    : covers.count ? covers : stickers,
 		@"stickers"  : stickers,
 	};

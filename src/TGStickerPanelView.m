@@ -4,18 +4,27 @@
 #import "TGClient+Stickers.h"
 #import "TGClient+Files.h"
 #import "TGActionSheet.h"
+#import "TGStickerThumbnailCache.h"
 #import "TGTheme.h"
 #import "TGViewRecycler.h"
 #import "TGReusableView.h"
-#import "UIImage+WebP.h"
 #import "UIView+SafeTint.h"
 
+/// The tab plates are 30pt tall and the divider between them is 2pt wide; both
+/// come straight off the button-group art the rest of the app uses.
 static const CGFloat TGStickerPanelTabHeight = 30.0f;
-static const CGFloat TGStickerPanelHeaderHeight = 25.0f;
+static const CGFloat TGStickerPanelTabHeightLandscape = 25.0f;
+static const CGFloat TGStickerPanelTabDividerWidth = 2.0f;
+static const CGFloat TGStickerPanelTabMinWidth = 44.0f;
+/// CategoryDivider.png is 26pt tall; a 25pt header stretched it by a pixel.
+static const CGFloat TGStickerPanelHeaderHeight = 26.0f;
 static const CGFloat TGStickerPanelTileSide = 64.0f;
+static const CGFloat TGStickerPanelTileMinSpacing = 9.0f;
+static const NSInteger TGStickerPanelMinColumns = 4;
+static const CGFloat TGStickerPanelTileCornerRadius = 8.0f;
+static const CGFloat TGStickerPanelPreviewSide = 180.0f;
 static const CGFloat TGStickerPanelSearchHeight = 44.0f;
-static const NSInteger TGStickerPanelImageCacheLimit = 96;
-static const NSUInteger TGStickerPanelImageCacheByteLimit = 4 * 1024 * 1024;
+static const CGFloat TGStickerPanelTabThumbSide = 24.0f;
 static const CGFloat TGStickerPanelPurgeDistance = 900.0f;
 static const NSInteger TGStickerPanelPageSize = 40;
 
@@ -38,13 +47,14 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 @interface TGStickerTile : UIControl <TGReusableView>
 
 @property (nonatomic, strong) NSString *reuseIdentifier;
+@property (nonatomic, strong) UIView *pressPlate;
 @property (nonatomic, strong) UIImageView *imageView;
 @property (nonatomic, strong) UILabel *emojiLabel;
 @property (nonatomic, strong) NSDictionary *sticker;
 @property (nonatomic, assign) NSInteger sectionIndex;
 @property (nonatomic, assign) NSInteger itemIndex;
 @property (nonatomic, strong) NSString *imageKey;
-@property (nonatomic, assign) NSInteger imageFileId;
+@property (nonatomic, strong) id imageToken;
 
 @end
 
@@ -57,6 +67,13 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 		self.opaque = NO;
 		self.backgroundColor = [UIColor clearColor];
 		self.exclusiveTouch = YES;
+
+		_pressPlate = [[UIView alloc] initWithFrame:self.bounds];
+		_pressPlate.backgroundColor = [[TGTheme shared] separatorColour];
+		_pressPlate.layer.cornerRadius = TGStickerPanelTileCornerRadius;
+		_pressPlate.userInteractionEnabled = NO;
+		_pressPlate.hidden = YES;
+		[self addSubview:_pressPlate];
 
 		_emojiLabel = [[UILabel alloc] initWithFrame:self.bounds];
 		_emojiLabel.backgroundColor = [UIColor clearColor];
@@ -75,32 +92,35 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 
 - (void)layoutSubviews {
 	[super layoutSubviews];
+	_pressPlate.frame = self.bounds;
 	_emojiLabel.frame = self.bounds;
 	_imageView.frame = self.bounds;
 }
 
+/// Telegram highlights a sticker with a rounded plate behind it rather than by
+/// fading the sticker out; a translucent sticker over a fading tile reads as a
+/// loading failure.
 - (void)setHighlighted:(BOOL)highlighted {
 	[super setHighlighted:highlighted];
-	self.alpha = highlighted ? 0.6f : 1.0f;
+	_pressPlate.hidden = !highlighted;
 }
 
-- (void)prepareForReuse {
+- (void)reset {
+	self.pressPlate.hidden = YES;
 	self.alpha = 1.0f;
 	self.sticker = nil;
 	self.imageKey = nil;
-	self.imageFileId = 0;
 	self.imageView.image = nil;
 	self.imageView.alpha = 1.0f;
 	self.emojiLabel.text = @"";
 }
 
+- (void)prepareForReuse {
+	[self reset];
+}
+
 - (void)prepareForRecycle:(TGViewRecycler *)recycler {
-	self.sticker = nil;
-	self.imageKey = nil;
-	self.imageFileId = 0;
-	self.imageView.image = nil;
-	self.imageView.alpha = 1.0f;
-	self.emojiLabel.text = @"";
+	[self reset];
 	[self removeTarget:nil action:NULL forControlEvents:UIControlEventAllEvents];
 	for (UIGestureRecognizer *recogniser in [self.gestureRecognizers copy])
 		[self removeGestureRecognizer:recogniser];
@@ -129,25 +149,38 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 @property (nonatomic, strong) NSMutableDictionary *visibleTiles;
 @property (nonatomic, strong) NSMutableArray *headerViews;
 @property (nonatomic, strong) NSMutableArray *tabButtons;
-@property (nonatomic, strong) NSMutableDictionary *imageCache;
-@property (nonatomic, strong) NSMutableArray *imageCacheOrder;
-@property (nonatomic, assign) NSUInteger imageCacheBytes;
-@property (nonatomic, strong) NSMutableDictionary *pendingImages;
-@property (nonatomic, strong) NSMutableDictionary *imageRequestCounts;
-@property (nonatomic, strong) dispatch_queue_t decodeQueue;
+@property (nonatomic, strong) NSMutableArray *tabDividers;
+@property (nonatomic, strong) NSMutableArray *tabImageTokens;
+@property (nonatomic, strong) UIView *previewOverlay;
+@property (nonatomic, strong) UIImageView *previewImageView;
+@property (nonatomic, strong) UILabel *previewEmojiLabel;
+@property (nonatomic, strong) id previewToken;
 
 @property (nonatomic, copy) NSString *searchQuery;
 @property (nonatomic, assign) BOOL searchVisible;
 @property (nonatomic, assign) NSInteger columns;
-@property (nonatomic, assign) CGFloat gutter;
+@property (nonatomic, assign) CGFloat tileSide;
+@property (nonatomic, assign) CGFloat tileSpacing;
+@property (nonatomic, assign) CGFloat sideInset;
+@property (nonatomic, assign) CGFloat tabHeight;
 @property (nonatomic, assign) NSInteger selectedSection;
 @property (nonatomic, assign) CGFloat laidOutWidth;
 @property (nonatomic, assign) BOOL loading;
 @property (nonatomic, assign) BOOL failed;
 @property (nonatomic, assign) NSInteger generation;
 @property (nonatomic, assign) NSInteger searchGeneration;
+@property (nonatomic, assign) NSTimeInterval openedAt;
+@property (nonatomic, assign) BOOL openTimingReported;
+@property (nonatomic, assign) BOOL restoredFromSnapshot;
 
 @end
+
+/// The panel view itself is thrown away every time the keyboard is dismissed
+/// (TGChatViewController -toggleStickerPanel), so the section list has to live
+/// outside it or the second open of a session pays for the whole load again.
+static NSMutableArray *TGStickerPanelSectionSnapshot = nil;
+static NSTimeInterval TGStickerPanelSnapshotTaken = 0;
+static const NSTimeInterval TGStickerPanelSnapshotLifetime = 600.0;
 
 @implementation TGStickerPanelView
 
@@ -169,13 +202,13 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 		_visibleTiles = [[NSMutableDictionary alloc] init];
 		_headerViews = [[NSMutableArray alloc] init];
 		_tabButtons = [[NSMutableArray alloc] init];
-		_imageCache = [[NSMutableDictionary alloc] init];
-		_imageCacheOrder = [[NSMutableArray alloc] init];
-		_pendingImages = [[NSMutableDictionary alloc] init];
-		_imageRequestCounts = [[NSMutableDictionary alloc] init];
-		_decodeQueue = dispatch_queue_create("tg.stickerpanel.decode", NULL);
-		_columns = 4;
-		_gutter = 12.0f;
+		_tabDividers = [[NSMutableArray alloc] init];
+		_tabImageTokens = [[NSMutableArray alloc] init];
+		_columns = TGStickerPanelMinColumns;
+		_tileSide = TGStickerPanelTileSide;
+		_tileSpacing = TGStickerPanelTileMinSpacing;
+		_sideInset = TGStickerPanelTileMinSpacing;
+		_tabHeight = TGStickerPanelTabHeight;
 		_selectedSection = -1;
 		_searchQuery = @"";
 
@@ -243,7 +276,17 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 				selector:@selector(handleMemoryWarning)
 					name:UIApplicationDidReceiveMemoryWarningNotification object:nil];
 
-		[self reload];
+		_openedAt = [NSDate timeIntervalSinceReferenceDate];
+		[TGStickerThumbnailCache resetStatistics];
+
+		// Reopening the panel inside one session draws the packs it already
+		// knows straight away and refreshes them underneath, instead of
+		// spinning through five TDLib round trips again.
+		_restoredFromSnapshot = [self restoreSectionSnapshot];
+		if (_restoredFromSnapshot)
+			[self reloadShowingSpinner:NO];
+		else
+			[self reload];
 	}
 	return self;
 }
@@ -252,97 +295,91 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 	[[NSNotificationCenter defaultCenter] removeObserver:self];
 	[NSObject cancelPreviousPerformRequestsWithTarget:self];
 	[self cancelAllPendingImageLoads];
+	[_previewOverlay removeFromSuperview];
 	_grid.delegate = nil;
 	_searchBar.delegate = nil;
 }
 
-- (NSInteger)fileIdFromCacheKey:(NSString *)key {
-	NSRange separator = [key rangeOfString:@"@"];
-	if (separator.location == NSNotFound)
-		return 0;
-	return [[key substringToIndex:separator.location] integerValue];
+/// A tile that scrolls out of the window drops its interest at once, so the
+/// download is cancelled and any decode still sitting in the queue is skipped
+/// instead of finishing for a tile nobody can see.
+- (void)releaseImageForTile:(TGStickerTile *)tile {
+	if (tile.imageToken != nil)
+		[TGStickerThumbnailCache cancelRequest:tile.imageToken];
+	tile.imageToken = nil;
+	tile.imageKey = nil;
+}
+
+- (void)cancelTabImageLoads {
+	for (id token in self.tabImageTokens)
+		[TGStickerThumbnailCache cancelRequest:token];
+	[self.tabImageTokens removeAllObjects];
 }
 
 - (void)cancelAllPendingImageLoads {
-	for (NSString *key in [self.pendingImages allKeys]){
-		NSInteger fileId = [self fileIdFromCacheKey:key];
-		if (fileId != 0)
-			[[TGClient shared] cancelDownloadOfFile:fileId onlyIfPending:NO];
-	}
-	[self.pendingImages removeAllObjects];
-	[self.imageRequestCounts removeAllObjects];
-}
-
-- (void)retainImageKey:(NSString *)key {
-	if (key == nil)
-		return;
-	NSInteger count = [self.imageRequestCounts[key] integerValue];
-	self.imageRequestCounts[key] = @(count + 1);
-}
-
-- (void)releaseImageKey:(NSString *)key fileId:(NSInteger)fileId {
-	if (key == nil)
-		return;
-	NSNumber *existing = self.imageRequestCounts[key];
-	if (existing == nil)
-		return;
-
-	NSInteger count = [existing integerValue] - 1;
-	if (count > 0){
-		self.imageRequestCounts[key] = @(count);
-		return;
-	}
-	[self.imageRequestCounts removeObjectForKey:key];
-
-	if (self.pendingImages[key] == nil)
-		return;
-
-	[self.pendingImages removeObjectForKey:key];
-	if (fileId == 0)
-		fileId = [self fileIdFromCacheKey:key];
-	if (fileId != 0)
-		[[TGClient shared] cancelDownloadOfFile:fileId onlyIfPending:NO];
-}
-
-- (void)releaseImageForTile:(TGStickerTile *)tile {
-	NSString *key = tile.imageKey;
-	if (key == nil)
-		return;
-	NSInteger fileId = tile.imageFileId;
-	tile.imageKey = nil;
-	tile.imageFileId = 0;
-	[self releaseImageKey:key fileId:fileId];
-}
-
-- (void)clearImageCache {
-	[self.imageCache removeAllObjects];
-	[self.imageCacheOrder removeAllObjects];
-	self.imageCacheBytes = 0;
+	for (NSString *key in [self.visibleTiles allKeys])
+		[self releaseImageForTile:self.visibleTiles[key]];
+	[self cancelTabImageLoads];
+	[self cancelPreviewLoad];
 }
 
 - (void)handleMemoryWarning {
-	[self clearImageCache];
+	[TGStickerThumbnailCache purgeMemory];
 	[self.recycler removeAllViews];
 	[self purgeDistantSectionsAggressively:YES];
+	TGStickerPanelSectionSnapshot = nil;
 }
 
 #pragma mark - loading
 
+/// Everything the snapshot carries stays valid only while the TDLib session
+/// that minted its file ids is alive, so it is a process-lifetime cache and
+/// never touches disk. The thumbnails behind it do survive a relaunch: those
+/// live in TGStickerThumbnailCache, keyed on the remote unique id.
+- (void)takeSectionSnapshot {
+	if (self.searchQuery.length > 0 || self.allSections.count == 0)
+		return;
+	TGStickerPanelSectionSnapshot = [self.allSections mutableCopy];
+	TGStickerPanelSnapshotTaken = [NSDate timeIntervalSinceReferenceDate];
+}
+
+- (BOOL)restoreSectionSnapshot {
+	if (TGStickerPanelSectionSnapshot.count == 0)
+		return NO;
+	if ([NSDate timeIntervalSinceReferenceDate] - TGStickerPanelSnapshotTaken >
+			TGStickerPanelSnapshotLifetime){
+		TGStickerPanelSectionSnapshot = nil;
+		return NO;
+	}
+
+	[self.allSections setArray:TGStickerPanelSectionSnapshot];
+	self.loading = NO;
+	self.failed = NO;
+	[self applyFilter];
+	[self updateStatus];
+	return YES;
+}
+
 - (void)reload {
+	[self reloadShowingSpinner:YES];
+}
+
+- (void)reloadShowingSpinner:(BOOL)showSpinner {
 	self.generation += 1;
 	NSInteger generation = self.generation;
 
-	[self clearImageCache];
 	[self clearTiles];
 	[self cancelAllPendingImageLoads];
-	[self.allSections removeAllObjects];
-	[self.sections removeAllObjects];
-	[self.searchSections removeAllObjects];
-	self.selectedSection = -1;
-	self.loading = YES;
-	self.failed = NO;
-	[self updateStatus];
-	[self rebuildTabs];
+	if (showSpinner){
+		[self.allSections removeAllObjects];
+		[self.sections removeAllObjects];
+		[self.searchSections removeAllObjects];
+		self.selectedSection = -1;
+		self.loading = YES;
+		self.failed = NO;
+		[self updateStatus];
+		[self rebuildTabs];
+	}
 
 	__block BOOL anyFailure = NO;
 	__block NSInteger outstanding = 5;
@@ -418,17 +455,19 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 		section[@"canInstall"] = @YES;
 
 	NSInteger thumbId = [set[@"thumbId"] integerValue];
+	NSString *thumbUniqueId = set[@"thumbUniqueId"];
 	if (thumbId == 0){
 		NSArray *covers = set[@"covers"];
 		NSDictionary *cover = covers.count > 0 ? covers[0] : nil;
 		if (cover != nil){
-			thumbId = [cover[@"thumbId"] integerValue];
-			if (thumbId == 0 && ![cover[@"isVideo"] boolValue] && ![cover[@"isAnimated"] boolValue])
-				thumbId = [cover[@"fileId"] integerValue];
+			thumbId = [self drawableFileIdForSticker:cover];
+			thumbUniqueId = [self drawableUniqueIdForSticker:cover];
 		}
 	}
 	if (thumbId != 0)
 		section[@"tabThumbId"] = @(thumbId);
+	if ([thumbUniqueId isKindOfClass:[NSString class]] && thumbUniqueId.length > 0)
+		section[@"tabThumbUniqueId"] = thumbUniqueId;
 
 	return section;
 }
@@ -440,6 +479,10 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 					   trending:(NSArray *)trending
 						 failed:(BOOL)failed {
 	self.loading = NO;
+	BOOL hadSections = (self.allSections.count > 0);
+	NSInteger keptSelection = self.selectedSection;
+	CGFloat keptOffset = self.grid.contentOffset.y;
+	[self.allSections removeAllObjects];
 
 	if (recent.count > 0){
 		[self.allSections addObject:[[NSMutableDictionary alloc] initWithObjectsAndKeys:
@@ -497,11 +540,22 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 	}
 
 	self.failed = (self.allSections.count == 0 && failed);
+	[self takeSectionSnapshot];
 	[self applyFilter];
 	[self updateStatus];
 
-	if (self.sections.count > 0)
-		[self setSelectedSection:0 scrollGrid:NO];
+	if (self.sections.count == 0)
+		return;
+
+	// A silent refresh behind a restored snapshot must not throw the user back
+	// to the top of the first pack.
+	if (hadSections && keptSelection >= 0 && keptSelection < (NSInteger)self.sections.count){
+		CGFloat maxOffset = MAX(0.0f, self.grid.contentSize.height - self.grid.bounds.size.height);
+		self.grid.contentOffset = CGPointMake(0, MAX(0.0f, MIN(keptOffset, maxOffset)));
+		[self setSelectedSection:keptSelection scrollGrid:NO];
+		return;
+	}
+	[self setSelectedSection:0 scrollGrid:NO];
 }
 
 - (void)ensureSection:(NSInteger)index loadedUpToItem:(NSInteger)item {
@@ -682,8 +736,11 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 			@(stickers.count), @"count", nil];
 
 	NSInteger thumbId = [self drawableFileIdForSticker:stickers[0]];
+	NSString *thumbUniqueId = [self drawableUniqueIdForSticker:stickers[0]];
 	if (thumbId != 0)
 		section[@"tabThumbId"] = @(thumbId);
+	if (thumbUniqueId.length > 0)
+		section[@"tabThumbUniqueId"] = thumbUniqueId;
 	return section;
 }
 
@@ -850,12 +907,14 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 	CGRect bounds = self.bounds;
 	CGFloat separator = 1.0f / [UIScreen mainScreen].scale;
 	CGFloat searchHeight = self.searchVisible ? TGStickerPanelSearchHeight : 0.0f;
+	BOOL landscape = bounds.size.width > bounds.size.height;
+	CGFloat tabHeight = landscape ? TGStickerPanelTabHeightLandscape : TGStickerPanelTabHeight;
+	self.tabHeight = tabHeight;
 
 	self.topSeparator.frame = CGRectMake(0, 0, bounds.size.width, separator);
 	self.searchBar.frame = CGRectMake(0, separator, bounds.size.width, TGStickerPanelSearchHeight);
-	self.tabStrip.frame = CGRectMake(0, separator + searchHeight, bounds.size.width,
-			TGStickerPanelTabHeight);
-	CGFloat gridTop = separator + searchHeight + TGStickerPanelTabHeight;
+	self.tabStrip.frame = CGRectMake(0, separator + searchHeight, bounds.size.width, tabHeight);
+	CGFloat gridTop = separator + searchHeight + tabHeight;
 	self.grid.frame = CGRectMake(0, gridTop, bounds.size.width,
 			MAX(0.0f, bounds.size.height - gridTop));
 
@@ -864,21 +923,43 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 	self.statusLabel.frame = CGRectMake(20, centreY - 34, bounds.size.width - 40, 40);
 	self.retryButton.frame = CGRectMake(floorf((bounds.size.width - 120) / 2.0f), centreY + 12, 120, 43);
 
-	NSInteger columns = (NSInteger)floorf((bounds.size.width - 12.0f) / (TGStickerPanelTileSide + 12.0f));
-	if (columns < 4)
-		columns = 4;
-	CGFloat gutter = floorf((bounds.size.width - columns * TGStickerPanelTileSide) / (columns + 1));
-	if (gutter < 4.0f)
-		gutter = 4.0f;
+	// Columns come from a minimum gap, the tile shrinks only when it has to,
+	// the leftover width becomes the gap between tiles, and the whole block is
+	// centred - so the outer margin is never confused with the inner spacing.
+	CGFloat pixel = 1.0f / [UIScreen mainScreen].scale;
+	CGFloat available = bounds.size.width - TGStickerPanelTileMinSpacing * 2.0f;
+	NSInteger columns = (NSInteger)floorf((available + TGStickerPanelTileMinSpacing) /
+			(TGStickerPanelTileSide + TGStickerPanelTileMinSpacing));
+	if (columns < TGStickerPanelMinColumns)
+		columns = TGStickerPanelMinColumns;
 
-	BOOL metricsChanged = (columns != self.columns || fabsf(gutter - self.gutter) > 0.01f);
+	CGFloat proposed = floorf((available - TGStickerPanelTileMinSpacing * (columns - 1)) / columns);
+	CGFloat tileSide = MIN(proposed, TGStickerPanelTileSide);
+	if (tileSide < 1.0f)
+		tileSide = TGStickerPanelTileSide;
+	CGFloat spacing = (columns > 1)
+			? floorf((available - tileSide * columns) / (columns - 1) / pixel) * pixel
+			: 0.0f;
+	if (spacing < TGStickerPanelTileMinSpacing)
+		spacing = TGStickerPanelTileMinSpacing;
+	CGFloat contentWidth = tileSide * columns + spacing * (columns - 1);
+	CGFloat sideInset = floorf((bounds.size.width - contentWidth) / 2.0f);
+	if (sideInset < 0.0f)
+		sideInset = 0.0f;
+
+	BOOL metricsChanged = (columns != self.columns ||
+			fabsf(tileSide - self.tileSide) > 0.01f ||
+			fabsf(spacing - self.tileSpacing) > 0.01f);
 	BOOL widthChanged = fabsf(bounds.size.width - self.laidOutWidth) > 0.01f;
 	self.columns = columns;
-	self.gutter = gutter;
+	self.tileSide = tileSide;
+	self.tileSpacing = spacing;
+	self.sideInset = sideInset;
 	self.laidOutWidth = bounds.size.width;
 	if (metricsChanged || widthChanged || (self.sections.count > 0 && self.grid.contentSize.height < 1.0f))
 		[self relayoutSections];
 	[self layoutTabs];
+	[self layoutPreview];
 	[self updateVisibleTiles];
 }
 
@@ -925,10 +1006,12 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 		else
 			header.backgroundColor = [[TGTheme shared] listBackgroundColour];
 
+		// The same plate carries the same 15pt bold caption everywhere else in
+		// the app that uses CategoryDivider.
 		UILabel *label = [[UILabel alloc] initWithFrame:
-				CGRectMake(self.gutter, 0, width - self.gutter * 2, TGStickerPanelHeaderHeight)];
+				CGRectMake(self.sideInset, 0, width - self.sideInset * 2, TGStickerPanelHeaderHeight)];
 		label.backgroundColor = [UIColor clearColor];
-		label.font = [UIFont boldSystemFontOfSize:13];
+		label.font = [UIFont boldSystemFontOfSize:15];
 		label.textColor = [UIColor colorWithRed:0x69 / 255.0f green:0x74 / 255.0f
 										   blue:0x87 / 255.0f alpha:1.0f];
 		label.text = section[@"title"];
@@ -937,16 +1020,17 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 		if ([section[@"canInstall"] boolValue]){
 			UIButton *add = [self addButtonForSectionIndex:index];
 			CGFloat addWidth = 52.0f;
-			add.frame = CGRectMake(width - self.gutter - addWidth,
+			add.frame = CGRectMake(width - self.sideInset - addWidth,
 					floorf((TGStickerPanelHeaderHeight - 20.0f) / 2.0f), addWidth, 20.0f);
-			label.frame = CGRectMake(self.gutter, 0,
-					MAX(20.0f, width - self.gutter * 2 - addWidth - 6.0f), TGStickerPanelHeaderHeight);
+			label.frame = CGRectMake(self.sideInset, 0,
+					MAX(20.0f, width - self.sideInset * 2 - addWidth - 6.0f), TGStickerPanelHeaderHeight);
 			[header addSubview:add];
 		}
 		[self.grid addSubview:header];
 		[self.headerViews addObject:header];
 
-		CGFloat body = self.gutter + rows * (TGStickerPanelTileSide + self.gutter);
+		CGFloat body = self.tileSpacing * 2.0f + rows * self.tileSide +
+				(rows - 1) * self.tileSpacing;
 		section[@"height"] = @(TGStickerPanelHeaderHeight + body);
 		y += TGStickerPanelHeaderHeight + body;
 		index += 1;
@@ -1076,10 +1160,10 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 	CGFloat sectionY = [section[@"y"] floatValue];
 	NSInteger row = item / self.columns;
 	NSInteger column = item % self.columns;
-	CGFloat x = self.gutter + column * (TGStickerPanelTileSide + self.gutter);
-	CGFloat y = sectionY + TGStickerPanelHeaderHeight + self.gutter +
-			row * (TGStickerPanelTileSide + self.gutter);
-	return CGRectMake(floorf(x), floorf(y), TGStickerPanelTileSide, TGStickerPanelTileSide);
+	CGFloat x = self.sideInset + column * (self.tileSide + self.tileSpacing);
+	CGFloat y = sectionY + TGStickerPanelHeaderHeight + self.tileSpacing +
+			row * (self.tileSide + self.tileSpacing);
+	return CGRectMake(floorf(x), floorf(y), self.tileSide, self.tileSide);
 }
 
 #pragma mark - tiles
@@ -1097,8 +1181,12 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 	if (self.sections.count == 0)
 		return;
 
-	CGRect visible = CGRectMake(0, self.grid.contentOffset.y - TGStickerPanelTileSide,
-			self.grid.bounds.size.width, self.grid.bounds.size.height + TGStickerPanelTileSide * 2);
+	// One row of headroom either side, the same window Telegram's own pager
+	// allocates item layers for. Anything past it is recycled and its download
+	// and decode are cancelled.
+	CGFloat row = self.tileSide + self.tileSpacing;
+	CGRect visible = CGRectMake(0, self.grid.contentOffset.y - row,
+			self.grid.bounds.size.width, self.grid.bounds.size.height + row * 2.0f);
 
 	NSMutableSet *wanted = [[NSMutableSet alloc] init];
 	NSMutableArray *nowViewed = nil;
@@ -1142,7 +1230,7 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 					   forControlEvents:UIControlEventTouchUpInside];
 				UILongPressGestureRecognizer *press = [[UILongPressGestureRecognizer alloc]
 						initWithTarget:self action:@selector(tileLongPressed:)];
-				press.minimumPressDuration = 0.5;
+				press.minimumPressDuration = 0.2;
 				[tile addGestureRecognizer:press];
 				[self.grid addSubview:tile];
 				self.visibleTiles[key] = tile;
@@ -1169,7 +1257,30 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 	if (nowViewed.count > 0)
 		[[TGClient shared] markTrendingStickerSetsViewed:nowViewed];
 
+	[self reportOpenTiming];
 	[self purgeDistantSectionsAggressively:NO];
+}
+
+/// One line per panel open, once the first screenful has stopped waiting on
+/// anything. "restored" means the pack list came from the in-process snapshot
+/// rather than from five TDLib round trips.
+- (void)reportOpenTiming {
+	if (self.openTimingReported || self.visibleTiles.count == 0)
+		return;
+	for (NSString *key in self.visibleTiles){
+		TGStickerTile *tile = self.visibleTiles[key];
+		// A tile with no sticker yet is a section still being fetched, and a
+		// tile still holding a token is a thumbnail still in flight.
+		if (tile.sticker == nil || tile.imageToken != nil)
+			return;
+	}
+
+	self.openTimingReported = YES;
+	NSLog(@"PERF stickers open +%.0f ms: %lu tiles, %@, %@",
+			([NSDate timeIntervalSinceReferenceDate] - self.openedAt) * 1000.0,
+			(unsigned long)self.visibleTiles.count,
+			self.restoredFromSnapshot ? @"restored" : @"cold",
+			[TGStickerThumbnailCache statisticsSummary]);
 }
 
 - (void)purgeDistantSectionsAggressively:(BOOL)aggressive {
@@ -1228,8 +1339,9 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 
 	NSString *emoji = sticker[@"emoji"];
 	NSInteger fileId = [self drawableFileIdForSticker:sticker];
+	NSString *uniqueId = [self drawableUniqueIdForSticker:sticker];
 
-	if (fileId == 0){
+	if (fileId == 0 && uniqueId.length == 0){
 		[self releaseImageForTile:tile];
 		tile.sticker = sticker;
 		tile.emojiLabel.text = emoji.length > 0 ? emoji : @"";
@@ -1238,8 +1350,9 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 		return;
 	}
 
-	NSString *key = [self cacheKeyForFileId:fileId side:TGStickerPanelTileSide];
-	UIImage *cached = [self cachedImageForFileId:fileId side:TGStickerPanelTileSide];
+	CGFloat side = self.tileSide;
+	NSString *key = [NSString stringWithFormat:@"%@|%d@%d", uniqueId, (int)fileId, (int)side];
+	UIImage *cached = [TGStickerThumbnailCache cachedThumbnailForUniqueId:uniqueId side:side];
 	if (cached != nil){
 		[self releaseImageForTile:tile];
 		tile.sticker = sticker;
@@ -1249,6 +1362,8 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 		return;
 	}
 
+	// Already waiting on exactly this image for exactly this sticker: leave the
+	// request alone rather than cancelling and restarting it on every scroll.
 	if (tile.sticker == sticker && [tile.imageKey isEqualToString:key])
 		return;
 
@@ -1258,26 +1373,21 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 	tile.imageView.image = nil;
 	tile.imageView.alpha = 1.0f;
 	tile.imageKey = key;
-	tile.imageFileId = fileId;
-	[self retainImageKey:key];
 
 	NSDictionary *requested = sticker;
-	__weak TGStickerPanelView *weakSelf = self;
 	__weak TGStickerTile *weakTile = tile;
-	[self imageForFileId:fileId side:TGStickerPanelTileSide completion:^(UIImage *image){
-		TGStickerPanelView *me = weakSelf;
+	tile.imageToken = [TGStickerThumbnailCache thumbnailForFileId:fileId uniqueId:uniqueId
+															 side:side
+													   completion:^(UIImage *image){
 		TGStickerTile *target = weakTile;
-		if (me == nil || target == nil)
+		if (target == nil)
 			return;
 		if (target.sticker != requested || ![target.imageKey isEqualToString:key])
 			return;
-		if (image == nil){
-			[me releaseImageForTile:target];
+		target.imageToken = nil;
+		if (image == nil)
 			return;
-		}
 		target.imageKey = nil;
-		target.imageFileId = 0;
-		[me releaseImageKey:key fileId:fileId];
 		target.imageView.image = image;
 		target.emojiLabel.text = @"";
 		target.imageView.alpha = 0.0f;
@@ -1295,133 +1405,28 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 	return drawable ? [sticker[@"fileId"] integerValue] : 0;
 }
 
-#pragma mark - images
-
-- (NSString *)cacheKeyForFileId:(NSInteger)fileId side:(CGFloat)side {
-	return [NSString stringWithFormat:@"%d@%d", (int)fileId, (int)side];
-}
-
-- (UIImage *)cachedImageForFileId:(NSInteger)fileId side:(CGFloat)side {
-	return self.imageCache[[self cacheKeyForFileId:fileId side:side]];
-}
-
-- (NSUInteger)byteCostOfImage:(UIImage *)image {
-	CGImageRef bitmap = image.CGImage;
-	if (bitmap == NULL)
-		return 4096;
-	return CGImageGetWidth(bitmap) * CGImageGetHeight(bitmap) * 4;
-}
-
-- (void)storeImage:(UIImage *)image forKey:(NSString *)key {
-	if (image == nil || key == nil)
-		return;
-
-	UIImage *existing = self.imageCache[key];
-	if (existing != nil){
-		self.imageCacheBytes -= MIN(self.imageCacheBytes, [self byteCostOfImage:existing]);
-		[self.imageCacheOrder removeObject:key];
-	}
-	self.imageCache[key] = image;
-	[self.imageCacheOrder addObject:key];
-	self.imageCacheBytes += [self byteCostOfImage:image];
-
-	while (self.imageCacheOrder.count > 1 &&
-		   ((NSInteger)self.imageCacheOrder.count > TGStickerPanelImageCacheLimit ||
-			self.imageCacheBytes > TGStickerPanelImageCacheByteLimit)){
-		NSString *oldest = self.imageCacheOrder[0];
-		self.imageCacheBytes -= MIN(self.imageCacheBytes,
-				[self byteCostOfImage:self.imageCache[oldest]]);
-		[self.imageCacheOrder removeObjectAtIndex:0];
-		[self.imageCache removeObjectForKey:oldest];
-	}
-}
-
-- (void)deliverImage:(UIImage *)image forKey:(NSString *)key {
-	NSArray *blocks = self.pendingImages[key];
-	[self.pendingImages removeObjectForKey:key];
-	for (void (^block)(UIImage *) in blocks)
-		block(image);
-}
-
-- (void)imageForFileId:(NSInteger)fileId side:(CGFloat)side completion:(void (^)(UIImage *))completion {
-	NSString *key = [self cacheKeyForFileId:fileId side:side];
-	UIImage *cached = self.imageCache[key];
-	if (cached != nil){
-		if (completion)
-			completion(cached);
-		return;
-	}
-
-	NSMutableArray *waiting = self.pendingImages[key];
-	if (waiting != nil){
-		if (completion)
-			[waiting addObject:[completion copy]];
-		return;
-	}
-
-	waiting = [[NSMutableArray alloc] init];
-	if (completion)
-		[waiting addObject:[completion copy]];
-	self.pendingImages[key] = waiting;
-
-	NSInteger generation = self.generation;
-	__weak TGStickerPanelView *weakSelf = self;
-	[[TGClient shared] downloadFile:fileId completion:^(NSString *path){
-		TGStickerPanelView *me = weakSelf;
-		if (me == nil)
-			return;
-		if (path.length == 0){
-			[me deliverImage:nil forKey:key];
-			return;
-		}
-		dispatch_async(me.decodeQueue, ^{
-			UIImage *scaled = nil;
-			@autoreleasepool {
-				UIImage *decoded = [UIImage convertFromWebP:path compressedData:nil error:nil];
-				if (decoded == nil)
-					decoded = [UIImage imageWithContentsOfFile:path];
-				scaled = [TGStickerPanelView imageFrom:decoded fittingSide:side];
-			}
-			dispatch_async(dispatch_get_main_queue(), ^{
-				TGStickerPanelView *inner = weakSelf;
-				if (inner == nil)
-					return;
-				if (scaled == nil || inner.generation != generation){
-					[inner deliverImage:nil forKey:key];
-					return;
-				}
-				[inner storeImage:scaled forKey:key];
-				[inner deliverImage:scaled forKey:key];
-			});
-		});
-	}];
-}
-
-+ (UIImage *)imageFrom:(UIImage *)image fittingSide:(CGFloat)side {
-	if (image == nil)
-		return nil;
-	CGSize size = image.size;
-	if (size.width < 1.0f || size.height < 1.0f)
-		return nil;
-
-	CGFloat scale = MIN(side / size.width, side / size.height);
-	CGSize target = CGSizeMake(floorf(size.width * scale), floorf(size.height * scale));
-	if (target.width < 1.0f || target.height < 1.0f)
-		return nil;
-
-	UIGraphicsBeginImageContextWithOptions(target, NO, 0.0f);
-	[image drawInRect:CGRectMake(0, 0, target.width, target.height)];
-	UIImage *result = UIGraphicsGetImageFromCurrentImageContext();
-	UIGraphicsEndImageContext();
-	return result;
+/// The disk cache has to be keyed on something that outlives the session, and
+/// TGClient+Files.h is explicit that the file id is not that. Pick the unique
+/// id of whichever file drawableFileIdForSticker: settled on.
+- (NSString *)drawableUniqueIdForSticker:(NSDictionary *)sticker {
+	BOOL drawable = ![sticker[@"isVideo"] boolValue] && ![sticker[@"isAnimated"] boolValue];
+	NSString *thumbUniqueId = sticker[@"thumbUniqueId"];
+	if ([sticker[@"thumbId"] integerValue] != 0)
+		return [thumbUniqueId isKindOfClass:[NSString class]] ? thumbUniqueId : @"";
+	if (!drawable)
+		return @"";
+	NSString *uniqueId = sticker[@"uniqueId"];
+	return [uniqueId isKindOfClass:[NSString class]] ? uniqueId : @"";
 }
 
 #pragma mark - tabs
 
 - (void)rebuildTabs {
+	[self cancelTabImageLoads];
 	for (UIView *view in [self.tabStrip.subviews copy])
 		[view removeFromSuperview];
 	[self.tabButtons removeAllObjects];
+	[self.tabDividers removeAllObjects];
 
 	NSInteger total = (NSInteger)self.sections.count + 2;
 	NSInteger index = 0;
@@ -1433,21 +1438,31 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 		 forControlEvents:UIControlEventTouchUpInside];
 
 		NSNumber *thumbId = section[@"tabThumbId"];
-		if (thumbId != nil){
-			UIImage *cached = [self cachedImageForFileId:[thumbId integerValue] side:24.0f];
+		NSString *thumbUniqueId = section[@"tabThumbUniqueId"];
+		if (![thumbUniqueId isKindOfClass:[NSString class]])
+			thumbUniqueId = @"";
+
+		if (thumbId != nil || thumbUniqueId.length > 0){
+			UIImage *cached = [TGStickerThumbnailCache
+					cachedThumbnailForUniqueId:thumbUniqueId side:TGStickerPanelTabThumbSide];
 			if (cached != nil){
 				[button setImage:cached forState:UIControlStateNormal];
 			}
 			else {
 				[button setTitle:[self shortTabTitle:section[@"tabTitle"]] forState:UIControlStateNormal];
 				__weak UIButton *weakButton = button;
-				[self imageForFileId:[thumbId integerValue] side:24.0f completion:^(UIImage *image){
+				id token = [TGStickerThumbnailCache thumbnailForFileId:[thumbId integerValue]
+															  uniqueId:thumbUniqueId
+																  side:TGStickerPanelTabThumbSide
+															completion:^(UIImage *image){
 					UIButton *target = weakButton;
 					if (target == nil || image == nil)
 						return;
 					[target setTitle:@"" forState:UIControlStateNormal];
 					[target setImage:image forState:UIControlStateNormal];
 				}];
+				if (token != nil)
+					[self.tabImageTokens addObject:token];
 			}
 		}
 		else {
@@ -1528,35 +1543,78 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 	return button;
 }
 
-- (void)layoutTabs {
-	for (UIView *view in [self.tabStrip.subviews copy]){
-		if (view.tag == 9901)
-			[view removeFromSuperview];
-	}
+/// A group-button strip carries a real 2pt divider between neighbours, and the
+/// divider next to the pressed plate is a different piece of art on each side.
+/// Overlapping one plain divider over the seam is what made the strip look
+/// stuck on rather than part of the bar.
+- (UIImageView *)tabDividerView {
+	UIImageView *view = [[UIImageView alloc] initWithFrame:CGRectZero];
+	UIImage *plain = [UIImage imageNamed:@"ButtonGroupDivider.png"];
+	if (plain != nil)
+		view.image = [plain stretchableImageWithLeftCapWidth:6 topCapHeight:0];
+	view.contentMode = UIViewContentModeScaleToFill;
+	return view;
+}
 
+- (void)layoutTabs {
+	for (UIView *view in self.tabDividers)
+		[view removeFromSuperview];
+	[self.tabDividers removeAllObjects];
+
+	CGFloat height = self.tabHeight;
 	CGFloat x = 0;
+	NSInteger index = 0;
+	NSInteger last = (NSInteger)self.tabButtons.count - 1;
+
 	for (UIButton *button in self.tabButtons){
-		CGFloat width = 44.0f;
+		CGFloat width = TGStickerPanelTabMinWidth;
 		NSString *title = [button titleForState:UIControlStateNormal];
 		if (title.length > 0){
 			CGSize size = [title sizeWithFont:button.titleLabel.font];
-			width = MAX(44.0f, floorf(size.width) + 14.0f);
+			width = MAX(TGStickerPanelTabMinWidth, floorf(size.width) + 14.0f);
 		}
-		button.frame = CGRectMake(floorf(x), 0, width, TGStickerPanelTabHeight);
+		button.frame = CGRectMake(floorf(x), 0, width, height);
 		x += width;
 
-		if (button != [self.tabButtons lastObject]){
-			UIImage *divider = [UIImage imageNamed:@"ButtonGroupDivider.png"];
-			if (divider != nil){
-				UIImageView *view = [[UIImageView alloc] initWithFrame:
-						CGRectMake(floorf(x) - 1, 0, 2, TGStickerPanelTabHeight)];
-				view.image = [divider stretchableImageWithLeftCapWidth:6 topCapHeight:0];
-				view.tag = 9901;
-				[self.tabStrip insertSubview:view atIndex:0];
-			}
+		if (index < last){
+			UIImageView *divider = [self tabDividerView];
+			divider.frame = CGRectMake(floorf(x), 0, TGStickerPanelTabDividerWidth, height);
+			[self.tabStrip addSubview:divider];
+			[self.tabDividers addObject:divider];
+			x += TGStickerPanelTabDividerWidth;
 		}
+		index += 1;
 	}
-	self.tabStrip.contentSize = CGSizeMake(x, TGStickerPanelTabHeight);
+	self.tabStrip.contentSize = CGSizeMake(x, height);
+	[self updateTabDividers];
+}
+
+- (void)updateTabDividers {
+	NSInteger selected = -1;
+	NSInteger index = 0;
+	for (UIButton *button in self.tabButtons){
+		if (button.selected){
+			selected = index;
+			break;
+		}
+		index += 1;
+	}
+
+	UIImage *plain = [UIImage imageNamed:@"ButtonGroupDivider.png"];
+	UIImage *leftLit = [UIImage imageNamed:@"ButtonGroupDivider_LeftHighlighted.png"];
+	UIImage *rightLit = [UIImage imageNamed:@"ButtonGroupDivider_RightHighlighted.png"];
+
+	for (NSInteger i = 0; i < (NSInteger)self.tabDividers.count; i++){
+		UIImageView *divider = self.tabDividers[i];
+		UIImage *wanted = plain;
+		if (selected == i)
+			wanted = leftLit ?: plain;
+		else if (selected == i + 1)
+			wanted = rightLit ?: plain;
+		if (wanted == nil)
+			continue;
+		divider.image = [wanted stretchableImageWithLeftCapWidth:6 topCapHeight:0];
+	}
 }
 
 - (void)updateTabSelection {
@@ -1568,6 +1626,7 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 			button.selected = (button.tag >= 0 && index == self.selectedSection);
 		index += 1;
 	}
+	[self updateTabDividers];
 }
 
 - (void)setSelectedSection:(NSInteger)index scrollGrid:(BOOL)scrollGrid {
@@ -1642,15 +1701,133 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 		self.onStickerPicked(sticker);
 }
 
-- (void)tileLongPressed:(UILongPressGestureRecognizer *)recogniser {
-	if (recogniser.state != UIGestureRecognizerStateBegan)
+#pragma mark - preview
+
+/// Holding a sticker shows it big before anything else happens, the way the
+/// current client peeks one: a 180pt bounding box with the sticker's emoji
+/// above it. Letting go brings up the actions.
+- (void)cancelPreviewLoad {
+	if (self.previewToken != nil)
+		[TGStickerThumbnailCache cancelRequest:self.previewToken];
+	self.previewToken = nil;
+}
+
+/// The panel is only as tall as a keyboard, so the peek goes over the window
+/// the way the action sheet does; inside the panel the emoji above the sticker
+/// would be clipped away.
+- (void)layoutPreview {
+	if (self.previewOverlay == nil || self.previewOverlay.hidden)
 		return;
+	UIView *host = self.previewOverlay.superview;
+	if (host == nil)
+		return;
+
+	CGRect bounds = host.bounds;
+	self.previewOverlay.frame = bounds;
+
+	CGFloat side = MIN(TGStickerPanelPreviewSide,
+			MIN(bounds.size.width - 24.0f, bounds.size.height - 96.0f));
+	if (side < 1.0f)
+		side = 1.0f;
+	CGFloat centreX = floorf(bounds.size.width / 2.0f);
+	CGFloat centreY = floorf(bounds.size.height / 2.0f);
+	self.previewImageView.frame = CGRectMake(floorf(centreX - side / 2.0f),
+			floorf(centreY - side / 2.0f), side, side);
+	// 32pt emoji, 10pt clear of the sticker, exactly as the current client
+	// stacks a peeked sticker.
+	self.previewEmojiLabel.frame = CGRectMake(0,
+			CGRectGetMinY(self.previewImageView.frame) - 48.0f, bounds.size.width, 38.0f);
+}
+
+- (void)showPreviewForSticker:(NSDictionary *)sticker {
+	if (self.previewOverlay == nil){
+		_previewOverlay = [[UIView alloc] initWithFrame:CGRectZero];
+		_previewOverlay.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.45f];
+		_previewOverlay.userInteractionEnabled = NO;
+
+		_previewEmojiLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+		_previewEmojiLabel.backgroundColor = [UIColor clearColor];
+		_previewEmojiLabel.textAlignment = UITextAlignmentCenter;
+		_previewEmojiLabel.font = [UIFont systemFontOfSize:32];
+		[_previewOverlay addSubview:_previewEmojiLabel];
+
+		_previewImageView = [[UIImageView alloc] initWithFrame:CGRectZero];
+		_previewImageView.contentMode = UIViewContentModeScaleAspectFit;
+		[_previewOverlay addSubview:_previewImageView];
+	}
+
+	UIView *host = self.window ?: self;
+	if (self.previewOverlay.superview != host)
+		[host addSubview:self.previewOverlay];
+
+	NSString *emoji = sticker[@"emoji"];
+	self.previewEmojiLabel.text = [emoji isKindOfClass:[NSString class]] ? emoji : @"";
+	self.previewOverlay.hidden = NO;
+	[host bringSubviewToFront:self.previewOverlay];
+	[self layoutPreview];
+
+	CGFloat side = self.previewImageView.frame.size.width;
+	NSInteger fileId = [self drawableFileIdForSticker:sticker];
+	NSString *uniqueId = [self drawableUniqueIdForSticker:sticker];
+
+	UIImage *cached = [TGStickerThumbnailCache cachedThumbnailForUniqueId:uniqueId side:side];
+	self.previewImageView.image = cached;
+	if (cached != nil)
+		return;
+
+	// Something to look at while the big one decodes.
+	self.previewImageView.image =
+			[TGStickerThumbnailCache cachedThumbnailForUniqueId:uniqueId side:self.tileSide];
+
+	[self cancelPreviewLoad];
+	__weak TGStickerPanelView *weakSelf = self;
+	self.previewToken = [TGStickerThumbnailCache thumbnailForFileId:fileId uniqueId:uniqueId
+															   side:side
+														 completion:^(UIImage *image){
+		TGStickerPanelView *me = weakSelf;
+		if (me == nil || image == nil)
+			return;
+		me.previewToken = nil;
+		if (me.previewOverlay.hidden)
+			return;
+		me.previewImageView.image = image;
+	}];
+}
+
+- (void)hidePreview {
+	[self cancelPreviewLoad];
+	if (self.previewOverlay == nil)
+		return;
+	self.previewOverlay.hidden = YES;
+	self.previewImageView.image = nil;
+	[self.previewOverlay removeFromSuperview];
+}
+
+- (void)tileLongPressed:(UILongPressGestureRecognizer *)recogniser {
 	if (![recogniser.view isKindOfClass:[TGStickerTile class]])
 		return;
 
 	TGStickerTile *tile = (TGStickerTile *)recogniser.view;
 	NSDictionary *sticker = tile.sticker;
 	NSInteger fileId = [sticker[@"fileId"] integerValue];
+
+	if (recogniser.state == UIGestureRecognizerStateBegan){
+		if (fileId == 0 || self.currentActionSheet != nil)
+			return;
+		[self showPreviewForSticker:sticker];
+		return;
+	}
+
+	if (recogniser.state != UIGestureRecognizerStateEnded &&
+		recogniser.state != UIGestureRecognizerStateCancelled &&
+		recogniser.state != UIGestureRecognizerStateFailed)
+		return;
+
+	BOOL wasPreviewing = (self.previewOverlay != nil && !self.previewOverlay.hidden);
+	[self hidePreview];
+
+	if (!wasPreviewing || recogniser.state != UIGestureRecognizerStateEnded)
+		return;
 	if (fileId == 0 || self.currentActionSheet != nil)
 		return;
 
@@ -1794,6 +1971,7 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 
 	section[@"loadedCount"] = @(stickers.count);
 	section[@"count"] = @(stickers.count);
+	[self takeSectionSnapshot];
 	[self relayoutSections];
 }
 
@@ -1830,6 +2008,7 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 		section[@"loadedCount"] = @(stickers.count);
 		section[@"complete"] = @YES;
 		section[@"count"] = @(stickers.count);
+		[me takeSectionSnapshot];
 		[me relayoutSections];
 	}];
 }
