@@ -695,16 +695,17 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 			w - previewLeft - 10 - rightPadding, 40);
 	if (!self.authorLabel.hidden){
 		self.authorLabel.frame = CGRectMake(left, 29, w - left - 10 - rightPadding, 20);
-		previewFrame.origin.y += 9;
-		previewFrame.size.height -= 12;
-		CGSize fits = TGEmojiTextSize(self.previewLabel.text, self.previewLabel.font,
-				previewFrame.size, NSLineBreakByTruncatingTail, 2);
-		if (fits.height < 20)
-			previewFrame.origin.y += 9;
-		CGFloat textBottom = kRowHeight - 9;
-		if (CGRectGetMaxY(previewFrame) > textBottom)
-			previewFrame.size.height = textBottom - previewFrame.origin.y;
+		previewFrame.origin.y += 18;
+		previewFrame.size.height -= 18;
 	}
+	CGSize previewFits = TGEmojiTextSize(self.previewLabel.text, self.previewLabel.font,
+			previewFrame.size, NSLineBreakByTruncatingTail, 2);
+	if (previewFits.height > 0)
+		previewFrame.size.height = MIN(previewFrame.size.height,
+				ceilf(previewFits.height));
+	CGFloat previewBottom = kRowHeight - 9;
+	if (CGRectGetMaxY(previewFrame) > previewBottom)
+		previewFrame.size.height = previewBottom - previewFrame.origin.y;
 	self.previewLabel.frame = previewFrame;
 
 	// Your own last message is marked, the way it is in their chat item.
