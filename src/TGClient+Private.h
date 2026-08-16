@@ -32,9 +32,16 @@ typedef const char *(*td_exec_fn)(void *client, const char *request);
 @property (nonatomic, strong) NSArray *folders;
 @property (nonatomic, strong) NSArray *chats;
 @property (nonatomic, strong) NSMutableArray *outbox;   // JSON strings awaiting send
+@property (nonatomic, assign) BOOL parametersSent;
+@property (nonatomic, strong) NSMutableArray *preInitRequests;
 @property (nonatomic, strong) NSLock *outboxLock;
 @property (nonatomic, assign) NSUInteger chatsAtLastLoad;
 @property (nonatomic, assign) BOOL chatListComplete;
+@property (nonatomic, assign) BOOL chatsNotifyScheduled;
+@property (nonatomic, assign) BOOL idlePolling;
+@property (nonatomic, assign) BOOL cachedChatsLoaded;
+@property (nonatomic, assign) NSTimeInterval lastChatSnapshotSave;
+@property (nonatomic, strong) NSMutableSet *chatsConfirmedByServer;
 @property (nonatomic, assign) NSUInteger loadChatsAttempts;
 @property (nonatomic, strong) NSDictionary *me;
 @property (nonatomic, assign) TGConnectionState connectionState;
@@ -45,6 +52,11 @@ typedef const char *(*td_exec_fn)(void *client, const char *request);
 /// Send a request and get the reply on the main queue. `completion` receives
 /// the raw TDLib object, or an "error" object if the call failed.
 - (void)request:(NSDictionary *)request completion:(void (^)(NSDictionary *))completion;
+
+- (void)rebuildChats;
+- (void)scheduleChatsChanged;
+- (void)saveCachedChatsThrottled;
+- (void)dropChatsMissingFromServerList;
 @end
 
 // vim:ft=objc

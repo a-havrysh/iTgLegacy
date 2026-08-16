@@ -1,6 +1,8 @@
 #import "TGClient+Private.h"
 #import "TGClient+Notifications.h"
+#import "TGClient+Stories.h"
 #import "TGCall.h"
+#import "TGDiskCache.h"
 #import <UIKit/UIKit.h>
 #include <dlfcn.h>
 #include "api_id.h"
@@ -136,6 +138,7 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 
 	self.available = YES;
 	self.running = YES;
+	[self watchApplicationState];
 
 	// The single-threaded ClientManager creates its scheduler lazily, on the
 	// first request - without this nothing ever runs and no update arrives.
@@ -151,6 +154,21 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 	return YES;
 }
 
+- (void)watchApplicationState {
+	__weak typeof(self) weakSelf = self;
+	NSNotificationCenter *centre = [NSNotificationCenter defaultCenter];
+	[centre addObserverForName:UIApplicationDidEnterBackgroundNotification object:nil
+						 queue:[NSOperationQueue mainQueue]
+					usingBlock:^(NSNotification *__unused note){
+		weakSelf.idlePolling = YES;
+	}];
+	[centre addObserverForName:UIApplicationWillEnterForegroundNotification object:nil
+						 queue:[NSOperationQueue mainQueue]
+					usingBlock:^(NSNotification *__unused note){
+		weakSelf.idlePolling = NO;
+	}];
+}
+
 - (void)receiveLoop {
 	dispatch_semaphore_t slots = dispatch_semaphore_create(48);
 
@@ -158,7 +176,7 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 		@autoreleasepool {
 			[self drainOutbox];
 
-			const char *res = self.td_recv(self.client, 1.0);
+			const char *res = self.td_recv(self.client, self.idlePolling ? 1.0 : 0.05);
 			if (!res)
 				continue;
 
@@ -189,7 +207,39 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 // thread: sending from elsewhere while the receive loop holds the scheduler
 // guard aborts on `Scheduler.cpp:126 Check !scheduler_->has_guard_ failed`.
 // So callers only enqueue here, and the receive thread does the sending.
+- (BOOL)requestSurvivesUninitialised:(NSDictionary *)request {
+	NSString *type = request[@"@type"];
+	return [type isEqualToString:@"setTdlibParameters"] ||
+		   [type isEqualToString:@"getAuthorizationState"] ||
+		   [type isEqualToString:@"setLogVerbosityLevel"] ||
+		   [type isEqualToString:@"setLogStream"];
+}
+
+- (void)sendUnguarded:(NSDictionary *)request {
+	NSError *err = nil;
+	NSData *data = [NSJSONSerialization dataWithJSONObject:request options:0 error:&err];
+	if (!data){
+		NSLog(@"TGClient: cannot encode %@: %@", request, err);
+		return;
+	}
+
+	NSMutableData *z = [[NSMutableData alloc] initWithCapacity:data.length + 1];
+	[z appendData:data];
+	[z appendBytes:"\0" length:1];
+
+	[self.outboxLock lock];
+	[self.outbox addObject:z];
+	[self.outboxLock unlock];
+}
+
 - (void)send:(NSDictionary *)request {
+	if (!self.parametersSent && ![self requestSurvivesUninitialised:request]){
+		if (!self.preInitRequests)
+			self.preInitRequests = [NSMutableArray array];
+		[self.preInitRequests addObject:request];
+		return;
+	}
+
 	NSError *err = nil;
 	NSData *data = [NSJSONSerialization dataWithJSONObject:request options:0 error:&err];
 	if (!data){
@@ -385,6 +435,13 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 		return;
 	}
 
+	if ([type hasPrefix:@"updateStory"] ||
+		[type isEqualToString:@"updateChatActiveStories"]){
+		[[NSNotificationCenter defaultCenter]
+				postNotificationName:TGStoryUpdateNotification object:obj];
+		return;
+	}
+
 	if ([type isEqualToString:@"updateChatAction"]){
 		[self handleUpdateChatAction:obj];
 		return;
@@ -490,6 +547,12 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 		if (expected > 0)
 			self.onFileProgress([file[@"id"] integerValue], (float)(got / expected));
 	}
+	NSDictionary *remote = file[@"remote"];
+	if ([remote[@"is_uploading_active"] boolValue] ||
+		[remote[@"is_uploading_completed"] boolValue]){
+		[[NSNotificationCenter defaultCenter]
+				postNotificationName:TGStoryUpdateNotification object:obj];
+	}
 }
 
 // TDLib names the action; the client turns it into the phrase every
@@ -584,7 +647,10 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 	if ([obj[@"code"] intValue] == 404)
 		return;
 	NSLog(@"TGClient: error: %@", obj);
-	if (self.authState == TGAuthStateReady)
+	if (self.authState != TGAuthStateWaitPhoneNumber &&
+		self.authState != TGAuthStateWaitCode &&
+		self.authState != TGAuthStateWaitPassword &&
+		self.authState != TGAuthStateWaitRegistration)
 		return;
 	if (self.onError)
 		self.onError(msg);
@@ -598,6 +664,7 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 
 	if ([type isEqualToString:@"authorizationStateWaitTdlibParameters"]){
 		[self sendTdlibParameters];
+		[self flushPreInitRequests];
 		return;                       // not a user-visible state
 	} else if ([type isEqualToString:@"authorizationStateWaitPhoneNumber"]){
 		s = TGAuthStateWaitPhoneNumber;
@@ -621,8 +688,19 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 
 	self.authState = s;
 	if (s == TGAuthStateReady){
+		[[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"tgWasSignedIn"];
+		[[NSUserDefaults standardUserDefaults] synchronize];
 		[self loadChats];
 		[self send:@{@"@type" : @"getMe"}];
+	}
+	if (s == TGAuthStateWaitPhoneNumber || s == TGAuthStateLoggingOut ||
+		s == TGAuthStateWaitRegistration){
+		[[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"tgWasSignedIn"];
+		[[NSUserDefaults standardUserDefaults] synchronize];
+		[self clearCachedChats];
+		[self.chatsById removeAllObjects];
+		[self.chatsConfirmedByServer removeAllObjects];
+		[self rebuildChats];
 	}
 	if (s == TGAuthStateWaitPhoneNumber)
 		[self flushPendingPhoneNumber];
@@ -630,17 +708,23 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 		self.onAuthState(s);
 }
 
+- (void)flushPreInitRequests {
+	NSArray *held = self.preInitRequests;
+	self.preInitRequests = nil;
+	for (NSDictionary *request in held)
+		[self send:request];
+}
+
 - (void)sendTdlibParameters {
-	NSString *docs = [NSSearchPathForDirectoriesInDomains(
-			NSDocumentDirectory, NSUserDomainMask, YES) objectAtIndex:0];
-	NSString *db = [docs stringByAppendingPathComponent:@"tdlib"];
+	NSString *db = [TGDiskCache databaseDirectory];
 
 	int SETUP_API_ID(apiId)
 	char * SETUP_API_HASH(apiHash)
 
 	UIDevice *dev = [UIDevice currentDevice];
 
-	[self send:@{
+	self.parametersSent = YES;
+	[self sendUnguarded:@{
 		@"@type"                  : @"setTdlibParameters",
 		@"database_directory"     : db,
 		@"files_directory"        : [db stringByAppendingPathComponent:@"files"],
@@ -853,6 +937,7 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 	NSData *waveform = nil;
 	BOOL isService = NO;
 	NSString *callState = nil;     // "missed" or "answered" on a call message
+	NSString *audioTitle = nil, *audioPerformer = nil;
 	NSNumber *photoW = nil, *photoH = nil;
 	NSArray *photoSizes = nil;
 	NSDictionary *minithumb = nil;
@@ -932,8 +1017,21 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 	} else if ([ctype isEqualToString:@"messageAudio"]){
 		docFileId = content[@"audio"][@"audio"][@"id"];
 		docName   = content[@"audio"][@"file_name"];
+		duration  = content[@"audio"][@"duration"];
 		NSString *title = content[@"audio"][@"title"];
-		extra = title.length ? title : (docName ?: @"Audio");
+		NSString *performer = content[@"audio"][@"performer"];
+		audioTitle     = [title isKindOfClass:NSString.class] ? title : nil;
+		audioPerformer = [performer isKindOfClass:NSString.class] ? performer : nil;
+		if (!audioTitle.length)
+			audioTitle = docName.length ? docName.lastPathComponent : @"Audio";
+		NSInteger seconds = [duration integerValue];
+		NSMutableString *lines = [NSMutableString stringWithString:audioTitle];
+		if (audioPerformer.length)
+			[lines appendFormat:@"\n%@", audioPerformer];
+		if (seconds > 0)
+			[lines appendFormat:@"%@%ld:%02ld", audioPerformer.length ? @", " : @"\n",
+					(long)(seconds / 60), (long)(seconds % 60)];
+		extra = lines;
 
 	} else if ([ctype isEqualToString:@"messageContact"]){
 		NSDictionary *c = content[@"contact"];
@@ -1190,6 +1288,8 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 							? minithumb : (id)[NSNull null]),
 		@"docId"     : docFileId   ?: [NSNull null],
 		@"docName"   : docName     ?: @"",
+		@"audioTitle"     : audioTitle     ?: @"",
+		@"audioPerformer" : audioPerformer ?: @"",
 		@"service"   : @(isService),
 		// Several photos sent together share an album id; the chat draws them
 		// as one block rather than as unrelated messages.
@@ -1228,6 +1328,23 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 	withPoll[@"pollClosed"]    = poll[@"is_closed"] ?: @NO;
 	withPoll[@"pollAnonymous"] = poll[@"is_anonymous"] ?: @YES;
 	return [withPoll copy];
+}
+
+- (void)historyForChat:(int64_t)chatId
+                thread:(int64_t)threadId
+                 limit:(NSInteger)limit
+             onlyLocal:(BOOL)onlyLocal
+            completion:(void (^)(NSArray *))completion {
+	if (threadId == 0){
+		[self historyForChat:chatId limit:limit onlyLocal:onlyLocal completion:completion];
+		return;
+	}
+	if (onlyLocal){
+		if (completion)
+			completion(@[]);
+		return;
+	}
+	[self historyForChat:chatId thread:threadId limit:limit completion:completion];
 }
 
 - (void)historyForChat:(int64_t)chatId
@@ -1322,10 +1439,18 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 	// batch size itself - a first call on a cold chat often answers with one
 	// message. Walk backwards from the newest until we have enough or the
 	// chat runs out.
+	[self historyForChat:chatId limit:limit onlyLocal:NO completion:completion];
+}
+
+- (void)historyForChat:(int64_t)chatId
+                 limit:(NSInteger)limit
+             onlyLocal:(BOOL)onlyLocal
+            completion:(void (^)(NSArray *))completion {
 	NSMutableArray *collected = [NSMutableArray array];
 	[self fetchHistoryChunkForChat:chatId
 					 fromMessageId:0
 							 limit:limit
+						 onlyLocal:onlyLocal
 						 collected:collected
 						completion:completion];
 }
@@ -1333,6 +1458,7 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 - (void)fetchHistoryChunkForChat:(int64_t)chatId
                    fromMessageId:(int64_t)fromMessageId
                            limit:(NSInteger)limit
+                       onlyLocal:(BOOL)onlyLocal
                        collected:(NSMutableArray *)collected
                       completion:(void (^)(NSArray *))completion {
 	__weak typeof(self) weakSelf = self;
@@ -1342,7 +1468,7 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		@"from_message_id" : @(fromMessageId),
 		@"offset"          : @(0),
 		@"limit"           : @(limit),
-		@"only_local"      : @NO,
+		@"only_local"      : @(onlyLocal),
 	} completion:^(NSDictionary *result){
 		TGClient *me = weakSelf;
 		NSArray *msgs = result[@"messages"];
@@ -1368,6 +1494,7 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		[me fetchHistoryChunkForChat:chatId
 					   fromMessageId:oldest
 							   limit:limit - collected.count
+						   onlyLocal:onlyLocal
 						   collected:collected
 						  completion:completion];
 	}];
@@ -1892,6 +2019,7 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 			loader.chatListComplete = YES;
 			NSLog(@"TGClient: chat list complete (%lu)",
 					(unsigned long)loader.chatsById.count);
+			[loader dropChatsMissingFromServerList];
 		}
 	}];
 	[self request:@{
@@ -2582,6 +2710,10 @@ static NSArray *TGPacksFrom(NSDictionary *target) {
 	if (!chatId)
 		return;
 
+	if (!self.chatsConfirmedByServer)
+		self.chatsConfirmedByServer = [NSMutableSet set];
+	[self.chatsConfirmedByServer addObject:chatId];
+
 	NSMutableDictionary *info = self.chatsById[chatId];
 	if (!info){
 		info = [NSMutableDictionary dictionary];
@@ -2684,6 +2816,10 @@ static NSArray *TGPacksFrom(NSDictionary *target) {
 	if (!chatId)
 		return;
 
+	if (!self.chatsConfirmedByServer)
+		self.chatsConfirmedByServer = [NSMutableSet set];
+	[self.chatsConfirmedByServer addObject:chatId];
+
 	NSMutableDictionary *info = self.chatsById[chatId];
 	if (!info){
 		info = [NSMutableDictionary dictionary];
@@ -2758,10 +2894,130 @@ static NSArray *TGPacksFrom(NSDictionary *target) {
 		return oa > ob ? NSOrderedAscending : NSOrderedDescending;
 	}];
 
-	if (self.onChatsChanged)
-		self.onChatsChanged();
-	if (self.onArchiveChanged)
-		self.onArchiveChanged();
+	[self scheduleChatsChanged];
+}
+
+- (void)scheduleChatsChanged {
+	if (self.chatsNotifyScheduled)
+		return;
+	self.chatsNotifyScheduled = YES;
+	__weak typeof(self) weakSelf = self;
+	dispatch_async(dispatch_get_main_queue(), ^{
+		TGClient *me = weakSelf;
+		if (!me)
+			return;
+		me.chatsNotifyScheduled = NO;
+		if (me.onChatsChanged)
+			me.onChatsChanged();
+		if (me.onArchiveChanged)
+			me.onArchiveChanged();
+		[me saveCachedChatsThrottled];
+	});
+}
+
+#pragma mark - chat list snapshot
+
+static NSString *const TGChatSnapshotName = @"chatlist";
+static const NSUInteger TGChatSnapshotLimit = 200;
+static const NSTimeInterval TGChatSnapshotInterval = 4.0;
+
+static NSDictionary *TGPlistSafeChat(NSDictionary *chat) {
+	NSMutableDictionary *out = [NSMutableDictionary dictionaryWithCapacity:chat.count];
+	for (NSString *key in chat){
+		id value = chat[key];
+		if (![key isKindOfClass:NSString.class])
+			continue;
+		if ([value isKindOfClass:NSString.class] || [value isKindOfClass:NSNumber.class])
+			out[key] = value;
+	}
+	return [out[@"id"] isKindOfClass:NSNumber.class] ? out : nil;
+}
+
+- (void)loadCachedChats {
+	if (self.cachedChatsLoaded || self.chatsById.count)
+		return;
+	self.cachedChatsLoaded = YES;
+
+	NSData *data = [NSData dataWithContentsOfFile:
+			[TGDiskCache snapshotPathForName:TGChatSnapshotName]];
+	if (!data.length)
+		return;
+
+	id plist = [NSPropertyListSerialization propertyListWithData:data
+														 options:NSPropertyListImmutable
+														  format:NULL
+														   error:NULL];
+	if (![plist isKindOfClass:NSArray.class])
+		return;
+
+	for (id entry in (NSArray *)plist){
+		if (![entry isKindOfClass:NSDictionary.class])
+			continue;
+		NSDictionary *chat = TGPlistSafeChat(entry);
+		NSNumber *chatId = chat[@"id"];
+		if (!chatId || self.chatsById[chatId])
+			continue;
+		self.chatsById[chatId] = [chat mutableCopy];
+	}
+	NSLog(@"TGClient: %lu chats restored from disk", (unsigned long)self.chatsById.count);
+	[self rebuildChats];
+}
+
+- (void)saveCachedChatsThrottled {
+	NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+	if (now - self.lastChatSnapshotSave < TGChatSnapshotInterval)
+		return;
+	[self saveCachedChats];
+}
+
+- (void)saveCachedChats {
+	if (self.authState != TGAuthStateReady)
+		return;
+	self.lastChatSnapshotSave = [NSDate timeIntervalSinceReferenceDate];
+
+	NSMutableArray *rows = [NSMutableArray array];
+	for (NSArray *list in @[self.chats ?: @[], self.archivedChats ?: @[]]){
+		for (NSDictionary *chat in list){
+			if (rows.count >= TGChatSnapshotLimit)
+				break;
+			NSDictionary *safe = TGPlistSafeChat(chat);
+			if (safe)
+				[rows addObject:safe];
+		}
+	}
+	if (!rows.count)
+		return;
+
+	dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
+		@autoreleasepool {
+			NSData *data = [NSPropertyListSerialization dataWithPropertyList:rows
+					format:NSPropertyListBinaryFormat_v1_0 options:0 error:NULL];
+			if (data.length)
+				[TGDiskCache writeData:data toProtectedPath:
+						[TGDiskCache snapshotPathForName:TGChatSnapshotName]];
+		}
+	});
+}
+
+- (void)clearCachedChats {
+	self.lastChatSnapshotSave = 0;
+	[[NSFileManager defaultManager] removeItemAtPath:
+			[TGDiskCache snapshotPathForName:TGChatSnapshotName] error:NULL];
+}
+
+- (void)dropChatsMissingFromServerList {
+	if (!self.chatsConfirmedByServer.count)
+		return;
+	NSMutableArray *stale = [NSMutableArray array];
+	for (NSNumber *chatId in self.chatsById)
+		if (![self.chatsConfirmedByServer containsObject:chatId])
+			[stale addObject:chatId];
+	if (!stale.count)
+		return;
+	[self.chatsById removeObjectsForKeys:stale];
+	NSLog(@"TGClient: dropped %lu chats the server no longer lists",
+			(unsigned long)stale.count);
+	[self rebuildChats];
 }
 
 - (void)logOut {
