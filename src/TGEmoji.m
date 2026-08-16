@@ -1,4 +1,5 @@
 #import "TGEmoji.h"
+#import "AppDelegate.h"
 
 #import <CoreText/CoreText.h>
 

@@ -82,11 +82,11 @@ FRAMEWORKS := -framework UIKit -framework Foundation -framework QuickLook \
               -framework SystemConfiguration -framework CoreGraphics \
               -framework QuartzCore -framework MediaPlayer \
               -framework AVFoundation -framework AudioToolbox \
-              -framework CoreMedia -framework AddressBook \
+              -framework CoreMedia -framework CoreVideo -framework AddressBook \
               -framework AddressBookUI -framework MobileCoreServices \
               -framework CoreLocation -framework MapKit \
               -framework CoreTelephony -framework ImageIO \
-              -framework CoreText \
+              -framework CoreText -framework AssetsLibrary \
 
 
 # TDLib is loaded at runtime from libtdjson.dylib, never linked.
@@ -145,6 +145,7 @@ APP_SRC_M := \
 	src/RootViewController.m \
 	src/main.m \
 	src/TGClient.m \
+	src/TGDiskCache.m \
 	src/TGCallModel.m \
 	src/TGChatModel.m \
 	src/TGFolderModel.m \
@@ -204,6 +205,8 @@ APP_SRC_M := \
 	src/TGSnackbar.m \
 	src/TGSearchViewController.m \
 	src/TGQRViewController.m \
+	src/TGQRImage.m \
+	src/TGQRCodeViewController.m \
 	src/TGLoginViewController.m \
 	src/TGChatListViewController.m \
 	src/TGChatViewController.m \
@@ -234,6 +237,8 @@ APP_SRC_M := \
 	src/TGStarsViewController.m \
 	src/TGSavedMessagesTagsViewController.m \
 	src/TGVoiceDecoder.m \
+	src/TGMusicPlayer.m \
+	src/TGMusicPlayerBar.m \
 	src/TGCallIce.m \
 	src/TGCallStun.m \
 	src/TGCallMessages.m \
@@ -242,6 +247,7 @@ APP_SRC_M := \
 	src/TGVideoRecorder.m \
 	src/TGVideoCaptureViewController.m \
 	src/TGMediaViewController.m \
+	src/TGAssetPicker.m \
 	src/opusenc/opusenc.m \
 	src/UIImage+WebP.m \
 	src/TGLottieView.m \
@@ -265,6 +271,11 @@ APP_SRC_M := \
 APP_SRC_C := \
 	src/tlv_polyfill.c \
 	src/TGCallCrypto.c \
+	src/TGQRCode.c \
+	src/quirc/quirc.c \
+	src/quirc/identify.c \
+	src/quirc/decode.c \
+	src/quirc/version_db.c \
 	src/opusfile/internal.c \
 	src/opusfile/opusfile.c \
 	src/opusfile/info.c \

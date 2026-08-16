@@ -12,6 +12,8 @@
 
 - (void)updateUnreadBadge;
 
+- (CGFloat)tabBarInsetForController:(UIViewController *)controller;
+
 + (BOOL)isPadIdiom;
 
 + (RootViewController *)splitRootController;

@@ -1,8 +1,12 @@
 #import "TGStoriesViewController.h"
 
+#import <AVFoundation/AVFoundation.h>
+#import <MobileCoreServices/MobileCoreServices.h>
+
 #import "TGClient.h"
 #import "TGClient+Stories.h"
 #import "TGClient+Files.h"
+#import "TGClient+Premium.h"
 #import "TGActionSheet.h"
 #import "TGAlertView.h"
 #import "TGTheme.h"
@@ -4149,12 +4153,478 @@ typedef enum
 
 @end
 
+static NSString *TGStoryPeriodTitle(NSInteger seconds)
+{
+	if (seconds == TGStoryPeriodSixHours)
+		return @"6 hours";
+	if (seconds == TGStoryPeriodTwelveHours)
+		return @"12 hours";
+	if (seconds == TGStoryPeriodTwoDays)
+		return @"48 hours";
+	return @"24 hours";
+}
+
+static NSString *TGStoryPrivacyTitle(NSString *privacy)
+{
+	if ([privacy isEqualToString:@"contacts"])
+		return @"My Contacts";
+	if ([privacy isEqualToString:@"closeFriends"])
+		return @"Close Friends";
+	if ([privacy isEqualToString:@"selected"])
+		return @"Selected Contacts";
+	return @"Everyone";
+}
+
+@interface TGStoryPostOptions : UIViewController <UITableViewDataSource, UITableViewDelegate,
+		UITextFieldDelegate>
+
+@property (nonatomic, strong) UIImage *preview;
+@property (nonatomic, copy) NSString *chatTitle;
+@property (nonatomic, assign) BOOL showsPrivacy;
+@property (nonatomic, assign) BOOL premium;
+
+@property (nonatomic, copy) NSString *caption;
+@property (nonatomic, copy) NSString *privacy;
+@property (nonatomic, copy) NSArray *userIds;
+@property (nonatomic, assign) NSInteger period;
+@property (nonatomic, assign) BOOL toProfile;
+
+@property (nonatomic, copy) void (^onCancel)(void);
+@property (nonatomic, copy) void (^onChangeChat)(void);
+@property (nonatomic, copy) void (^onPost)(void);
+
+- (void)rebuildSections;
+
+- (void)setBusy:(BOOL)busy;
+- (void)setProgress:(float)fraction;
+
+@end
+
+@implementation TGStoryPostOptions
+{
+	UITableView *_tableView;
+	UITextField *_captionField;
+	NSArray *_sections;
+	UIView *_overlay;
+	UILabel *_overlayLabel;
+	UIProgressView *_overlayProgress;
+}
+
+- (void)viewDidLoad
+{
+	[super viewDidLoad];
+
+	self.title = @"New Story";
+	self.view.backgroundColor = [[TGTheme shared] listBackgroundColour];
+
+	self.navigationItem.leftBarButtonItem =
+			[[UIBarButtonItem alloc] initWithTitle:@"Cancel"
+											 style:UIBarButtonItemStyleBordered
+											target:self
+											action:@selector(cancelPressed)];
+	self.navigationItem.rightBarButtonItem =
+			[[UIBarButtonItem alloc] initWithTitle:@"Post"
+											 style:UIBarButtonItemStyleDone
+											target:self
+											action:@selector(postPressed)];
+
+	_tableView = [[UITableView alloc] initWithFrame:self.view.bounds
+											  style:UITableViewStyleGrouped];
+	_tableView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+	_tableView.dataSource = self;
+	_tableView.delegate = self;
+	_tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
+	_tableView.separatorColor = [[TGTheme shared] separatorColour];
+	_tableView.tableHeaderView = [self previewHeader];
+	[self.view addSubview:_tableView];
+
+	[self rebuildSections];
+}
+
+- (UIView *)previewHeader
+{
+	CGFloat width = self.view.bounds.size.width;
+	CGFloat height = 148.0f;
+	CGFloat plateHeight = 124.0f;
+	CGFloat plateWidth = floorf(plateHeight * 9.0f / 16.0f);
+
+	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, height)];
+	header.backgroundColor = [UIColor clearColor];
+
+	UIImageView *thumb = [[UIImageView alloc] initWithFrame:
+			CGRectMake(floorf((width - plateWidth) / 2.0f), 12.0f, plateWidth, plateHeight)];
+	thumb.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin |
+			UIViewAutoresizingFlexibleRightMargin;
+	thumb.backgroundColor = [UIColor blackColor];
+	thumb.contentMode = UIViewContentModeScaleAspectFill;
+	thumb.clipsToBounds = YES;
+	thumb.layer.cornerRadius = 6.0f;
+	thumb.image = self.preview;
+	[header addSubview:thumb];
+
+	return header;
+}
+
+- (void)rebuildSections
+{
+	NSMutableArray *sections = [[NSMutableArray alloc] init];
+	[sections addObject:[NSArray arrayWithObject:@"caption"]];
+	if (self.chatTitle.length > 0)
+		[sections addObject:[NSArray arrayWithObject:@"chat"]];
+	if (self.showsPrivacy)
+		[sections addObject:[NSArray arrayWithObject:@"privacy"]];
+	[sections addObject:[NSArray arrayWithObject:@"period"]];
+	[sections addObject:[NSArray arrayWithObject:@"page"]];
+	_sections = sections;
+	[_tableView reloadData];
+}
+
+- (NSString *)kindAt:(NSIndexPath *)indexPath
+{
+	if (indexPath.section >= (NSInteger)_sections.count)
+		return @"";
+	NSArray *rows = [_sections objectAtIndex:(NSUInteger)indexPath.section];
+	if (indexPath.row >= (NSInteger)rows.count)
+		return @"";
+	return [rows objectAtIndex:(NSUInteger)indexPath.row];
+}
+
+#pragma mark - the busy overlay
+
+- (void)buildOverlay
+{
+	_overlay = [[UIView alloc] initWithFrame:self.view.bounds];
+	_overlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+	_overlay.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.4f];
+
+	CGFloat plateWidth = MIN(240.0f, self.view.bounds.size.width - 60.0f);
+	UIView *plate = [[UIView alloc] initWithFrame:CGRectMake(
+			floorf((self.view.bounds.size.width - plateWidth) / 2.0f),
+			floorf((self.view.bounds.size.height - 96.0f) / 2.0f),
+			plateWidth, 96.0f)];
+	plate.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin |
+			UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin |
+			UIViewAutoresizingFlexibleBottomMargin;
+	plate.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.75f];
+	plate.layer.cornerRadius = 10.0f;
+	[_overlay addSubview:plate];
+
+	_overlayLabel = [[UILabel alloc] initWithFrame:CGRectMake(12, 18, plateWidth - 24, 20)];
+	_overlayLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	_overlayLabel.backgroundColor = [UIColor clearColor];
+	_overlayLabel.textColor = [UIColor whiteColor];
+	_overlayLabel.textAlignment = NSTextAlignmentCenter;
+	_overlayLabel.font = [UIFont boldSystemFontOfSize:14];
+	_overlayLabel.text = @"Uploading 0%";
+	[plate addSubview:_overlayLabel];
+
+	_overlayProgress = [[UIProgressView alloc] initWithProgressViewStyle:
+			UIProgressViewStyleDefault];
+	_overlayProgress.frame = CGRectMake(16, 48, plateWidth - 32, 9);
+	_overlayProgress.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	_overlayProgress.progress = 0.0f;
+	[plate addSubview:_overlayProgress];
+
+	UIActivityIndicatorView *spinner = [[UIActivityIndicatorView alloc]
+			initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhite];
+	spinner.center = CGPointMake(plateWidth / 2.0f, 74.0f);
+	spinner.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin |
+			UIViewAutoresizingFlexibleRightMargin;
+	[spinner startAnimating];
+	[plate addSubview:spinner];
+
+	[self.view addSubview:_overlay];
+}
+
+- (void)setBusy:(BOOL)busy
+{
+	[_captionField resignFirstResponder];
+	self.navigationItem.leftBarButtonItem.enabled = !busy;
+	self.navigationItem.rightBarButtonItem.enabled = !busy;
+	_tableView.userInteractionEnabled = !busy;
+
+	if (!busy){
+		_overlay.hidden = YES;
+		return;
+	}
+	if (_overlay == nil)
+		[self buildOverlay];
+	[self.view bringSubviewToFront:_overlay];
+	_overlay.hidden = NO;
+	[self setProgress:0.0f];
+}
+
+- (void)setProgress:(float)fraction
+{
+	if (_overlay == nil || _overlay.hidden)
+		return;
+	if (fraction < 0.0f)
+		fraction = 0.0f;
+	if (fraction > 1.0f)
+		fraction = 1.0f;
+	_overlayProgress.progress = fraction;
+	_overlayLabel.text = fraction >= 1.0f
+			? @"Posting"
+			: [NSString stringWithFormat:@"Uploading %d%%", (int)(fraction * 100.0f)];
+}
+
+#pragma mark - actions
+
+- (void)cancelPressed
+{
+	[_captionField resignFirstResponder];
+	void (^cancel)(void) = self.onCancel;
+	self.onCancel = nil;
+	if (cancel != nil)
+		cancel();
+}
+
+- (void)captionChanged:(UITextField *)field
+{
+	self.caption = field.text ?: @"";
+}
+
+- (void)postPressed
+{
+	[_captionField resignFirstResponder];
+	if (_captionField != nil)
+		self.caption = _captionField.text ?: @"";
+	if (self.onPost != nil)
+		self.onPost();
+}
+
+- (void)changePrivacy
+{
+	NSArray *titles = [NSArray arrayWithObjects:
+			@"Everyone", @"My Contacts", @"Close Friends", @"Selected Contacts", nil];
+	NSArray *values = [NSArray arrayWithObjects:
+			@"everyone", @"contacts", @"closeFriends", @"selected", nil];
+
+	NSMutableArray *actions = [[NSMutableArray alloc] init];
+	for (NSString *title in titles)
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:title action:title]];
+	[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Cancel"
+														   action:@"cancel"
+															 type:TGActionSheetActionTypeCancel]];
+
+	__weak TGStoryPostOptions *weakSelf = self;
+	TGActionSheet *sheet = [[TGActionSheet alloc] initWithTitle:@"Who can see this story?"
+													   actions:actions
+												   actionBlock:^(id target, NSString *action)
+	{
+		(void)target;
+		TGStoryPostOptions *strongSelf = weakSelf;
+		NSUInteger index = [titles indexOfObject:action];
+		if (strongSelf == nil || index == NSNotFound)
+			return;
+		NSString *chosen = [values objectAtIndex:index];
+		if (![chosen isEqualToString:@"selected"]){
+			strongSelf.privacy = chosen;
+			strongSelf.userIds = nil;
+			[strongSelf->_tableView reloadData];
+			return;
+		}
+		[TGStoryContactPicker presentFrom:strongSelf
+									title:@"Selected Contacts"
+							  preselected:strongSelf.userIds
+								   picked:^(NSArray *userIds)
+		{
+			TGStoryPostOptions *inner = weakSelf;
+			if (inner == nil || userIds.count == 0)
+				return;
+			inner.privacy = @"selected";
+			inner.userIds = userIds;
+			[inner->_tableView reloadData];
+		}];
+	}
+														target:self];
+	[sheet showInView:self.view];
+}
+
+- (void)changePeriod
+{
+	NSArray *values = [NSArray arrayWithObjects:
+			[NSNumber numberWithInteger:TGStoryPeriodSixHours],
+			[NSNumber numberWithInteger:TGStoryPeriodTwelveHours],
+			[NSNumber numberWithInteger:TGStoryPeriodDay],
+			[NSNumber numberWithInteger:TGStoryPeriodTwoDays], nil];
+
+	NSMutableArray *actions = [[NSMutableArray alloc] init];
+	NSMutableArray *titles = [[NSMutableArray alloc] init];
+	for (NSNumber *value in values){
+		NSString *title = TGStoryPeriodTitle([value integerValue]);
+		[titles addObject:title];
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:title action:title]];
+	}
+	[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Cancel"
+														   action:@"cancel"
+															 type:TGActionSheetActionTypeCancel]];
+
+	__weak TGStoryPostOptions *weakSelf = self;
+	TGActionSheet *sheet = [[TGActionSheet alloc] initWithTitle:@"Keep the story for"
+													   actions:actions
+												   actionBlock:^(id target, NSString *action)
+	{
+		(void)target;
+		TGStoryPostOptions *strongSelf = weakSelf;
+		NSUInteger index = [titles indexOfObject:action];
+		if (strongSelf == nil || index == NSNotFound)
+			return;
+		NSInteger chosen = [[values objectAtIndex:index] integerValue];
+		if (chosen != TGStoryPeriodDay && !strongSelf.premium){
+			[[[TGAlertView alloc] initWithTitle:nil
+										message:@"Other durations need Telegram Premium."
+							  cancelButtonTitle:@"OK"
+								  okButtonTitle:nil
+								completionBlock:nil] show];
+			return;
+		}
+		strongSelf.period = chosen;
+		[strongSelf->_tableView reloadData];
+	}
+														target:self];
+	[sheet showInView:self.view];
+}
+
+- (void)pageSwitchChanged:(UISwitch *)control
+{
+	self.toProfile = control.on;
+}
+
+#pragma mark - table
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView
+{
+	(void)tableView;
+	return (NSInteger)_sections.count;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section
+{
+	(void)tableView;
+	if (section >= (NSInteger)_sections.count)
+		return 0;
+	return (NSInteger)[[_sections objectAtIndex:(NSUInteger)section] count];
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section
+{
+	(void)tableView;
+	NSString *kind = [self kindAt:[NSIndexPath indexPathForRow:0 inSection:section]];
+	if ([kind isEqualToString:@"page"])
+		return @"Keeps the story on your page after it expires.";
+	if ([kind isEqualToString:@"period"] && !self.premium)
+		return @"Durations other than 24 hours need Telegram Premium.";
+	return nil;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView
+		 cellForRowAtIndexPath:(NSIndexPath *)indexPath
+{
+	NSString *kind = [self kindAt:indexPath];
+
+	if ([kind isEqualToString:@"caption"]){
+		UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"caption"];
+		if (cell == nil){
+			cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+										  reuseIdentifier:@"caption"];
+			cell.selectionStyle = UITableViewCellSelectionStyleNone;
+			_captionField = [[UITextField alloc] initWithFrame:
+					CGRectInset(cell.contentView.bounds, 12.0f, 0.0f)];
+			_captionField.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+					UIViewAutoresizingFlexibleHeight;
+			_captionField.placeholder = @"Add a caption";
+			_captionField.font = [UIFont systemFontOfSize:16];
+			_captionField.returnKeyType = UIReturnKeyDone;
+			_captionField.delegate = self;
+			_captionField.clearButtonMode = UITextFieldViewModeWhileEditing;
+			_captionField.textColor = [[TGTheme shared] primaryTextColour];
+			_captionField.text = self.caption ?: @"";
+			[_captionField addTarget:self
+							  action:@selector(captionChanged:)
+					forControlEvents:UIControlEventEditingChanged];
+			[cell.contentView addSubview:_captionField];
+		}
+		[[TGTheme shared] styleCell:cell];
+		return cell;
+	}
+
+	if ([kind isEqualToString:@"page"]){
+		UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"page"];
+		if (cell == nil){
+			cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+										  reuseIdentifier:@"page"];
+			cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		}
+		cell.textLabel.text = @"Keep on My Page";
+		UISwitch *control = [[UISwitch alloc] init];
+		control.on = self.toProfile;
+		[control addTarget:self
+					action:@selector(pageSwitchChanged:)
+		  forControlEvents:UIControlEventValueChanged];
+		cell.accessoryView = control;
+		[[TGTheme shared] styleCell:cell];
+		return cell;
+	}
+
+	UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"value"];
+	if (cell == nil)
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
+									  reuseIdentifier:@"value"];
+	cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+	if ([kind isEqualToString:@"chat"]){
+		cell.textLabel.text = @"Post As";
+		cell.detailTextLabel.text = self.chatTitle ?: @"";
+	} else if ([kind isEqualToString:@"privacy"]){
+		cell.textLabel.text = @"Who Can See";
+		cell.detailTextLabel.text = [self.privacy isEqualToString:@"selected"]
+				? [NSString stringWithFormat:@"%lu Selected", (unsigned long)self.userIds.count]
+				: TGStoryPrivacyTitle(self.privacy);
+	} else {
+		cell.textLabel.text = @"Expires In";
+		cell.detailTextLabel.text = TGStoryPeriodTitle(self.period);
+	}
+	cell.detailTextLabel.textColor = [[TGTheme shared] cellDetailColour];
+	[[TGTheme shared] styleCell:cell];
+	return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath
+{
+	[tableView deselectRowAtIndexPath:indexPath animated:YES];
+	NSString *kind = [self kindAt:indexPath];
+	if ([kind isEqualToString:@"privacy"]){
+		[self changePrivacy];
+		return;
+	}
+	if ([kind isEqualToString:@"period"]){
+		[self changePeriod];
+		return;
+	}
+	if ([kind isEqualToString:@"chat"] && self.onChangeChat != nil)
+		self.onChangeChat();
+}
+
+- (BOOL)textFieldShouldReturn:(UITextField *)textField
+{
+	[textField resignFirstResponder];
+	return NO;
+}
+
+@end
+
 @interface TGStoryComposer () <UIImagePickerControllerDelegate, UINavigationControllerDelegate>
 {
 	UIViewController *_host;
+	NSArray *_chats;
 	int64_t _asChatId;
 	NSString *_path;
-	NSString *_caption;
+	BOOL _isVideo;
+	double _duration;
+	UIImage *_preview;
+	NSString *_stageFailure;
+	TGStoryPostOptions *_options;
+	UINavigationController *_optionsNavigation;
 	void (^_completion)(BOOL posted);
 }
 @end
@@ -4185,10 +4655,23 @@ static NSMutableArray *TGStoryComposersInFlight(void)
 {
 	void (^completion)(BOOL) = _completion;
 	_completion = nil;
+	_options = nil;
+	_optionsNavigation = nil;
 	if (completion != nil)
 		completion(posted);
 	[TGStoryComposersInFlight() removeObject:self];
 }
+
+- (void)showMessage:(NSString *)message
+{
+	[[[TGAlertView alloc] initWithTitle:nil
+								message:message
+					  cancelButtonTitle:@"OK"
+						  okButtonTitle:nil
+						completionBlock:nil] show];
+}
+
+#pragma mark - who to post as
 
 - (void)chooseChat
 {
@@ -4201,14 +4684,11 @@ static NSMutableArray *TGStoryComposersInFlight(void)
 
 		if (![chats isKindOfClass:[NSArray class]] || chats.count == 0)
 		{
-			[[[TGAlertView alloc] initWithTitle:nil
-										message:@"You cannot post a story"
-							  cancelButtonTitle:@"OK"
-								  okButtonTitle:nil
-								completionBlock:nil] show];
+			[strongSelf showMessage:@"This account cannot post stories."];
 			[strongSelf finishPosted:NO];
 			return;
 		}
+		strongSelf->_chats = chats;
 
 		if (chats.count == 1)
 		{
@@ -4222,15 +4702,27 @@ static NSMutableArray *TGStoryComposersInFlight(void)
 			return;
 		}
 
-		[strongSelf presentChatChooserForChats:chats];
+		[strongSelf presentChatChooser];
 	}];
 }
 
-- (void)presentChatChooserForChats:(NSArray *)chats
+- (NSString *)titleForChat:(int64_t)chatId
+{
+	for (NSDictionary *chat in _chats)
+	{
+		if (![chat isKindOfClass:[NSDictionary class]])
+			continue;
+		if (TGStoryChatId(chat, @"id") == chatId)
+			return TGStoryString(chat, @"title");
+	}
+	return @"";
+}
+
+- (void)presentChatChooser
 {
 	NSMutableArray *actions = [[NSMutableArray alloc] init];
 	NSMutableDictionary *byTitle = [[NSMutableDictionary alloc] init];
-	for (NSDictionary *chat in chats)
+	for (NSDictionary *chat in _chats)
 	{
 		if (![chat isKindOfClass:[NSDictionary class]])
 			continue;
@@ -4240,7 +4732,11 @@ static NSMutableArray *TGStoryComposersInFlight(void)
 		[byTitle setObject:[chat objectForKey:@"id"] forKey:title];
 		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:title action:title]];
 	}
+	[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Cancel"
+														   action:@"cancel"
+															 type:TGActionSheetActionTypeCancel]];
 
+	BOOL reopened = (_options != nil);
 	__weak TGStoryComposer *weakSelf = self;
 	TGActionSheet *sheet = [[TGActionSheet alloc] initWithTitle:@"Post story as"
 													   actions:actions
@@ -4253,17 +4749,19 @@ static NSMutableArray *TGStoryComposersInFlight(void)
 		NSNumber *identifier = [byTitle objectForKey:action];
 		if (identifier == nil)
 		{
-			[inner finishPosted:NO];
+			if (!reopened)
+				[inner finishPosted:NO];
 			return;
 		}
 		[inner checkChat:(int64_t)[identifier longLongValue]];
 	}
 														target:self];
-	[sheet showInView:_host.view];
+	[sheet showInView:(_options != nil ? _options.view : _host.view)];
 }
 
 - (void)checkChat:(int64_t)chatId
 {
+	int64_t previous = _asChatId;
 	_asChatId = chatId;
 	__weak TGStoryComposer *weakSelf = self;
 	[[TGClient shared] canPostStoryAsChat:chatId completion:^(BOOL canPost, NSString *reason)
@@ -4273,30 +4771,102 @@ static NSMutableArray *TGStoryComposersInFlight(void)
 			return;
 		if (!canPost)
 		{
-			[[[TGAlertView alloc] initWithTitle:nil
-										message:(reason.length > 0 ? reason : @"You cannot post a story")
-							  cancelButtonTitle:@"OK"
-								  okButtonTitle:nil
-								completionBlock:nil] show];
+			[strongSelf showMessage:(reason.length > 0 ? reason
+													   : @"Stories cannot be posted right now.")];
+			if (strongSelf->_options != nil){
+				strongSelf->_asChatId = previous;
+				return;
+			}
 			[strongSelf finishPosted:NO];
 			return;
 		}
-		[strongSelf pickPhoto];
+		if (strongSelf->_options != nil){
+			[strongSelf refreshOptionsForChat];
+			return;
+		}
+		[strongSelf pickSource];
 	}];
 }
 
-- (void)pickPhoto
+#pragma mark - picking the media
+
+- (void)pickSource
 {
-	if (![UIImagePickerController isSourceTypeAvailable:UIImagePickerControllerSourceTypePhotoLibrary])
+	BOOL hasCamera = [UIImagePickerController isSourceTypeAvailable:
+			UIImagePickerControllerSourceTypeCamera];
+	BOOL hasLibrary = [UIImagePickerController isSourceTypeAvailable:
+			UIImagePickerControllerSourceTypePhotoLibrary];
+	NSArray *cameraTypes = hasCamera ? [UIImagePickerController availableMediaTypesForSourceType:
+			UIImagePickerControllerSourceTypeCamera] : nil;
+	NSArray *libraryTypes = hasLibrary ? [UIImagePickerController availableMediaTypesForSourceType:
+			UIImagePickerControllerSourceTypePhotoLibrary] : nil;
+	BOOL canRecord = [cameraTypes containsObject:(NSString *)kUTTypeMovie];
+	BOOL canPickMovie = [libraryTypes containsObject:(NSString *)kUTTypeMovie];
+
+	if (!hasCamera && !hasLibrary)
 	{
+		[self showMessage:@"There is no camera and no photo library on this device."];
 		[self finishPosted:NO];
 		return;
 	}
 
+	NSMutableArray *actions = [[NSMutableArray alloc] init];
+	if (hasCamera)
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Take Photo"
+															   action:@"takePhoto"]];
+	if (canRecord)
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Record Video"
+															   action:@"recordVideo"]];
+	if (hasLibrary)
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Choose Photo"
+															   action:@"choosePhoto"]];
+	if (canPickMovie)
+		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Choose Video"
+															   action:@"chooseVideo"]];
+	[actions addObject:[[TGActionSheetAction alloc] initWithTitle:@"Cancel"
+														   action:@"cancel"
+															 type:TGActionSheetActionTypeCancel]];
+
+	__weak TGStoryComposer *weakSelf = self;
+	TGActionSheet *sheet = [[TGActionSheet alloc] initWithTitle:@"New Story"
+													   actions:actions
+												   actionBlock:^(id target, NSString *action)
+	{
+		(void)target;
+		TGStoryComposer *strongSelf = weakSelf;
+		if (strongSelf == nil)
+			return;
+		if ([action isEqualToString:@"takePhoto"])
+			[strongSelf openPickerWithSource:UIImagePickerControllerSourceTypeCamera video:NO];
+		else if ([action isEqualToString:@"recordVideo"])
+			[strongSelf openPickerWithSource:UIImagePickerControllerSourceTypeCamera video:YES];
+		else if ([action isEqualToString:@"choosePhoto"])
+			[strongSelf openPickerWithSource:UIImagePickerControllerSourceTypePhotoLibrary video:NO];
+		else if ([action isEqualToString:@"chooseVideo"])
+			[strongSelf openPickerWithSource:UIImagePickerControllerSourceTypePhotoLibrary video:YES];
+		else
+			[strongSelf finishPosted:NO];
+	}
+														target:self];
+	[sheet showInView:_host.view];
+}
+
+- (void)openPickerWithSource:(UIImagePickerControllerSourceType)source video:(BOOL)video
+{
 	UIImagePickerController *picker = [[UIImagePickerController alloc] init];
-	picker.sourceType = UIImagePickerControllerSourceTypePhotoLibrary;
-	picker.allowsEditing = YES;
+	picker.sourceType = source;
 	picker.delegate = self;
+	picker.allowsEditing = YES;
+	if (video)
+	{
+		picker.mediaTypes = [NSArray arrayWithObject:(NSString *)kUTTypeMovie];
+		picker.videoQuality = UIImagePickerControllerQualityTypeMedium;
+		picker.videoMaximumDuration = 60.0;
+	}
+	else
+	{
+		picker.mediaTypes = [NSArray arrayWithObject:(NSString *)kUTTypeImage];
+	}
 	[_host presentViewController:picker animated:YES completion:nil];
 }
 
@@ -4311,160 +4881,224 @@ static NSMutableArray *TGStoryComposersInFlight(void)
 		didFinishPickingMediaWithInfo:(NSDictionary *)info
 {
 	(void)picker;
-	[_host dismissViewControllerAnimated:YES completion:nil];
+
+	_stageFailure = nil;
+
+	NSURL *movie = [info objectForKey:UIImagePickerControllerMediaURL];
+	if ([movie isKindOfClass:[NSURL class]] && movie.path.length > 0)
+	{
+		BOOL staged = [self stageVideoAtPath:movie.path];
+		[_host dismissViewControllerAnimated:YES completion:^{
+			if (staged)
+				[self presentOptions];
+			else
+				[self failStaging:@"That video could not be prepared."];
+		}];
+		return;
+	}
 
 	UIImage *image = [info objectForKey:UIImagePickerControllerEditedImage];
 	if (![image isKindOfClass:[UIImage class]])
 		image = [info objectForKey:UIImagePickerControllerOriginalImage];
-	if (![image isKindOfClass:[UIImage class]])
-	{
-		[self finishPosted:NO];
-		return;
-	}
 
-	NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:@"story.jpg"];
+	BOOL staged = [image isKindOfClass:[UIImage class]] && [self stageImage:image];
+	[_host dismissViewControllerAnimated:YES completion:^{
+		if (staged)
+			[self presentOptions];
+		else
+			[self failStaging:@"That picture could not be prepared."];
+	}];
+}
+
+- (void)failStaging:(NSString *)fallback
+{
+	[self showMessage:(_stageFailure.length > 0 ? _stageFailure : fallback)];
+	_stageFailure = nil;
+	[self finishPosted:NO];
+}
+
+- (NSString *)temporaryPathWithExtension:(NSString *)extension
+{
+	return [NSTemporaryDirectory() stringByAppendingPathComponent:
+			[NSString stringWithFormat:@"story-%.0f.%@",
+					[[NSDate date] timeIntervalSince1970] * 1000.0, extension]];
+}
+
+- (BOOL)stageImage:(UIImage *)image
+{
+	NSString *path = [self temporaryPathWithExtension:@"jpg"];
 	BOOL written = NO;
 
 	@autoreleasepool
 	{
-		CGFloat side = MAX(image.size.width, image.size.height);
-		UIImage *scaled = image;
-		if (side > 720.0f)
-		{
-			CGFloat factor = 720.0f / side;
-			CGSize target = CGSizeMake(floorf(image.size.width * factor),
-									   floorf(image.size.height * factor));
-			UIGraphicsBeginImageContextWithOptions(target, YES, 1.0f);
-			[image drawInRect:CGRectMake(0, 0, target.width, target.height)];
-			scaled = UIGraphicsGetImageFromCurrentImageContext();
-			UIGraphicsEndImageContext();
-		}
-		image = nil;
+		CGSize canvas = CGSizeMake(720.0f, 1280.0f);
+		CGSize source = image.size;
+		if (source.width < 1.0f || source.height < 1.0f)
+			return NO;
 
-		NSData *data = UIImageJPEGRepresentation(scaled, 0.87f);
-		scaled = nil;
+		BOOL portrait = source.height >= source.width;
+		CGFloat scale = portrait
+				? MAX(canvas.width / source.width, canvas.height / source.height)
+				: MIN(canvas.width / source.width, canvas.height / source.height);
+		CGSize drawn = CGSizeMake(floorf(source.width * scale), floorf(source.height * scale));
+		CGRect target = CGRectMake(floorf((canvas.width - drawn.width) / 2.0f),
+								   floorf((canvas.height - drawn.height) / 2.0f),
+								   drawn.width, drawn.height);
+
+		UIGraphicsBeginImageContextWithOptions(canvas, YES, 1.0f);
+		[[UIColor blackColor] setFill];
+		UIRectFill(CGRectMake(0, 0, canvas.width, canvas.height));
+		[image drawInRect:target];
+		UIImage *composed = UIGraphicsGetImageFromCurrentImageContext();
+		UIGraphicsEndImageContext();
+
+		NSData *data = UIImageJPEGRepresentation(composed, 0.87f);
 		if (data.length != 0)
 			written = [data writeToFile:path atomically:YES];
+		if (written)
+			_preview = composed;
 	}
 
 	if (!written)
+		return NO;
+	_path = path;
+	_isVideo = NO;
+	_duration = 0.0;
+	return YES;
+}
+
+- (BOOL)stageVideoAtPath:(NSString *)path
+{
+	if (![[NSFileManager defaultManager] fileExistsAtPath:path])
+		return NO;
+
+	AVURLAsset *asset = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:path] options:nil];
+	CMTime length = asset.duration;
+	double seconds = CMTIME_IS_NUMERIC(length) ? CMTimeGetSeconds(length) : 0.0;
+	if (seconds > 60.0)
 	{
-		[self finishPosted:NO];
+		_stageFailure = @"A story video can be at most one minute long.";
+		return NO;
+	}
+
+	@autoreleasepool
+	{
+		AVAssetImageGenerator *generator = [[AVAssetImageGenerator alloc] initWithAsset:asset];
+		generator.appliesPreferredTrackTransform = YES;
+		generator.maximumSize = CGSizeMake(360.0f, 640.0f);
+		CGImageRef frame = [generator copyCGImageAtTime:CMTimeMake(0, 1)
+											 actualTime:NULL
+												  error:NULL];
+		if (frame != NULL)
+		{
+			_preview = [UIImage imageWithCGImage:frame];
+			CGImageRelease(frame);
+		}
+	}
+
+	_path = path;
+	_isVideo = YES;
+	_duration = seconds;
+	return YES;
+}
+
+#pragma mark - the options screen
+
+- (void)presentOptions
+{
+	_options = [[TGStoryPostOptions alloc] init];
+	_options.preview = _preview;
+	_options.privacy = @"everyone";
+	_options.period = TGStoryPeriodDay;
+	_options.toProfile = NO;
+	_options.premium = [[TGClient shared] isPremiumAccount];
+	_options.showsPrivacy = (_asChatId >= 0);
+	_options.chatTitle = (_chats.count > 1) ? [self titleForChat:_asChatId] : nil;
+
+	__weak TGStoryComposer *weakSelf = self;
+	_options.onCancel = ^{
+		TGStoryComposer *strongSelf = weakSelf;
+		if (strongSelf == nil)
+			return;
+		[strongSelf->_host dismissViewControllerAnimated:YES completion:nil];
+		[strongSelf finishPosted:NO];
+	};
+	_options.onChangeChat = ^{
+		TGStoryComposer *strongSelf = weakSelf;
+		if (strongSelf != nil)
+			[strongSelf presentChatChooser];
+	};
+	_options.onPost = ^{
+		TGStoryComposer *strongSelf = weakSelf;
+		if (strongSelf != nil)
+			[strongSelf post];
+	};
+
+	_optionsNavigation = [[UINavigationController alloc] initWithRootViewController:_options];
+	[[TGTheme shared] styleNavigationBar:_optionsNavigation.navigationBar];
+	[_host presentViewController:_optionsNavigation animated:YES completion:nil];
+}
+
+- (void)refreshOptionsForChat
+{
+	_options.chatTitle = (_chats.count > 1) ? [self titleForChat:_asChatId] : nil;
+	_options.showsPrivacy = (_asChatId >= 0);
+	[_options rebuildSections];
+}
+
+#pragma mark - posting
+
+- (void)post
+{
+	__weak TGStoryComposer *weakSelf = self;
+	[_options setBusy:YES];
+
+	void (^progress)(float) = ^(float fraction){
+		TGStoryComposer *strongSelf = weakSelf;
+		if (strongSelf == nil)
+			return;
+		[strongSelf->_options setProgress:fraction];
+	};
+
+	void (^done)(NSDictionary *, NSString *) = ^(NSDictionary *story, NSString *error){
+		TGStoryComposer *strongSelf = weakSelf;
+		if (strongSelf == nil)
+			return;
+		if (story == nil)
+		{
+			[strongSelf->_options setBusy:NO];
+			[strongSelf showMessage:(error.length > 0 ? error
+													  : @"The story could not be posted.")];
+			return;
+		}
+		[strongSelf->_host dismissViewControllerAnimated:YES completion:nil];
+		[strongSelf finishPosted:YES];
+	};
+
+	if (_isVideo)
+	{
+		[[TGClient shared] postVideoStoryAtPath:_path
+									   duration:_duration
+										 asChat:_asChatId
+										caption:(_options.caption ?: @"")
+										privacy:(_options.privacy ?: @"everyone")
+										userIds:_options.userIds
+								   activePeriod:_options.period
+									  toProfile:_options.toProfile
+									   progress:progress
+									 completion:done];
 		return;
 	}
-	_path = path;
-	[self askCaption];
-}
 
-- (void)askCaption
-{
-	__weak TGStoryComposer *weakSelf = self;
-	TGAlertView *alert = nil;
-	__block __weak TGAlertView *weakAlert = nil;
-	alert = [[TGAlertView alloc] initWithTitle:nil
-									   message:@"Caption"
-							 cancelButtonTitle:@"Skip"
-								 okButtonTitle:@"Next"
-							   completionBlock:^(bool okButtonPressed)
-	{
-		TGStoryComposer *strongSelf = weakSelf;
-		if (strongSelf == nil)
-			return;
-		NSString *text = nil;
-		if (okButtonPressed && [weakAlert respondsToSelector:@selector(textFieldAtIndex:)])
-			text = [weakAlert textFieldAtIndex:0].text;
-		strongSelf->_caption = text ?: @"";
-		[strongSelf askPrivacy];
-	}];
-	weakAlert = alert;
-	if ([alert respondsToSelector:@selector(setAlertViewStyle:)])
-		alert.alertViewStyle = UIAlertViewStylePlainTextInput;
-	[alert show];
-}
-
-- (void)askPrivacy
-{
-	NSArray *titles = [NSArray arrayWithObjects:
-			@"Everyone", @"My Contacts", @"Close Friends", @"Selected Contacts", nil];
-	NSArray *values = [NSArray arrayWithObjects:
-			@"everyone", @"contacts", @"closeFriends", @"selected", nil];
-
-	NSMutableArray *actions = [[NSMutableArray alloc] init];
-	for (NSString *title in titles)
-		[actions addObject:[[TGActionSheetAction alloc] initWithTitle:title action:title]];
-
-	__weak TGStoryComposer *weakSelf = self;
-	TGActionSheet *sheet = [[TGActionSheet alloc] initWithTitle:@"Who can see this story?"
-													   actions:actions
-												   actionBlock:^(id target, NSString *action)
-	{
-		(void)target;
-		TGStoryComposer *strongSelf = weakSelf;
-		if (strongSelf == nil)
-			return;
-		NSUInteger index = [titles indexOfObject:action];
-		if (index == NSNotFound)
-		{
-			[strongSelf finishPosted:NO];
-			return;
-		}
-		NSString *privacy = [values objectAtIndex:index];
-		if (![privacy isEqualToString:@"selected"])
-		{
-			[strongSelf postWithPrivacy:privacy];
-			return;
-		}
-
-		[TGStoryContactPicker presentFrom:strongSelf->_host
-									title:@"Selected Contacts"
-							  preselected:nil
-								   picked:^(NSArray *userIds)
-		{
-			TGStoryComposer *inner = weakSelf;
-			if (inner == nil)
-				return;
-			if (userIds.count == 0)
-			{
-				[inner finishPosted:NO];
-				return;
-			}
-			[inner postWithPrivacy:@"selected" userIds:userIds];
-		}];
-	}
-														target:self];
-	[sheet showInView:_host.view];
-}
-
-- (void)postWithPrivacy:(NSString *)privacy
-{
-	[self postWithPrivacy:privacy userIds:nil];
-}
-
-- (void)postWithPrivacy:(NSString *)privacy userIds:(NSArray *)userIds
-{
-	__weak TGStoryComposer *weakSelf = self;
 	[[TGClient shared] postPhotoStoryAtPath:_path
 									 asChat:_asChatId
-									caption:(_caption ?: @"")
-									privacy:privacy
-									userIds:userIds
-								  toProfile:NO
-								 completion:^(NSDictionary *story)
-	{
-		TGStoryComposer *strongSelf = weakSelf;
-		if (strongSelf == nil)
-			return;
-		BOOL posted = [story isKindOfClass:[NSDictionary class]];
-		if (!posted)
-		{
-			[[[TGAlertView alloc] initWithTitle:nil
-										message:@"Could not post the story"
-							  cancelButtonTitle:@"OK"
-								  okButtonTitle:nil
-								completionBlock:nil] show];
-		}
-		[strongSelf finishPosted:posted];
-	}];
+									caption:(_options.caption ?: @"")
+									privacy:(_options.privacy ?: @"everyone")
+									userIds:_options.userIds
+							   activePeriod:_options.period
+								  toProfile:_options.toProfile
+								   progress:progress
+								 completion:done];
 }
 
 @end

@@ -5,6 +5,7 @@
 #import "TGClient+Account.h"
 #import "TGClient+Privacy.h"
 #import "TGActionSheet.h"
+#import "TGQRImage.h"
 #import <QuartzCore/QuartzCore.h>
 
 typedef NS_ENUM(NSInteger, TGLoginStep) {
@@ -92,6 +93,7 @@ static const NSInteger TGLoginAlertDeleteAccount = 102;
 @property (nonatomic, strong) UIImage *plateTopImage;
 @property (nonatomic, strong) UIImage *plateBottomImage;
 @property (nonatomic, strong) UILabel *qrLinkLabel;
+@property (nonatomic, strong) TGQRCodeView *qrCodeView;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @property (nonatomic, copy) NSString *savedPhoneNumber;
 @property (nonatomic, copy) NSString *emailPattern;
@@ -636,6 +638,12 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     self.qrLinkLabel.backgroundColor = [UIColor clearColor];
     self.qrLinkLabel.hidden = YES;
     [self.view addSubview:self.qrLinkLabel];
+
+    self.qrCodeView = [[TGQRCodeView alloc] initWithFrame:CGRectZero];
+    self.qrCodeView.backgroundColor = [UIColor clearColor];
+    self.qrCodeView.layer.borderWidth = 0;
+    self.qrCodeView.hidden = YES;
+    [self.view addSubview:self.qrCodeView];
 }
 
 - (void)buildShadeView {
@@ -883,6 +891,7 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     self.inputBackgroundView.hidden = NO;
     self.inputField.hidden = NO;
     self.qrLinkLabel.hidden = YES;
+    self.qrCodeView.hidden = YES;
 
     if (self.currentStep == TGLoginStepPhone)
         [self layoutPhoneRowForViewSize:viewSize];
@@ -899,6 +908,7 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     self.countryCodeField.hidden = YES;
     self.inputDivider.hidden = YES;
     self.qrLinkLabel.hidden = YES;
+    self.qrCodeView.hidden = YES;
     self.inputBackgroundView.hidden = NO;
     self.inputField.hidden = NO;
     self.lastNameBackgroundView.hidden = NO;
@@ -932,7 +942,7 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
 }
 
 - (void)layoutQrStepForViewSize:(CGSize)viewSize {
-    CGFloat plateWidth = 288;
+    CGFloat plateWidth = MIN(288.0f, viewSize.width - 32);
     self.countryButton.hidden = YES;
     self.countryCodeField.hidden = YES;
     self.inputDivider.hidden = YES;
@@ -945,17 +955,38 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
     self.noticeLabel.frame = CGRectIntegral(CGRectMake((viewSize.width - noticeSize.width) / 2, 40, noticeSize.width, noticeSize.height));
     self.noticeLabel.alpha = 1.0f;
 
+    CGFloat plateTop = self.noticeLabel.frame.origin.y + self.noticeLabel.frame.size.height + 24;
+    CGFloat codeSide = 0;
+    if (self.qrCodeView.text.length) {
+        CGFloat room = viewSize.height - plateTop - 84;
+        codeSide = MIN(plateWidth - 40, room);
+        if (codeSide < 96)
+            codeSide = 0;
+    }
+    self.qrCodeView.hidden = codeSide <= 0;
+
     CGSize linkSize = [self.qrLinkLabel sizeThatFits:CGSizeMake(plateWidth - 30, 1024)];
     CGFloat plateHeight = linkSize.height + 21;
+    if (codeSide > 0)
+        plateHeight = codeSide + linkSize.height + 30;
     if (plateHeight < 43)
         plateHeight = 43;
 
     self.inputBackgroundView.frame = CGRectIntegral(CGRectMake((viewSize.width - plateWidth) / 2,
-                                                               self.noticeLabel.frame.origin.y + self.noticeLabel.frame.size.height + 24,
-                                                               plateWidth, plateHeight));
-    self.qrLinkLabel.frame = CGRectIntegral(CGRectMake(self.inputBackgroundView.frame.origin.x + 15,
-                                                       self.inputBackgroundView.frame.origin.y + (plateHeight - linkSize.height) / 2,
-                                                       plateWidth - 30, linkSize.height));
+                                                               plateTop, plateWidth, plateHeight));
+    if (codeSide > 0) {
+        self.qrCodeView.frame = CGRectIntegral(CGRectMake(
+                (viewSize.width - codeSide) / 2,
+                self.inputBackgroundView.frame.origin.y + 10,
+                codeSide, codeSide));
+        self.qrLinkLabel.frame = CGRectIntegral(CGRectMake(self.inputBackgroundView.frame.origin.x + 15,
+                                                           CGRectGetMaxY(self.qrCodeView.frame) + 10,
+                                                           plateWidth - 30, linkSize.height));
+    } else {
+        self.qrLinkLabel.frame = CGRectIntegral(CGRectMake(self.inputBackgroundView.frame.origin.x + 15,
+                                                           self.inputBackgroundView.frame.origin.y + (plateHeight - linkSize.height) / 2,
+                                                           plateWidth - 30, linkSize.height));
+    }
 
     self.timeoutLabel.hidden = YES;
     self.requestingCallLabel.hidden = YES;
@@ -1740,6 +1771,8 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
               title:@"Log in by QR Code"
              notice:@"1. Open Telegram on your other phone\n2. Go to Settings → Devices\n3. Add this device with the link below"];
     self.qrLinkLabel.text = @"Requesting a link…";
+    self.qrCodeView.text = nil;
+    self.qrCodeView.hidden = YES;
 
     [self.inputField resignFirstResponder];
     [self.countryCodeField resignFirstResponder];
@@ -1766,6 +1799,7 @@ static NSString *tgFormatNationalNumber(NSString *dialDigits, NSString *national
 
 - (void)applyQrLink:(NSString *)link {
     self.qrLinkLabel.text = link;
+    self.qrCodeView.text = link;
     [self layoutInterface];
 }
 

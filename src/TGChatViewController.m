@@ -1,5 +1,6 @@
 #import "TGChatViewController.h"
 #import "TGClient.h"
+#import "AppDelegate.h"
 #import "TGTheme.h"
 #import "TGIcons.h"
 #import "TGForwardPicker.h"
@@ -18,6 +19,7 @@
 #import <MapKit/MapKit.h>
 #import <AVFoundation/AVFoundation.h>
 #import "TGVoiceDecoder.h"
+#import "TGMusicPlayer.h"
 #import "UIImage+WebP.h"
 #import "TGLottieView.h"
 #import "UIView+SafeTint.h"
@@ -36,6 +38,7 @@
 #import "TGClient+WebLinks.h"
 #import "TGClient+Notifications.h"
 #import "TGVideoCaptureViewController.h"
+#import "TGAssetPicker.h"
 #import <ImageIO/ImageIO.h>
 #import "TGClient+Groups.h"
 #import "TGClient+SecretChats.h"
@@ -45,6 +48,7 @@
 #import "TGClient+ChatList.h"
 #import "TGMediaViewController.h"
 #import <UIKit/UIGestureRecognizerSubclass.h>
+#import "TGAlertView.h"
 
 // Their design system is drawn for Android at 360dp; a 4S is 320pt, so
 // everything taken from it is scaled by 0.889 and rounded to a whole point.
@@ -1650,7 +1654,7 @@ heightForRowAtIndexPath:(NSIndexPath *)indexPath {
 		return;
 	}
 	if ([action isEqualToString:@"editCaption"]){
-		UIAlertView *ask = [[UIAlertView alloc] initWithTitle:@"Caption"
+		UIAlertView *ask = [[TGAlertView alloc] initWithTitle:@"Caption"
 													  message:nil
 													 delegate:self
 											cancelButtonTitle:@"Cancel"
@@ -2432,7 +2436,7 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 };
 
 @interface TGChatViewController () <UISearchBarDelegate, CLLocationManagerDelegate,
-		UIScrollViewDelegate, AVAudioPlayerDelegate, UIAlertViewDelegate,
+		UIScrollViewDelegate, UIAlertViewDelegate,
 		ABPeoplePickerNavigationControllerDelegate, MPMediaPickerControllerDelegate,
 		UIGestureRecognizerDelegate, UISplitViewControllerDelegate>
 - (CGFloat)bubbleWidthBudget;
@@ -2457,7 +2461,6 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 @property (nonatomic, strong) NSMutableSet *photoFilesFailed;
 @property (nonatomic, strong) NSMutableDictionary *minithumbnails;
 @property (nonatomic, assign) NSRange photoWindow;
-@property (nonatomic, strong) AVAudioPlayer *voicePlayer;
 @property (nonatomic, assign) BOOL anchorToBottom;
 @property (nonatomic, strong) NSMutableDictionary *lottiePaths;   // fileId -> path
 @property (nonatomic, strong) NSMutableDictionary *maps;          // messageId -> UIImage
@@ -2482,13 +2485,7 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 @property (nonatomic, strong) UIView *recordPanel;      // shown while holding
 @property (nonatomic, strong) UILabel *recordClock;
 @property (nonatomic, strong) UIView *recordDot;
-@property (nonatomic, assign) int64_t playingMessageId;
-@property (nonatomic, strong) NSTimer *playbackTimer;
 @property (nonatomic, strong) MPMoviePlayerController *videoNotePlayer;
-@property (nonatomic, strong) UIView *playerBar;        // the strip under the header
-@property (nonatomic, strong) UIView *playerProgress;   // its line
-@property (nonatomic, strong) UIButton *playerToggle;
-@property (nonatomic, strong) UILabel *playerLabel;
 @property (nonatomic, strong) NSMutableDictionary *senderAvatars;   // userId -> UIImage
 @property (nonatomic, strong) NSMutableSet *senderAvatarsRequested;
 @property (nonatomic, strong) UILabel *downloadHUD;
@@ -2522,6 +2519,8 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 @property (nonatomic, strong) UIView *pinnedBanner;
 @property (nonatomic, assign) CGFloat pinnedBannerInset;
 @property (nonatomic, assign) BOOL deeperHistoryPending;
+@property (nonatomic, assign) BOOL localHistoryShown;
+@property (nonatomic, assign) BOOL networkHistoryShown;
 @property (nonatomic, strong) UIButton *channelActionButton;
 @property (nonatomic, assign) BOOL channelMuted;
 @property (nonatomic, assign) BOOL selecting;
@@ -2542,7 +2541,6 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 @property (nonatomic, strong) UIButton *mentionButton;
 @property (nonatomic, assign) BOOL draftRestored;
 @property (nonatomic, copy) NSString *reportTextOptionId;
-@property (nonatomic, assign) NSTimeInterval pendingPlaybackOffset;
 @property (nonatomic, strong) UIView *datePickerPanel;
 @property (nonatomic, strong) UIDatePicker *schedulePicker;
 @property (nonatomic, strong) UIImage *pendingPastedImage;
@@ -2559,7 +2557,6 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 @property (nonatomic, copy) NSString *moderationName;
 @property (nonatomic, strong) NSArray *moderationMessageIds;
 @property (nonatomic, copy) NSString *attachMode;
-@property (nonatomic, strong) NSMutableArray *albumPaths;
 @property (nonatomic, copy) NSString *locationMode;
 @property (nonatomic, assign) int64_t liveLocationMessageId;
 @property (nonatomic, copy) NSString *venueTitle;
@@ -2604,6 +2601,9 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 - (void)applyMicButtonGlyph;
 - (void)captureVideoRound:(BOOL)round;
 - (Class)videoCaptureClass;
+- (void)pickPhotoAlbum;
+- (void)sendPickedPhotos:(NSArray *)paths;
+- (void)sendAlbumBatch:(NSArray *)paths caption:(NSString *)caption;
 @end
 
 @implementation TGChatViewController
@@ -2739,8 +2739,16 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 			selector:@selector(flushDraftOnAppState:)
 			name:UIApplicationWillTerminateNotification object:nil];
 
+	[[NSNotificationCenter defaultCenter] addObserver:self
+			selector:@selector(musicPlayerStateChanged)
+			name:TGMusicPlayerStateChangedNotification object:nil];
+	[[NSNotificationCenter defaultCenter] addObserver:self
+			selector:@selector(musicPlayerProgressed)
+			name:TGMusicPlayerProgressNotification object:nil];
+
 	[self installMessageHandler];
 
+	TGBeginOpenTiming();
 	[self reload];
 }
 
@@ -3358,13 +3366,9 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	[self.input resignFirstResponder];
 }
 
-/// A voice note going on playing after you have left the chat is the one thing
-/// nobody expects, and the timer would outlive the screen it repaints.
 - (void)viewWillDisappear:(BOOL)animated {
 	[super viewWillDisappear:animated];
 	[self saveDraft];
-	if (self.voicePlayer)
-		[self stopPlayback];
 	[self stopVideoNote];
 	// A pending delete must not be lost with the screen, and a menu must not
 	// outlive the messages it was opened over.
@@ -3394,7 +3398,6 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 }
 
 - (void)dealloc {
-	[self.playbackTimer invalidate];
 	[[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
@@ -3402,54 +3405,79 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 
 - (void)reload {
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] historyForChat:self.chatId thread:self.threadId limit:60 completion:^(NSArray *messages){
+	self.localHistoryShown = NO;
+	self.networkHistoryShown = NO;
+	if (self.messages.count == 0){
+		[[TGClient shared] historyForChat:self.chatId thread:self.threadId limit:60
+								onlyLocal:YES completion:^(NSArray *messages){
+			TGChatViewController *me = weakSelf;
+			if (!me || !messages.count || me.networkHistoryShown)
+				return;
+			me.localHistoryShown = YES;
+			TGMarkOpenStage([NSString stringWithFormat:@"%lu cached messages drawn",
+					(unsigned long)messages.count]);
+			[me applyHistory:messages final:NO];
+		}];
+	}
+
+	[[TGClient shared] historyForChat:self.chatId thread:self.threadId limit:60
+							onlyLocal:NO completion:^(NSArray *messages){
 		TGChatViewController *me = weakSelf;
 		if (!me)
 			return;
-		me.messages = messages;
-		[me.reactionChipsRequested removeAllObjects];
-		[me.reactionChips removeAllObjects];
-		[me.chipsRowWidths removeAllObjects];
-		for (NSNumber *key in [me.sendStates allKeys]){
-			if ([me.sendStates[key] isEqualToString:@"sent"])
-				continue;
-			[me.sendStates removeObjectForKey:key];
-			[me.sendStatesRequested removeObject:key];
-		}
-		// hold the bottom until the media has settled
-		me.anchorToBottom = YES;
-		dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6.0 * NSEC_PER_SEC)),
-				dispatch_get_main_queue(), ^{ me.anchorToBottom = NO; });
-		// kinds only - the content is the user's, the log is read remotely
-		NSMutableArray *kinds = [NSMutableArray array];
-		for (NSDictionary *m in messages)
-			[kinds addObject:m[@"kind"] ?: @"?"];
-		NSLog(@"TDLIB HISTORY: %lu msgs: %@",
-				(unsigned long)messages.count, [kinds componentsJoinedByString:@", "]);
-		[me.table reloadData];
-		[me updateEmptyState];
-		[me scrollToBottomAnimated:NO];
-		[me fetchMissingImages];
-		[me resolveUnknownSenders];
-		[me fetchMissingQuotes];
-
-		if (me.focusMessageId){
-			int64_t wanted = me.focusMessageId;
-			me.focusMessageId = 0;
-			me.anchorToBottom = NO;
-			if (![me scrollToMessageId:wanted])
-				[me loadDeeperHistoryAndScrollTo:wanted];
-		}
-
-		// A message with no id would put NSNull, or nothing, into the array and
-		// take the app down inside markRead.
-		NSMutableArray *ids = [NSMutableArray array];
-		for (NSDictionary *m in messages)
-			if ([m[@"id"] isKindOfClass:NSNumber.class])
-				[ids addObject:m[@"id"]];
-		if (ids.count)
-			[[TGClient shared] markRead:ids inChat:me.chatId];
+		if (me.localHistoryShown && messages.count < me.messages.count)
+			return;
+		me.networkHistoryShown = YES;
+		TGMarkOpenStage([NSString stringWithFormat:@"%lu messages from TDLib",
+				(unsigned long)messages.count]);
+		[me applyHistory:messages final:YES];
 	}];
+}
+
+- (void)applyHistory:(NSArray *)messages final:(BOOL)final {
+	self.messages = messages;
+	[self.reactionChipsRequested removeAllObjects];
+	[self.reactionChips removeAllObjects];
+	[self.chipsRowWidths removeAllObjects];
+	for (NSNumber *key in [self.sendStates allKeys]){
+		if ([self.sendStates[key] isEqualToString:@"sent"])
+			continue;
+		[self.sendStates removeObjectForKey:key];
+		[self.sendStatesRequested removeObject:key];
+	}
+	self.anchorToBottom = YES;
+	__weak typeof(self) weakSelf = self;
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6.0 * NSEC_PER_SEC)),
+			dispatch_get_main_queue(), ^{ weakSelf.anchorToBottom = NO; });
+	NSMutableArray *kinds = [NSMutableArray array];
+	for (NSDictionary *m in messages)
+		[kinds addObject:m[@"kind"] ?: @"?"];
+	NSLog(@"TDLIB HISTORY%@: %lu msgs: %@", final ? @"" : @" (cached)",
+			(unsigned long)messages.count, [kinds componentsJoinedByString:@", "]);
+	[self.table reloadData];
+	[self updateEmptyState];
+	[self scrollToBottomAnimated:NO];
+	[self fetchMissingImages];
+	[self resolveUnknownSenders];
+	[self fetchMissingQuotes];
+
+	if (self.focusMessageId && final){
+		int64_t wanted = self.focusMessageId;
+		self.focusMessageId = 0;
+		self.anchorToBottom = NO;
+		if (![self scrollToMessageId:wanted])
+			[self loadDeeperHistoryAndScrollTo:wanted];
+	}
+
+	if (!final)
+		return;
+
+	NSMutableArray *ids = [NSMutableArray array];
+	for (NSDictionary *m in messages)
+		if ([m[@"id"] isKindOfClass:NSNumber.class])
+			[ids addObject:m[@"id"]];
+	if (ids.count)
+		[[TGClient shared] markRead:ids inChat:self.chatId];
 }
 
 /// A location gets a drawn card, not a real map: MKMapSnapshotter fires no
@@ -5273,139 +5301,37 @@ static UIImage *TGPinnedBadgeGlyph(void) {
 
 #pragma mark - playback
 
-/// Their player strip: an arrow, what is playing, a way out, and a line along
-/// the bottom that fills as it goes. It sits under the header, which is where
-/// a client puts it so the chat stays readable while something plays.
-- (void)showPlayerBar {
-	CGRect b = self.view.bounds;
-	if (!self.playerBar){
-		self.playerBar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, b.size.width, 36)];
-		self.playerBar.backgroundColor = [[TGTheme shared] listBackgroundColour];
-		self.playerBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-
-		self.playerToggle = [UIButton buttonWithType:UIButtonTypeCustom];
-		self.playerToggle.frame = CGRectMake(8, 4, 28, 28);
-		[self.playerToggle tg_setTintColor:[[TGTheme shared] accentColour]];
-		[self.playerToggle addTarget:self action:@selector(togglePlayback)
-					forControlEvents:UIControlEventTouchUpInside];
-		[self.playerBar addSubview:self.playerToggle];
-
-		self.playerLabel = [[UILabel alloc] initWithFrame:
-				CGRectMake(40, 8, b.size.width - 80, 20)];
-		self.playerLabel.font = [UIFont systemFontOfSize:14];
-		self.playerLabel.backgroundColor = [UIColor clearColor];
-		self.playerLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-		[self.playerBar addSubview:self.playerLabel];
-
-		UIButton *close = [UIButton buttonWithType:UIButtonTypeCustom];
-		close.frame = CGRectMake(b.size.width - 38, 4, 34, 28);
-		[close setTitle:@"×" forState:UIControlStateNormal];
-		close.titleLabel.font = [UIFont systemFontOfSize:24];
-		close.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
-		[close addTarget:self action:@selector(stopPlayback)
-		forControlEvents:UIControlEventTouchUpInside];
-		[self.playerBar addSubview:close];
-		[close setTitleColor:[[TGTheme shared] secondaryTextColour]
-					forState:UIControlStateNormal];
-
-		UIView *track = [[UIView alloc] initWithFrame:CGRectMake(0, 34, b.size.width, 2)];
-		track.backgroundColor = [[TGTheme shared] separatorColour];
-		track.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-		[self.playerBar addSubview:track];
-
-		self.playerProgress = [[UIView alloc] initWithFrame:CGRectMake(0, 34, 0, 2)];
-		self.playerProgress.backgroundColor = [[TGTheme shared] accentColour];
-		[self.playerBar addSubview:self.playerProgress];
-	}
-
-	self.playerLabel.textColor = [[TGTheme shared] primaryTextColour];
-	self.playerLabel.text = @"Voice message";
-	self.playerProgress.frame = CGRectMake(0, 34, 0, 2);
-	[self.playerToggle setImage:[TGIcons pause] forState:UIControlStateNormal];
-	[self.view addSubview:self.playerBar];
-
-	// Push the messages down so the strip does not cover the newest one.
-	UIEdgeInsets insets = self.table.contentInset;
-	insets.top += 36;
-	self.table.contentInset = insets;
-	self.table.scrollIndicatorInsets = insets;
-}
-
-- (void)hidePlayerBar {
-	if (!self.playerBar.superview)
-		return;
-	[self.playerBar removeFromSuperview];
-	UIEdgeInsets insets = self.table.contentInset;
-	insets.top -= 36;
-	self.table.contentInset = insets;
-	self.table.scrollIndicatorInsets = insets;
-}
-
-/// Five ticks a second is enough for the eye and cheap enough for a 4S: the
-/// waveform is redrawn each tick, and redrawing it sixty times would not be.
-- (void)startPlaybackTimer {
-	[self.playbackTimer invalidate];
-	self.playbackTimer = [NSTimer scheduledTimerWithTimeInterval:0.2
-														 target:self
-													   selector:@selector(playbackTick)
-													   userInfo:nil
-														repeats:YES];
+- (int64_t)playingMessageId {
+	TGMusicPlayer *player = [TGMusicPlayer shared];
+	return (player.currentChatId == self.chatId) ? player.currentMessageId : 0;
 }
 
 - (CGFloat)playedFraction {
-	if (!self.voicePlayer || self.voicePlayer.duration <= 0)
-		return 0;
-	return (CGFloat)(self.voicePlayer.currentTime / self.voicePlayer.duration);
+	return [self playingMessageId] ? [TGMusicPlayer shared].playedFraction : 0;
 }
 
-- (void)playbackTick {
-	CGFloat played = [self playedFraction];
-	self.playerProgress.frame = CGRectMake(0, 34,
-			self.playerBar.bounds.size.width * played, 2);
+- (void)musicPlayerStateChanged {
+	if (!self.isViewLoaded || !self.view.window)
+		return;
+	[self.table reloadData];
+}
 
-	// Only the row being played changes, and reloading the whole table five
-	// times a second on this hardware is visible as a stutter.
+- (void)musicPlayerProgressed {
+	int64_t playing = [self playingMessageId];
+	if (!playing)
+		return;
+	CGFloat played = [self playedFraction];
 	for (UITableViewCell *cell in self.table.visibleCells){
 		if (![cell isKindOfClass:TGBubbleCell.class])
 			continue;
 		TGBubbleCell *bubble = (TGBubbleCell *)cell;
-		if (bubble.voiceMessageId != self.playingMessageId || bubble.wave.hidden)
+		if (bubble.voiceMessageId != playing || bubble.wave.hidden)
 			continue;
 		bubble.wave.image = [TGIcons waveform:bubble.waveformData
 										 size:bubble.wave.bounds.size
 									   played:played
 									   colour:[[TGTheme shared] accentColour]];
 	}
-}
-
-- (void)togglePlayback {
-	if (!self.voicePlayer)
-		return;
-	if (self.voicePlayer.playing){
-		[self.voicePlayer pause];
-		[self.playbackTimer invalidate];
-		self.playbackTimer = nil;
-		[self.playerToggle setImage:[TGIcons play] forState:UIControlStateNormal];
-	} else {
-		[self.voicePlayer play];
-		[self startPlaybackTimer];
-		[self.playerToggle setImage:[TGIcons pause] forState:UIControlStateNormal];
-	}
-	[self.table reloadData];
-}
-
-- (void)stopPlayback {
-	[self.voicePlayer stop];
-	self.voicePlayer = nil;
-	[self.playbackTimer invalidate];
-	self.playbackTimer = nil;
-	self.playingMessageId = 0;
-	[self hidePlayerBar];
-	[self.table reloadData];
-}
-
-- (void)audioPlayerDidFinishPlaying:(AVAudioPlayer *)player successfully:(BOOL)flag {
-	[self stopPlayback];
 }
 
 #pragma mark - attachments
@@ -5435,7 +5361,8 @@ static const NSInteger kVenueAddressAlertTag = 65;
 static const NSInteger kPollQuestionAlertTag = 66;
 static const NSInteger kPollOptionAlertTag  = 67;
 static const NSInteger kQuickReplyAlertTag  = 68;
-static const NSInteger kAlbumAlertTag       = 69;
+static const NSInteger kAlbumSelectionLimit = 30;
+static const NSInteger kAlbumBatchLimit     = 10;
 static const NSInteger kBotMenuSheetTag     = 90;
 static const NSInteger kBotButtonsSheetTag  = 91;
 static const NSInteger kBotCommandsSheetTag = 92;
@@ -5476,6 +5403,8 @@ static const NSInteger kStickerLinkAlertTag = 102;
 	if ([self cameraAvailable])
 		[titles addObject:@"Take Photo"];
 	[titles addObject:@"Photo or Video"];
+	if ([TGAssetPicker available])
+		[titles addObject:@"Photo Album"];
 	if ([self videoCaptureClass]){
 		[titles addObject:@"Video"];
 		[titles addObject:@"Video Message"];
@@ -5708,6 +5637,8 @@ static const NSInteger kStickerLinkAlertTag = 102;
 		[self pickMusic];
 	else if ([chosen isEqualToString:@"Photo or Video"])
 		[self pickMedia];
+	else if ([chosen isEqualToString:@"Photo Album"])
+		[self pickPhotoAlbum];
 	else if ([chosen isEqualToString:@"Video"])
 		[self captureVideoRound:NO];
 	else if ([chosen isEqualToString:@"Video Message"])
@@ -5727,8 +5658,7 @@ static const NSInteger kStickerLinkAlertTag = 102;
 													   delegate:self
 											  cancelButtonTitle:nil
 										 destructiveButtonTitle:nil
-											  otherButtonTitles:@"Photo Album",
-															   @"Send as File",
+											  otherButtonTitles:@"Send as File",
 															   @"GIF",
 															   @"Poll",
 															   @"Dice", nil];
@@ -5749,12 +5679,6 @@ static const NSInteger kStickerLinkAlertTag = 102;
 	}
 	if ([chosen isEqualToString:@"Bot"]){
 		[self showBotMenu];
-		return;
-	}
-	if ([chosen isEqualToString:@"Photo Album"]){
-		self.albumPaths = [NSMutableArray array];
-		self.attachMode = @"album";
-		[self pickMedia];
 		return;
 	}
 	if ([chosen isEqualToString:@"Send as File"]){
@@ -5805,7 +5729,7 @@ static const NSInteger kStickerLinkAlertTag = 102;
 - (void)askPollQuestion {
 	self.pollQuestion = nil;
 	self.pollOptionsBeingWritten = [NSMutableArray array];
-	UIAlertView *ask = [[UIAlertView alloc] initWithTitle:@"New Poll"
+	UIAlertView *ask = [[TGAlertView alloc] initWithTitle:@"New Poll"
 												  message:@"The question"
 												 delegate:self
 										cancelButtonTitle:@"Cancel"
@@ -5818,7 +5742,7 @@ static const NSInteger kStickerLinkAlertTag = 102;
 
 - (void)askPollOption {
 	NSUInteger next = self.pollOptionsBeingWritten.count + 1;
-	UIAlertView *ask = [[UIAlertView alloc] initWithTitle:@"New Poll"
+	UIAlertView *ask = [[TGAlertView alloc] initWithTitle:@"New Poll"
 												  message:[NSString stringWithFormat:
 														  @"Option %lu", (unsigned long)next]
 												 delegate:self
@@ -5896,7 +5820,7 @@ static const NSInteger kStickerLinkAlertTag = 102;
 		return;
 	}
 	if ([chosen isEqualToString:@"Send a Place"]){
-		UIAlertView *ask = [[UIAlertView alloc] initWithTitle:@"Place"
+		UIAlertView *ask = [[TGAlertView alloc] initWithTitle:@"Place"
 													  message:@"Its name"
 													 delegate:self
 											cancelButtonTitle:@"Cancel"
@@ -6024,7 +5948,7 @@ static const NSInteger kStickerLinkAlertTag = 102;
 	}
 
 	if ([chosen isEqualToString:@"Save as Quick Reply"]){
-		UIAlertView *ask = [[UIAlertView alloc] initWithTitle:@"Quick Reply"
+		UIAlertView *ask = [[TGAlertView alloc] initWithTitle:@"Quick Reply"
 													  message:@"A short name for it"
 													 delegate:self
 											cancelButtonTitle:@"Cancel"
@@ -7200,7 +7124,7 @@ static const NSInteger kStickerLinkAlertTag = 102;
 		if ([status isEqualToString:@"needText"]){
 			me.reportMessageId = messageId;
 			me.reportTextOptionId = result[@"optionId"] ?: optionId;
-			UIAlertView *ask = [[UIAlertView alloc] initWithTitle:@"Report"
+			UIAlertView *ask = [[TGAlertView alloc] initWithTitle:@"Report"
 														  message:@"Add a comment"
 														 delegate:me
 												cancelButtonTitle:@"Cancel"
@@ -7568,12 +7492,9 @@ static const NSInteger kStickerLinkAlertTag = 102;
 
 - (void)imagePickerControllerDidCancel:(UIImagePickerController *)picker {
 	self.attachMode = nil;
-	self.albumPaths = nil;
 	[picker dismissViewControllerAnimated:YES completion:nil];
 }
 
-/// The three sends the picker is borrowed for: a file kept as a file, an mp4
-/// sent as a GIF, and a run of photos collected into one album bubble.
 - (void)handleAttachPickOfMovie:(NSString *)moviePath image:(UIImage *)image {
 	NSString *mode = self.attachMode;
 	self.attachMode = nil;
@@ -7606,47 +7527,94 @@ static const NSInteger kStickerLinkAlertTag = 102;
 				dispatch_get_main_queue(), ^{ [self reload]; });
 		return;
 	}
+}
 
-	if (![mode isEqualToString:@"album"])
+- (void)pickPhotoAlbum {
+	if (self.postingBlocked)
 		return;
-
-	NSString *path = [self stageImageForSending:image];
-	if (path.length)
-		[self.albumPaths addObject:path];
-	if (!self.albumPaths.count){
-		[self showAlertTitle:@"" message:@"No photo was picked."];
+	if (![TGAssetPicker available]){
+		[self showAlertTitle:@""
+					 message:@"Telegram has no access to your photos. "
+							 @"Turn Photos on in Settings, Privacy."];
 		return;
 	}
 
-	UIAlertView *ask = [[UIAlertView alloc] initWithTitle:@"Photo Album"
-												  message:[NSString stringWithFormat:
-														  @"%lu photo%@ so far.",
-														  (unsigned long)self.albumPaths.count,
-														  (self.albumPaths.count == 1 ? @"" : @"s")]
-												 delegate:self
-										cancelButtonTitle:@"Add Another"
-										otherButtonTitles:@"Send", nil];
-	ask.tag = kAlbumAlertTag;
-	[ask show];
-}
-
-- (void)sendCollectedAlbum {
-	NSArray *paths = [self.albumPaths copy];
-	self.albumPaths = nil;
-	if (!paths.count)
-		return;
-
+	TGAssetPicker *picker = [[TGAssetPicker alloc] init];
+	picker.selectionLimit = kAlbumSelectionLimit;
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] sendPhotoAlbumAtPaths:paths toChat:self.chatId caption:@""
-								  completion:^(NSArray *messages){
+	picker.onCancelled = ^{
+		TGChatViewController *me = weakSelf;
+		[me dismissViewControllerAnimated:YES completion:nil];
+	};
+	picker.onPicked = ^(NSArray *paths){
 		TGChatViewController *me = weakSelf;
 		if (!me)
 			return;
-		if (!messages.count){
+		[me dismissViewControllerAnimated:YES completion:nil];
+		[me sendPickedPhotos:paths];
+	};
+	[self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)sendPickedPhotos:(NSArray *)paths {
+	if (self.postingBlocked)
+		return;
+	if (!paths.count){
+		[self showAlertTitle:@"" message:@"Those photos could not be prepared."];
+		return;
+	}
+
+	NSString *caption = @"";
+	if (self.composeMode != TGComposeModeEdit){
+		NSString *typed = [self.input.text stringByTrimmingCharactersInSet:
+				[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+		if (typed.length){
+			caption = typed;
+			self.input.text = @"";
+		}
+	}
+	[self clearComposeState];
+
+	if (paths.count == 1){
+		[[TGClient shared] sendPhotoAtPath:[paths objectAtIndex:0]
+									toChat:self.chatId
+									thread:self.threadId
+								   caption:caption
+								   spoiler:NO
+					   selfDestructSeconds:0];
+		dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+				dispatch_get_main_queue(), ^{ [self reload]; });
+		return;
+	}
+
+	[self sendAlbumBatch:paths caption:caption];
+}
+
+- (void)sendAlbumBatch:(NSArray *)paths caption:(NSString *)caption {
+	if (!paths.count)
+		return;
+
+	NSUInteger take = MIN((NSUInteger)kAlbumBatchLimit, paths.count);
+	NSArray *batch = [paths subarrayWithRange:NSMakeRange(0, take)];
+	NSArray *rest = [paths subarrayWithRange:NSMakeRange(take, paths.count - take)];
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] sendPhotoAlbumAtPaths:batch
+									  toChat:self.chatId
+									  thread:self.threadId
+									 caption:(caption ?: @"")
+								  completion:^(NSInteger sent){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (!sent){
 			[me showAlertTitle:@"" message:@"This album could not be sent."];
 			return;
 		}
-		[me clearComposeState];
+		if (rest.count){
+			[me sendAlbumBatch:rest caption:@""];
+			return;
+		}
 		[me reload];
 	}];
 }
@@ -7895,76 +7863,10 @@ static const NSInteger kStickerLinkAlertTag = 102;
 }
 
 - (void)playAudioMessage:(NSDictionary *)m fromSeconds:(NSTimeInterval)seconds {
-	NSNumber *docId = m[@"docId"];
-	if (![docId isKindOfClass:NSNumber.class])
-		return;
-
-	if (self.playingMessageId == [m[@"id"] longLongValue] && self.voicePlayer){
-		if (seconds > 0){
-			self.voicePlayer.currentTime = MIN(seconds, self.voicePlayer.duration);
-			if (!self.voicePlayer.isPlaying)
-				[self togglePlayback];
-			[self.table reloadData];
-			return;
-		}
-		[self togglePlayback];
-		return;
-	}
-	if (self.voicePlayer)
-		[self stopPlayback];
-	self.pendingPlaybackOffset = seconds;
-	[self beginDownloadHUDForFile:[docId integerValue]];
-	[self playAudioTail:m];
-}
-
-- (void)playAudioTail:(NSDictionary *)m {
-	NSNumber *docId = m[@"docId"];
-	if (![docId isKindOfClass:NSNumber.class])
-		return;
-	{
-		[[TGClient shared] downloadFile:[docId integerValue] completion:^(NSString *path){
-			[self endDownloadHUD];
-			NSLog(@"voice: file %@", path.lastPathComponent ?: @"(not downloaded)");
-			if (!path)
-				return;
-			dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-				NSString *wav = [TGVoiceDecoder wavFromOpusFile:path];
-				NSLog(@"voice: decoded to %@ (%llu bytes)", wav.lastPathComponent ?: @"nothing",
-						[[[NSFileManager defaultManager] attributesOfItemAtPath:wav ?: @""
-																		  error:nil] fileSize]);
-				dispatch_async(dispatch_get_main_queue(), ^{
-					if (!wav){
-						[self showPlaybackFailure];
-						return;
-					}
-					NSError *err = nil;
-					[[AVAudioSession sharedInstance]
-							setCategory:AVAudioSessionCategoryPlayback error:nil];
-					[[AVAudioSession sharedInstance] setActive:YES error:nil];
-					self.voicePlayer = [[AVAudioPlayer alloc]
-							initWithContentsOfURL:[NSURL fileURLWithPath:wav] error:&err];
-					if (err){
-						NSLog(@"voice playback: %@", err);
-						[self showPlaybackFailure];
-						return;
-					}
-					NSLog(@"voice: playing %.1f s", self.voicePlayer.duration);
-					self.voicePlayer.delegate = self;
-					self.playingMessageId = [m[@"id"] longLongValue];
-					if (self.pendingPlaybackOffset > 0){
-						self.voicePlayer.currentTime =
-								MIN(self.pendingPlaybackOffset, self.voicePlayer.duration);
-						self.pendingPlaybackOffset = 0;
-					}
-					[self.voicePlayer play];
-					[self showPlayerBar];
-					[self startPlaybackTimer];
-					[self.table reloadData];
-				});
-			});
-		}];
-		return;
-	}
+	[[TGMusicPlayer shared] playMessage:m
+								 inChat:self.chatId
+							  chatTitle:self.chatTitle
+							fromSeconds:seconds];
 }
 
 - (void)image:(UIImage *)image didFinishSavingWithError:(NSError *)error
@@ -9415,7 +9317,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 
 	cell.disc.hidden = NO;
 	cell.disc.image = [TGIcons mediaDiscOfSide:disc
-									   playing:(isPlaying && self.voicePlayer.playing)];
+									   playing:(isPlaying && [TGMusicPlayer shared].isPlaying)];
 	cell.disc.frame = CGRectMake(kPadH, fwd + (bubbleH - fwd - disc) / 2, disc, disc);
 
 	// The bars take the width left over once the stamp has its corner, and
@@ -9584,7 +9486,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 	[cell.lottie stop];
 	[cell.bubble viewWithTag:0x9006].hidden = YES;
 	cell.album.hidden = NO;
-	cell.album.layer.cornerRadius = kMediaRadius;
+	cell.album.clipsToBounds = YES;
 
 	CGFloat senderH = senderName.length ? 17 : 0;
 	CGFloat albumContentW = MAX(groupSize.width, body.width);
@@ -9624,6 +9526,8 @@ static UIColor *TGSenderColour(int64_t userId) {
 	y += [self layoutForwardIn:cell message:head atY:y width:bubbleW];
 	y = [self layoutQuoteIn:cell message:head atY:y bubbleWidth:bubbleW];
 	cell.album.frame = CGRectMake(inset, y, groupSize.width, groupSize.height);
+	CGFloat innerRadius = [theme bubbleCornerRadius] - inset;
+	cell.album.layer.cornerRadius = MAX(kMediaRadius, innerRadius);
 
 	for (NSUInteger i = 0; i < album.count && i < frames.count; i++){
 		NSDictionary *member = album[i];
@@ -11153,7 +11057,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 
 	if ([kind isEqualToString:@"callbackWithPassword"]){
 		self.pendingCallbackButton = button;
-		UIAlertView *ask = [[UIAlertView alloc] initWithTitle:(button[@"text"] ?: @"Password")
+		UIAlertView *ask = [[TGAlertView alloc] initWithTitle:(button[@"text"] ?: @"Password")
 													  message:@"Your two-step verification password"
 													 delegate:self
 											cancelButtonTitle:@"Cancel"
@@ -11273,7 +11177,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 
 - (void)askInlineBotQuery {
 	NSString *typed = [self composerText];
-	UIAlertView *ask = [[UIAlertView alloc] initWithTitle:@"Inline Bot"
+	UIAlertView *ask = [[TGAlertView alloc] initWithTitle:@"Inline Bot"
 												  message:@"Bot username and what to look for"
 												 delegate:self
 										cancelButtonTitle:@"Cancel"
@@ -11725,15 +11629,6 @@ static UIColor *TGSenderColour(int64_t userId) {
 	}];
 }
 
-- (void)handleAlbumAlert:(UIAlertView *)alertView buttonIndex:(NSInteger)buttonIndex {
-	if (buttonIndex == alertView.cancelButtonIndex){
-		self.attachMode = @"album";
-		[self pickMedia];
-		return;
-	}
-	[self sendCollectedAlbum];
-}
-
 - (void)handleVenueTitleAlert:(UIAlertView *)alertView buttonIndex:(NSInteger)buttonIndex {
 	if (buttonIndex == alertView.cancelButtonIndex)
 		return;
@@ -11742,7 +11637,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 		[self showAlertTitle:@"" message:@"A place needs a name."];
 		return;
 	}
-	UIAlertView *ask = [[UIAlertView alloc] initWithTitle:@"Place"
+	UIAlertView *ask = [[TGAlertView alloc] initWithTitle:@"Place"
 												  message:@"Its address"
 												 delegate:self
 										cancelButtonTitle:@"Cancel"
@@ -11847,10 +11742,6 @@ static UIColor *TGSenderColour(int64_t userId) {
 	}
 	if (alertView.tag == kJoinLinkAlertTag){
 		[self handleJoinLinkAlert:alertView buttonIndex:buttonIndex];
-		return;
-	}
-	if (alertView.tag == kAlbumAlertTag){
-		[self handleAlbumAlert:alertView buttonIndex:buttonIndex];
 		return;
 	}
 	if (alertView.tag == kVenueTitleAlertTag){

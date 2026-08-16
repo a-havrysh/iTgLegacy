@@ -1066,7 +1066,7 @@ static NSDateFormatter *TGInviteShortDateFormatter(void) {
 
 - (void)askNameForLink:(NSDictionary *)link {
 	self.editingLink = link;
-	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Link Name"
+	UIAlertView *alert = [[TGAlertView alloc] initWithTitle:@"Link Name"
 													message:@"Name this link."
 												   delegate:self
 										  cancelButtonTitle:@"Cancel"

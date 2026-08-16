@@ -9,6 +9,7 @@
 #import "TGDevice.h"
 #import "TGEditProfileViewController.h"
 #import "TGQRViewController.h"
+#import "TGQRCodeViewController.h"
 #import "TGStickersViewController.h"
 #import "TGFoldersViewController.h"
 #import "TGProxyViewController.h"
@@ -31,6 +32,7 @@
 #import "TGIcons.h"
 #import <QuartzCore/QuartzCore.h>
 #import "UIView+SafeTint.h"
+#import "TGAlertView.h"
 
 // Their profile page: a 175dp coloured block with a 76dp picture on the left,
 // the name beside it and the status under that. Scaled to a 320pt screen.
@@ -438,7 +440,7 @@ static NSString *TGSettingsDuration(double seconds) {
 	}
 
 	if (indexPath.section == 2){
-		UIAlertView *alert = [[UIAlertView alloc] initWithTitle:
+		UIAlertView *alert = [[TGAlertView alloc] initWithTitle:
 				(indexPath.row == 0 ? @"Login Email" : @"Verify an Email Address")
 				message:@"Type the address."
 			   delegate:self cancelButtonTitle:@"Cancel"
@@ -452,7 +454,7 @@ static NSString *TGSettingsDuration(double seconds) {
 
 - (void)tapIdentityRow:(NSInteger)row {
 	if (row == 0){
-		UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Your Name"
+		UIAlertView *alert = [[TGAlertView alloc] initWithTitle:@"Your Name"
 				message:@"First and last name."
 			   delegate:self cancelButtonTitle:@"Cancel"
 		  otherButtonTitles:@"Save", nil];
@@ -479,11 +481,13 @@ static NSString *TGSettingsDuration(double seconds) {
 		[alert show];
 		return;
 	}
-	[UIPasteboard generalPasteboard].string = self.publicLink;
-	UIAlertView *copied = [[UIAlertView alloc] initWithTitle:@"Public Link"
-			message:self.publicLink delegate:nil
-		  cancelButtonTitle:@"OK" otherButtonTitles:nil];
-	[copied show];
+	TGQRCodeViewController *code = [[TGQRCodeViewController alloc]
+			initWithLink:self.publicLink
+				 caption:@"Anyone can scan this code to open your profile."];
+	if (self.navigationController)
+		[self.navigationController pushViewController:code animated:YES];
+	else
+		[UIPasteboard generalPasteboard].string = self.publicLink;
 }
 
 - (void)tapProfileRow:(NSInteger)row {
@@ -588,7 +592,7 @@ static NSString *TGSettingsDuration(double seconds) {
 }
 
 - (void)askForNewNumberPrefilled:(NSString *)prefill {
-	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Change Number"
+	UIAlertView *alert = [[TGAlertView alloc] initWithTitle:@"Change Number"
 			message:@"A code goes to the new number, and the account moves to it."
 		   delegate:self cancelButtonTitle:@"Cancel"
 	  otherButtonTitles:@"Send Code", nil];
@@ -600,7 +604,7 @@ static NSString *TGSettingsDuration(double seconds) {
 }
 
 - (void)askForCodeWithTag:(NSInteger)tag description:(NSString *)description {
-	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Confirmation Code"
+	UIAlertView *alert = [[TGAlertView alloc] initWithTitle:@"Confirmation Code"
 			message:description.length ? description : @"Type the code you received."
 		   delegate:self cancelButtonTitle:@"Cancel" otherButtonTitles:nil];
 	alert.alertViewStyle = UIAlertViewStylePlainTextInput;
@@ -900,7 +904,7 @@ static NSString *TGSettingsDuration(double seconds) {
 - (void)handleBirthdaySheetAtIndex:(NSInteger)index {
 	__weak typeof(self) weakSelf = self;
 	if (index == 0){
-		UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Birthday"
+		UIAlertView *alert = [[TGAlertView alloc] initWithTitle:@"Birthday"
 				message:@"Write it as DD.MM or DD.MM.YYYY. Leaving the year out "
 						@"keeps it private."
 			   delegate:self cancelButtonTitle:@"Cancel"
@@ -2240,7 +2244,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		return ([self showsSuggestions] ? 9 : 8)
 				+ (self.tableView.isEditing ? 1 : 0);
 	switch (self.page){
-		case TGSettingsPageAppearance:    return 4;
+		case TGSettingsPageAppearance:    return 3;
 		case TGSettingsPageData:          return 3;
 		case TGSettingsPageNotifications: return TGSettingsNotifSectionCount;
 		case TGSettingsPagePrivacy:       return 3;
@@ -2268,9 +2272,8 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		return (NSInteger)MAX((NSUInteger)1, self.savedSounds.count);
 	switch (self.page){
 		case TGSettingsPageAppearance:
-			if (section == 0) return 3;                          // styles
-			if (section == 1) return 2;                          // wallpaper, size
-			if (section == 2) return 3;
+			if (section == 0) return 2;                          // wallpaper, size
+			if (section == 1) return 3;
 			return [TGTheme availableThemeFiles].count + 1;      // + "None"
 		case TGSettingsPageData:
 			if (section == 0) return 5;
@@ -2363,10 +2366,9 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		return section == 1 ? @"From your account" : nil;
 	switch (self.page){
 		case TGSettingsPageAppearance:
-			if (section == 0) return @"Style";
-			if (section == 1) return @"Appearance";
-			if (section == 2) return @"Chats";
-			if (section == 3) return @"Telegram themes";
+			if (section == 0) return @"Appearance";
+			if (section == 1) return @"Chats";
+			if (section == 2) return @"Telegram themes";
 			return nil;
 		case TGSettingsPagePrivacy:
 			return section == 0 ? @"Who can see" : nil;
@@ -2489,14 +2491,10 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 }
 
 - (NSString *)appearanceFooterForSection:(NSInteger)section {
-	if (section == 3)
+	if (section == 2)
 		return @"Theme files made for the official clients - .tgios-theme and "
 			   @".attheme - are read from the app's Documents folder, or from "
 			   @"one received in a chat.";
-	if (section == 0)
-		return (NSFoundationVersionNumber > 993.00)
-			? @"This system shipped flat, so that is the default here."
-			: @"This system shipped skeuomorphic, so that is the default here.";
 	return nil;
 }
 
@@ -3221,14 +3219,6 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 
 - (UITableViewCell *)fillAppearanceCell:(UITableViewCell *)cell at:(NSIndexPath *)indexPath {
 	if (indexPath.section == 0){
-		static NSArray *styles = nil;
-		if (!styles) styles = @[@"Skeuomorphic", @"Flat", @"Dark"];
-		cell.textLabel.text = styles[indexPath.row];
-		[self markChecked:(indexPath.row == [TGTheme shared].style) on:cell];
-		return cell;
-	}
-
-	if (indexPath.section == 1){
 		if (indexPath.row == 0){
 			cell.textLabel.text = @"Chat wallpaper";
 			cell.detailTextLabel.text = [TGTheme shared].wallpaper ? @"Set" : @"None";
@@ -3241,7 +3231,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		return cell;
 	}
 
-	if (indexPath.section == 2){
+	if (indexPath.section == 1){
 		if (indexPath.row == 0){
 			cell.textLabel.text = @"Chat List";
 			cell.detailTextLabel.text =
@@ -4422,20 +4412,12 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 
 - (void)tapAppearance:(NSIndexPath *)indexPath {
 	if (indexPath.section == 0){
-		[TGTheme shared].style = (TGThemeStyle)indexPath.row;
-		[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
-		[self applyTheme];
-		[self.tableView reloadData];
-		return;
-	}
-
-	if (indexPath.section == 1){
 		if (indexPath.row == 0) [self openPage:(TGSettingsPage)TGSettingsPageWallpaper];
 		else                    [self chooseTextSize];
 		return;
 	}
 
-	if (indexPath.section == 2){
+	if (indexPath.section == 1){
 		if (indexPath.row == 0){
 			[self openPage:(TGSettingsPage)TGSettingsPageChatListLayout];
 		} else if (indexPath.row == 1){

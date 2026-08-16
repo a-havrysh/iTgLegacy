@@ -2710,7 +2710,7 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 			if (!inner)
 				return;
 			inner->_pendingUserId = userId;
-			UIAlertView *prompt = [[UIAlertView alloc]
+			UIAlertView *prompt = [[TGAlertView alloc]
 					initWithTitle:@"Two-Step Verification"
 						  message:@"Enter your password to confirm the transfer."
 						 delegate:inner

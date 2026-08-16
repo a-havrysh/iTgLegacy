@@ -88,6 +88,69 @@ static NSString *TGStoryPrivacyName(NSDictionary *settings) {
 	return @"";
 }
 
+NSString *const TGStoryUpdateNotification = @"TGStoryUpdateNotification";
+
+static NSString *TGStoryLimitReason(NSString *type) {
+	if ([type isEqualToString:@"canPostStoryResultPremiumNeeded"])
+		return @"Posting more stories requires Telegram Premium.";
+	if ([type isEqualToString:@"canPostStoryResultBoostNeeded"])
+		return @"This channel needs more boosts before it can post stories.";
+	if ([type isEqualToString:@"canPostStoryResultActiveStoryLimitExceeded"])
+		return @"Too many active stories. Delete one first.";
+	if ([type isEqualToString:@"canPostStoryResultWeeklyLimitExceeded"])
+		return @"The weekly story limit has been reached.";
+	if ([type isEqualToString:@"canPostStoryResultMonthlyLimitExceeded"])
+		return @"The monthly story limit has been reached.";
+	if ([type isEqualToString:@"canPostStoryResultLiveStoryIsActive"])
+		return @"A live story is still running.";
+	return @"Stories cannot be posted right now.";
+}
+
+static NSString *TGStoryErrorText(NSDictionary *error) {
+	NSDictionary *e = TGStoryDict(error);
+	NSString *message = TGStoryString(e[@"message"]);
+	if (!message.length)
+		return @"The story could not be posted.";
+
+	if ([message hasPrefix:@"FLOOD_WAIT_"]){
+		NSInteger seconds = [[message substringFromIndex:11] integerValue];
+		if (seconds > 3600)
+			return [NSString stringWithFormat:@"Too many attempts. Try again in %ld hours.",
+					(long)(seconds / 3600)];
+		if (seconds > 60)
+			return [NSString stringWithFormat:@"Too many attempts. Try again in %ld minutes.",
+					(long)(seconds / 60)];
+		return [NSString stringWithFormat:@"Too many attempts. Try again in %ld seconds.",
+				(long)seconds];
+	}
+	if ([message hasPrefix:@"STORY_SEND_FLOOD_WEEKLY_"])
+		return @"The weekly story limit has been reached.";
+	if ([message hasPrefix:@"STORY_SEND_FLOOD_MONTHLY_"])
+		return @"The monthly story limit has been reached.";
+	if ([message isEqualToString:@"STORIES_TOO_MUCH"])
+		return @"Too many active stories. Delete one first.";
+	if ([message isEqualToString:@"PREMIUM_ACCOUNT_REQUIRED"])
+		return @"This needs Telegram Premium.";
+	if ([message isEqualToString:@"STORY_PERIOD_INVALID"])
+		return @"That expiry needs Telegram Premium. Post for 24 hours instead.";
+	if ([message isEqualToString:@"BOOSTS_REQUIRED"])
+		return @"This channel needs more boosts before it can post stories.";
+	if ([message isEqualToString:@"CHAT_ADMIN_REQUIRED"] ||
+		[message isEqualToString:@"CHAT_WRITE_FORBIDDEN"])
+		return @"You are not allowed to post stories here.";
+	if ([message isEqualToString:@"MEDIA_EMPTY"] ||
+		[message isEqualToString:@"PHOTO_INVALID_DIMENSIONS"] ||
+		[message isEqualToString:@"PHOTO_EXT_INVALID"])
+		return @"Telegram rejected that picture.";
+	if ([message isEqualToString:@"VIDEO_FILE_INVALID"] ||
+		[message hasPrefix:@"VIDEO_"])
+		return @"Telegram rejected that video. Stories need a short MP4.";
+	if ([message isEqualToString:@"Request timeout"] ||
+		[message isEqualToString:@"Request aborted"])
+		return @"The connection dropped before the story went out.";
+	return message;
+}
+
 static NSString *TGStoryReactionEmoji(NSDictionary *type) {
 	NSDictionary *t = TGStoryDict(type);
 	if (!t)
@@ -306,7 +369,177 @@ static NSDictionary *TGStoryAutoDownloadFromMirror(NSDictionary *values) {
 	};
 }
 
+@interface TGStoryPostWatcher : NSObject
+
++ (void)watchChat:(int64_t)chatId
+          storyId:(NSInteger)storyId
+             path:(NSString *)path
+         progress:(void (^)(float fraction))progress
+       completion:(void (^)(NSDictionary *story, NSString *error))completion;
+
+@end
+
+static NSMutableArray *TGStoryPostWatchers(void) {
+	static NSMutableArray *watchers = nil;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{ watchers = [[NSMutableArray alloc] init]; });
+	return watchers;
+}
+
+@implementation TGStoryPostWatcher {
+	int64_t _chatId;
+	NSInteger _storyId;
+	NSString *_path;
+	void (^_progress)(float);
+	void (^_completion)(NSDictionary *, NSString *);
+	NSTimer *_deadline;
+	BOOL _finished;
+}
+
++ (void)watchChat:(int64_t)chatId
+          storyId:(NSInteger)storyId
+             path:(NSString *)path
+         progress:(void (^)(float))progress
+       completion:(void (^)(NSDictionary *, NSString *))completion {
+	TGStoryPostWatcher *watcher = [[TGStoryPostWatcher alloc] init];
+	watcher->_chatId = chatId;
+	watcher->_storyId = storyId;
+	watcher->_path = [path copy];
+	watcher->_progress = [progress copy];
+	watcher->_completion = [completion copy];
+	[TGStoryPostWatchers() addObject:watcher];
+	[[NSNotificationCenter defaultCenter] addObserver:watcher
+	                                         selector:@selector(handleStoryUpdate:)
+	                                             name:TGStoryUpdateNotification
+	                                           object:nil];
+	[watcher armDeadline];
+}
+
+- (void)dealloc {
+	[_deadline invalidate];
+	[[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)armDeadline {
+	[_deadline invalidate];
+	_deadline = [NSTimer scheduledTimerWithTimeInterval:180.0
+	                                             target:self
+	                                           selector:@selector(deadlinePassed)
+	                                           userInfo:nil
+	                                            repeats:NO];
+}
+
+- (void)deadlinePassed {
+	_deadline = nil;
+	[self finishWithStory:nil
+	                error:@"The upload stopped making progress. Check the connection and try again."];
+}
+
+- (void)finishWithStory:(NSDictionary *)story error:(NSString *)error {
+	if (_finished)
+		return;
+	_finished = YES;
+	[_deadline invalidate];
+	_deadline = nil;
+	[[NSNotificationCenter defaultCenter] removeObserver:self];
+
+	void (^completion)(NSDictionary *, NSString *) = _completion;
+	_completion = nil;
+	_progress = nil;
+	if (completion)
+		completion(story, error);
+	[TGStoryPostWatchers() removeObject:self];
+}
+
+- (void)applyFileUpdate:(NSDictionary *)file {
+	if (!_progress || !_path.length)
+		return;
+	NSString *local = TGStoryString(TGStoryDict(file[@"local"])[@"path"]);
+	if (![local isEqualToString:_path] &&
+		![local.lastPathComponent isEqualToString:_path.lastPathComponent])
+		return;
+
+	NSDictionary *remote = TGStoryDict(file[@"remote"]);
+	double total = [TGStoryNumber(file[@"expected_size"]) doubleValue];
+	if (total <= 0)
+		total = [TGStoryNumber(file[@"size"]) doubleValue];
+	double sent = [TGStoryNumber(remote[@"uploaded_size"]) doubleValue];
+
+	float fraction = 0.0f;
+	if ([remote[@"is_uploading_completed"] boolValue])
+		fraction = 1.0f;
+	else if (total > 0)
+		fraction = (float)(sent / total);
+	if (fraction < 0.0f)
+		fraction = 0.0f;
+	if (fraction > 1.0f)
+		fraction = 1.0f;
+
+	[self armDeadline];
+	_progress(fraction);
+}
+
+- (void)handleStoryUpdate:(NSNotification *)note {
+	NSDictionary *update = TGStoryDict(note.object);
+	NSString *type = TGStoryString(update[@"@type"]);
+
+	if ([type isEqualToString:@"updateFile"]){
+		[self applyFileUpdate:TGStoryDict(update[@"file"])];
+		return;
+	}
+
+	if ([type isEqualToString:@"updateStoryPostSucceeded"]){
+		if ([TGStoryNumber(update[@"old_story_id"]) integerValue] != _storyId)
+			return;
+		if (_progress)
+			_progress(1.0f);
+		[self finishWithStory:TGStoryFlattened(update[@"story"]) error:nil];
+		return;
+	}
+
+	if ([type isEqualToString:@"updateStoryPostFailed"]){
+		NSDictionary *story = TGStoryDict(update[@"story"]);
+		if ([TGStoryNumber(story[@"id"]) integerValue] != _storyId)
+			return;
+		NSString *text = TGStoryErrorText(update[@"error"]);
+		NSString *typed = TGStoryString(TGStoryDict(update[@"error_type"])[@"@type"]);
+		if (typed.length && ![typed isEqualToString:@"canPostStoryResultOk"])
+			text = TGStoryLimitReason(typed);
+		[self finishWithStory:nil error:text];
+		return;
+	}
+
+	if ([type isEqualToString:@"updateStoryDeleted"]){
+		if ([TGStoryNumber(update[@"story_id"]) integerValue] != _storyId ||
+			[TGStoryNumber(update[@"story_poster_chat_id"]) longLongValue] != _chatId)
+			return;
+		[self finishWithStory:nil error:@"Posting the story was cancelled."];
+		return;
+	}
+
+	if ([type isEqualToString:@"updateStory"]){
+		NSDictionary *story = TGStoryDict(update[@"story"]);
+		if ([TGStoryNumber(story[@"id"]) integerValue] != _storyId ||
+			[TGStoryNumber(story[@"poster_chat_id"]) longLongValue] != _chatId)
+			return;
+		if (![story[@"is_being_posted"] boolValue])
+			[self finishWithStory:TGStoryFlattened(story) error:nil];
+	}
+}
+
+@end
+
 @interface TGClient (StoriesInternal)
+- (void)postStoryContent:(NSDictionary *)content
+                    path:(NSString *)path
+                  asChat:(int64_t)chatId
+                 caption:(NSString *)caption
+                 privacy:(NSString *)privacy
+                 userIds:(NSArray *)userIds
+            activePeriod:(NSInteger)activePeriod
+               toProfile:(BOOL)toProfile
+                progress:(void (^)(float fraction))progress
+              completion:(void (^)(NSDictionary *story, NSString *error))completion;
 - (NSArray *)flattenedStoryInteractions:(NSArray *)interactions;
 - (void)requestStoryAlbum:(NSDictionary *)request
                completion:(void (^)(NSDictionary *album))completion;
@@ -636,20 +869,7 @@ static NSDictionary *TGStoryAutoDownloadFromMirror(NSDictionary *values) {
 			completion(YES, nil);
 			return;
 		}
-		NSString *reason = @"Stories cannot be posted right now.";
-		if ([type isEqualToString:@"canPostStoryResultPremiumNeeded"])
-			reason = @"Posting more stories requires Telegram Premium.";
-		else if ([type isEqualToString:@"canPostStoryResultBoostNeeded"])
-			reason = @"This channel needs more boosts before it can post stories.";
-		else if ([type isEqualToString:@"canPostStoryResultActiveStoryLimitExceeded"])
-			reason = @"Too many active stories. Delete one first.";
-		else if ([type isEqualToString:@"canPostStoryResultWeeklyLimitExceeded"])
-			reason = @"The weekly story limit has been reached.";
-		else if ([type isEqualToString:@"canPostStoryResultMonthlyLimitExceeded"])
-			reason = @"The monthly story limit has been reached.";
-		else if ([type isEqualToString:@"canPostStoryResultLiveStoryIsActive"])
-			reason = @"A live story is still running.";
-		completion(NO, reason);
+		completion(NO, TGStoryLimitReason(type));
 	}];
 }
 
@@ -675,6 +895,129 @@ static NSDictionary *TGStoryAutoDownloadFromMirror(NSDictionary *values) {
 	}];
 }
 
+- (void)postStoryContent:(NSDictionary *)content
+                    path:(NSString *)path
+                  asChat:(int64_t)chatId
+                 caption:(NSString *)caption
+                 privacy:(NSString *)privacy
+                 userIds:(NSArray *)userIds
+            activePeriod:(NSInteger)activePeriod
+               toProfile:(BOOL)toProfile
+                progress:(void (^)(float))progress
+              completion:(void (^)(NSDictionary *, NSString *))completion {
+	if (!path.length || !content){
+		if (completion)
+			completion(nil, @"There is nothing to post.");
+		return;
+	}
+	if (![[NSFileManager defaultManager] fileExistsAtPath:path]){
+		if (completion)
+			completion(nil, @"The picked file went missing before it could be posted.");
+		return;
+	}
+
+	NSInteger period = activePeriod;
+	if (period != TGStoryPeriodSixHours && period != TGStoryPeriodTwelveHours &&
+		period != TGStoryPeriodDay && period != TGStoryPeriodTwoDays)
+		period = TGStoryPeriodDay;
+
+	if (progress)
+		progress(0.0f);
+
+	[self request:@{
+		@"@type"   : @"postStory",
+		@"chat_id" : @(chatId),
+		@"content" : content,
+		@"areas"            : @{@"@type" : @"inputStoryAreas", @"areas" : @[]},
+		@"caption"          : @{@"@type" : @"formattedText", @"text" : caption ?: @""},
+		@"privacy_settings" : TGStoryPrivacyRules(privacy, userIds),
+		@"album_ids"        : @[],
+		@"active_period"    : @(period),
+		@"is_posted_to_chat_page" : @(toProfile),
+		@"protect_content"  : @NO,
+	} completion:^(NSDictionary *result){
+		if (TGStoryIsError(result)){
+			if (completion)
+				completion(nil, TGStoryErrorText(result));
+			return;
+		}
+
+		NSDictionary *temporary = TGStoryDict(result);
+		NSNumber *storyId = TGStoryNumber(temporary[@"id"]);
+		if (!storyId){
+			if (completion)
+				completion(nil, @"Telegram did not accept the story.");
+			return;
+		}
+		if (![temporary[@"is_being_posted"] boolValue]){
+			if (progress)
+				progress(1.0f);
+			if (completion)
+				completion(TGStoryFlattened(temporary), nil);
+			return;
+		}
+		[TGStoryPostWatcher watchChat:chatId
+		                      storyId:[storyId integerValue]
+		                         path:path
+		                     progress:progress
+		                   completion:completion];
+	}];
+}
+
+- (void)postPhotoStoryAtPath:(NSString *)path
+                      asChat:(int64_t)chatId
+                     caption:(NSString *)caption
+                     privacy:(NSString *)privacy
+                     userIds:(NSArray *)userIds
+                activePeriod:(NSInteger)activePeriod
+                   toProfile:(BOOL)toProfile
+                    progress:(void (^)(float))progress
+                  completion:(void (^)(NSDictionary *, NSString *))completion {
+	[self postStoryContent:@{
+		@"@type" : @"inputStoryContentPhoto",
+		@"photo" : @{@"@type" : @"inputFileLocal", @"path" : (path ?: @"")},
+		@"added_sticker_file_ids" : @[],
+	}
+	                  path:path
+	                asChat:chatId
+	               caption:caption
+	               privacy:privacy
+	               userIds:userIds
+	          activePeriod:activePeriod
+	             toProfile:toProfile
+	              progress:progress
+	            completion:completion];
+}
+
+- (void)postVideoStoryAtPath:(NSString *)path
+                    duration:(double)duration
+                      asChat:(int64_t)chatId
+                     caption:(NSString *)caption
+                     privacy:(NSString *)privacy
+                     userIds:(NSArray *)userIds
+                activePeriod:(NSInteger)activePeriod
+                   toProfile:(BOOL)toProfile
+                    progress:(void (^)(float))progress
+                  completion:(void (^)(NSDictionary *, NSString *))completion {
+	[self postStoryContent:@{
+		@"@type" : @"inputStoryContentVideo",
+		@"video" : @{@"@type" : @"inputFileLocal", @"path" : (path ?: @"")},
+		@"added_sticker_file_ids" : @[],
+		@"duration"              : @(duration > 0.0 ? duration : 0.0),
+		@"cover_frame_timestamp" : @(0.0),
+		@"is_animation"          : @NO,
+	}
+	                  path:path
+	                asChat:chatId
+	               caption:caption
+	               privacy:privacy
+	               userIds:userIds
+	          activePeriod:activePeriod
+	             toProfile:toProfile
+	              progress:progress
+	            completion:completion];
+}
+
 - (void)postPhotoStoryAtPath:(NSString *)path
                       asChat:(int64_t)chatId
                      caption:(NSString *)caption
@@ -682,30 +1025,18 @@ static NSDictionary *TGStoryAutoDownloadFromMirror(NSDictionary *values) {
                      userIds:(NSArray *)userIds
                    toProfile:(BOOL)toProfile
                   completion:(void (^)(NSDictionary *))completion {
-	if (!path.length){
+	[self postPhotoStoryAtPath:path
+	                    asChat:chatId
+	                   caption:caption
+	                   privacy:privacy
+	                   userIds:userIds
+	              activePeriod:TGStoryPeriodDay
+	                 toProfile:toProfile
+	                  progress:nil
+	                completion:^(NSDictionary *story, NSString *error){
+		(void)error;
 		if (completion)
-			completion(nil);
-		return;
-	}
-	[self request:@{
-		@"@type"   : @"postStory",
-		@"chat_id" : @(chatId),
-		@"content" : @{
-			@"@type" : @"inputStoryContentPhoto",
-			@"photo" : @{@"@type" : @"inputFileLocal", @"path" : path},
-			@"added_sticker_file_ids" : @[],
-		},
-		@"areas"            : @{@"@type" : @"inputStoryAreas", @"areas" : @[]},
-		@"caption"          : @{@"@type" : @"formattedText", @"text" : caption ?: @""},
-		@"privacy_settings" : TGStoryPrivacyRules(privacy, userIds),
-		@"album_ids"        : @[],
-		@"active_period"    : @(86400),
-		@"is_posted_to_chat_page" : @(toProfile),
-		@"protect_content"  : @NO,
-	} completion:^(NSDictionary *result){
-		if (!completion)
-			return;
-		completion(TGStoryIsError(result) ? nil : TGStoryFlattened(result));
+			completion(story);
 	}];
 }
 

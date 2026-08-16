@@ -18,6 +18,7 @@
 #import "TGClient+UserStatus.h"
 #import "TGClient+Stories.h"
 #import "TGGroupMembersViewController.h"
+#import "TGQRCodeViewController.h"
 #import "TGInviteLinksViewController.h"
 #import "TGChatEventsViewController.h"
 #import "TGChatViewController.h"
@@ -28,6 +29,7 @@
 #import "TGEmoji.h"
 #import "TGDateLabel.h"
 #import "TGDateUtils.h"
+#import "TGAlertView.h"
 
 @interface TGProfilePermissionsController : UITableViewController
 @property (nonatomic, assign) int64_t chatId;
@@ -544,7 +546,7 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 }
 
 - (void)askStoryCaption {
-	UIAlertView *caption = [[UIAlertView alloc] initWithTitle:nil
+	UIAlertView *caption = [[TGAlertView alloc] initWithTitle:nil
 			message:@"Caption" delegate:self cancelButtonTitle:@"Cancel"
 			otherButtonTitles:@"Post", nil];
 	caption.tag = 79;
@@ -2456,7 +2458,7 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 }
 
 - (void)promptForChatTitle {
-	UIAlertView *rename = [[UIAlertView alloc] initWithTitle:nil
+	UIAlertView *rename = [[TGAlertView alloc] initWithTitle:nil
 			message:(self.isChannelChat ? @"Channel name" : @"Group name")
 		   delegate:self cancelButtonTitle:@"Cancel" otherButtonTitles:@"Done", nil];
 	rename.tag = 73;
@@ -2477,7 +2479,7 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 }
 
 - (void)promptForChatDescription {
-	UIAlertView *editor = [[UIAlertView alloc] initWithTitle:nil
+	UIAlertView *editor = [[TGAlertView alloc] initWithTitle:nil
 			message:@"Description" delegate:self cancelButtonTitle:@"Cancel"
 			otherButtonTitles:@"Done", nil];
 	editor.tag = 91;
@@ -2489,7 +2491,7 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 }
 
 - (void)promptForStickerSet {
-	UIAlertView *editor = [[UIAlertView alloc] initWithTitle:nil
+	UIAlertView *editor = [[TGAlertView alloc] initWithTitle:nil
 			message:@"Sticker set name" delegate:self cancelButtonTitle:@"Cancel"
 			otherButtonTitles:@"Done", nil];
 	editor.tag = 90;
@@ -2732,7 +2734,7 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 
 - (void)promptForReportTextWithTitle:(NSString *)title optionId:(NSString *)optionId {
 	self.reportOptionId = optionId;
-	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:nil
+	UIAlertView *alert = [[TGAlertView alloc] initWithTitle:nil
 			message:(TGProfileText(title) ?: @"Describe the problem")
 		   delegate:self cancelButtonTitle:@"Cancel"
 		   otherButtonTitles:@"Send", nil];
@@ -3057,7 +3059,7 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 }
 
 - (void)editNote {
-	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:nil
+	UIAlertView *alert = [[TGAlertView alloc] initWithTitle:nil
 			message:@"Note about this contact"
 		   delegate:self cancelButtonTitle:@"Cancel" otherButtonTitles:@"Done", nil];
 	alert.tag = 81;
@@ -3597,8 +3599,26 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 		[self showInviteLinkActions];
 		return;
 	}
+	if ([label isEqualToString:@"username"]){
+		NSArray *pair = self.details[indexPath.row];
+		if (pair.count > 1)
+			[self showUsernameCode:pair[1]];
+		return;
+	}
 	if ([label isEqualToString:@"mobile"])
 		[self dialPhoneNumber];
+}
+
+- (void)showUsernameCode:(NSString *)value {
+	NSString *username = [value hasPrefix:@"@"] ? [value substringFromIndex:1] : value;
+	if (!username.length || !self.navigationController)
+		return;
+	NSString *link = [@"https://t.me/" stringByAppendingString:username];
+	NSString *caption = [NSString stringWithFormat:
+			@"Anyone can scan this code to open @%@.", username];
+	TGQRCodeViewController *code = [[TGQRCodeViewController alloc]
+			initWithLink:link caption:caption];
+	[self.navigationController pushViewController:code animated:YES];
 }
 
 - (void)dialPhoneNumber {
@@ -3700,7 +3720,8 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 
 	BOOL opens = [label isEqualToString:@"note"]
 			|| [label isEqualToString:@"groups in common"]
-			|| [label isEqualToString:@"invite link"];
+			|| [label isEqualToString:@"invite link"]
+			|| [label isEqualToString:@"username"];
 	BOOL isPhone = [label isEqualToString:@"mobile"];
 	BOOL hiddenPhone = isPhone && [value isEqualToString:@"Hidden"];
 	cell.selectionStyle = (opens || (isPhone && !hiddenPhone))

@@ -134,6 +134,10 @@ typedef NS_ENUM(NSInteger, TGConnectionState) {
 /// Safe to call more than once. Returns NO if TDLib is unavailable.
 - (BOOL)start;
 
+- (void)loadCachedChats;
+- (void)saveCachedChats;
+- (void)clearCachedChats;
+
 /// Request with a reply. `completion` runs on the main queue with the raw
 /// TDLib object, or an object of @type "error".
 - (void)request:(NSDictionary *)request completion:(void (^)(NSDictionary *result))completion;
@@ -161,6 +165,12 @@ typedef NS_ENUM(NSInteger, TGConnectionState) {
 - (void)historyForChat:(int64_t)chatId
                 thread:(int64_t)threadId
                  limit:(NSInteger)limit
+            completion:(void (^)(NSArray *messages))completion;
+
+- (void)historyForChat:(int64_t)chatId
+                thread:(int64_t)threadId
+                 limit:(NSInteger)limit
+             onlyLocal:(BOOL)onlyLocal
             completion:(void (^)(NSArray *messages))completion;
 
 /// Someone is typing (or recording, or uploading) in a chat. `action` is a

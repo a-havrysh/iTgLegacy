@@ -1440,7 +1440,7 @@ enum {
 					ok:(NSString *)ok
 {
 	self.prompt = kind;
-	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:title
+	UIAlertView *alert = [[TGAlertView alloc] initWithTitle:title
 													message:message
 												   delegate:self
 										  cancelButtonTitle:@"Cancel"

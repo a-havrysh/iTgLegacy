@@ -5,6 +5,10 @@
 #import <UIKit/UIKit.h>
 #import "TGLoginViewController.h"
 
+void TGMarkLaunchStage(NSString *stage);
+void TGMarkOpenStage(NSString *stage);
+void TGBeginOpenTiming(void);
+
 @interface AppDelegate : UIResponder <UIApplicationDelegate, UIAlertViewDelegate>
 
 @property (strong, nonatomic) UIWindow *window;

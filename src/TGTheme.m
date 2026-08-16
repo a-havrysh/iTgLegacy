@@ -24,14 +24,7 @@ static NSString *const kFontKey   = @"messageFontSize";
 	if (!self)
 		return nil;
 
-	NSNumber *stored = [NSUserDefaults.standardUserDefaults objectForKey:kStyleKey];
-	if (stored){
-		_style = (TGThemeStyle)stored.integerValue;
-	} else {
-		// NSFoundationVersionNumber_iOS_6_1 is 993.00; anything above is iOS 7+
-		_style = (NSFoundationVersionNumber > 993.00)
-			? TGThemeStyleFlat : TGThemeStyleSkeuomorphic;
-	}
+	_style = TGThemeStyleSkeuomorphic;
 	NSString *imported = [NSUserDefaults.standardUserDefaults stringForKey:kImportKey];
 	if (imported.length)
 		[self loadImportedTheme:[TGTheme pathInDocuments:imported]];

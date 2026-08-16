@@ -17,14 +17,42 @@
 #import "TGChatViewController.h"
 #import "TGTopicsViewController.h"
 #import "TGNotificationManager.h"
+#import "TGMusicPlayer.h"
 #import "TGHacks.h"
 #import "TGIcons.h"
+#import "TGDiskCache.h"
+#import "TGAlertView.h"
 #import <QuartzCore/QuartzCore.h>
 #include <stdio.h>
 
 @protocol TGTabBarHitTesting <NSObject>
 - (int)indexForLocation:(CGPoint)location;
 @end
+
+static NSTimeInterval TGLaunchStarted = 0;
+static NSTimeInterval TGOpenStarted = 0;
+
+void TGMarkLaunchStage(NSString *stage) {
+	if (TGLaunchStarted <= 0)
+		TGLaunchStarted = [NSDate timeIntervalSinceReferenceDate];
+	NSLog(@"PERF launch +%.0f ms: %@",
+			([NSDate timeIntervalSinceReferenceDate] - TGLaunchStarted) * 1000.0, stage);
+}
+
+void TGBeginOpenTiming(void) {
+	TGOpenStarted = [NSDate timeIntervalSinceReferenceDate];
+}
+
+void TGMarkOpenStage(NSString *stage) {
+	if (TGOpenStarted <= 0)
+		return;
+	NSTimeInterval elapsed = [NSDate timeIntervalSinceReferenceDate] - TGOpenStarted;
+	if (elapsed > 20.0){
+		TGOpenStarted = 0;
+		return;
+	}
+	NSLog(@"PERF open +%.0f ms: %@", elapsed * 1000.0, stage);
+}
 
 @implementation AppDelegate
 
@@ -47,6 +75,7 @@ static void TGWatchForIncomingCalls(void) {
 - (BOOL)application:(UIApplication *)application
 		didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
 {
+	TGMarkLaunchStage(@"didFinishLaunching");
 	[TGHacks hackSetAnimationDuration];
 
 	NSString *cache = [NSSearchPathForDirectoriesInDomains(
@@ -87,15 +116,23 @@ static void TGWatchForIncomingCalls(void) {
 	[[NSFileManager defaultManager] changeCurrentDirectoryPath:
 			[[NSBundle mainBundle] bundlePath]];
 
+	NSString *databaseDirectory = [TGDiskCache databaseDirectory];
+
 	self.window = [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
-	// Only TDLib knows whether this session is signed in, and it takes a second
-	// to say so. Showing the login form meanwhile means an already-signed-in
-	// user is asked for their phone number on every launch, so show a neutral
-	// screen until the state actually arrives.
-	[self showLoadingUI];
+	if ([NSUserDefaults.standardUserDefaults boolForKey:@"tgWasSignedIn"]){
+		[[TGClient shared] loadCachedChats];
+		TGMarkLaunchStage(@"snapshot loaded");
+		[self showMainUI];
+	} else {
+		[self showLoadingUI];
+	}
+	TGMarkLaunchStage(@"before makeKeyAndVisible");
 	[self.window makeKeyAndVisible];
+	TGMarkLaunchStage(@"window on screen");
 
 	[self startTDLib];
+	[TGDiskCache sweep];
+	[TGDiskCache protectTreeAtPath:databaseDirectory];
 
 	UILocalNotification *launchNotification =
 			launchOptions[UIApplicationLaunchOptionsLocalNotificationKey];
@@ -116,6 +153,7 @@ static void TGWatchForIncomingCalls(void) {
 
 - (void)applicationDidEnterBackground:(UIApplication *)application {
 	[TGIcons flush];
+	[[TGClient shared] saveCachedChats];
 	[[NSURLCache sharedURLCache] removeAllCachedResponses];
 	[[TGNotificationManager shared] applicationDidEnterBackground];
 
@@ -137,6 +175,10 @@ static void TGWatchForIncomingCalls(void) {
 		return;
 	TGBackgroundTaskActive = NO;
 	[application endBackgroundTask:TGBackgroundTask];
+}
+
+- (void)remoteControlReceivedWithEvent:(UIEvent *)event {
+	[[TGMusicPlayer shared] handleRemoteControlEvent:event];
 }
 
 - (void)applicationDidBecomeActive:(UIApplication *)application {
@@ -655,6 +697,52 @@ static void TGWatchForIncomingCalls(void) {
 							  text:@"Chat deleted"
 						   seconds:5
 						  onCommit:^{ NSLog(@"snackbar: committed (test, no-op)"); }];
+		});
+		return YES;
+	}
+
+	if ([host isEqualToString:@"alerttest"]){
+		dispatch_async(dispatch_get_main_queue(), ^{
+			NSInteger which = [arg integerValue];
+			NSString *longTitle = @"A Very Long Prompt Title That Has To Wrap Onto Several Lines";
+			TGAlertView *alert = nil;
+			if (which == 1)
+				alert = [[TGAlertView alloc] initWithTitle:@"Confirmation Code"
+						message:@"Type the code you received."
+						delegate:nil cancelButtonTitle:@"Cancel" otherButtonTitles:nil];
+			else if (which == 2)
+				alert = [[TGAlertView alloc] initWithTitle:@"New Poll"
+						message:@"The question"
+						delegate:nil cancelButtonTitle:@"Cancel" otherButtonTitles:@"Next", nil];
+			else if (which == 3)
+				alert = [[TGAlertView alloc] initWithTitle:@"New Poll"
+						message:@"Option 1"
+						delegate:nil cancelButtonTitle:@"Cancel" otherButtonTitles:@"Add", @"Send", nil];
+			else if (which == 4)
+				alert = [[TGAlertView alloc] initWithTitle:longTitle
+						message:@"Option 1"
+						delegate:nil cancelButtonTitle:@"Cancel" otherButtonTitles:@"Add", @"Send", nil];
+			else if (which == 5)
+				alert = [[TGAlertView alloc] initWithTitle:longTitle
+						message:nil
+						delegate:nil cancelButtonTitle:@"Cancel" otherButtonTitles:@"Save", nil];
+			else
+				alert = [[TGAlertView alloc] initWithTitle:@"Reply"
+						message:nil
+						delegate:nil cancelButtonTitle:@"Cancel" otherButtonTitles:@"Send", nil];
+			alert.alertViewStyle = UIAlertViewStylePlainTextInput;
+			if (which == 9){
+				NSString *info = [NSString stringWithFormat:@"%@ tg=%d n=%d own=%d",
+						NSStringFromClass([alert class]),
+						(int)[alert isKindOfClass:[TGAlertView class]],
+						(int)alert.numberOfButtons,
+						(int)[alert respondsToSelector:NSSelectorFromString(@"usesOwnLayout")]];
+				UIAlertView *probe = [[UIAlertView alloc] initWithTitle:info
+						message:@"probe" delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
+				[probe show];
+				return;
+			}
+			[alert show];
 		});
 		return YES;
 	}

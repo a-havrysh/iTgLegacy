@@ -2,6 +2,7 @@
 #import "TGClient.h"
 #import "TGClient+Files.h"
 #import "TGImageDecode.h"
+#import "TGDiskCache.h"
 
 @interface TGRemoteImageView ()
 @property (nonatomic, strong) UIImage *placeholderImage;
@@ -71,17 +72,8 @@ static NSUInteger TGRemoteImageCost(UIImage *image) {
 	return self.image;
 }
 
-- (NSString *)cachePathForKey:(NSString *)key {
-	static NSString *dir = nil;
-	static dispatch_once_t onceToken;
-	dispatch_once(&onceToken, ^{
-		dir = [NSSearchPathForDirectoriesInDomains(
-				NSCachesDirectory, NSUserDomainMask, YES).firstObject
-						stringByAppendingPathComponent:@"RemoteImageCache"];
-		[[NSFileManager defaultManager] createDirectoryAtPath:dir
-								 withIntermediateDirectories:YES attributes:nil error:nil];
-	});
-	return [dir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.png", key]];
+- (NSString *)diskKeyForCacheKey:(NSString *)key {
+	return [@"remote_" stringByAppendingString:key];
 }
 
 - (void)applyImage:(UIImage *)image fade:(bool)fade {
@@ -133,7 +125,7 @@ static NSUInteger TGRemoteImageCost(UIImage *image) {
 
 	self.image = placeholder;
 
-	NSString *cachePath = [self cachePathForKey:cacheKey];
+	NSString *diskKey = [self diskKeyForCacheKey:cacheKey];
 	bool fade = self.fadeTransition || forceFade;
 	CGFloat screenScale = [UIScreen mainScreen].scale;
 	if (screenScale < 1.0f)
@@ -157,16 +149,11 @@ static NSUInteger TGRemoteImageCost(UIImage *image) {
 	dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
 		UIImage *cached = nil;
 		@autoreleasepool {
-			NSData *cachedData = [NSData dataWithContentsOfFile:cachePath
-														options:NSDataReadingMappedIfSafe
-														  error:NULL];
-			if (cachedData.length){
-				UIImage *decoded = [UIImage imageWithData:cachedData scale:screenScale];
-				CGFloat expected = side * screenScale;
-				if (decoded && fabs(decoded.size.width * decoded.scale - expected) <= 0.5f &&
-					fabs(decoded.size.height * decoded.scale - expected) <= 0.5f)
-					cached = decoded;
-			}
+			UIImage *decoded = [TGDiskCache imageForKey:diskKey scale:screenScale];
+			CGFloat expected = side * screenScale;
+			if (decoded && fabs(decoded.size.width * decoded.scale - expected) <= 0.5f &&
+				fabs(decoded.size.height * decoded.scale - expected) <= 0.5f)
+				cached = decoded;
 		}
 		if (cached){
 			[TGRemoteImageMemoryCache() setObject:cached forKey:cacheKey cost:TGRemoteImageCost(cached)];
@@ -190,11 +177,7 @@ static NSUInteger TGRemoteImageCost(UIImage *image) {
 						dispatch_async(dispatch_get_main_queue(), ^{ deliver(nil); });
 						return;
 					}
-					@autoreleasepool {
-						NSData *data = UIImagePNGRepresentation(thumb);
-						if (data.length != 0)
-							[data writeToFile:cachePath atomically:YES];
-					}
+					[TGDiskCache storeImage:thumb forKey:diskKey];
 					[TGRemoteImageMemoryCache() setObject:thumb forKey:cacheKey cost:TGRemoteImageCost(thumb)];
 					dispatch_async(dispatch_get_main_queue(), ^{ deliver(thumb); });
 				});

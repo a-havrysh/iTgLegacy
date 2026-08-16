@@ -16,6 +16,7 @@
 #import <QuartzCore/QuartzCore.h>
 #import <AddressBook/AddressBook.h>
 #import <dlfcn.h>
+#import "TGAlertView.h"
 
 static const CGFloat kContactAvatar = 40.0f;
 static const CGFloat kContactRowHeight = 51.0f;
@@ -680,7 +681,7 @@ static BOOL TGCanSendSMS(void) {
 - (void)nextTapped {
 	if (!self.selected.count)
 		return;
-	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"New Group"
+	UIAlertView *alert = [[TGAlertView alloc] initWithTitle:@"New Group"
 													message:@"Group name"
 												   delegate:self
 										  cancelButtonTitle:@"Cancel"
@@ -2092,7 +2093,7 @@ static NSString *TGContactSectionLetter(NSDictionary *u, BOOL byFirstName) {
 }
 
 - (void)promptForContactToken {
-	UIAlertView *alert = [[UIAlertView alloc]
+	UIAlertView *alert = [[TGAlertView alloc]
 			initWithTitle:@"Add by Link"
 				  message:@"Paste the t.me link someone shared with you."
 				 delegate:self

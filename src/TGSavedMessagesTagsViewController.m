@@ -678,7 +678,7 @@ static UIImage *TGTagsBadgeImage(void) {
 - (void)askRenameForEmoji:(NSString *)emoji {
 	self.pendingRenameEmoji = emoji;
 
-	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:nil
+	UIAlertView *alert = [[TGAlertView alloc] initWithTitle:nil
 												   message:@"Name for this tag"
 												  delegate:self
 										 cancelButtonTitle:@"Cancel"

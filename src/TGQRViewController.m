@@ -2,13 +2,49 @@
 #import "TGChatViewController.h"
 #import "TGClient.h"
 #import "TGTheme.h"
+#import "quirc/quirc.h"
 #import <AVFoundation/AVFoundation.h>
 #import <QuartzCore/QuartzCore.h>
+#import <dlfcn.h>
 
-@interface TGQRViewController () <AVCaptureMetadataOutputObjectsDelegate, UIAlertViewDelegate>
+static const NSTimeInterval TGQRDecodeInterval = 0.2;
+static const int TGQRDecodeLongestSide = 640;
+static const CGFloat TGQRWindowSlack = 0.12f;
+
+static NSString *TGQRMetadataObjectTypeQRCode(void) {
+	static NSString *type = nil;
+	static BOOL resolved = NO;
+
+	if (!resolved){
+		NSString *__unsafe_unretained *symbol =
+				(NSString *__unsafe_unretained *)dlsym(RTLD_DEFAULT,
+													   "AVMetadataObjectTypeQRCode");
+		type = symbol ? *symbol : nil;
+		resolved = YES;
+	}
+	return type;
+}
+
+static Class TGQRMetadataOutputClass(void) {
+	if (!TGQRMetadataObjectTypeQRCode())
+		return Nil;
+	return NSClassFromString(@"AVCaptureMetadataOutput");
+}
+
+@interface TGQRViewController () <AVCaptureMetadataOutputObjectsDelegate,
+		AVCaptureVideoDataOutputSampleBufferDelegate, UIAlertViewDelegate>
 @property (nonatomic, strong) AVCaptureSession *session;
 @property (nonatomic, strong) AVCaptureVideoPreviewLayer *preview;
-@property (nonatomic, strong) AVCaptureMetadataOutput *output;
+@property (nonatomic, strong) id output;
+@property (nonatomic, strong) AVCaptureVideoDataOutput *frames;
+@property (nonatomic, strong) dispatch_queue_t decodeQueue;
+@property (nonatomic, assign) struct quirc *decoder;
+@property (nonatomic, assign) int decoderWidth;
+@property (nonatomic, assign) int decoderHeight;
+@property (nonatomic, assign) NSTimeInterval lastDecode;
+@property (atomic, assign) CGRect scanFraction;
+@property (atomic, assign) BOOL viewIsPortrait;
+@property (atomic, assign) BOOL scanning;
 @property (nonatomic, strong) AVCaptureDevice *camera;
 @property (nonatomic, strong) UILabel *hint;
 @property (nonatomic, strong) UIButton *torch;
@@ -40,11 +76,6 @@
 }
 
 - (void)startCamera {
-	if ([[UIDevice currentDevice].systemVersion floatValue] < 7.0){
-		self.failure = @"QR scanning needs iOS 7 or later.";
-		return;
-	}
-
 	if ([AVCaptureDevice respondsToSelector:@selector(authorizationStatusForMediaType:)]){
 		AVAuthorizationStatus status =
 				[AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo];
@@ -87,16 +118,11 @@
 	self.session = [[AVCaptureSession alloc] init];
 	[self.session addInput:input];
 
-	AVCaptureMetadataOutput *codes = [[AVCaptureMetadataOutput alloc] init];
-	[self.session addOutput:codes];
-	if (![codes.availableMetadataObjectTypes containsObject:AVMetadataObjectTypeQRCode]){
+	if (![self attachMetadataReader] && ![self attachFrameReader]){
 		self.failure = @"This device cannot recognise QR codes.";
 		self.session = nil;
 		return;
 	}
-	[codes setMetadataObjectTypes:@[AVMetadataObjectTypeQRCode]];
-	[codes setMetadataObjectsDelegate:self queue:dispatch_get_main_queue()];
-	self.output = codes;
 
 	self.preview = [AVCaptureVideoPreviewLayer layerWithSession:self.session];
 	self.preview.videoGravity = AVLayerVideoGravityResizeAspectFill;
@@ -110,15 +136,116 @@
 	[self updateTorchButton];
 }
 
+- (BOOL)attachMetadataReader {
+	Class outputClass = TGQRMetadataOutputClass();
+	NSString *type = TGQRMetadataObjectTypeQRCode();
+	id codes;
+
+	if (!outputClass || !type)
+		return NO;
+	codes = [[outputClass alloc] init];
+	if (![self.session canAddOutput:codes])
+		return NO;
+	[self.session addOutput:codes];
+	if (![[codes availableMetadataObjectTypes] containsObject:type]){
+		[self.session removeOutput:codes];
+		return NO;
+	}
+	[codes setMetadataObjectTypes:@[type]];
+	[codes setMetadataObjectsDelegate:self queue:dispatch_get_main_queue()];
+	self.output = codes;
+	return YES;
+}
+
+- (BOOL)attachFrameReader {
+	AVCaptureVideoDataOutput *frames = [[AVCaptureVideoDataOutput alloc] init];
+
+	if ([self.session canSetSessionPreset:AVCaptureSessionPreset640x480])
+		self.session.sessionPreset = AVCaptureSessionPreset640x480;
+	if (![self.session canAddOutput:frames])
+		return NO;
+
+	frames.alwaysDiscardsLateVideoFrames = YES;
+	[self.session addOutput:frames];
+
+	NSArray *offered = frames.availableVideoCVPixelFormatTypes;
+	NSNumber *format = nil;
+	NSNumber *wanted[3] = {
+		@(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange),
+		@(kCVPixelFormatType_420YpCbCr8BiPlanarFullRange),
+		@(kCVPixelFormatType_32BGRA)
+	};
+	for (int i = 0; i < 3 && !format; i++){
+		if (!offered.count || [offered containsObject:wanted[i]])
+			format = wanted[i];
+	}
+	if (!format){
+		[self.session removeOutput:frames];
+		return NO;
+	}
+	frames.videoSettings = @{ (id)kCVPixelBufferPixelFormatTypeKey : format };
+
+	self.decodeQueue = dispatch_queue_create("tg.qr.decode", NULL);
+	[frames setSampleBufferDelegate:self queue:self.decodeQueue];
+	self.frames = frames;
+	self.scanning = YES;
+	return YES;
+}
+
 - (void)applyScanWindow {
 	if (!self.preview || CGRectIsEmpty(self.window))
 		return;
+
+	if (self.frames)
+		[self applyFrameScanWindow];
+
 	if (![self.preview respondsToSelector:@selector(metadataOutputRectOfInterestForRect:)])
 		return;
 	CGRect interest = [self.preview metadataOutputRectOfInterestForRect:self.window];
 	if (interest.size.width > 0 && interest.size.height > 0
 			&& [self.output respondsToSelector:@selector(setRectOfInterest:)])
-		self.output.rectOfInterest = interest;
+		[self.output setRectOfInterest:interest];
+}
+
+- (void)applyFrameScanWindow {
+	CGRect bounds = self.view.bounds;
+	BOOL portrait = bounds.size.height >= bounds.size.width;
+	CGFloat contentWidth = portrait ? 3.0f : 4.0f;
+	CGFloat contentHeight = portrait ? 4.0f : 3.0f;
+
+	if (bounds.size.width <= 0 || bounds.size.height <= 0)
+		return;
+
+	CGFloat scale = MAX(bounds.size.width / contentWidth,
+						bounds.size.height / contentHeight);
+	CGFloat shownWidth = contentWidth * scale;
+	CGFloat shownHeight = contentHeight * scale;
+	CGFloat left = (bounds.size.width - shownWidth) / 2;
+	CGFloat top = (bounds.size.height - shownHeight) / 2;
+
+	CGFloat x0 = (CGRectGetMinX(self.window) - left) / shownWidth;
+	CGFloat x1 = (CGRectGetMaxX(self.window) - left) / shownWidth;
+	CGFloat y0 = (CGRectGetMinY(self.window) - top) / shownHeight;
+	CGFloat y1 = (CGRectGetMaxY(self.window) - top) / shownHeight;
+
+	CGFloat slackX = (x1 - x0) * TGQRWindowSlack;
+	CGFloat slackY = (y1 - y0) * TGQRWindowSlack;
+	x0 = MAX(0.0f, x0 - slackX);
+	x1 = MIN(1.0f, x1 + slackX);
+	y0 = MAX(0.0f, y0 - slackY);
+	y1 = MIN(1.0f, y1 + slackY);
+	if (x1 - x0 < 0.1f || y1 - y0 < 0.1f)
+		return;
+
+	CGFloat mirroredX0 = MIN(x0, 1.0f - x1);
+	CGFloat mirroredX1 = MAX(x1, 1.0f - x0);
+	CGFloat mirroredY0 = MIN(y0, 1.0f - y1);
+	CGFloat mirroredY1 = MAX(y1, 1.0f - y0);
+
+	self.viewIsPortrait = portrait;
+	self.scanFraction = CGRectMake(mirroredX0, mirroredY0,
+								   mirroredX1 - mirroredX0,
+								   mirroredY1 - mirroredY0);
 }
 
 - (BOOL)torchAvailable {
@@ -262,9 +389,7 @@
 
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
-	self.handled = NO;
-	if (self.session && !self.session.isRunning)
-		[self.session startRunning];
+	[self resumeScanning];
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
@@ -279,7 +404,16 @@
 }
 
 - (void)dealloc {
-	[self.session stopRunning];
+	struct quirc *decoder = _decoder;
+	dispatch_queue_t queue = _decodeQueue;
+
+	[_session stopRunning];
+	[_frames setSampleBufferDelegate:nil queue:NULL];
+	_decoder = NULL;
+	if (queue)
+		dispatch_sync(queue, ^{ if (decoder) quirc_destroy(decoder); });
+	else if (decoder)
+		quirc_destroy(decoder);
 }
 
 #pragma mark - reading
@@ -288,17 +422,173 @@
 		didOutputMetadataObjects:(NSArray *)objects
 				  fromConnection:(AVCaptureConnection *)connection
 {
+	NSString *type = TGQRMetadataObjectTypeQRCode();
+
 	if (self.handled)
 		return;
 	for (AVMetadataMachineReadableCodeObject *code in objects){
-		if (![code.type isEqualToString:AVMetadataObjectTypeQRCode] || !code.stringValue.length)
+		if (![code.type isEqualToString:type] || !code.stringValue.length)
 			continue;
-		self.handled = YES;
-		[self.session stopRunning];
-		NSLog(@"qr: %@", code.stringValue);
-		[self actOn:code.stringValue];
+		[self foundCode:code.stringValue];
 		return;
 	}
+}
+
+- (void)captureOutput:(AVCaptureOutput *)output
+		didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
+			   fromConnection:(AVCaptureConnection *)connection
+{
+	if (!self.scanning)
+		return;
+
+	NSTimeInterval now = CFAbsoluteTimeGetCurrent();
+	if (now - self.lastDecode < TGQRDecodeInterval)
+		return;
+	self.lastDecode = now;
+
+	CVImageBufferRef pixels = CMSampleBufferGetImageBuffer(sampleBuffer);
+	if (!pixels)
+		return;
+	if (CVPixelBufferLockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly) != 0)
+		return;
+
+	NSString *payload = [self decodeLuminanceOf:pixels];
+	CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
+	if (!payload.length)
+		return;
+
+	self.scanning = NO;
+	__weak typeof(self) weakSelf = self;
+	dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf foundCode:payload]; });
+}
+
+- (NSString *)decodeLuminanceOf:(CVImageBufferRef)pixels {
+	BOOL planar = CVPixelBufferIsPlanar(pixels);
+	const uint8_t *base = planar ? CVPixelBufferGetBaseAddressOfPlane(pixels, 0)
+								 : CVPixelBufferGetBaseAddress(pixels);
+	size_t stride = planar ? CVPixelBufferGetBytesPerRowOfPlane(pixels, 0)
+						   : CVPixelBufferGetBytesPerRow(pixels);
+	int width = (int)(planar ? CVPixelBufferGetWidthOfPlane(pixels, 0)
+							 : CVPixelBufferGetWidth(pixels));
+	int height = (int)(planar ? CVPixelBufferGetHeightOfPlane(pixels, 0)
+							  : CVPixelBufferGetHeight(pixels));
+	int sourceStep = planar ? 1 : 4;
+	int sourceOffset = planar ? 0 : 1;
+
+	if (!base || width <= 0 || height <= 0)
+		return nil;
+
+	CGRect fraction = self.scanFraction;
+	int left = 0;
+	int top = 0;
+	int cropWidth = width;
+	int cropHeight = height;
+
+	if (!CGRectIsEmpty(fraction)){
+		if (self.viewIsPortrait != (height >= width))
+			fraction = CGRectMake(fraction.origin.y, fraction.origin.x,
+								  fraction.size.height, fraction.size.width);
+		left = (int)(fraction.origin.x * width);
+		top = (int)(fraction.origin.y * height);
+		cropWidth = (int)(fraction.size.width * width);
+		cropHeight = (int)(fraction.size.height * height);
+	}
+	if (left < 0) left = 0;
+	if (top < 0) top = 0;
+	if (cropWidth > width - left) cropWidth = width - left;
+	if (cropHeight > height - top) cropHeight = height - top;
+	if (cropWidth < 48 || cropHeight < 48){
+		left = 0;
+		top = 0;
+		cropWidth = width;
+		cropHeight = height;
+	}
+
+	int step = 1;
+	while (cropWidth / step > TGQRDecodeLongestSide
+			|| cropHeight / step > TGQRDecodeLongestSide)
+		step++;
+
+	int outWidth = cropWidth / step;
+	int outHeight = cropHeight / step;
+	if (outWidth < 48 || outHeight < 48)
+		return nil;
+
+	if (!self.decoder){
+		self.decoder = quirc_new();
+		self.decoderWidth = 0;
+		self.decoderHeight = 0;
+	}
+	if (!self.decoder)
+		return nil;
+	if (self.decoderWidth != outWidth || self.decoderHeight != outHeight){
+		if (quirc_resize(self.decoder, outWidth, outHeight) < 0)
+			return nil;
+		self.decoderWidth = outWidth;
+		self.decoderHeight = outHeight;
+	}
+
+	uint8_t *target = quirc_begin(self.decoder, NULL, NULL);
+	if (!target)
+		return nil;
+	for (int y = 0; y < outHeight; y++){
+		const uint8_t *source = base + (size_t)(top + y * step) * stride
+				+ (size_t)left * sourceStep + sourceOffset;
+		uint8_t *row = target + (size_t)y * outWidth;
+
+		if (step == 1 && sourceStep == 1){
+			memcpy(row, source, (size_t)outWidth);
+			continue;
+		}
+		for (int x = 0; x < outWidth; x++)
+			row[x] = source[x * step * sourceStep];
+	}
+	quirc_end(self.decoder);
+
+	int count = quirc_count(self.decoder);
+	for (int i = 0; i < count; i++){
+		struct quirc_code code;
+		struct quirc_data data;
+
+		quirc_extract(self.decoder, i, &code);
+		if (quirc_decode(&code, &data) != QUIRC_SUCCESS){
+			quirc_flip(&code);
+			if (quirc_decode(&code, &data) != QUIRC_SUCCESS)
+				continue;
+		}
+		if (data.payload_len <= 0)
+			continue;
+
+		NSString *text = [[NSString alloc] initWithBytes:data.payload
+												  length:(NSUInteger)data.payload_len
+												encoding:NSUTF8StringEncoding];
+		if (!text)
+			text = [[NSString alloc] initWithBytes:data.payload
+											length:(NSUInteger)data.payload_len
+										  encoding:NSISOLatin1StringEncoding];
+		if (text.length)
+			return text;
+	}
+	return nil;
+}
+
+- (void)foundCode:(NSString *)payload {
+	if (self.handled || !payload.length)
+		return;
+	self.handled = YES;
+	self.scanning = NO;
+	[self.session stopRunning];
+	if (self.onCode && self.onCode(payload))
+		return;
+	[self actOn:payload];
+}
+
+- (void)resumeScanning {
+	self.handled = NO;
+	self.lastDecode = 0;
+	self.scanning = YES;
+	if (self.session && !self.session.isRunning)
+		[self.session startRunning];
 }
 
 - (NSString *)usernameIn:(NSString *)text {
@@ -343,8 +633,7 @@
 	text = [text stringByTrimmingCharactersInSet:
 			[NSCharacterSet whitespaceAndNewlineCharacterSet]];
 	if (!text.length){
-		self.handled = NO;
-		[self.session startRunning];
+		[self resumeScanning];
 		return;
 	}
 
@@ -370,8 +659,7 @@
 			return;
 		if (!chatId){
 			me.hint.text = [NSString stringWithFormat:@"No such account: @%@", username];
-			me.handled = NO;
-			[me.session startRunning];
+			[me resumeScanning];
 			return;
 		}
 		me.hint.text = @"Point the camera at a QR code";
@@ -398,9 +686,7 @@
 		}
 	}
 	self.hint.text = @"Point the camera at a QR code";
-	self.handled = NO;
-	if (self.session && !self.session.isRunning)
-		[self.session startRunning];
+	[self resumeScanning];
 }
 
 @end

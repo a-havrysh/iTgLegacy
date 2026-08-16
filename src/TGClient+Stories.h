@@ -47,6 +47,15 @@
  */
 #import "TGClient.h"
 
+extern NSString *const TGStoryUpdateNotification;
+
+enum {
+	TGStoryPeriodSixHours    = 6 * 3600,
+	TGStoryPeriodTwelveHours = 12 * 3600,
+	TGStoryPeriodDay         = 86400,
+	TGStoryPeriodTwoDays     = 2 * 86400
+};
+
 @interface TGClient (Stories)
 
 #pragma mark - active stories (the tray)
@@ -140,11 +149,6 @@
 /// channel with the right. Each entry: "id", "title".
 - (void)chatsToPostStoriesWithCompletion:(void (^)(NSArray *chats))completion;
 
-/// Post a photo story from a local file. `privacy` is one of the four privacy
-/// values; `userIds` is the exception list for "everyone"/"contacts" and the
-/// allow list for "selected", and may be nil. The expiry is fixed at 24h
-/// because anything else is Premium-only. `completion` gets the flattened
-/// story TDLib created, or nil if the call was refused.
 - (void)postPhotoStoryAtPath:(NSString *)path
                       asChat:(int64_t)chatId
                      caption:(NSString *)caption
@@ -152,6 +156,46 @@
                      userIds:(NSArray *)userIds
                    toProfile:(BOOL)toProfile
                   completion:(void (^)(NSDictionary *story))completion;
+
+/**
+ * Post a photo story and follow it all the way to the server.
+ *
+ * postStory answers at once with a temporary, still-uploading story, so a
+ * completion fired on that reply would be a lie. These two methods instead
+ * keep watching until TDLib says the story really landed
+ * (updateStoryPostSucceeded) or really failed (updateStoryPostFailed), and
+ * only then call back.
+ *
+ * `privacy` is one of the four privacy values; `userIds` is the exception
+ * list for "everyone"/"contacts" and the allow list for "selected", and may
+ * be nil. `activePeriod` is one of the TGStoryPeriod* values - anything but
+ * TGStoryPeriodDay needs Premium. `toProfile` keeps the story on the poster's
+ * page after it expires.
+ *
+ * `progress` runs on the main thread with 0..1 as the media uploads, and may
+ * be nil. `completion` gets either the flattened story and a nil error, or
+ * nil and a ready-to-show sentence - never both, and exactly once.
+ */
+- (void)postPhotoStoryAtPath:(NSString *)path
+                      asChat:(int64_t)chatId
+                     caption:(NSString *)caption
+                     privacy:(NSString *)privacy
+                     userIds:(NSArray *)userIds
+                activePeriod:(NSInteger)activePeriod
+                   toProfile:(BOOL)toProfile
+                    progress:(void (^)(float fraction))progress
+                  completion:(void (^)(NSDictionary *story, NSString *error))completion;
+
+- (void)postVideoStoryAtPath:(NSString *)path
+                    duration:(double)duration
+                      asChat:(int64_t)chatId
+                     caption:(NSString *)caption
+                     privacy:(NSString *)privacy
+                     userIds:(NSArray *)userIds
+                activePeriod:(NSInteger)activePeriod
+                   toProfile:(BOOL)toProfile
+                    progress:(void (^)(float fraction))progress
+                  completion:(void (^)(NSDictionary *story, NSString *error))completion;
 
 /// Repost someone else's story as our own, optionally with a new caption.
 - (void)repostStory:(NSInteger)storyId

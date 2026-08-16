@@ -220,7 +220,7 @@ const struct quirc_version_info quirc_version_db[QUIRC_MAX_VERSION + 1] = {
 	    },
 	    { /* Version 21 */
 		    .data_bytes = 1156,
-		    .apat = {6, 28, 50, 72, 92, 0},
+		    .apat = {6, 28, 50, 72, 94, 0},
 		    .ecc = {
 			    {.bs = 68, .dw = 42, .ns = 17},
 			    {.bs = 144, .dw = 116, .ns = 4},

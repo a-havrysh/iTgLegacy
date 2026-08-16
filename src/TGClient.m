@@ -728,6 +728,8 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 		@"@type"                  : @"setTdlibParameters",
 		@"database_directory"     : db,
 		@"files_directory"        : [db stringByAppendingPathComponent:@"files"],
+		@"use_file_database"      : @YES,
+		@"use_chat_info_database" : @YES,
 		@"use_message_database"   : @YES,
 		@"use_secret_chats"       : @NO,
 		@"api_id"                 : @(apiId),
@@ -2747,10 +2749,12 @@ static NSArray *TGPacksFrom(NSDictionary *target) {
 
 	[self mergeForumFlagFromChat:chat into:info chatId:chatId];
 
-	if (chat[@"positions"]){
-		info[@"order"] = @(TGMainListOrder(chat[@"positions"]));
-		info[@"archiveOrder"] = @(TGArchiveOrder(chat[@"positions"]));
-		info[@"isPinned"] = @(TGPinnedInMain(chat[@"positions"]));
+	NSArray *chatPositions = [chat[@"positions"] isKindOfClass:NSArray.class]
+			? chat[@"positions"] : nil;
+	if (chatPositions.count){
+		info[@"order"] = @(TGMainListOrder(chatPositions));
+		info[@"archiveOrder"] = @(TGArchiveOrder(chatPositions));
+		info[@"isPinned"] = @(TGPinnedInMain(chatPositions));
 	}
 	if (chat[@"notification_settings"])
 		info[@"isMuted"] = @([chat[@"notification_settings"][@"mute_for"] integerValue] > 0);
@@ -2846,10 +2850,12 @@ static NSArray *TGPacksFrom(NSDictionary *target) {
 
 	if (update[@"notification_settings"])
 		info[@"isMuted"] = @([update[@"notification_settings"][@"mute_for"] integerValue] > 0);
-	if (update[@"positions"]){
-		info[@"order"] = @(TGMainListOrder(update[@"positions"]));
-		info[@"archiveOrder"] = @(TGArchiveOrder(update[@"positions"]));
-		info[@"isPinned"] = @(TGPinnedInMain(update[@"positions"]));
+	NSArray *updatePositions = [update[@"positions"] isKindOfClass:NSArray.class]
+			? update[@"positions"] : nil;
+	if (updatePositions.count){
+		info[@"order"] = @(TGMainListOrder(updatePositions));
+		info[@"archiveOrder"] = @(TGArchiveOrder(updatePositions));
+		info[@"isPinned"] = @(TGPinnedInMain(updatePositions));
 	}
 	NSDictionary *position = update[@"position"];
 	if ([position isKindOfClass:NSDictionary.class]){
@@ -2957,7 +2963,9 @@ static NSDictionary *TGPlistSafeChat(NSDictionary *chat) {
 		NSNumber *chatId = chat[@"id"];
 		if (!chatId || self.chatsById[chatId])
 			continue;
-		self.chatsById[chatId] = [chat mutableCopy];
+		NSMutableDictionary *restored = [chat mutableCopy];
+		[restored removeObjectForKey:@"photoFileId"];
+		self.chatsById[chatId] = restored;
 	}
 	NSLog(@"TGClient: %lu chats restored from disk", (unsigned long)self.chatsById.count);
 	[self rebuildChats];

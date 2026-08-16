@@ -595,7 +595,9 @@ static quirc_decode_error_t codestream_ecc(struct quirc_data *data,
 		int j;
 
 		for (j = 0; j < ecc->dw; j++)
-			dst[j] = ds->raw[j * bc + i];
+			dst[j] = ds->raw[j < sb_ecc->dw
+					 ? j * bc + i
+					 : j * bc + i - sb_ecc->ns];
 		for (j = 0; j < num_ec; j++)
 			dst[ecc->dw + j] = ds->raw[ecc_offset + j * bc + i];
 

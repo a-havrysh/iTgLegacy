@@ -12,6 +12,7 @@
 #import "TGDateLabel.h"
 #import "UIView+SafeTint.h"
 #import <QuartzCore/QuartzCore.h>
+#import "TGAlertView.h"
 
 static const CGFloat kTopicRowHeight = 73.0f;
 static const CGFloat kTopicAvatar = 56.0f;
@@ -1953,7 +1954,7 @@ targetIndexPathForMoveFromRowAtIndexPath:(NSIndexPath *)from
 
 - (void)askTopicNameForEdit:(NSDictionary *)topic {
 	self.actionTopic = topic;
-	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Edit Topic"
+	UIAlertView *alert = [[TGAlertView alloc] initWithTitle:@"Edit Topic"
 													message:@"Name the topic."
 												   delegate:self
 										  cancelButtonTitle:@"Cancel"

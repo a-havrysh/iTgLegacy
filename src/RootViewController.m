@@ -46,6 +46,7 @@ static const CGFloat TGTabBarHeight = 49.0f;
 @property (nonatomic, strong) TGTabBar *customTabBar;
 @property (nonatomic, strong) id layoutDelegate;
 @property (nonatomic, strong) NSMutableIndexSet *insetTabs;
+@property (nonatomic, strong) NSMutableIndexSet *builtTabs;
 @property (nonatomic, assign) BOOL isSplitMaster;
 @property (nonatomic, strong) UISplitViewController *splitController;
 @property (nonatomic, strong) RootViewController *splitMaster;
@@ -82,18 +83,42 @@ static __weak RootViewController *gSplitRoot = nil;
 	[self buildTabs];
 }
 
+- (UINavigationController *)placeholderTab {
+	UIViewController *blank = [[UIViewController alloc] init];
+	blank.view.backgroundColor = [UIColor colorWithRed:0.84f green:0.85f blue:0.87f alpha:1.0f];
+	return [[UINavigationController alloc] initWithRootViewController:blank];
+}
+
+- (void)materialiseTab:(NSUInteger)index {
+	if (index == 1 || [self.builtTabs containsIndex:index])
+		return;
+	NSMutableArray *tabs = [[super viewControllers] mutableCopy];
+	if (index >= tabs.count)
+		return;
+	UIViewController *root = index == 0
+			? (UIViewController *)[[TGContactsViewController alloc] init]
+			: (UIViewController *)[[TGSettingsViewController alloc] init];
+	UINavigationController *nc =
+			[[UINavigationController alloc] initWithRootViewController:root];
+	nc.delegate = self;
+	tabs[index] = nc;
+	[self.builtTabs addIndex:index];
+	NSUInteger selected = [super selectedIndex];
+	[super setViewControllers:tabs animated:NO];
+	[super setSelectedIndex:selected];
+	[self.insetTabs removeIndex:index];
+	[self applyTabBarInsetForIndex:index];
+}
+
 - (void)buildTabs {
+	self.builtTabs = [NSMutableIndexSet indexSet];
+
 	TGChatListViewController *chats = [[TGChatListViewController alloc] init];
 	UINavigationController *chatsNC =
 		[[UINavigationController alloc] initWithRootViewController:chats];
 
-	TGContactsViewController *contacts = [[TGContactsViewController alloc] init];
-	UINavigationController *contactsNC =
-		[[UINavigationController alloc] initWithRootViewController:contacts];
-
-	TGSettingsViewController *settings = [[TGSettingsViewController alloc] init];
-	UINavigationController *settingsNC =
-		[[UINavigationController alloc] initWithRootViewController:settings];
+	UINavigationController *contactsNC = [self placeholderTab];
+	UINavigationController *settingsNC = [self placeholderTab];
 
 	[self setViewControllers:@[contactsNC, chatsNC, settingsNC] animated:NO];
 	[self setSelectedIndex:1];
@@ -284,12 +309,23 @@ static __weak RootViewController *gSplitRoot = nil;
 
 #pragma mark - tabs
 
+- (CGFloat)tabBarInsetForController:(UIViewController *)controller {
+	if (!self.customTabBar || !controller)
+		return 0;
+	UINavigationController *nav = controller.navigationController;
+	if (!nav || [nav.viewControllers firstObject] != controller)
+		return 0;
+	if (![[super viewControllers] containsObject:nav])
+		return 0;
+	return TGTabBarHeight;
+}
+
 - (void)applyTabBarInsetForIndex:(NSUInteger)index {
-	if (index >= self.viewControllers.count)
+	if (self.splitMaster){
+		[self.splitMaster applyTabBarInsetForIndex:index];
 		return;
-	if (!self.insetTabs)
-		self.insetTabs = [NSMutableIndexSet indexSet];
-	if ([self.insetTabs containsIndex:index])
+	}
+	if (index >= self.viewControllers.count)
 		return;
 	id controller = self.viewControllers[index];
 	if (![controller isKindOfClass:[UINavigationController class]])
@@ -297,10 +333,14 @@ static __weak RootViewController *gSplitRoot = nil;
 	UIViewController *top = [[(UINavigationController *)controller viewControllers] firstObject];
 	if (![top isKindOfClass:[UITableViewController class]])
 		return;
-	[self.insetTabs addIndex:index];
 	UITableView *tableView = ((UITableViewController *)top).tableView;
-	tableView.contentInset = UIEdgeInsetsMake(tableView.contentInset.top, 0, TGTabBarHeight, 0);
-	tableView.scrollIndicatorInsets = tableView.contentInset;
+	CGFloat bottom = [self tabBarInsetForController:top];
+	UIEdgeInsets insets = tableView.contentInset;
+	if (insets.bottom == bottom && tableView.scrollIndicatorInsets.bottom == bottom)
+		return;
+	insets.bottom = bottom;
+	tableView.contentInset = insets;
+	tableView.scrollIndicatorInsets = insets;
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -313,9 +353,13 @@ static __weak RootViewController *gSplitRoot = nil;
 - (void)navigationController:(UINavigationController *)navigationController
 		willShowViewController:(UIViewController *)viewController animated:(BOOL)animated {
 	self.customTabBar.hidden = viewController != navigationController.viewControllers.firstObject;
+	if (!self.customTabBar.hidden)
+		[self applyTabBarInsetForIndex:[[self viewControllers] indexOfObject:navigationController]];
 }
 
 - (void)tabBarSelectedItem:(int)index {
+	if (index >= 0)
+		[self materialiseTab:(NSUInteger)index];
 	if ((int)self.selectedIndex != index)
 		[self setSelectedIndex:index];
 }

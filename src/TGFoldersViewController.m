@@ -932,7 +932,7 @@ static const unsigned int kFolderTagColours[7] = {
 	NSDictionary *link = [self activeLink];
 	if (!link)
 		return;
-	UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Link Name"
+	UIAlertView *alert = [[TGAlertView alloc] initWithTitle:@"Link Name"
 													message:nil
 												   delegate:self
 										  cancelButtonTitle:@"Cancel"
