@@ -53,6 +53,10 @@ static const CGFloat TGTabBarHeight = 49.0f;
 @property (nonatomic, strong) UINavigationController *detailNav;
 @property (nonatomic, strong) UIPopoverController *masterPopover;
 @property (nonatomic, strong) UIBarButtonItem *masterBarButtonItem;
+@property (nonatomic, assign) NSInteger pendingIconBadge;
+@property (nonatomic, assign) NSInteger pushedIconBadge;
+@property (nonatomic, assign) BOOL iconBadgeScheduled;
+@property (nonatomic, assign) BOOL iconBadgePushed;
 @end
 
 static __weak RootViewController *gSplitRoot = nil;
@@ -420,6 +424,16 @@ static __weak RootViewController *gSplitRoot = nil;
 	return total;
 }
 
+- (void)pushIconBadge {
+	if (![UIApplication instancesRespondToSelector:@selector(setApplicationIconBadgeNumber:)])
+		return;
+	if (self.iconBadgePushed && self.pendingIconBadge == self.pushedIconBadge)
+		return;
+	self.iconBadgePushed = YES;
+	self.pushedIconBadge = self.pendingIconBadge;
+	[UIApplication sharedApplication].applicationIconBadgeNumber = self.pendingIconBadge;
+}
+
 - (void)updateUnreadBadge {
 	if (self.splitMaster){
 		[self.splitMaster updateUnreadBadge];
@@ -432,8 +446,15 @@ static __weak RootViewController *gSplitRoot = nil;
 	if (total < 0)
 		total = 0;
 	[self.customTabBar setUnreadCount:total];
-	if ([UIApplication instancesRespondToSelector:@selector(setApplicationIconBadgeNumber:)])
-		[UIApplication sharedApplication].applicationIconBadgeNumber = total;
+
+	if (self.iconBadgeScheduled && total == self.pendingIconBadge)
+		return;
+	self.iconBadgeScheduled = YES;
+	self.pendingIconBadge = total;
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+											 selector:@selector(pushIconBadge)
+											   object:nil];
+	[self performSelector:@selector(pushIconBadge) withObject:nil afterDelay:1.5];
 }
 
 @end

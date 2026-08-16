@@ -48,6 +48,7 @@
 #import "TGClient+Files.h"
 #import "TGClient+ChatList.h"
 #import "TGMediaViewController.h"
+#import "TGImageDecode.h"
 #import <UIKit/UIGestureRecognizerSubclass.h>
 #import "TGAlertView.h"
 
@@ -108,6 +109,8 @@ static UIColor *TGMessageBodyColour(void) {
 	return colour;
 }
 static const CGFloat kImageMax    = 200.0f;
+static const NSUInteger kPictureMemoryBudget = 5 * 1024 * 1024;
+static const NSUInteger kMaxLivePictures = 12;
 static const CGFloat kDayRowHeight    = 27.0f;
 static const CGFloat kUnreadRowHeight = 34.0f;
 static const CGFloat kSystemPlateHeight = 21.0f;
@@ -2509,7 +2512,12 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 @property (nonatomic, strong) NSMutableDictionary *mosaics;
 @property (nonatomic, strong) NSMutableDictionary *tileSizes;
 @property (nonatomic, strong) NSMutableDictionary *tileBitmaps;
+@property (nonatomic, strong) NSMutableSet *tileBitmapsRequested;
 @property (nonatomic, strong) NSMutableDictionary *images; // fileId -> UIImage
+@property (nonatomic, strong) NSMutableArray *imageOrder;  // fileId, oldest first
+@property (nonatomic, assign) BOOL tableReloadPending;
+@property (nonatomic, assign) BOOL fetchImagesPending;
+@property (nonatomic, assign) BOOL pendingReloadAnchors;
 @property (nonatomic, strong) NSMutableSet *imagesRequested;
 @property (nonatomic, strong) NSMutableSet *photoFilesInFlight;
 @property (nonatomic, strong) NSMutableSet *photoFilesCancelled;
@@ -2576,6 +2584,7 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 @property (nonatomic, strong) NSDictionary *pinnedMessage;
 @property (nonatomic, strong) UIView *pinnedBanner;
 @property (nonatomic, assign) CGFloat pinnedBannerInset;
+@property (nonatomic, assign) CGFloat shortContentInset;
 @property (nonatomic, assign) BOOL deeperHistoryPending;
 @property (nonatomic, assign) BOOL localHistoryShown;
 @property (nonatomic, assign) BOOL networkHistoryShown;
@@ -2702,10 +2711,12 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 	self.mosaics = [NSMutableDictionary dictionary];
 	self.tileSizes = [NSMutableDictionary dictionary];
 	self.tileBitmaps = [NSMutableDictionary dictionary];
+	self.tileBitmapsRequested = [NSMutableSet set];
 	self.messages = @[];
 	self.senderAvatars = [NSMutableDictionary dictionary];
 	self.senderAvatarsRequested = [NSMutableSet set];
 	self.images = [NSMutableDictionary dictionary];
+	self.imageOrder = [NSMutableArray array];
 	self.imagesRequested = [NSMutableSet set];
 	self.photoFilesInFlight = [NSMutableSet set];
 	self.photoFilesCancelled = [NSMutableSet set];
@@ -2835,10 +2846,13 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 	[self centreEmptyPlate];
 	[self layoutFloatingButtons];
 	CGFloat width = self.table.bounds.size.width;
-	if (width < 1 || fabsf(width - self.laidOutWidth) < 0.5f)
+	if (width < 1 || fabsf(width - self.laidOutWidth) < 0.5f){
+		[self updateShortContentInset];
 		return;
+	}
 	self.laidOutWidth = width;
 	[self.table reloadData];
+	[self updateShortContentInset];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -2912,6 +2926,7 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 			NSMutableArray *next = [me.messages mutableCopy];
 			[next addObject:message];
 			me.messages = next;
+			[me warmMinithumbnailsFor:@[message]];
 			[me.table reloadData];
 			[me updateEmptyState];
 			if (follow)
@@ -3435,6 +3450,7 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	[self.mosaics removeAllObjects];
 	[self.tileSizes removeAllObjects];
 	[self.tileBitmaps removeAllObjects];
+	[self.tileBitmapsRequested removeAllObjects];
 
 	NSArray *visible = [self.table indexPathsForVisibleRows];
 	NSIndexPath *anchor = visible.count ? visible.lastObject : nil;
@@ -3509,15 +3525,33 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	[super didReceiveMemoryWarning];
 
 	NSMutableSet *keep = [NSMutableSet set];
+	NSMutableSet *keepFiles = [NSMutableSet set];
 	for (NSIndexPath *path in [self.table indexPathsForVisibleRows]){
-		for (NSDictionary *m in [self messagesAtRow:path.row])
+		for (NSDictionary *m in [self messagesAtRow:path.row]){
 			if ([m[@"id"] isKindOfClass:NSNumber.class])
 				[keep addObject:m[@"id"]];
+			NSNumber *fileId = [self pictureFileIdFor:m];
+			if (fileId)
+				[keepFiles addObject:fileId];
+		}
 	}
 	[self.tileBitmaps removeAllObjects];
+	[self.tileBitmapsRequested removeAllObjects];
 	for (NSNumber *key in [self.maps allKeys])
 		if (![keep containsObject:key])
 			[self.maps removeObjectForKey:key];
+	for (NSNumber *key in [self.minithumbnails allKeys])
+		if (![keep containsObject:key])
+			[self.minithumbnails removeObjectForKey:key];
+
+	for (NSNumber *fileId in [self.images allKeys]){
+		if ([keepFiles containsObject:fileId])
+			continue;
+		[self.images removeObjectForKey:fileId];
+		[self.imagesRequested removeObject:fileId];
+		[self.imageOrder removeObject:fileId];
+	}
+	self.photoWindow = NSMakeRange(NSNotFound, 0);
 }
 
 - (void)dealloc {
@@ -3562,20 +3596,41 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	__weak typeof(self) weakSelf = self;
 	self.localHistoryShown = NO;
 	self.networkHistoryShown = NO;
-	if (self.messages.count == 0){
-		[self showHistorySpinnerAfterGrace];
-		[[TGClient shared] historyForChat:self.chatId thread:self.threadId limit:60
-								onlyLocal:YES completion:^(NSArray *messages){
-			TGChatViewController *me = weakSelf;
-			if (!me || !messages.count || me.networkHistoryShown)
-				return;
+	if (self.messages.count != 0){
+		[self reloadFromNetwork];
+		return;
+	}
+
+	[self showHistorySpinnerAfterGrace];
+
+	void (^partial)(NSArray *) = ^(NSArray *messages){
+		TGChatViewController *me = weakSelf;
+		if (!me || !messages.count || me.networkHistoryShown ||
+			messages.count <= me.messages.count)
+			return;
+		me.localHistoryShown = YES;
+		TGMarkOpenStage([NSString stringWithFormat:@"%lu of the cached messages drawn",
+				(unsigned long)messages.count]);
+		[me applyHistory:messages final:NO partial:YES];
+	};
+
+	[[TGClient shared] historyForChat:self.chatId thread:self.threadId limit:60
+							onlyLocal:YES progress:partial completion:^(NSArray *messages){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (messages.count && !me.networkHistoryShown){
 			me.localHistoryShown = YES;
 			TGMarkOpenStage([NSString stringWithFormat:@"%lu cached messages drawn",
 					(unsigned long)messages.count]);
-			[me applyHistory:messages final:NO];
-		}];
-	}
+			[me applyHistory:messages final:NO partial:NO];
+		}
+		[me reloadFromNetwork];
+	}];
+}
 
+- (void)reloadFromNetwork {
+	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] historyForChat:self.chatId thread:self.threadId limit:60
 							onlyLocal:NO completion:^(NSArray *messages){
 		TGChatViewController *me = weakSelf;
@@ -3586,13 +3641,15 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 		me.networkHistoryShown = YES;
 		TGMarkOpenStage([NSString stringWithFormat:@"%lu messages from TDLib",
 				(unsigned long)messages.count]);
-		[me applyHistory:messages final:YES];
+		[me applyHistory:messages final:YES partial:NO];
 	}];
 }
 
-- (void)applyHistory:(NSArray *)messages final:(BOOL)final {
-	[self hideHistorySpinner];
+- (void)applyHistory:(NSArray *)messages final:(BOOL)final partial:(BOOL)partial {
+	if (messages.count)
+		[self hideHistorySpinner];
 	self.messages = messages;
+	[self warmMinithumbnailsFor:messages];
 	[self.reactionChipsRequested removeAllObjects];
 	[self.reactionChips removeAllObjects];
 	[self.chipsRowWidths removeAllObjects];
@@ -3612,6 +3669,14 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	NSLog(@"TDLIB HISTORY%@: %lu msgs: %@", final ? @"" : @" (cached)",
 			(unsigned long)messages.count, [kinds componentsJoinedByString:@", "]);
 	[self.table reloadData];
+	[self updateShortContentInset];
+	if (messages.count){
+		TGMarkOpenFrame([NSString stringWithFormat:@"FIRST FRAME with %lu messages",
+				(unsigned long)messages.count]);
+		if (!partial)
+			TGMarkOpenSettledFrame([NSString stringWithFormat:
+					@"SETTLED FRAME with %lu messages", (unsigned long)messages.count]);
+	}
 	[self updateEmptyState];
 	[self scrollToBottomAnimated:NO];
 	[self fetchMissingImages];
@@ -3738,17 +3803,62 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 		if (!me || fileId <= 0)
 			return;
 		[[TGClient shared] downloadFile:fileId completion:^(NSString *path){
-			TGChatViewController *inner = weakSelf;
-			if (!inner || !path.length)
+			if (!path.length)
 				return;
-			UIImage *tile = [UIImage imageWithContentsOfFile:path];
-			if (!tile)
-				return;
-			inner.maps[key] = TGImageDrawnAtPointSize(tile,
-					CGSizeMake(kMapCardW, kMapCardH));
-			[inner.table reloadData];
+			CGFloat cardPixels = MAX(kMapCardW, kMapCardH) * [UIScreen mainScreen].scale;
+			dispatch_async(TGImageDecodeQueue(), ^{
+				UIImage *tile = TGDecodeThumbnail(path, cardPixels);
+				if (!tile)
+					return;
+				UIImage *card = TGImageDrawnAtPointSize(tile,
+						CGSizeMake(kMapCardW, kMapCardH));
+				dispatch_async(dispatch_get_main_queue(), ^{
+					TGChatViewController *inner = weakSelf;
+					if (!inner)
+						return;
+					inner.maps[key] = card;
+					[inner setNeedsTableReload];
+				});
+			});
 		}];
 	}];
+}
+
+- (void)setNeedsTableReload {
+	if (self.tableReloadPending)
+		return;
+	self.tableReloadPending = YES;
+	__weak typeof(self) weakSelf = self;
+	dispatch_async(dispatch_get_main_queue(), ^{
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		me.tableReloadPending = NO;
+		BOOL anchor = me.pendingReloadAnchors;
+		me.pendingReloadAnchors = NO;
+		[me.table reloadData];
+		if (anchor && me.anchorToBottom)
+			[me scrollToBottomAnimated:NO];
+	});
+}
+
+- (void)setNeedsTableReloadKeepingBottom {
+	self.pendingReloadAnchors = YES;
+	[self setNeedsTableReload];
+}
+
+- (void)setNeedsFetchMissingImages {
+	if (self.fetchImagesPending)
+		return;
+	self.fetchImagesPending = YES;
+	__weak typeof(self) weakSelf = self;
+	dispatch_async(dispatch_get_main_queue(), ^{
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		me.fetchImagesPending = NO;
+		[me fetchMissingImages];
+	});
 }
 
 /// Group messages need a name over the bubble, and TDLib only volunteers
@@ -3764,7 +3874,7 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 
 	for (NSNumber *uid in wanted){
 		[[TGClient shared] ensureUserName:uid.longLongValue completion:^{
-			[weakSelf.table reloadData];
+			[weakSelf setNeedsTableReload];
 		}];
 	}
 }
@@ -3794,8 +3904,8 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 				return;
 			}
 			me.quotes[replyId] = original;
-			[me.table reloadData];
-			[me fetchMissingImages];
+			[me setNeedsTableReload];
+			[me setNeedsFetchMissingImages];
 		}];
 	}
 }
@@ -3821,7 +3931,7 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 				return;
 			me.reactionChips[messageId] = chips;
 			[me.chipsRowWidths removeObjectForKey:messageId];
-			[me.table reloadData];
+			[me setNeedsTableReload];
 		}];
 	}
 }
@@ -3855,18 +3965,25 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 			if ([photo isKindOfClass:NSNumber.class] && photo.integerValue != 0 &&
 				!me.images[photo] && ![me.imagesRequested containsObject:photo]){
 				[me.imagesRequested addObject:photo];
+				CGFloat limit = [me pictureDecodeLimit];
 				[[TGClient shared] downloadFile:photo.integerValue completion:^(NSString *path){
-					TGChatViewController *inner = weakSelf;
-					if (!inner || !path)
+					if (!path.length)
 						return;
-					UIImage *image = [UIImage imageWithContentsOfFile:path];
-					if (!image)
-						return;
-					inner.images[photo] = image;
-					[inner.table reloadData];
+					dispatch_async(TGImageDecodeQueue(), ^{
+						UIImage *image = TGDecodeThumbnail(path, limit);
+						if (!image)
+							return;
+						dispatch_async(dispatch_get_main_queue(), ^{
+							TGChatViewController *inner = weakSelf;
+							if (!inner)
+								return;
+							inner.images[photo] = image;
+							[inner setNeedsTableReload];
+						});
+					});
 				}];
 			}
-			[me.table reloadData];
+			[me setNeedsTableReload];
 		}];
 	}
 }
@@ -3940,9 +4057,7 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 			if (!me || !path)
 				return;
 			me.lottiePaths[docId] = path;
-			[me.table reloadData];
-			if (me.anchorToBottom)
-				[me scrollToBottomAnimated:NO];
+			[me setNeedsTableReloadKeepingBottom];
 		}];
 	}
 
@@ -3969,8 +4084,8 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 		first = MAX(0, count - 12);
 		last = count - 1;
 	}
-	first = MAX(0, first - 6);
-	last = MIN(count - 1, last + 6);
+	first = MAX(0, first - 3);
+	last = MIN(count - 1, last + 3);
 	if (last < first)
 		return NSMakeRange(0, 0);
 	return NSMakeRange((NSUInteger)first, (NSUInteger)(last - first + 1));
@@ -3986,17 +4101,37 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	self.photoWindow = window;
 
 	NSMutableSet *wanted = [NSMutableSet set];
-	for (NSUInteger row = window.location; row < window.location + window.length; row++){
-		for (NSDictionary *m in [self messagesAtRow:(NSInteger)row]){
-			NSNumber *fileId = [self pictureFileIdFor:m];
-			if (fileId)
+	NSMutableArray *byProximity = [NSMutableArray array];
+	NSUInteger centre = window.location + window.length / 2;
+	for (NSInteger step = (NSInteger)window.length; step >= 0; step--){
+		for (NSInteger side = 0; side < 2; side++){
+			NSInteger row = (NSInteger)centre + (side ? step : -step);
+			if (row < (NSInteger)window.location ||
+				row >= (NSInteger)(window.location + window.length))
+				continue;
+			for (NSDictionary *m in [self messagesAtRow:row]){
+				NSNumber *fileId = [self pictureFileIdFor:m];
+				if (!fileId || [wanted containsObject:fileId])
+					continue;
 				[wanted addObject:fileId];
+				[byProximity addObject:fileId];
+			}
+			if (!step)
+				break;
 		}
 	}
 	for (NSDictionary *quoted in [self.quotes allValues]){
 		NSNumber *fileId = [self pictureFileIdFor:quoted];
-		if (fileId)
+		if (fileId && ![wanted containsObject:fileId]){
 			[wanted addObject:fileId];
+			[byProximity insertObject:fileId atIndex:0];
+		}
+	}
+
+	if (byProximity.count > kMaxLivePictures){
+		NSRange far = NSMakeRange(0, byProximity.count - kMaxLivePictures);
+		[wanted minusSet:[NSSet setWithArray:[byProximity subarrayWithRange:far]]];
+		[byProximity removeObjectsInRange:far];
 	}
 
 	for (NSNumber *fileId in [self.photoFilesInFlight allObjects]){
@@ -4019,6 +4154,83 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 			continue;
 		[self startPictureDownload:fileId];
 	}
+
+	[self prunePicturesInUseOrder:byProximity];
+}
+
+- (void)prunePicturesInUseOrder:(NSArray *)nearestLast {
+	for (NSNumber *fileId in nearestLast){
+		[self.imageOrder removeObject:fileId];
+		[self.imageOrder addObject:fileId];
+	}
+
+	NSUInteger budget = 0;
+	NSMutableSet *keep = [NSMutableSet set];
+	for (NSNumber *fileId in [self.imageOrder reverseObjectEnumerator]){
+		UIImage *image = self.images[fileId];
+		if (!image)
+			continue;
+		NSUInteger cost = TGImageBitmapBytes(image);
+		if (keep.count && budget + cost > kPictureMemoryBudget)
+			continue;
+		budget += cost;
+		[keep addObject:fileId];
+	}
+
+	for (NSNumber *fileId in [self.images allKeys]){
+		if ([keep containsObject:fileId])
+			continue;
+		[self.images removeObjectForKey:fileId];
+		[self.imagesRequested removeObject:fileId];
+		[self.imageOrder removeObject:fileId];
+	}
+	[self dropTileBitmapsOutside:keep];
+
+	if (!TGPerfLogging())
+		return;
+	NSUInteger tiles = 0;
+	for (UIImage *image in [self.tileBitmaps allValues])
+		tiles += TGImageBitmapBytes(image);
+	NSUInteger thumbs = 0;
+	for (id image in [self.minithumbnails allValues])
+		if ([image isKindOfClass:[UIImage class]])
+			thumbs += TGImageBitmapBytes(image);
+	NSUInteger avatars = 0;
+	for (UIImage *image in [self.senderAvatars allValues])
+		avatars += TGImageBitmapBytes(image);
+	NSLog(@"PERF chatmem pictures=%u/%.2f MB tiles=%u/%.2f MB thumbs=%u/%.2f MB avatars=%.2f MB",
+			(unsigned)self.images.count, budget / 1048576.0,
+			(unsigned)self.tileBitmaps.count, tiles / 1048576.0,
+			(unsigned)self.minithumbnails.count, thumbs / 1048576.0,
+			avatars / 1048576.0);
+}
+
+- (void)dropTileBitmapsOutside:(NSSet *)keep {
+	if (!self.tileBitmaps.count)
+		return;
+	NSMutableSet *live = [NSMutableSet set];
+	for (NSNumber *fileId in keep)
+		[live addObject:[fileId stringValue]];
+	for (NSString *key in [self.tileBitmaps allKeys]){
+		NSRange at = [key rangeOfString:@"@"];
+		if (at.location == NSNotFound)
+			continue;
+		if (![live containsObject:[key substringToIndex:at.location]])
+			[self.tileBitmaps removeObjectForKey:key];
+	}
+}
+
+- (CGFloat)pictureDecodeLimit {
+	CGFloat scale = [UIScreen mainScreen].scale;
+	if (scale < 1.0f)
+		scale = 1.0f;
+	return MAX(kImageMax, [self bubbleWidthBudget]) * scale;
+}
+
+- (void)pictureFailed:(NSNumber *)fileId {
+	[self.imagesRequested removeObject:fileId];
+	[self.photoFilesFailed addObject:fileId];
+	[self refreshRowsShowingFile:fileId withImage:nil];
 }
 
 - (void)startPictureDownload:(NSNumber *)fileId {
@@ -4028,6 +4240,7 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	[self.photoFilesInFlight addObject:fileId];
 	[self.photoFilesCancelled removeObject:fileId];
 
+	CGFloat limit = [self pictureDecodeLimit];
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] downloadFile:[fileId integerValue] completion:^(NSString *path){
 		TGChatViewController *me = weakSelf;
@@ -4039,19 +4252,37 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 			[me.imagesRequested removeObject:fileId];
 			return;
 		}
-		// Stickers arrive as WebP, which UIImage does not know on iOS 7.
-		UIImage *img = path.length ? [UIImage imageWithContentsOfFile:path] : nil;
-		if (!img && [path.pathExtension.lowercaseString isEqualToString:@"webp"])
-			img = [UIImage convertFromWebP:path compressedData:nil error:nil];
-		if (!img){
-			[me.imagesRequested removeObject:fileId];
-			[me.photoFilesFailed addObject:fileId];
-			[me refreshRowsShowingFile:fileId withImage:nil];
+		if (!path.length){
+			[me pictureFailed:fileId];
 			return;
 		}
-		[me.photoFilesFailed removeObject:fileId];
-		me.images[fileId] = img;
-		[me applyArrivedImage:img forFile:fileId];
+
+		dispatch_async(TGImageDecodeQueue(), ^{
+			UIImage *img = nil;
+			@autoreleasepool {
+				img = TGDecodeThumbnail(path, limit);
+				if (!img && [path.pathExtension.lowercaseString isEqualToString:@"webp"])
+					img = TGImageWithinPixelLimit(
+							[UIImage convertFromWebP:path compressedData:nil error:nil], limit);
+			}
+			dispatch_async(dispatch_get_main_queue(), ^{
+				TGChatViewController *inner = weakSelf;
+				if (!inner)
+					return;
+				if ([inner.photoFilesCancelled containsObject:fileId]){
+					[inner.photoFilesCancelled removeObject:fileId];
+					[inner.imagesRequested removeObject:fileId];
+					return;
+				}
+				if (!img){
+					[inner pictureFailed:fileId];
+					return;
+				}
+				[inner.photoFilesFailed removeObject:fileId];
+				inner.images[fileId] = img;
+				[inner applyArrivedImage:img forFile:fileId];
+			});
+		});
 	}];
 }
 
@@ -4069,9 +4300,7 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 
 - (void)applyArrivedImage:(UIImage *)img forFile:(NSNumber *)fileId {
 	if ([self heightDependsOnBitmapForFile:fileId]){
-		[self.table reloadData];
-		if (self.anchorToBottom)
-			[self scrollToBottomAnimated:NO];
+		[self setNeedsTableReloadKeepingBottom];
 		return;
 	}
 	[self refreshRowsShowingFile:fileId withImage:img];
@@ -4110,6 +4339,26 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	if (stale.count)
 		[self.table reloadRowsAtIndexPaths:stale
 						  withRowAnimation:UITableViewRowAnimationNone];
+}
+
+- (void)updateShortContentInset {
+	if (!self.table)
+		return;
+	UIEdgeInsets insets = self.table.contentInset;
+	CGFloat fixed = insets.top - self.shortContentInset;
+	CGFloat room = self.table.bounds.size.height - fixed - insets.bottom;
+	NSInteger rows = [self displayRowCount];
+	if (self.shortContentInset <= 0 && rows * kSystemPlateHeight > room)
+		return;
+	CGFloat pad = rows ? room - self.table.contentSize.height : 0;
+	if (pad < 0)
+		pad = 0;
+	if (fabsf(pad - self.shortContentInset) < 0.5f)
+		return;
+	insets.top = fixed + pad;
+	self.shortContentInset = pad;
+	self.table.contentInset = insets;
+	self.table.scrollIndicatorInsets = insets;
 }
 
 - (void)scrollToBottomAnimated:(BOOL)animated {
@@ -4437,9 +4686,18 @@ static const CGFloat kEmptyPlateHeight = 116.0f;
 	NSNumber *fileId = [[TGClient shared] photoFileIdForChat:self.chatId];
 	if (!fileId)
 		return;
+	CGFloat avatarPixels = side * [UIScreen mainScreen].scale;
 	[[TGClient shared] downloadFile:fileId.integerValue completion:^(NSString *path){
-		UIImage *photo = path ? [UIImage imageWithContentsOfFile:path] : nil;
-		if (photo) [button setImage:photo forState:UIControlStateNormal];
+		if (!path.length)
+			return;
+		dispatch_async(TGImageDecodeQueue(), ^{
+			UIImage *photo = TGDecodeThumbnail(path, avatarPixels);
+			if (!photo)
+				return;
+			dispatch_async(dispatch_get_main_queue(), ^{
+				[button setImage:photo forState:UIControlStateNormal];
+			});
+		});
 	}];
 }
 
@@ -4938,6 +5196,7 @@ static UIImage *TGPinnedBadgeGlyph(void) {
 	self.table.contentInset = insets;
 	self.table.scrollIndicatorInsets = insets;
 	[self centreEmptyPlate];
+	[self updateShortContentInset];
 }
 
 - (void)showPinnedBanner:(NSString *)text {
@@ -5015,6 +5274,7 @@ static UIImage *TGPinnedBadgeGlyph(void) {
 	self.table.contentInset = insets;
 	self.table.scrollIndicatorInsets = insets;
 	[self centreEmptyPlate];
+	[self updateShortContentInset];
 }
 
 - (void)pinnedBannerPressed:(UIControl *)banner {
@@ -5251,14 +5511,24 @@ static UIImage *TGPinnedBadgeGlyph(void) {
 	void (^fetch)(NSNumber *) = ^(NSNumber *fileId){
 		if (!fileId)
 			return;
+		CGFloat sidePixels = kAvatarSide * [UIScreen mainScreen].scale;
 		[[TGClient shared] downloadFile:fileId.integerValue completion:^(NSString *path){
-			TGChatViewController *me = weakSelf;
-			UIImage *photo = path.length ? [UIImage imageWithContentsOfFile:path] : nil;
-			if (!me || !photo)
+			if (!path.length)
 				return;
-			me.senderAvatars[key] = TGImageDrawnAtPointSize(photo,
-					CGSizeMake(kAvatarSide, kAvatarSide));
-			[me refreshAvatarForUser:key];
+			dispatch_async(TGImageDecodeQueue(), ^{
+				UIImage *photo = TGDecodeThumbnail(path, sidePixels);
+				if (!photo)
+					return;
+				UIImage *sized = TGImageDrawnAtPointSize(photo,
+						CGSizeMake(kAvatarSide, kAvatarSide));
+				dispatch_async(dispatch_get_main_queue(), ^{
+					TGChatViewController *me = weakSelf;
+					if (!me)
+						return;
+					me.senderAvatars[key] = sized;
+					[me refreshAvatarForUser:key];
+				});
+			});
 		}];
 	};
 
@@ -9611,26 +9881,61 @@ static CGSize TGStickerFittedSize(CGSize source, BOOL animated) {
 }
 
 - (UIImage *)minithumbnailImageFor:(NSDictionary *)m {
-	id raw = m[@"minithumbnail"];
-	if (!raw || raw == [NSNull null])
-		return nil;
 	NSNumber *key = [m[@"id"] isKindOfClass:NSNumber.class] ? m[@"id"] : nil;
-	if (key){
-		UIImage *cached = self.minithumbnails[key];
-		if (cached)
-			return cached;
-	}
-	NSData *data = nil;
-	if ([raw isKindOfClass:NSData.class])
-		data = raw;
-	else if ([raw isKindOfClass:NSDictionary.class])
-		data = [[TGClient shared] minithumbnailData:raw];
-	if (!data.length)
+	if (!key)
 		return nil;
-	UIImage *image = [UIImage imageWithData:data];
-	if (image && key)
-		self.minithumbnails[key] = image;
-	return image;
+	id cached = self.minithumbnails[key];
+	return [cached isKindOfClass:[UIImage class]] ? cached : nil;
+}
+
+- (void)warmMinithumbnailsFor:(NSArray *)messages {
+	NSMutableArray *pending = [NSMutableArray array];
+	for (NSDictionary *m in messages){
+		NSNumber *key = [m[@"id"] isKindOfClass:NSNumber.class] ? m[@"id"] : nil;
+		id raw = m[@"minithumbnail"];
+		if (!key || !raw || raw == [NSNull null] || self.minithumbnails[key])
+			continue;
+		self.minithumbnails[key] = [NSNull null];
+		[pending addObject:@[key, raw]];
+	}
+	if (!pending.count)
+		return;
+
+	if (pending.count <= 4){
+		for (NSArray *entry in pending){
+			id raw = entry[1];
+			NSData *data = [raw isKindOfClass:NSData.class]
+					? raw : [[TGClient shared] minithumbnailData:raw];
+			UIImage *image = data.length ? [UIImage imageWithData:data] : nil;
+			if (image)
+				self.minithumbnails[entry[0]] = image;
+		}
+		return;
+	}
+
+	__weak typeof(self) weakSelf = self;
+	dispatch_async(TGImageDecodeQueue(), ^{
+		NSMutableDictionary *decoded = [NSMutableDictionary dictionary];
+		@autoreleasepool {
+			for (NSArray *entry in pending){
+				id raw = entry[1];
+				NSData *data = [raw isKindOfClass:NSData.class]
+						? raw : [[TGClient shared] minithumbnailData:raw];
+				UIImage *image = data.length ? [UIImage imageWithData:data] : nil;
+				if (image)
+					decoded[entry[0]] = image;
+			}
+		}
+		if (!decoded.count)
+			return;
+		dispatch_async(dispatch_get_main_queue(), ^{
+			TGChatViewController *me = weakSelf;
+			if (!me)
+				return;
+			[me.minithumbnails addEntriesFromDictionary:decoded];
+			[me setNeedsTableReload];
+		});
+	});
 }
 
 - (BOOL)pictureFailedFor:(NSDictionary *)m {
@@ -9705,13 +10010,30 @@ static CGSize TGStickerFittedSize(CGSize source, BOOL animated) {
 	if (cached)
 		return cached;
 
-	UIImage *drawn = TGImageDrawnAtPointSize(image, target);
-	if (drawn){
-		if (self.tileBitmaps.count > 80)
-			[self.tileBitmaps removeAllObjects];
-		self.tileBitmaps[key] = drawn;
+	if (![self.tileBitmapsRequested containsObject:key]){
+		[self.tileBitmapsRequested addObject:key];
+		__weak typeof(self) weakSelf = self;
+		dispatch_async(TGImageDecodeQueue(), ^{
+			UIImage *drawn = nil;
+			@autoreleasepool {
+				drawn = TGImageDrawnAtPointSize(image, target);
+			}
+			dispatch_async(dispatch_get_main_queue(), ^{
+				TGChatViewController *me = weakSelf;
+				if (!me)
+					return;
+				[me.tileBitmapsRequested removeObject:key];
+				if (!drawn)
+					return;
+				if (me.tileBitmaps.count > 80){
+					[me.tileBitmaps removeAllObjects];
+					[me.tileBitmapsRequested removeAllObjects];
+				}
+				me.tileBitmaps[key] = drawn;
+			});
+		});
 	}
-	return drawn;
+	return image;
 }
 
 - (void)applyPictureTo:(UIImageView *)view message:(NSDictionary *)m {
@@ -11862,24 +12184,25 @@ static const NSInteger kQuoteTapTag = 0x9009;
 			if (!fileId)
 				continue;
 			started++;
-			UIImage *have = self.images[fileId];
-			if (have){
-				UIImageWriteToSavedPhotosAlbum(have, self,
-						@selector(image:didFinishSavingWithError:contextInfo:), NULL);
-				continue;
-			}
 			__weak typeof(self) weakForPhoto = self;
 			[[TGClient shared] downloadFile:[fileId integerValue]
 								 completion:^(NSString *path){
-				TGChatViewController *me = weakForPhoto;
-				if (!me)
+				if (!path.length)
 					return;
-				UIImage *loaded = path ? [UIImage imageWithContentsOfFile:path] : nil;
-				if (!loaded && [path.pathExtension.lowercaseString isEqualToString:@"webp"])
-					loaded = [UIImage convertFromWebP:path compressedData:nil error:nil];
-				if (loaded)
-					UIImageWriteToSavedPhotosAlbum(loaded, me,
-							@selector(image:didFinishSavingWithError:contextInfo:), NULL);
+				dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+					UIImage *loaded = [UIImage imageWithContentsOfFile:path];
+					if (!loaded && [path.pathExtension.lowercaseString isEqualToString:@"webp"])
+						loaded = [UIImage convertFromWebP:path compressedData:nil error:nil];
+					if (!loaded)
+						return;
+					dispatch_async(dispatch_get_main_queue(), ^{
+						TGChatViewController *me = weakForPhoto;
+						if (!me)
+							return;
+						UIImageWriteToSavedPhotosAlbum(loaded, me,
+								@selector(image:didFinishSavingWithError:contextInfo:), NULL);
+					});
+				});
 			}];
 			continue;
 		}

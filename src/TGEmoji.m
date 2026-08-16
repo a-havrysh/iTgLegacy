@@ -41,6 +41,10 @@ static BOOL TGEmojiScalarIsCandidate(UTF32Char code) {
 	return code >= 0xE0020 && code <= 0xE007F;
 }
 
+static BOOL TGEmojiScalarIsPictographic(UTF32Char code) {
+	return code >= 0x1F000 && code <= 0x1FBFF;
+}
+
 static BOOL TGEmojiScalarIsInvisible(UTF32Char code) {
 	if (code == 0x200D || code == 0xFE0E || code == 0xFE0F)
 		return YES;
@@ -152,20 +156,20 @@ static NSString *TGEmojiDirectory(void) {
 	return path;
 }
 
-static NSSet *TGEmojiShippedKeys(void) {
-	static NSSet *keys = nil;
-	if (keys)
-		return keys;
+static BOOL TGEmojiHasImage(NSString *key) {
+	static NSMutableDictionary *known = nil;
+	if (!known)
+		known = [[NSMutableDictionary alloc] init];
 
-	NSArray *files = [[NSFileManager defaultManager]
-			contentsOfDirectoryAtPath:TGEmojiDirectory() error:NULL];
-	NSMutableSet *found = [NSMutableSet setWithCapacity:files.count];
-	for (NSString *file in files){
-		if ([[file pathExtension] isEqualToString:@"png"])
-			[found addObject:[file stringByDeletingPathExtension]];
-	}
-	keys = found;
-	return keys;
+	NSNumber *cached = [known objectForKey:key];
+	if (cached)
+		return [cached boolValue];
+
+	NSString *path = [[TGEmojiDirectory() stringByAppendingPathComponent:key]
+			stringByAppendingPathExtension:@"png"];
+	BOOL exists = [[NSFileManager defaultManager] fileExistsAtPath:path];
+	[known setObject:[NSNumber numberWithBool:exists] forKey:key];
+	return exists;
 }
 
 static NSCache *TGEmojiImageCache(void) {
@@ -304,7 +308,6 @@ static BOOL TGEmojiWalk(NSString *text, UIFont *font, UIColor *colour,
 			? [[NSMutableAttributedString alloc] init] : nil;
 	NSUInteger run = 0;
 	BOOL changed = NO;
-	NSSet *shipped = TGEmojiShippedKeys();
 
 	NSUInteger i = 0;
 	while (i < length){
@@ -362,8 +365,9 @@ static BOOL TGEmojiWalk(NSString *text, UIFont *font, UIColor *colour,
 		}
 
 		NSString *key = TGEmojiKeyForScalars(scalars, scalarCount);
-		BOOL replaceable = [shipped containsObject:key];
-		if (!replaceable && !TGEmojiScalarIsInvisible(code)){
+		BOOL replaceable = TGEmojiHasImage(key);
+		if (!replaceable && !TGEmojiScalarIsInvisible(code) &&
+			!TGEmojiScalarIsPictographic(code)){
 			i = consumed;
 			continue;
 		}
@@ -492,8 +496,9 @@ static NSArray *TGEmojiBuildLines(NSArray *paragraphs, NSDictionary *plain, CGFl
 	return lines;
 }
 
-CGSize TGEmojiTextSize(NSString *text, UIFont *font, CGSize limit,
-					   NSLineBreakMode mode, NSInteger maxLines) {
+static CGSize TGEmojiMeasure(NSString *text, UIFont *font, CGSize limit,
+							 NSLineBreakMode mode, NSInteger maxLines) {
+	TGWaitForTextWarm();
 	if (!TGEmojiTextNeedsSubstitution(text))
 		return [text sizeWithFont:font constrainedToSize:limit lineBreakMode:mode];
 
@@ -510,6 +515,30 @@ CGSize TGEmojiTextSize(NSString *text, UIFont *font, CGSize limit,
 	if (limit.height > 0 && height > limit.height)
 		height = limit.height;
 	return CGSizeMake(ceilf(widest), ceilf(height));
+}
+
+CGSize TGEmojiTextSize(NSString *text, UIFont *font, CGSize limit,
+					   NSLineBreakMode mode, NSInteger maxLines) {
+	if (!text.length)
+		return CGSizeZero;
+
+	static NSCache *measured = nil;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		measured = [[NSCache alloc] init];
+		[measured setCountLimit:512];
+	});
+
+	NSString *key = [[NSString alloc] initWithFormat:@"%@\n%@|%.1f|%.1f|%.1f|%d|%ld",
+			text, font.fontName, font.pointSize, limit.width, limit.height,
+			(int)mode, (long)maxLines];
+	NSValue *hit = [measured objectForKey:key];
+	if (hit)
+		return [hit CGSizeValue];
+
+	CGSize size = TGEmojiMeasure(text, font, limit, mode, maxLines);
+	[measured setObject:[NSValue valueWithCGSize:size] forKey:key];
+	return size;
 }
 
 static void TGEmojiDrawLines(NSArray *lines, UIFont *font, CGRect rect,

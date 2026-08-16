@@ -5,6 +5,7 @@
 #import "TGBackgroundSession.h"
 #import "TGDiskCache.h"
 #import "TGRemoteImageView.h"
+#import "AppDelegate.h"
 #import <UIKit/UIKit.h>
 #include <dlfcn.h>
 #include "api_id.h"
@@ -114,7 +115,9 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 	NSString *path = [[NSBundle mainBundle].bundlePath
 			stringByAppendingPathComponent:@"libtdjson.dylib"];
 
+	TGMemMark(@"before dlopen tdjson");
 	self.handle = dlopen(path.UTF8String, RTLD_NOW | RTLD_LOCAL);
+	TGMemMark(@"after dlopen tdjson");
 	if (!self.handle){
 		NSLog(@"TGClient: dlopen failed: %s", dlerror());
 		return NO;
@@ -135,6 +138,7 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 	[[TGBackgroundSession shared] attachToTDLibHandle:self.handle];
 
 	self.client = create();
+	TGMemMark(@"after td_json_client_create");
 	if (!self.client){
 		NSLog(@"TGClient: td_json_client_create returned NULL");
 		return NO;
@@ -664,6 +668,7 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 	}
 	self.folders = out;
 	NSLog(@"TGClient: %lu folders", (unsigned long)out.count);
+	[self saveCachedFolders];
 }
 
 - (void)handleErrorObject:(NSDictionary *)obj {
@@ -1427,8 +1432,19 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
                  limit:(NSInteger)limit
              onlyLocal:(BOOL)onlyLocal
             completion:(void (^)(NSArray *))completion {
+	[self historyForChat:chatId thread:threadId limit:limit onlyLocal:onlyLocal
+				progress:nil completion:completion];
+}
+
+- (void)historyForChat:(int64_t)chatId
+                thread:(int64_t)threadId
+                 limit:(NSInteger)limit
+             onlyLocal:(BOOL)onlyLocal
+              progress:(void (^)(NSArray *))progress
+            completion:(void (^)(NSArray *))completion {
 	if (threadId == 0){
-		[self historyForChat:chatId limit:limit onlyLocal:onlyLocal completion:completion];
+		[self historyForChat:chatId limit:limit onlyLocal:onlyLocal
+					progress:progress completion:completion];
 		return;
 	}
 	if (onlyLocal){
@@ -1538,12 +1554,22 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
                  limit:(NSInteger)limit
              onlyLocal:(BOOL)onlyLocal
             completion:(void (^)(NSArray *))completion {
+	[self historyForChat:chatId limit:limit onlyLocal:onlyLocal
+				progress:nil completion:completion];
+}
+
+- (void)historyForChat:(int64_t)chatId
+                 limit:(NSInteger)limit
+             onlyLocal:(BOOL)onlyLocal
+              progress:(void (^)(NSArray *))progress
+            completion:(void (^)(NSArray *))completion {
 	NSMutableArray *collected = [NSMutableArray array];
 	[self fetchHistoryChunkForChat:chatId
 					 fromMessageId:0
 							 limit:limit
 						 onlyLocal:onlyLocal
 						 collected:collected
+						  progress:progress
 						completion:completion];
 }
 
@@ -1552,6 +1578,7 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
                            limit:(NSInteger)limit
                        onlyLocal:(BOOL)onlyLocal
                        collected:(NSMutableArray *)collected
+                        progress:(void (^)(NSArray *))progress
                       completion:(void (^)(NSArray *))completion {
 	__weak typeof(self) weakSelf = self;
 	[self request:@{
@@ -1564,6 +1591,10 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 	} completion:^(NSDictionary *result){
 		TGClient *me = weakSelf;
 		NSArray *msgs = result[@"messages"];
+
+		TGMarkOpenStage([NSString stringWithFormat:@"getChatHistory(%@) chunk of %lu",
+				onlyLocal ? @"local" : @"net",
+				(unsigned long)([msgs isKindOfClass:NSArray.class] ? msgs.count : 0)]);
 
 		if (!me || ![msgs isKindOfClass:NSArray.class] || msgs.count == 0){
 			// End of the chat, or an error - hand back what we have, oldest
@@ -1583,12 +1614,16 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 			return;
 		}
 
+		NSArray *soFar = progress ? [[collected reverseObjectEnumerator] allObjects] : nil;
 		[me fetchHistoryChunkForChat:chatId
 					   fromMessageId:oldest
 							   limit:limit - collected.count
 						   onlyLocal:onlyLocal
 						   collected:collected
+							progress:progress
 						  completion:completion];
+		if (progress)
+			progress(soFar);
 	}];
 }
 
@@ -2859,10 +2894,17 @@ static NSArray *TGPacksFrom(NSDictionary *target) {
 		info[@"isMuted"] = @([chat[@"notification_settings"][@"mute_for"] integerValue] > 0);
 
 	// Small avatar, if the chat has one. Downloaded lazily; the id is enough
-	// for the UI to ask for it later.
 	NSNumber *photoFile = chat[@"photo"][@"small"][@"id"];
 	if (photoFile)
 		info[@"photoFileId"] = photoFile;
+	NSString *photoKey = chat[@"photo"][@"small"][@"remote"][@"unique_id"];
+	if ([photoKey isKindOfClass:NSString.class] && photoKey.length)
+		info[@"photoKey"] = photoKey;
+	else if (photoFile)
+		[info removeObjectForKey:@"photoKey"];
+	NSString *photoMini = chat[@"photo"][@"minithumbnail"][@"data"];
+	if ([photoMini isKindOfClass:NSString.class] && photoMini.length)
+		info[@"photoMini"] = photoMini;
 
 	info[@"draft"] = TGDraftText(chat[@"draft_message"]);
 
@@ -3058,10 +3100,46 @@ static NSDictionary *TGPlistSafeChat(NSDictionary *chat) {
 	return [out[@"id"] isKindOfClass:NSNumber.class] ? out : nil;
 }
 
+static NSString *const TGFolderSnapshotName = @"folders";
+
+- (void)saveCachedFolders {
+	NSMutableArray *rows = [NSMutableArray array];
+	for (NSDictionary *folder in self.folders ?: @[]){
+		id folderId = folder[@"id"];
+		id title = folder[@"title"];
+		if ([folderId isKindOfClass:NSNumber.class] && [title isKindOfClass:NSString.class])
+			[rows addObject:@{@"id" : folderId, @"title" : title}];
+	}
+	NSData *data = [NSPropertyListSerialization dataWithPropertyList:rows
+			format:NSPropertyListBinaryFormat_v1_0 options:0 error:NULL];
+	if (!data.length)
+		return;
+	dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
+		[TGDiskCache writeData:data toProtectedPath:
+				[TGDiskCache snapshotPathForName:TGFolderSnapshotName]];
+	});
+}
+
+- (void)loadCachedFolders {
+	if (self.folders.count)
+		return;
+	NSData *data = [NSData dataWithContentsOfFile:
+			[TGDiskCache snapshotPathForName:TGFolderSnapshotName]];
+	if (!data.length)
+		return;
+	id plist = [NSPropertyListSerialization propertyListWithData:data
+														 options:NSPropertyListImmutable
+														  format:NULL
+														   error:NULL];
+	if ([plist isKindOfClass:NSArray.class] && [(NSArray *)plist count])
+		self.folders = plist;
+}
+
 - (void)loadCachedChats {
 	if (self.cachedChatsLoaded || self.chatsById.count)
 		return;
 	self.cachedChatsLoaded = YES;
+	[self loadCachedFolders];
 
 	NSData *data = [NSData dataWithContentsOfFile:
 			[TGDiskCache snapshotPathForName:TGChatSnapshotName]];

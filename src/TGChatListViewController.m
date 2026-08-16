@@ -1179,7 +1179,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 @property (nonatomic, strong) NSArray *chats;
 @property (nonatomic, assign) BOOL showsArchive;      // this IS the archive screen
 @property (nonatomic, assign) NSInteger folderId;     // 0 = no folder
-@property (nonatomic, strong) NSMutableDictionary *avatars;   // fileId -> UIImage
+@property (nonatomic, strong) NSMutableDictionary *avatars;   // stable avatar key -> UIImage
 @property (nonatomic, strong) NSMutableSet *avatarsRequested;
 @property (nonatomic, strong) NSMutableSet *avatarsInFlight;
 @property (nonatomic, strong) NSMutableSet *avatarsFailedOnce;
@@ -1189,12 +1189,15 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 @property (nonatomic, strong) NSDictionary *actionChat; // long-pressed row
 @property (nonatomic, assign) int64_t chatPendingDeletion;
 @property (nonatomic, assign) CGFloat headerHeight;
+@property (nonatomic, copy) NSString *headerSignature;
 @property (nonatomic, assign) CGFloat scrollAnchor;
 @property (nonatomic, assign) BOOL archiveAvailable;
 @property (nonatomic, assign) BOOL archiveRevealed;
 @property (nonatomic, assign) CGFloat archiveRowTop;
 @property (nonatomic, weak) TGChatCell *archiveRowView;
 @property (nonatomic, assign) BOOL initialScrollApplied;
+@property (nonatomic, strong) NSMutableDictionary *avatarMinis;
+@property (nonatomic, assign) BOOL warmedFirstFrameAvatars;
 @property (nonatomic, strong) UIView *emptyContainer;
 @property (nonatomic, strong) UIImageView *emptyIcon;
 @property (nonatomic, strong) UILabel *emptyTitleLabel;
@@ -1238,6 +1241,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 - (void)buildRowCaches {
 	self.chats = @[];
 	self.avatars = [NSMutableDictionary dictionary];
+	self.avatarMinis = [NSMutableDictionary dictionary];
 	self.avatarsRequested = [NSMutableSet set];
 	self.avatarsInFlight = [NSMutableSet set];
 	self.avatarsFailedOnce = [NSMutableSet set];
@@ -1895,6 +1899,27 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	CGFloat rowsTop = kSearchBarHeight + loginHeight + folderBannerHeight + trayHeight
 			+ stripHeight;
 	CGFloat height = rowsTop + (showArchive ? kRowHeight : 0);
+
+	TGTheme *theme = [TGTheme shared];
+	NSMutableString *signature = [NSMutableString stringWithFormat:
+			@"%.1f|%lu|%d%d%d%d%d%d|%ld|%d|%@",
+			width, (unsigned long)archivedCount,
+			hasArchive, showArchive, showTray, showStrip, showLogin, showFolderBanner,
+			(long)[self.listUnread[@(TGChatListArchive)] integerValue],
+			theme.isDark, theme.importedName ?: @"-"];
+	if (showTray)
+		[signature appendFormat:@"|tray:%@", TGReplyArray(self.storyPosters)];
+	if (showStrip)
+		[signature appendFormat:@"|strip:%@", [self folderStripEntries]];
+	if (showLogin)
+		[signature appendFormat:@"|login:%@", self.unconfirmedSession];
+	if (showFolderBanner)
+		[signature appendFormat:@"|banner:%@", self.folderNewChats];
+
+	if (self.tableView.tableHeaderView != nil &&
+		[signature isEqualToString:self.headerSignature])
+		return;
+	self.headerSignature = signature;
 
 	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, height)];
 	header.backgroundColor = [[TGTheme shared] listBackgroundColour];
@@ -2560,8 +2585,8 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	avatar.layer.cornerRadius = 5;
 	avatar.clipsToBounds = YES;
 	avatar.contentMode = UIViewContentModeScaleAspectFill;
-	NSNumber *fileId = poster[@"photoFileId"];
-	UIImage *photo = fileId ? self.avatars[fileId] : nil;
+	NSString *posterKey = TGAvatarKeyForChat(poster);
+	UIImage *photo = posterKey.length ? self.avatars[posterKey] : nil;
 	if (!photo){
 		NSString *title = TGReplyString(poster[@"title"]) ?: @"";
 		photo = [TGIcons avatarWithInitials:(title.length
@@ -2788,6 +2813,10 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 
 	self.chats = TGChatRows([TGClient shared].chats);
 	self.loadingMore = NO;
+	if (!self.showsArchive){
+		[self loadCachedAvatarsForFirstFrame];
+		[self warmAvatarPlaceholders];
+	}
 	[self.tableView reloadData];
 	[self refreshUnreadCounters];
 	[self rebuildTableHeader];
@@ -3137,7 +3166,7 @@ static UIImage *TGAvatarThumbnail(UIImage *source, CGFloat sidePoints) {
 	}
 }
 
-- (NSSet *)avatarFileIdsWanted {
+- (NSSet *)avatarKeysWanted {
 	NSMutableSet *wanted = [NSMutableSet set];
 	NSArray *rows = [self visibleChats];
 	NSInteger headerCount = (NSInteger)[self headerRows].count;
@@ -3160,21 +3189,21 @@ static UIImage *TGAvatarThumbnail(UIImage *source, CGFloat sidePoints) {
 		NSInteger index = row - headerCount;
 		if (index < 0 || index >= (NSInteger)rows.count)
 			continue;
-		id fileId = rows[index][@"photoFileId"];
-		if ([fileId isKindOfClass:[NSNumber class]])
-			[wanted addObject:fileId];
+		NSString *avatarKey = TGAvatarKeyForChat(rows[index]);
+		if (avatarKey.length)
+			[wanted addObject:avatarKey];
 	}
 	for (NSDictionary *poster in (self.storyPosters ?: @[])){
-		id fileId = poster[@"photoFileId"];
-		if ([fileId isKindOfClass:[NSNumber class]])
-			[wanted addObject:fileId];
+		NSString *avatarKey = TGAvatarKeyForChat(poster);
+		if (avatarKey.length)
+			[wanted addObject:avatarKey];
 	}
 	return wanted;
 }
 
-- (BOOL)storyPostersUseAvatarFileId:(NSNumber *)fileId {
+- (BOOL)storyPostersUseAvatarKey:(NSString *)avatarKey {
 	for (NSDictionary *poster in (self.storyPosters ?: @[]))
-		if ([fileId isEqual:poster[@"photoFileId"]])
+		if ([avatarKey isEqualToString:(TGAvatarKeyForChat(poster) ?: @"")])
 			return YES;
 	return NO;
 }
@@ -3202,14 +3231,15 @@ static UIImage *TGAvatarThumbnail(UIImage *source, CGFloat sidePoints) {
 	return nil;
 }
 
-- (void)applyArrivedAvatar:(UIImage *)image forFileId:(NSNumber *)fileId {
+- (void)applyArrivedAvatar:(UIImage *)image forKey:(NSString *)avatarKey {
 	NSMutableSet *owners = [NSMutableSet set];
 	for (NSDictionary *c in [self visibleChats]){
-		if ([fileId isEqual:c[@"photoFileId"]] && ![c[@"isSaved"] boolValue])
+		if ([avatarKey isEqualToString:(TGAvatarKeyForChat(c) ?: @"")] &&
+			![c[@"isSaved"] boolValue])
 			[owners addObject:@([c[@"id"] longLongValue])];
 	}
 	if (!owners.count){
-		if ([self storyPostersUseAvatarFileId:fileId])
+		if ([self storyPostersUseAvatarKey:avatarKey])
 			[self rebuildTableHeader];
 		return;
 	}
@@ -3229,7 +3259,7 @@ static UIImage *TGAvatarThumbnail(UIImage *source, CGFloat sidePoints) {
 						animations:^{ target.image = image; }
 						completion:nil];
 	}
-	if ([self storyPostersUseAvatarFileId:fileId])
+	if ([self storyPostersUseAvatarKey:avatarKey])
 		[self rebuildTableHeader];
 }
 
@@ -3250,11 +3280,20 @@ static UIImage *TGAvatarThumbnail(UIImage *source, CGFloat sidePoints) {
 			(unsigned long)count]);
 }
 
-static NSString *TGAvatarDiskKey(NSNumber *fileId, long long ownerChatId) {
-	if (!ownerChatId)
+static NSString *TGAvatarDiskKey(NSString *avatarKey) {
+	if (!avatarKey.length)
 		return nil;
-	return [NSString stringWithFormat:@"chatavatar_%lld_%@_%d",
-			ownerChatId, fileId, (int)kAvatar];
+	return [NSString stringWithFormat:@"chatavatar_%@_%d", avatarKey, (int)kAvatar];
+}
+
+static NSString *TGAvatarKeyForChat(NSDictionary *chat) {
+	NSString *stable = chat[@"photoKey"];
+	if ([stable isKindOfClass:[NSString class]] && stable.length)
+		return stable;
+	NSNumber *fileId = chat[@"photoFileId"];
+	if ([fileId isKindOfClass:[NSNumber class]])
+		return [NSString stringWithFormat:@"session%@", fileId];
+	return nil;
 }
 
 static CGFloat TGAvatarScale(void) {
@@ -3262,58 +3301,131 @@ static CGFloat TGAvatarScale(void) {
 	return scale < 1.0f ? 1.0f : scale;
 }
 
-- (long long)avatarOwnerChatIdForFileId:(NSNumber *)fileId {
-	for (NSDictionary *c in [self visibleChats]){
-		if ([fileId isEqual:c[@"photoFileId"]])
-			return [c[@"id"] longLongValue];
-	}
-	for (NSDictionary *poster in (self.storyPosters ?: @[])){
-		if ([fileId isEqual:poster[@"photoFileId"]])
-			return [poster[@"chatId"] longLongValue];
-	}
-	return 0;
+- (UIImage *)blurredAvatarPlaceholderForChat:(NSDictionary *)chat {
+	NSString *encoded = chat[@"photoMini"];
+	if (![encoded isKindOfClass:[NSString class]] || !encoded.length)
+		return nil;
+	id cached = self.avatarMinis[encoded];
+	if (cached)
+		return [cached isKindOfClass:[UIImage class]] ? cached : nil;
+	[self warmAvatarPlaceholders];
+	return nil;
 }
 
-- (void)startAvatarDownload:(NSNumber *)fileId {
-	[self.avatarsRequested addObject:fileId];
-	[self.avatarsInFlight addObject:fileId];
-
-	NSString *key = TGAvatarDiskKey(fileId, [self avatarOwnerChatIdForFileId:fileId]);
-	if (!key){
-		[self downloadAvatar:fileId key:nil];
-		return;
+- (void)warmAvatarPlaceholders {
+	NSMutableArray *pending = [NSMutableArray array];
+	for (NSDictionary *c in [self visibleChats]){
+		NSString *encoded = c[@"photoMini"];
+		if (![encoded isKindOfClass:[NSString class]] || !encoded.length)
+			continue;
+		if (self.avatarMinis[encoded])
+			continue;
+		self.avatarMinis[encoded] = [NSNull null];
+		[pending addObject:encoded];
 	}
+	if (!pending.count)
+		return;
 
+	__weak typeof(self) weakSelf = self;
+	dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+		NSMutableDictionary *decoded = [NSMutableDictionary dictionary];
+		@autoreleasepool {
+			for (NSString *encoded in pending){
+				NSData *bytes = [[TGClient shared] minithumbnailData:@{@"data" : encoded}];
+				UIImage *image = bytes.length ? [UIImage imageWithData:bytes] : nil;
+				if (image)
+					decoded[encoded] = image;
+			}
+		}
+		if (!decoded.count)
+			return;
+		dispatch_async(dispatch_get_main_queue(), ^{
+			TGChatListViewController *me = weakSelf;
+			if (!me)
+				return;
+			[me.avatarMinis addEntriesFromDictionary:decoded];
+			[me.tableView reloadData];
+		});
+	});
+}
+
+- (NSNumber *)avatarFileIdForKey:(NSString *)avatarKey {
+	for (NSDictionary *c in [self visibleChats]){
+		if ([avatarKey isEqualToString:(TGAvatarKeyForChat(c) ?: @"")])
+			return c[@"photoFileId"];
+	}
+	for (NSDictionary *poster in (self.storyPosters ?: @[])){
+		if ([avatarKey isEqualToString:(TGAvatarKeyForChat(poster) ?: @"")])
+			return poster[@"photoFileId"];
+	}
+	return nil;
+}
+
+- (void)startAvatarLoadForKey:(NSString *)avatarKey {
+	[self.avatarsRequested addObject:avatarKey];
+	[self.avatarsInFlight addObject:avatarKey];
+
+	NSString *key = TGAvatarDiskKey(avatarKey);
 	__weak typeof(self) weakSelf = self;
 	dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
 		UIImage *cached = [TGDiskCache imageForKey:key scale:TGAvatarScale()];
 		dispatch_async(dispatch_get_main_queue(), ^{
 			TGChatListViewController *me = weakSelf;
-			if (!me || ![me.avatarsRequested containsObject:fileId])
+			if (!me || ![me.avatarsRequested containsObject:avatarKey])
 				return;
 			if (!cached){
-				[me downloadAvatar:fileId key:key];
+				[me downloadAvatarForKey:avatarKey];
 				return;
 			}
-			[me.avatarsInFlight removeObject:fileId];
-			[me.avatarsFailedOnce removeObject:fileId];
-			me.avatars[fileId] = cached;
-			[me applyArrivedAvatar:cached forFileId:fileId];
+			[me.avatarsInFlight removeObject:avatarKey];
+			[me.avatarsFailedOnce removeObject:avatarKey];
+			me.avatars[avatarKey] = cached;
+			[me applyArrivedAvatar:cached forKey:avatarKey];
 		});
 	});
 }
 
-- (void)downloadAvatar:(NSNumber *)fileId key:(NSString *)key {
+- (void)loadCachedAvatarsForFirstFrame {
+	if (self.warmedFirstFrameAvatars)
+		return;
+	self.warmedFirstFrameAvatars = YES;
+	NSArray *rows = [self visibleChats];
+	NSUInteger limit = MIN(rows.count, (NSUInteger)(kAvatarPrefetchRows + 4));
+	NSUInteger found = 0;
+	for (NSUInteger i = 0; i < limit; i++){
+		NSString *avatarKey = TGAvatarKeyForChat(rows[i]);
+		if (!avatarKey.length || self.avatars[avatarKey])
+			continue;
+		UIImage *cached = [TGDiskCache imageForKey:TGAvatarDiskKey(avatarKey)
+											 scale:TGAvatarScale()];
+		if (!cached)
+			continue;
+		self.avatars[avatarKey] = cached;
+		[self.avatarsRequested addObject:avatarKey];
+		found++;
+	}
+	TGMarkLaunchStage([NSString stringWithFormat:@"%lu avatars off disk", (unsigned long)found]);
+}
+
+- (void)downloadAvatarForKey:(NSString *)avatarKey {
+	NSNumber *fileId = [self avatarFileIdForKey:avatarKey];
+	if (![fileId isKindOfClass:[NSNumber class]]){
+		[self.avatarsInFlight removeObject:avatarKey];
+		[self.avatarsRequested removeObject:avatarKey];
+		return;
+	}
+
+	NSString *key = TGAvatarDiskKey(avatarKey);
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] downloadFile:[fileId integerValue] completion:^(NSString *reply){
 		TGChatListViewController *me = weakSelf;
 		if (!me)
 			return;
-		[me.avatarsInFlight removeObject:fileId];
+		[me.avatarsInFlight removeObject:avatarKey];
 
 		NSString *path = TGReplyString(reply);
 		if (!path.length){
-			[me avatarFailed:fileId];
+			[me avatarFailed:avatarKey];
 			return;
 		}
 
@@ -3329,42 +3441,44 @@ static CGFloat TGAvatarScale(void) {
 				if (!inner)
 					return;
 				if (!img){
-					[inner avatarFailed:fileId];
+					[inner avatarFailed:avatarKey];
 					return;
 				}
-				[inner.avatarsFailedOnce removeObject:fileId];
-				inner.avatars[fileId] = img;
-				[inner applyArrivedAvatar:img forFileId:fileId];
+				[inner.avatarsFailedOnce removeObject:avatarKey];
+				inner.avatars[avatarKey] = img;
+				[inner applyArrivedAvatar:img forKey:avatarKey];
 			});
 		});
 	}];
 }
 
-- (void)avatarFailed:(NSNumber *)fileId {
-	if (![self.avatarsRequested containsObject:fileId])
+- (void)avatarFailed:(NSString *)avatarKey {
+	if (![self.avatarsRequested containsObject:avatarKey])
 		return;
-	if ([self.avatarsFailedOnce containsObject:fileId])
+	if ([self.avatarsFailedOnce containsObject:avatarKey])
 		return;
-	[self.avatarsFailedOnce addObject:fileId];
-	[self.avatarsRequested removeObject:fileId];
+	[self.avatarsFailedOnce addObject:avatarKey];
+	[self.avatarsRequested removeObject:avatarKey];
 }
 
 - (void)fetchMissingAvatars {
 	self.lastAvatarSweep = [NSDate timeIntervalSinceReferenceDate];
-	NSSet *wanted = [self avatarFileIdsWanted];
+	NSSet *wanted = [self avatarKeysWanted];
 
-	for (NSNumber *fileId in [self.avatarsInFlight allObjects]){
-		if ([wanted containsObject:fileId])
+	for (NSString *avatarKey in [self.avatarsInFlight allObjects]){
+		if ([wanted containsObject:avatarKey])
 			continue;
-		[self.avatarsInFlight removeObject:fileId];
-		[self.avatarsRequested removeObject:fileId];
-		[[TGClient shared] cancelDownloadOfFile:[fileId integerValue] onlyIfPending:NO];
+		[self.avatarsInFlight removeObject:avatarKey];
+		[self.avatarsRequested removeObject:avatarKey];
+		NSNumber *fileId = [self avatarFileIdForKey:avatarKey];
+		if ([fileId isKindOfClass:[NSNumber class]])
+			[[TGClient shared] cancelDownloadOfFile:[fileId integerValue] onlyIfPending:NO];
 	}
 
-	for (NSNumber *fileId in wanted){
-		if (self.avatars[fileId] || [self.avatarsRequested containsObject:fileId])
+	for (NSString *avatarKey in wanted){
+		if (self.avatars[avatarKey] || [self.avatarsRequested containsObject:avatarKey])
 			continue;
-		[self startAvatarDownload:fileId];
+		[self startAvatarLoadForKey:avatarKey];
 	}
 }
 
@@ -4253,10 +4367,12 @@ static const NSInteger kChatActionsTag = 77;
 }
 
 - (void)configureAvatarInCell:(TGChatCell *)cell chat:(NSDictionary *)c {
-	NSNumber *fileId = c[@"photoFileId"];
-	UIImage *photo = fileId ? self.avatars[fileId] : nil;
+	NSString *avatarKey = TGAvatarKeyForChat(c);
+	UIImage *photo = avatarKey.length ? self.avatars[avatarKey] : nil;
 	if ([c[@"isSaved"] boolValue])
 		photo = [TGIcons savedMessagesAvatarOfSide:kAvatar];
+	if (!photo)
+		photo = [self blurredAvatarPlaceholderForChat:c];
 	if (!photo){
 		NSString *title = TGReplyString(c[@"title"]) ?: @"";
 		NSString *initials = title.length ? [title substringToIndex:1] : @"?";
@@ -4465,10 +4581,10 @@ static const NSInteger kChatActionsTag = 77;
 	if (!c)
 		return;
 	[self fetchRowDetailForChat:c];
-	NSNumber *avatarFileId = c[@"photoFileId"];
-	if ([avatarFileId isKindOfClass:[NSNumber class]] && !self.avatars[avatarFileId] &&
-		![self.avatarsRequested containsObject:avatarFileId])
-		[self startAvatarDownload:avatarFileId];
+	NSString *avatarKey = TGAvatarKeyForChat(c);
+	if (avatarKey.length && !self.avatars[avatarKey] &&
+		![self.avatarsRequested containsObject:avatarKey])
+		[self startAvatarLoadForKey:avatarKey];
 	if (![c[@"sponsored"] boolValue])
 		return;
 	NSNumber *uniqueId = c[@"uniqueId"];
@@ -4482,13 +4598,15 @@ static const NSInteger kChatActionsTag = 77;
 		forRowAtIndexPath:(NSIndexPath *)indexPath {
 	if (!self.avatarsInFlight.count)
 		return;
-	NSSet *wanted = [self avatarFileIdsWanted];
-	for (NSNumber *fileId in [self.avatarsInFlight allObjects]){
-		if ([wanted containsObject:fileId])
+	NSSet *wanted = [self avatarKeysWanted];
+	for (NSString *avatarKey in [self.avatarsInFlight allObjects]){
+		if ([wanted containsObject:avatarKey])
 			continue;
-		[self.avatarsInFlight removeObject:fileId];
-		[self.avatarsRequested removeObject:fileId];
-		[[TGClient shared] cancelDownloadOfFile:[fileId integerValue] onlyIfPending:NO];
+		[self.avatarsInFlight removeObject:avatarKey];
+		[self.avatarsRequested removeObject:avatarKey];
+		NSNumber *fileId = [self avatarFileIdForKey:avatarKey];
+		if ([fileId isKindOfClass:[NSNumber class]])
+			[[TGClient shared] cancelDownloadOfFile:[fileId integerValue] onlyIfPending:NO];
 	}
 }
 
@@ -4609,6 +4727,7 @@ static const NSInteger kChatActionsTag = 77;
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+	TGBeginOpenTimingFromTap();
 	if (![self splitLayoutActive])
 		[tableView deselectRowAtIndexPath:indexPath animated:YES];
 

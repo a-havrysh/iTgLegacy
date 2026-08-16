@@ -44,8 +44,8 @@ static NSData *TGFilesDataFromBase64(id value) {
 		return nil;
 
 	static signed char table[256];
-	static BOOL ready = NO;
-	if (!ready){
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
 		static const char *alphabet =
 				"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 		for (int i = 0; i < 256; i++)
@@ -54,8 +54,7 @@ static NSData *TGFilesDataFromBase64(id value) {
 			table[(unsigned char)alphabet[i]] = (signed char)i;
 		table[(unsigned char)'-'] = 62;
 		table[(unsigned char)'_'] = 63;
-		ready = YES;
-	}
+	});
 
 	NSMutableData *out = nil;
 	@autoreleasepool {

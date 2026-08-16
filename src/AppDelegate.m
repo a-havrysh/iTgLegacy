@@ -25,8 +25,11 @@
 #import "TGDiskCache.h"
 #import "TGRemoteImageView.h"
 #import <QuartzCore/QuartzCore.h>
+#import <CoreText/CoreText.h>
 #include <stdio.h>
+#include <sys/sysctl.h>
 #include <mach/mach.h>
+#include <dlfcn.h>
 #include <malloc/malloc.h>
 
 @protocol TGTabBarHitTesting <NSObject>
@@ -37,8 +40,10 @@ extern void TGEmojiPurgeImages(void);
 
 static NSTimeInterval TGLaunchStarted = 0;
 static NSTimeInterval TGOpenStarted = 0;
-static volatile double TGMainPingAt = 0;
+static BOOL TGOpenFrameSeen = NO;
+static BOOL TGOpenSettledSeen = NO;
 static unsigned long long TGResidentPeak = 0;
+static volatile double TGMainPingAt = 0;
 
 unsigned long long TGResidentBytes(void) {
 	struct task_basic_info info;
@@ -51,7 +56,7 @@ unsigned long long TGResidentBytes(void) {
 	return rss;
 }
 
-double TGProcessCPUSeconds(void) {
+static double TGProcessCPUSeconds(void) {
 	double total = 0;
 	struct task_basic_info basic;
 	mach_msg_type_number_t count = TASK_BASIC_INFO_COUNT;
@@ -79,13 +84,6 @@ static unsigned int TGThreadCount(void) {
 	return (unsigned int)count;
 }
 
-void TGMemMark(NSString *tag) {
-	unsigned long long rss = TGResidentBytes();
-	NSLog(@"PERF mem %@ rss=%.2f MB peak=%.2f MB cpu=%.2f s threads=%u",
-			tag, rss / 1048576.0, TGResidentPeak / 1048576.0,
-			TGProcessCPUSeconds(), TGThreadCount());
-}
-
 static void TGMemZoneReport(NSString *tag) {
 	vm_address_t *zones = NULL;
 	unsigned int count = 0;
@@ -109,33 +107,248 @@ static void TGMemZoneReport(NSString *tag) {
 	NSLog(@"PERF zone %@ TOTAL malloc in_use=%.2f MB", tag, inUse / 1048576.0);
 }
 
-static void TGStartMemorySampler(void) {
-	static dispatch_once_t once;
-	dispatch_once(&once, ^{
-		TGMainPingAt = [NSDate timeIntervalSinceReferenceDate];
-		dispatch_async(dispatch_get_main_queue(), ^{
-			[NSTimer scheduledTimerWithTimeInterval:0.05
-											 target:[AppDelegate class]
-										   selector:@selector(tgPingMainThread)
-										   userInfo:nil
-											repeats:YES];
-		});
-		[NSThread detachNewThreadSelector:@selector(tgMemorySamplerLoop)
-								 toTarget:[AppDelegate class]
-							   withObject:nil];
-	});
+static volatile BOOL TGPerfLoggingOn = NO;
+
+BOOL TGPerfLogging(void) {
+	return TGPerfLoggingOn;
+}
+
+static thread_t TGMainThreadPort = MACH_PORT_NULL;
+static volatile BOOL TGStackSamplingOn = NO;
+
+static BOOL TGPeek(const void *address, void *into, size_t length) {
+	vm_size_t got = 0;
+	if (vm_read_overwrite(mach_task_self(), (vm_address_t)address, length,
+			(vm_address_t)into, &got) != KERN_SUCCESS)
+		return NO;
+	return got == length;
+}
+
+static int TGCaptureMainStack(void **frames, int maximum) {
+	if (TGMainThreadPort == MACH_PORT_NULL)
+		return 0;
+	if (thread_suspend(TGMainThreadPort) != KERN_SUCCESS)
+		return 0;
+	int found = 0;
+#if defined(__arm__)
+	_STRUCT_ARM_THREAD_STATE state;
+	mach_msg_type_number_t count = ARM_THREAD_STATE_COUNT;
+	if (thread_get_state(TGMainThreadPort, ARM_THREAD_STATE,
+			(thread_state_t)&state, &count) == KERN_SUCCESS){
+		frames[found++] = (void *)state.__pc;
+		if (state.__lr && found < maximum)
+			frames[found++] = (void *)state.__lr;
+		const void **link = (const void **)state.__r[7];
+		while (found < maximum && link && ((uintptr_t)link & 3) == 0){
+			const void *next = NULL;
+			const void *returnAddress = NULL;
+			if (!TGPeek(link, &next, sizeof(next)))
+				break;
+			if (!TGPeek(link + 1, &returnAddress, sizeof(returnAddress)))
+				break;
+			if (!returnAddress)
+				break;
+			frames[found++] = (void *)returnAddress;
+			if ((const void **)next <= link)
+				break;
+			link = (const void **)next;
+		}
+	}
+#endif
+	thread_resume(TGMainThreadPort);
+	return found;
+}
+
+static void TGLogMainStack(void) {
+	void *frames[48];
+	int found = TGCaptureMainStack(frames, 48);
+	if (found <= 0)
+		return;
+	char line[4000];
+	size_t used = 0;
+	for (int i = 0; i < found && used < sizeof(line) - 90; i++){
+		Dl_info info;
+		memset(&info, 0, sizeof(info));
+		const char *symbol = "?";
+		const char *image = "?";
+		if (dladdr(frames[i], &info)){
+			if (info.dli_sname)
+				symbol = info.dli_sname;
+			if (info.dli_fname){
+				const char *slash = strrchr(info.dli_fname, '/');
+				image = slash ? slash + 1 : info.dli_fname;
+			}
+		}
+		used += snprintf(line + used, sizeof(line) - used, "%s%s`%s",
+				i ? " < " : "", image, symbol);
+	}
+	line[sizeof(line) - 1] = 0;
+	NSLog(@"PERF stack | %s", line);
+}
+
+static void TGRegionReport(NSString *tag) {
+	vm_address_t address = 0;
+	unsigned long long byTag[256];
+	unsigned long long dirtyByTag[256];
+	memset(byTag, 0, sizeof(byTag));
+	memset(dirtyByTag, 0, sizeof(dirtyByTag));
+
+	while (1){
+		vm_size_t size = 0;
+		uint32_t depth = 1;
+		struct vm_region_submap_info_64 info;
+		mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
+		if (vm_region_recurse_64(mach_task_self(), &address, &size, &depth,
+				(vm_region_recurse_info_t)&info, &count) != KERN_SUCCESS)
+			break;
+		if (info.is_submap){
+			depth++;
+			continue;
+		}
+		unsigned int slot = info.user_tag & 0xFF;
+		byTag[slot] += (unsigned long long)info.pages_resident * vm_page_size;
+		dirtyByTag[slot] += (unsigned long long)info.pages_dirtied * vm_page_size;
+		address += size;
+	}
+
+	for (unsigned int i = 0; i < 256; i++){
+		if (byTag[i] < 1048576)
+			continue;
+		NSLog(@"PERF region %@ tag=%u resident=%.2f MB dirty=%.2f MB",
+				tag, i, byTag[i] / 1048576.0, dirtyByTag[i] / 1048576.0);
+	}
+}
+
+void TGMemMark(NSString *tag) {
+	vm_address_t *zones = NULL;
+	unsigned int count = 0;
+	unsigned long long inUse = 0;
+	if (malloc_get_all_zones(mach_task_self(), NULL, &zones, &count) == KERN_SUCCESS){
+		for (unsigned int i = 0; i < count; i++){
+			malloc_zone_t *zone = (malloc_zone_t *)zones[i];
+			if (!zone || !zone->introspect)
+				continue;
+			malloc_statistics_t stats;
+			memset(&stats, 0, sizeof(stats));
+			malloc_zone_statistics(zone, &stats);
+			inUse += stats.size_in_use;
+		}
+	}
+	NSLog(@"PERF mem %@ rss=%.2f MB peak=%.2f MB heap=%.2f MB cpu=%.2f s threads=%u",
+			tag, TGResidentBytes() / 1048576.0, TGResidentPeak / 1048576.0,
+			inUse / 1048576.0, TGProcessCPUSeconds(), TGThreadCount());
+}
+
+static NSTimeInterval TGProcessStarted(void) {
+	static NSTimeInterval started = -1;
+	if (started >= 0)
+		return started;
+	int name[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid() };
+	struct kinfo_proc info;
+	size_t length = sizeof(info);
+	memset(&info, 0, sizeof(info));
+	if (sysctl(name, 4, &info, &length, NULL, 0) != 0 || length == 0){
+		started = 0;
+		return started;
+	}
+	NSTimeInterval unix = info.kp_proc.p_starttime.tv_sec +
+			info.kp_proc.p_starttime.tv_usec / 1e6;
+	started = unix - NSTimeIntervalSince1970;
+	return started;
+}
+
+static double TGSinceTap(void) {
+	NSTimeInterval started = TGProcessStarted();
+	if (started <= 0)
+		return -1;
+	return ([NSDate timeIntervalSinceReferenceDate] - started) * 1000.0;
+}
+
+void TGRedirectLogToFile(void) {
+	NSString *cache = [NSSearchPathForDirectoriesInDomains(
+			NSCachesDirectory, NSUserDomainMask, YES) objectAtIndex:0];
+	NSString *log = [cache stringByAppendingPathComponent:@"log.txt"];
+	NSString *lastlog = [cache stringByAppendingPathComponent:@"lastlog.txt"];
+	[[NSFileManager defaultManager] removeItemAtPath:lastlog error:nil];
+	[[NSFileManager defaultManager] moveItemAtPath:log toPath:lastlog error:nil];
+	freopen(log.UTF8String, "a+", stderr);
+}
+
+void TGNoteImageReady(NSTimeInterval when) {
+	if (when <= 0)
+		return;
+	NSTimeInterval started = TGProcessStarted();
+	if (started <= 0)
+		return;
+	NSLog(@"PERF launch (tap +%.0f ms): image ready, dyld and the kernel done",
+			(when - started) * 1000.0);
 }
 
 void TGMarkLaunchStage(NSString *stage) {
 	if (TGLaunchStarted <= 0)
 		TGLaunchStarted = [NSDate timeIntervalSinceReferenceDate];
-	NSLog(@"PERF launch +%.0f ms: %@ rss=%.2f MB cpu=%.2f s",
-			([NSDate timeIntervalSinceReferenceDate] - TGLaunchStarted) * 1000.0, stage,
+	NSLog(@"PERF launch +%.0f ms (tap +%.0f ms): %@ rss=%.2f MB cpu=%.2f s",
+			([NSDate timeIntervalSinceReferenceDate] - TGLaunchStarted) * 1000.0,
+			TGSinceTap(), stage,
 			TGResidentBytes() / 1048576.0, TGProcessCPUSeconds());
 }
 
-void TGBeginOpenTiming(void) {
+static void TGCaptureFrame(NSString *name) {
+	if (![[NSUserDefaults standardUserDefaults] boolForKey:@"tgCaptureFrames"])
+		return;
+	UIWindow *window = [[UIApplication sharedApplication] keyWindow];
+	if (!window)
+		return;
+	CGFloat scale = [UIScreen mainScreen].scale;
+	UIGraphicsBeginImageContextWithOptions(window.bounds.size, YES, scale);
+	[window.layer renderInContext:UIGraphicsGetCurrentContext()];
+	UIImage *shot = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	NSString *cache = [NSSearchPathForDirectoriesInDomains(
+			NSCachesDirectory, NSUserDomainMask, YES) objectAtIndex:0];
+	[UIImagePNGRepresentation(shot)
+			writeToFile:[cache stringByAppendingPathComponent:name] atomically:YES];
+	NSLog(@"PERF captured %@", name);
+}
+
+void TGMarkFirstFrame(NSString *stage) {
+	[CATransaction begin];
+	[CATransaction setCompletionBlock:^{
+		TGMarkLaunchStage(stage);
+		TGCaptureFrame(@"firstframe.png");
+	}];
+	[CATransaction commit];
+}
+
+static dispatch_semaphore_t TGTextWarmGate(void) {
+	static dispatch_semaphore_t gate = NULL;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		gate = dispatch_semaphore_create(0);
+	});
+	return gate;
+}
+
+void TGWaitForTextWarm(void) {
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		dispatch_semaphore_wait(TGTextWarmGate(),
+				dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)));
+	});
+}
+
+void TGBeginOpenTimingFromTap(void) {
 	TGOpenStarted = [NSDate timeIntervalSinceReferenceDate];
+	TGOpenFrameSeen = NO;
+	TGOpenSettledSeen = NO;
+}
+
+void TGBeginOpenTiming(void) {
+	if (TGOpenStarted > 0)
+		return;
+	TGOpenStarted = [NSDate timeIntervalSinceReferenceDate];
+	TGOpenFrameSeen = NO;
+	TGOpenSettledSeen = NO;
 }
 
 void TGMarkOpenStage(NSString *stage) {
@@ -165,10 +378,46 @@ void TGMarkOpenStage(NSString *stage) {
 
 @end
 
+void TGMarkOpenFrame(NSString *stage) {
+	if (TGOpenStarted <= 0 || TGOpenFrameSeen)
+		return;
+	TGOpenFrameSeen = YES;
+	[CATransaction begin];
+	[CATransaction setCompletionBlock:^{
+		TGMarkOpenStage(stage);
+		TGCaptureFrame(@"openframe.png");
+	}];
+	[CATransaction commit];
+}
+
+void TGMarkOpenSettledFrame(NSString *stage) {
+	if (TGOpenStarted <= 0 || TGOpenSettledSeen)
+		return;
+	TGOpenSettledSeen = YES;
+	[CATransaction begin];
+	[CATransaction setCompletionBlock:^{
+		TGMarkOpenStage(stage);
+		TGOpenStarted = 0;
+		TGCaptureFrame(@"settledframe.png");
+	}];
+	[CATransaction commit];
+}
+
 @implementation AppDelegate
 
 + (void)tgPingMainThread {
 	TGMainPingAt = [NSDate timeIntervalSinceReferenceDate];
+}
+
++ (void)tgStackSamplerLoop {
+	while (1){
+		if (TGStackSamplingOn){
+			@autoreleasepool {
+				TGLogMainStack();
+			}
+		}
+		usleep(25000);
+	}
 }
 
 + (void)tgMemorySamplerLoop {
@@ -176,17 +425,84 @@ void TGMarkOpenStage(NSString *stage) {
 	double worstStall = 0;
 	while (1){
 		@autoreleasepool {
+			if (!TGPerfLoggingOn){
+				usleep(250000);
+				continue;
+			}
 			NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
 			double stall = TGMainPingAt > 0 ? (now - TGMainPingAt) : 0;
 			if (stall > worstStall)
 				worstStall = stall;
-			NSLog(@"PERF sample +%.0f ms rss=%.2f MB cpu=%.2f s stall=%.0f ms worst=%.0f ms threads=%u",
+			NSLog(@"PERF sample +%.0f ms rss=%.2f MB peak=%.2f MB cpu=%.2f s stall=%.0f worst=%.0f threads=%u",
 					(now - started) * 1000.0,
 					TGResidentBytes() / 1048576.0,
+					TGResidentPeak / 1048576.0,
 					TGProcessCPUSeconds(),
 					stall * 1000.0, worstStall * 1000.0, TGThreadCount());
 		}
-		usleep(200000);
+		usleep(250000);
+	}
+}
+
+static void TGStartMemorySampler(void) {
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		TGMainThreadPort = mach_thread_self();
+		TGMainPingAt = [NSDate timeIntervalSinceReferenceDate];
+		dispatch_async(dispatch_get_main_queue(), ^{
+			[NSTimer scheduledTimerWithTimeInterval:0.05
+											 target:[AppDelegate class]
+										   selector:@selector(tgPingMainThread)
+										   userInfo:nil
+											repeats:YES];
+		});
+		[NSThread detachNewThreadSelector:@selector(tgMemorySamplerLoop)
+								 toTarget:[AppDelegate class]
+							   withObject:nil];
+		[NSThread detachNewThreadSelector:@selector(tgStackSamplerLoop)
+								 toTarget:[AppDelegate class]
+							   withObject:nil];
+	});
+}
+
+static void TGStartMemorySamplerIfRequested(void) {
+	if ([[NSUserDefaults standardUserDefaults] boolForKey:@"tgStacksAtLaunch"]){
+		TGStackSamplingOn = YES;
+		TGStartMemorySampler();
+	}
+}
+
++ (void)tgWarmEmojiFont {
+	@autoreleasepool {
+		unichar units[2] = {0x2764, 0xFE0F};
+		CTFontRef font = CTFontCreateWithName(CFSTR("AppleColorEmoji"), 14.0f, NULL);
+		if (!font){
+			dispatch_semaphore_signal(TGTextWarmGate());
+			return;
+		}
+		NSDictionary *attributes = [NSDictionary dictionaryWithObject:(__bridge id)font
+				forKey:(__bridge NSString *)kCTFontAttributeName];
+		NSAttributedString *string = [[NSAttributedString alloc]
+				initWithString:[NSString stringWithCharacters:units length:2]
+					attributes:attributes];
+		CTLineRef line = CTLineCreateWithAttributedString(
+				(__bridge CFAttributedStringRef)string);
+		if (line){
+			CGFloat ascent = 0, descent = 0, leading = 0;
+			CTLineGetTypographicBounds(line, &ascent, &descent, &leading);
+			CFRelease(line);
+		}
+		CFRelease(font);
+
+		NSString *probe = [NSString stringWithCharacters:units length:2];
+		NSArray *fonts = @[[UIFont boldSystemFontOfSize:16.0f],
+						   [UIFont systemFontOfSize:14.0f],
+						   [UIFont systemFontOfSize:13.0f]];
+		for (UIFont *warm in fonts)
+			[probe sizeWithFont:warm
+			  constrainedToSize:CGSizeMake(1000, 40)
+				  lineBreakMode:NSLineBreakByWordWrapping];
+		dispatch_semaphore_signal(TGTextWarmGate());
 	}
 }
 
@@ -215,23 +531,14 @@ static void TGWatchForIncomingCalls(void) {
 {
 	TGMarkLaunchStage(@"didFinishLaunching");
 	[[TGBackgroundSession shared] applicationDidFinishLaunching:application];
-	TGStartMemorySampler();
+	TGStartMemorySamplerIfRequested();
+	[NSThread detachNewThreadSelector:@selector(tgWarmEmojiFont)
+							 toTarget:[AppDelegate class]
+						   withObject:nil];
 	[TGHacks hackSetAnimationDuration];
 
 	NSString *cache = [NSSearchPathForDirectoriesInDomains(
 			NSCachesDirectory, NSUserDomainMask, YES) objectAtIndex:0];
-
-	// stderr into a file so TDLib's own diagnostics survive a crash and can be
-	// read off the device; scripts/devrun.sh pulls it.
-	NSString *log = [cache stringByAppendingPathComponent:@"log.txt"];
-	// Keep the previous run: an uncaught exception prints its reason to stderr
-	// and the process dies, so without this copy the one message that explains
-	// a crash is deleted by the next launch.
-	NSString *lastlog = [cache stringByAppendingPathComponent:@"lastlog.txt"];
-	[[NSFileManager defaultManager] removeItemAtPath:lastlog error:nil];
-	[[NSFileManager defaultManager] copyItemAtPath:log toPath:lastlog error:nil];
-	[[NSFileManager defaultManager] removeItemAtPath:log error:nil];
-	self.log = freopen(log.UTF8String, "a+", stderr);
 
 	NSLog(@"start...");
 	TGWatchForIncomingCalls();
@@ -269,6 +576,7 @@ static void TGWatchForIncomingCalls(void) {
 	TGMarkLaunchStage(@"before makeKeyAndVisible");
 	[self.window makeKeyAndVisible];
 	TGMarkLaunchStage(@"window on screen");
+	TGMarkFirstFrame(@"FIRST FRAME");
 
 	[self startTDLib];
 	[TGDiskCache sweep];
@@ -606,6 +914,44 @@ static void TGWatchForIncomingCalls(void) {
 		return YES;
 	}
 
+	if ([host isEqualToString:@"regions"]){
+		TGMemMark(arg.length ? arg : @"regions");
+		TGRegionReport(arg.length ? arg : @"regions");
+		return YES;
+	}
+
+	if ([host isEqualToString:@"captureframes"]){
+		[[NSUserDefaults standardUserDefaults] setBool:[arg isEqualToString:@"on"]
+												forKey:@"tgCaptureFrames"];
+		[[NSUserDefaults standardUserDefaults] synchronize];
+		NSLog(@"PERF captureframes %@", arg);
+		return YES;
+	}
+
+	if ([host isEqualToString:@"perflog"]){
+		TGPerfLoggingOn = [arg isEqualToString:@"on"];
+		if (TGPerfLoggingOn)
+			TGStartMemorySampler();
+		NSLog(@"PERF perflog %@", TGPerfLoggingOn ? @"on" : @"off");
+		return YES;
+	}
+
+	if ([host isEqualToString:@"stacks"]){
+		TGStackSamplingOn = [arg isEqualToString:@"on"];
+		if (TGStackSamplingOn)
+			TGStartMemorySampler();
+		NSLog(@"PERF stacks %@", TGStackSamplingOn ? @"on" : @"off");
+		return YES;
+	}
+
+	if ([host isEqualToString:@"stacksatlaunch"]){
+		[[NSUserDefaults standardUserDefaults] setBool:[arg isEqualToString:@"on"]
+												forKey:@"tgStacksAtLaunch"];
+		[[NSUserDefaults standardUserDefaults] synchronize];
+		NSLog(@"PERF stacksatlaunch %@", arg);
+		return YES;
+	}
+
 	if ([host isEqualToString:@"phone"] && arg.length){
 		self.currentPhoneNumber = arg;
 		[[TGClient shared] sendPhoneNumber:arg];
@@ -644,6 +990,7 @@ static void TGWatchForIncomingCalls(void) {
 
 	if ([host isEqualToString:@"chatindex"]){
 		dispatch_async(dispatch_get_main_queue(), ^{
+			TGBeginOpenTimingFromTap();
 			NSArray *chats = [TGClient shared].chats;
 			NSInteger idx = [arg integerValue];
 			if (idx < 0 || idx >= (NSInteger)chats.count){
