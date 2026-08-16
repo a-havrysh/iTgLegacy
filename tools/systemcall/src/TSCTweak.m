@@ -209,7 +209,22 @@ static void TSCForegroundApplication(void)
 	TSCLog(@"no way to bring %@ forward on this build", TSCApplicationIdentifier);
 }
 
-static void TSCDismiss(void)
+static BOOL TSCDeviceIsLocked(void)
+{
+	Class away = objc_getClass("SBAwayController");
+	if (!TSCClassMethodIs(away, @selector(sharedAwayControllerIfExists), "@", ""))
+		return NO;
+	id controller = [away performSelector:@selector(sharedAwayControllerIfExists)];
+	if (!TSCInstanceMethodIs([controller class], @selector(isLocked), "c", ""))
+		return NO;
+	return [[controller performSelector:@selector(isLocked)] boolValue];
+}
+
+/// Lets go of the alert without touching it. This is the right thing when
+/// SpringBoard is already taking it down - a tapped button dismisses its own
+/// UIAlertView - and calling -dismiss on top of that is a second deactivation
+/// of an item that is no longer in the controller's list.
+static id TSCForget(void)
 {
 	[gWatchdog invalidate];
 	[gWatchdog release];
@@ -221,6 +236,12 @@ static void TSCDismiss(void)
 	gCallerName = nil;
 	[gSubtitle release];
 	gSubtitle = nil;
+	return [item autorelease];
+}
+
+static void TSCDismiss(void)
+{
+	id item = TSCForget();
 	if (!item)
 		return;
 	@try {
@@ -230,20 +251,26 @@ static void TSCDismiss(void)
 	@catch (NSException *exception){
 		TSCLog(@"dismiss raised %@ (%@)", [exception name], [exception reason]);
 	}
-	[item release];
 }
 
-static void TSCAnswer(void)
+static void TSCAnswer(BOOL alertIsDismissingItself)
 {
 	notify_post(TSCAnswerName);
-	TSCDismiss();
-	TSCForegroundApplication();
+	if (alertIsDismissingItself)
+		TSCForget();
+	else
+		TSCDismiss();
+	if (!TSCDeviceIsLocked())
+		TSCForegroundApplication();
 }
 
-static void TSCDecline(void)
+static void TSCDecline(BOOL alertIsDismissingItself)
 {
 	notify_post(TSCDeclineName);
-	TSCDismiss();
+	if (alertIsDismissingItself)
+		TSCForget();
+	else
+		TSCDismiss();
 }
 
 #pragma mark - the alert item
@@ -290,15 +317,15 @@ static id TSCLockLabel(id self, SEL _cmd)
 
 static void TSCPerformUnlockAction(id self, SEL _cmd)
 {
-	TSCAnswer();
+	TSCAnswer(NO);
 }
 
 static void TSCClickedButton(id self, SEL _cmd, id sheet, NSInteger index)
 {
 	if (index == 1)
-		TSCAnswer();
+		TSCAnswer(YES);
 	else
-		TSCDecline();
+		TSCDecline(YES);
 }
 
 static BOOL TSCYes(id self, SEL _cmd)
