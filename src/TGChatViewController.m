@@ -3031,6 +3031,14 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 	}];
 
 	[self loadPinnedMessage];
+	__weak typeof(self) weakReadSelf = self;
+	[[TGClient shared] refreshOutgoingReadStateForChat:self.chatId
+										   completion:^(long long lastReadId){
+		TGChatViewController *me = weakReadSelf;
+		if (!me || lastReadId == 0)
+			return;
+		[me.table reloadData];
+	}];
 	[self applyPostingRights];
 
 	// Saved Messages is a chat with yourself only in TDLib's bookkeeping; your
@@ -10504,8 +10512,10 @@ static UIColor *TGSenderColour(int64_t userId) {
 	if (mine){
 		cell.ticks.hidden = NO;
 		cell.ticks.image = [self statusGlyphForMessage:m white:NO];
+		CGSize tickSize = cell.ticks.image ? cell.ticks.image.size : CGSizeMake(15, 9);
 		cell.ticks.frame = CGRectMake(dateX + dateW + 4,
-									  CGRectGetMidY(badge) - 5, 15, 9);
+									  CGRectGetMidY(badge) - tickSize.height / 2,
+									  tickSize.width, tickSize.height);
 	} else {
 		cell.ticks.hidden = YES;
 	}
@@ -13414,7 +13424,10 @@ static UIImage *TGFloatingBadgeDisc(UIColor *fill, UIColor *border) {
 		return [self clockGlyphWhite:white];
 	if ([state isEqualToString:@"failed"])
 		return [self failedGlyph];
-	UIImage *checks = [TGIcons messageChecksRead:[m[@"outgoingRead"] boolValue] white:white];
+	long long messageId = [m[@"id"] longLongValue];
+	long long readTo = [[TGClient shared] lastReadOutgoingMessageInChat:self.chatId];
+	BOOL read = messageId != 0 && readTo >= messageId;
+	UIImage *checks = [TGIcons messageChecksRead:read white:white];
 	return checks ?: [TGIcons ticksWhite:white];
 }
 

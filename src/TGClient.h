@@ -123,6 +123,10 @@ typedef NS_ENUM(NSInteger, TGConnectionState) {
 /// Main queue only.
 @property (nonatomic, readonly) NSArray *chats;
 
+- (long long)lastReadOutgoingMessageInChat:(int64_t)chatId;
+- (void)refreshOutgoingReadStateForChat:(int64_t)chatId
+							 completion:(void (^)(long long lastReadId))completion;
+
 /// Ask TDLib to populate the main chat list. Only meaningful once authorized.
 - (void)loadChats;
 

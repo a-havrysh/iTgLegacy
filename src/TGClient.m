@@ -2933,6 +2933,28 @@ static NSArray *TGPacksFrom(NSDictionary *target) {
 	[self refreshOutgoingReadStateIn:info];
 }
 
+- (long long)lastReadOutgoingMessageInChat:(int64_t)chatId {
+	NSDictionary *info = self.chatsById[@(chatId)];
+	return [info[@"lastReadOutboxId"] longLongValue];
+}
+
+- (void)refreshOutgoingReadStateForChat:(int64_t)chatId
+							 completion:(void (^)(long long lastReadId))completion {
+	__weak typeof(self) weakSelf = self;
+	[self request:@{@"@type" : @"getChat", @"chat_id" : [NSNumber numberWithLongLong:chatId]}
+	   completion:^(NSDictionary *chat){
+		TGClient *me = weakSelf;
+		long long lastRead = [chat[@"last_read_outbox_message_id"] longLongValue];
+		if (me && lastRead != 0){
+			NSMutableDictionary *info = me.chatsById[@(chatId)];
+			if (info)
+				info[@"lastReadOutboxId"] = @(lastRead);
+		}
+		if (completion)
+			completion(lastRead);
+	}];
+}
+
 - (void)refreshOutgoingReadStateIn:(NSMutableDictionary *)info {
 	long long lastId = [info[@"lastMessageId"] longLongValue];
 	info[@"outgoingRead"] = @(lastId != 0 &&

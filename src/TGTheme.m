@@ -369,7 +369,7 @@ static UIColor *rgb(int r, int g, int b) {
 }
 
 - (UIColor *)onlineColour {
-	return TG_PRESENCE_TEXT;
+	return rgb(0x4c, 0xd9, 0x64);
 }
 
 - (UIColor *)separatorColour {

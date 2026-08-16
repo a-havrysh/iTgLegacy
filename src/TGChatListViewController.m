@@ -351,7 +351,7 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 /// colour to stay legible against a photo.
 - (void)buildRowIcons {
 	self.onlineDot = [[UIView alloc] initWithFrame:
-			CGRectMake(kAvatarLeft + kAvatar - 14, 8 + kAvatar - 14, 14, 14)];
+			CGRectMake(kAvatarLeft + kAvatar - 10, 8 + kAvatar - 10, 14, 14)];
 	self.onlineDot.backgroundColor = [[TGTheme shared] onlineColour];
 	self.onlineDot.layer.cornerRadius = 7;
 	self.onlineDot.layer.borderWidth = 2;
