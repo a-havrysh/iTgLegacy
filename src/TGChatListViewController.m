@@ -3565,7 +3565,7 @@ static NSString *TGChatDateParts(NSTimeInterval unix, NSString **suffix, BOOL *b
 	if (suffix)
 		*suffix = nil;
 	if (bold)
-		*bold = NO;
+		*bold = YES;
 	if (unix <= 0)
 		return @"";
 
@@ -3590,11 +3590,8 @@ static NSString *TGChatDateParts(NSTimeInterval unix, NSString **suffix, BOOL *b
 			*suffix = [@" " stringByAppendingString:[marker stringFromDate:date]];
 		return [hour12 stringFromDate:date];
 	}
-	if (age < 7 * 24 * 3600){
-		if (bold)
-			*bold = YES;
+	if (age < 7 * 24 * 3600)
 		return [weekday stringFromDate:date];
-	}
 	return [full stringFromDate:date];
 }
 
