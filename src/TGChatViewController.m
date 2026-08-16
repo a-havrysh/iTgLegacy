@@ -5236,19 +5236,7 @@ static UIImage *TGPinnedBadgeGlyph(void) {
 	[banner addGestureRecognizer:[[UILongPressGestureRecognizer alloc]
 			initWithTarget:self action:@selector(pinnedBannerHeld:)]];
 
-	const CGFloat badgeWidth = 27;
-	const CGFloat badgeHeight = 21;
-	UIImageView *badge = [[UIImageView alloc] initWithImage:TGPinnedBadgeImage()];
-	badge.frame = CGRectMake(9, (height - 1 - badgeHeight) / 2, badgeWidth, badgeHeight);
-	[banner addSubview:badge];
-
-	UIImageView *glyph = [[UIImageView alloc] initWithImage:TGPinnedBadgeGlyph()];
-	glyph.frame = CGRectMake((badgeWidth - glyph.image.size.width) / 2,
-							 (badgeHeight - glyph.image.size.height) / 2 - 1,
-							 glyph.image.size.width, glyph.image.size.height);
-	[badge addSubview:glyph];
-
-	const CGFloat textLeft = 9 + badgeWidth + 8;
+	const CGFloat textLeft = 12;
 	UILabel *caption = [[UILabel alloc] initWithFrame:
 			CGRectMake(textLeft, 3, b.size.width - textLeft - 10, 16)];
 	caption.text = @"Pinned message";
