@@ -23,6 +23,7 @@
 #import "TGDiskCache.h"
 #import "TGAlertView.h"
 #import <QuartzCore/QuartzCore.h>
+#import <CoreText/CoreText.h>
 #include <stdio.h>
 #include <mach/mach.h>
 
@@ -75,6 +76,23 @@ void TGMarkLaunchStage(NSString *stage) {
 	NSLog(@"PERF launch +%.0f ms: %@ rss=%.2f MB cpu=%.2f s",
 			([NSDate timeIntervalSinceReferenceDate] - TGLaunchStarted) * 1000.0, stage,
 			TGResidentBytes() / 1048576.0, TGProcessCPUSeconds());
+}
+
+static dispatch_semaphore_t TGTextWarmGate(void) {
+	static dispatch_semaphore_t gate = NULL;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		gate = dispatch_semaphore_create(0);
+	});
+	return gate;
+}
+
+void TGWaitForTextWarm(void) {
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		dispatch_semaphore_wait(TGTextWarmGate(),
+				dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)));
+	});
 }
 
 void TGBeginOpenTiming(void) {
@@ -135,6 +153,40 @@ static void TGStartMemorySampler(void) {
 	});
 }
 
++ (void)tgWarmEmojiFont {
+	@autoreleasepool {
+		unichar units[2] = {0x2764, 0xFE0F};
+		CTFontRef font = CTFontCreateWithName(CFSTR("AppleColorEmoji"), 14.0f, NULL);
+		if (!font){
+			dispatch_semaphore_signal(TGTextWarmGate());
+			return;
+		}
+		NSDictionary *attributes = [NSDictionary dictionaryWithObject:(__bridge id)font
+				forKey:(__bridge NSString *)kCTFontAttributeName];
+		NSAttributedString *string = [[NSAttributedString alloc]
+				initWithString:[NSString stringWithCharacters:units length:2]
+					attributes:attributes];
+		CTLineRef line = CTLineCreateWithAttributedString(
+				(__bridge CFAttributedStringRef)string);
+		if (line){
+			CGFloat ascent = 0, descent = 0, leading = 0;
+			CTLineGetTypographicBounds(line, &ascent, &descent, &leading);
+			CFRelease(line);
+		}
+		CFRelease(font);
+
+		NSString *probe = [NSString stringWithCharacters:units length:2];
+		NSArray *fonts = @[[UIFont boldSystemFontOfSize:16.0f],
+						   [UIFont systemFontOfSize:14.0f],
+						   [UIFont systemFontOfSize:13.0f]];
+		for (UIFont *warm in fonts)
+			[probe sizeWithFont:warm
+			  constrainedToSize:CGSizeMake(1000, 40)
+				  lineBreakMode:NSLineBreakByWordWrapping];
+		dispatch_semaphore_signal(TGTextWarmGate());
+	}
+}
+
 static UIBackgroundTaskIdentifier TGBackgroundTask;
 static BOOL TGBackgroundTaskActive = NO;
 static int64_t TGPendingNotificationChatId = 0;
@@ -156,6 +208,9 @@ static void TGWatchForIncomingCalls(void) {
 {
 	TGMarkLaunchStage(@"didFinishLaunching");
 	TGStartMemorySampler();
+	[NSThread detachNewThreadSelector:@selector(tgWarmEmojiFont)
+							 toTarget:[AppDelegate class]
+						   withObject:nil];
 	[TGHacks hackSetAnimationDuration];
 
 	NSString *cache = [NSSearchPathForDirectoriesInDomains(
@@ -165,12 +220,11 @@ static void TGWatchForIncomingCalls(void) {
 	// read off the device; scripts/devrun.sh pulls it.
 	NSString *log = [cache stringByAppendingPathComponent:@"log.txt"];
 	// Keep the previous run: an uncaught exception prints its reason to stderr
-	// and the process dies, so without this copy the one message that explains
-	// a crash is deleted by the next launch.
+	// and the process dies, so without this rotation the one message that
+	// explains a crash is deleted by the next launch.
 	NSString *lastlog = [cache stringByAppendingPathComponent:@"lastlog.txt"];
 	[[NSFileManager defaultManager] removeItemAtPath:lastlog error:nil];
-	[[NSFileManager defaultManager] copyItemAtPath:log toPath:lastlog error:nil];
-	[[NSFileManager defaultManager] removeItemAtPath:log error:nil];
+	[[NSFileManager defaultManager] moveItemAtPath:log toPath:lastlog error:nil];
 	self.log = freopen(log.UTF8String, "a+", stderr);
 
 	NSLog(@"start...");

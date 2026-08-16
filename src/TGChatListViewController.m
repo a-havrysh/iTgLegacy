@@ -1189,6 +1189,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 @property (nonatomic, strong) NSDictionary *actionChat; // long-pressed row
 @property (nonatomic, assign) int64_t chatPendingDeletion;
 @property (nonatomic, assign) CGFloat headerHeight;
+@property (nonatomic, copy) NSString *headerSignature;
 @property (nonatomic, assign) CGFloat scrollAnchor;
 @property (nonatomic, assign) BOOL archiveAvailable;
 @property (nonatomic, assign) BOOL archiveRevealed;
@@ -1895,6 +1896,27 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	CGFloat rowsTop = kSearchBarHeight + loginHeight + folderBannerHeight + trayHeight
 			+ stripHeight;
 	CGFloat height = rowsTop + (showArchive ? kRowHeight : 0);
+
+	TGTheme *theme = [TGTheme shared];
+	NSMutableString *signature = [NSMutableString stringWithFormat:
+			@"%.1f|%lu|%d%d%d%d%d%d|%ld|%d|%@",
+			width, (unsigned long)archivedCount,
+			hasArchive, showArchive, showTray, showStrip, showLogin, showFolderBanner,
+			(long)[self.listUnread[@(TGChatListArchive)] integerValue],
+			theme.isDark, theme.importedName ?: @"-"];
+	if (showTray)
+		[signature appendFormat:@"|tray:%@", TGReplyArray(self.storyPosters)];
+	if (showStrip)
+		[signature appendFormat:@"|strip:%@", [self folderStripEntries]];
+	if (showLogin)
+		[signature appendFormat:@"|login:%@", self.unconfirmedSession];
+	if (showFolderBanner)
+		[signature appendFormat:@"|banner:%@", self.folderNewChats];
+
+	if (self.tableView.tableHeaderView != nil &&
+		[signature isEqualToString:self.headerSignature])
+		return;
+	self.headerSignature = signature;
 
 	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, height)];
 	header.backgroundColor = [[TGTheme shared] listBackgroundColour];

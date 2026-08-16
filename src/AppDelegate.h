@@ -6,6 +6,7 @@
 #import "TGLoginViewController.h"
 
 void TGMarkLaunchStage(NSString *stage);
+void TGWaitForTextWarm(void);
 void TGMarkOpenStage(NSString *stage);
 void TGBeginOpenTiming(void);
 
