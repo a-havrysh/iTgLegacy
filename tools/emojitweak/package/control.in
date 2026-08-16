@@ -13,15 +13,22 @@ Description: Unicode @EMOJI_VERSION@ colour emoji for iOS 6
  Replaces the stock Apple Color Emoji font with an sbix font built from
  Twemoji @TWEMOJI_VERSION@ artwork covering Unicode Emoji @EMOJI_VERSION@:
  @GLYPH_COUNT@ distinct emoji images, including skin tones, ZWJ professions,
- family sequences, keycaps and regional-indicator flags. Bitmap strikes at
- 20, 40, 48 and 96 ppem, so large emoji are sharp instead of upscaled.
+ family sequences, keycaps and regional-indicator flags.
  .
- Font metrics are byte-identical to the stock font, so line heights and
+ Both system font names are handled. Non-Retina devices read
+ @FONT_1X@ and get bitmap strikes at @STRIKES_1X@ ppem; Retina devices read
+ @FONT_2X@, which CoreText asks for at twice the point size, and get
+ strikes at @STRIKES_2X@ ppem. The install looks at which of the two files
+ the device actually has and replaces exactly those, so large emoji are
+ sharp on both instead of upscaled.
+ .
+ Font metrics are byte-identical to the stock fonts, so line heights and
  layout do not shift anywhere in the system.
  .
- The stock font is backed up on first install and put back when this
+ Each replaced font is backed up on first install and put back when this
  package is removed. Installing needs about @REQUIRED_MB@ MB free on the
- system partition; the install refuses to start if there is not enough.
+ system partition; the install refuses to start if there is not enough, and
+ refuses to start at all if neither font name is present.
  .
  Known limitation: the England, Scotland and Wales tag flags fall back to
  the black flag. iOS 6 CoreText deletes Unicode tag characters before the

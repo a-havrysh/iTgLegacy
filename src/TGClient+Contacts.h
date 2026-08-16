@@ -10,6 +10,10 @@
  */
 #import "TGClient.h"
 
+/// Posted whenever this client adds, renames or removes a contact, so any list
+/// showing contacts can reload itself.
+extern NSString *const TGContactsDidChangeNotification;
+
 @interface TGClient (Contacts)
 
 #pragma mark - contact list
@@ -29,6 +33,14 @@
                     lastName:(NSString *)lastName
             sharePhoneNumber:(BOOL)share
                   completion:(void (^)(BOOL ok))completion;
+
+/// Import one address-book entry that has no known user id yet. `completion`
+/// gets the Telegram user id the number resolved to, or 0 when the number has
+/// no account (or the request failed).
+- (void)importContactWithPhone:(NSString *)phone
+                     firstName:(NSString *)firstName
+                      lastName:(NSString *)lastName
+                    completion:(void (^)(int64_t userId))completion;
 
 /// Drop users from the contact list. `userIds` is an array of NSNumber ids.
 - (void)removeContacts:(NSArray *)userIds completion:(void (^)(BOOL ok))completion;

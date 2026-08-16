@@ -1,6 +1,8 @@
 #import "TGClient+Private.h"
 #import "TGClient+Contacts.h"
 
+NSString *const TGContactsDidChangeNotification = @"TGContactsDidChangeNotification";
+
 static NSDictionary *TGDict(id value){
 	return [value isKindOfClass:NSDictionary.class] ? value : nil;
 }
@@ -248,7 +250,35 @@ static NSDictionary *TGBirthdateInfo(id value){
 			@"last_name"    : lastName ?: @"",
 		},
 		@"share_phone_number" : @(share),
-	} completion:completion];
+	} completion:^(BOOL ok){
+		if (ok)
+			[[NSNotificationCenter defaultCenter]
+					postNotificationName:TGContactsDidChangeNotification object:nil];
+		if (completion) completion(ok);
+	}];
+}
+
+- (void)importContactWithPhone:(NSString *)phone
+					 firstName:(NSString *)firstName
+					  lastName:(NSString *)lastName
+					completion:(void (^)(int64_t))completion {
+	if (!phone.length){
+		if (completion) completion(0);
+		return;
+	}
+	[self importContacts:@[@{
+		@"phone"      : phone,
+		@"first_name" : firstName ?: @"",
+		@"last_name"  : lastName ?: @"",
+	}] completion:^(NSArray *userIds){
+		[[NSNotificationCenter defaultCenter]
+				postNotificationName:TGContactsDidChangeNotification object:nil];
+		if (!completion)
+			return;
+		id first = userIds.count ? [userIds objectAtIndex:0] : nil;
+		completion([first respondsToSelector:@selector(longLongValue)]
+				? [first longLongValue] : 0);
+	}];
 }
 
 - (void)removeContacts:(NSArray *)userIds completion:(void (^)(BOOL))completion {
@@ -258,7 +288,12 @@ static NSDictionary *TGBirthdateInfo(id value){
 		return;
 	}
 	[self tg_ok:@{ @"@type" : @"removeContacts", @"user_ids" : ids }
-	 completion:completion];
+	 completion:^(BOOL ok){
+		if (ok)
+			[[NSNotificationCenter defaultCenter]
+					postNotificationName:TGContactsDidChangeNotification object:nil];
+		if (completion) completion(ok);
+	}];
 }
 
 - (void)sharePhoneNumberWithUser:(int64_t)userId {

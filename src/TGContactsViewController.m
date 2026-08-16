@@ -10,6 +10,7 @@
 #import "TGTheme.h"
 #import "TGImageDecode.h"
 #import "TGNewContactViewController.h"
+#import "TGProfileViewController.h"
 #import "RootViewController.h"
 #import "UIView+SafeTint.h"
 #import "TGEmoji.h"
@@ -2686,6 +2687,10 @@ static NSString *TGContactSectionLetter(NSDictionary *u, BOOL byFirstName) {
 			selector:@selector(addressBookOrderMayHaveChanged)
 				name:UIApplicationWillEnterForegroundNotification
 			  object:nil];
+	[[NSNotificationCenter defaultCenter] addObserver:self
+			selector:@selector(reloadContacts)
+				name:TGContactsDidChangeNotification
+			  object:nil];
 
 	[self updatePhonebookAccess];
 	[self loadInitialContactData];
@@ -3032,13 +3037,62 @@ static NSString *TGContactSectionLetter(NSDictionary *u, BOOL byFirstName) {
 }
 
 - (void)addContactTapped {
+	ABAuthorizationStatus status = ABAddressBookGetAuthorizationStatus();
+	if (status == kABAuthorizationStatusDenied
+			|| status == kABAuthorizationStatusRestricted){
+		[[[UIAlertView alloc] initWithTitle:@"Access Denied"
+									message:@"Telegram needs access to your contacts. Please go to Settings > Privacy > Contacts and turn it on."
+								   delegate:nil
+						  cancelButtonTitle:@"OK"
+						  otherButtonTitles:nil] show];
+		return;
+	}
+	if (status == kABAuthorizationStatusNotDetermined){
+		ABAddressBookRef book = ABAddressBookCreateWithOptions(NULL, NULL);
+		if (book){
+			__weak typeof(self) weakSelf = self;
+			ABAddressBookRequestAccessWithCompletion(book, ^(bool granted, CFErrorRef error){
+				CFRelease(book);
+				dispatch_async(dispatch_get_main_queue(), ^{
+					if (granted)
+						[weakSelf presentNewContactScreen];
+				});
+			});
+			return;
+		}
+	}
+	[self presentNewContactScreen];
+}
+
+- (void)openProfileForUserId:(int64_t)userId {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] privateChatWithUser:userId completion:^(int64_t chatId){
+		TGContactsViewController *me = weakSelf;
+		if (!me)
+			return;
+		NSString *name = @"";
+		for (NSDictionary *u in me.users){
+			if ([u[@"id"] longLongValue] == userId){
+				name = TGContactName(u);
+				break;
+			}
+		}
+		TGProfileViewController *vc = [[TGProfileViewController alloc]
+				initWithChatId:chatId userId:userId title:name];
+		[me openTarget:vc];
+	}];
+}
+
+- (void)presentNewContactScreen {
 	TGNewContactViewController *vc = [[TGNewContactViewController alloc] init];
 	__weak typeof(self) weakSelf = self;
-	vc.onDone = ^{
+	vc.onDone = ^(int64_t userId){
 		TGContactsViewController *me = weakSelf;
 		if (!me)
 			return;
 		[me reloadContacts];
+		if (userId)
+			[me openProfileForUserId:userId];
 	};
 	UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
 	[self presentModalViewController:nav animated:YES];

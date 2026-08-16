@@ -1,5 +1,7 @@
 #import "TGStickerPanelView.h"
 
+#import <QuartzCore/QuartzCore.h>
+
 #import "TGClient.h"
 #import "TGClient+Stickers.h"
 #import "TGClient+Files.h"
@@ -10,23 +12,104 @@
 #import "TGReusableView.h"
 #import "UIView+SafeTint.h"
 
-/// The tab plates are 30pt tall and the divider between them is 2pt wide; both
-/// come straight off the button-group art the rest of the app uses.
-static const CGFloat TGStickerPanelTabHeight = 30.0f;
-static const CGFloat TGStickerPanelTabHeightLandscape = 25.0f;
-static const CGFloat TGStickerPanelTabDividerWidth = 2.0f;
-static const CGFloat TGStickerPanelTabMinWidth = 44.0f;
-/// CategoryDivider.png is 26pt tall; a 25pt header stretched it by a pixel.
-static const CGFloat TGStickerPanelHeaderHeight = 26.0f;
-static const CGFloat TGStickerPanelTileSide = 64.0f;
-static const CGFloat TGStickerPanelTileMinSpacing = 9.0f;
+static const CGFloat TGStickerPanelKeyBarHeight = 44.0f;
+static const CGFloat TGStickerPanelKeyHeight = 30.0f;
+static const CGFloat TGStickerPanelKeyTop = 7.0f;
+static const CGFloat TGStickerPanelKeyMinWidth = 48.0f;
+static const CGFloat TGStickerPanelFunctionKeyWidth = 44.0f;
+static const CGFloat TGStickerPanelHeaderHeight = 22.0f;
+static const CGFloat TGStickerPanelTileSide = 62.0f;
+static const CGFloat TGStickerPanelSideInset = 3.0f;
+static const CGFloat TGStickerPanelRowSpacing = 7.0f;
 static const NSInteger TGStickerPanelMinColumns = 4;
-static const CGFloat TGStickerPanelTileCornerRadius = 8.0f;
+static const CGFloat TGStickerPanelTileCornerRadius = 6.0f;
 static const CGFloat TGStickerPanelPreviewSide = 180.0f;
 static const CGFloat TGStickerPanelSearchHeight = 44.0f;
 static const CGFloat TGStickerPanelTabThumbSide = 24.0f;
 static const CGFloat TGStickerPanelPurgeDistance = 900.0f;
 static const NSInteger TGStickerPanelPageSize = 40;
+
+static const CGFloat TGStickerPanelKeyboardHeightPortrait = 216.0f;
+static const CGFloat TGStickerPanelKeyboardHeightLandscape = 162.0f;
+
+static CGFloat TGStickerPanelMeasuredPortrait = 0.0f;
+static CGFloat TGStickerPanelMeasuredLandscape = 0.0f;
+
+static UIColor *TGStickerPanelGroundTopColour(void) {
+	return [UIColor colorWithRed:0xd5 / 255.0f green:0xdc / 255.0f blue:0xe5 / 255.0f alpha:1.0f];
+}
+
+static UIColor *TGStickerPanelGroundBottomColour(void) {
+	return [UIColor colorWithRed:0xae / 255.0f green:0xb8 / 255.0f blue:0xc4 / 255.0f alpha:1.0f];
+}
+
+static UIColor *TGStickerPanelSeamColour(void) {
+	return [UIColor colorWithRed:0x81 / 255.0f green:0x92 / 255.0f blue:0x9f / 255.0f alpha:1.0f];
+}
+
+static UIColor *TGStickerPanelEngravedColour(void) {
+	return [UIColor colorWithRed:0x5c / 255.0f green:0x70 / 255.0f blue:0x8b / 255.0f alpha:1.0f];
+}
+
+static UIImage *TGStickerPanelKeyPlate(BOOL pressed) {
+	static UIImage *plainPlate = nil;
+	static UIImage *pressedPlate = nil;
+	UIImage *cached = pressed ? pressedPlate : plainPlate;
+	if (cached != nil)
+		return cached;
+
+	UIImage *plate = [UIImage imageNamed:pressed
+			? @"SearchBarScopeButton_Highlighted.png" : @"SearchBarScopeButton.png"];
+	if (plate == nil)
+		return nil;
+	cached = [plate stretchableImageWithLeftCapWidth:(int)(plate.size.width / 2.0f)
+									   topCapHeight:(int)(plate.size.height / 2.0f)];
+	if (pressed)
+		pressedPlate = cached;
+	else
+		plainPlate = cached;
+	return cached;
+}
+
+static UIImage *TGStickerPanelBackspaceGlyph(void) {
+	static UIImage *glyph = nil;
+	if (glyph != nil)
+		return glyph;
+
+	CGSize size = CGSizeMake(22.0f, 16.0f);
+	UIGraphicsBeginImageContextWithOptions(size, NO, [UIScreen mainScreen].scale);
+	CGContextRef context = UIGraphicsGetCurrentContext();
+
+	CGFloat notch = 7.0f;
+	CGContextBeginPath(context);
+	CGContextMoveToPoint(context, 0.5f, 8.0f);
+	CGContextAddLineToPoint(context, notch, 0.5f);
+	CGContextAddLineToPoint(context, 21.5f, 0.5f);
+	CGContextAddLineToPoint(context, 21.5f, 15.5f);
+	CGContextAddLineToPoint(context, notch, 15.5f);
+	CGContextClosePath(context);
+	CGContextSetFillColorWithColor(context,
+			[UIColor colorWithWhite:0.24f alpha:1.0f].CGColor);
+	CGContextFillPath(context);
+
+	CGContextSetStrokeColorWithColor(context, [UIColor whiteColor].CGColor);
+	CGContextSetLineWidth(context, 1.6f);
+	CGContextSetLineCap(context, kCGLineCapRound);
+	CGContextMoveToPoint(context, 11.0f, 5.0f);
+	CGContextAddLineToPoint(context, 17.0f, 11.0f);
+	CGContextMoveToPoint(context, 17.0f, 5.0f);
+	CGContextAddLineToPoint(context, 11.0f, 11.0f);
+	CGContextStrokePath(context);
+
+	glyph = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return glyph;
+}
+
+static UIImage *TGStickerPanelSearchGlyph(void) {
+	UIImage *icon = [UIImage imageNamed:@"SearchBarIcon.png"];
+	return icon;
+}
 
 static const NSInteger TGStickerSectionRecent = 0;
 static const NSInteger TGStickerSectionFavourite = 1;
@@ -47,7 +130,7 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 @interface TGStickerTile : UIControl <TGReusableView>
 
 @property (nonatomic, strong) NSString *reuseIdentifier;
-@property (nonatomic, strong) UIView *pressPlate;
+@property (nonatomic, strong) UIImageView *pressPlate;
 @property (nonatomic, strong) UIImageView *imageView;
 @property (nonatomic, strong) UILabel *emojiLabel;
 @property (nonatomic, strong) NSDictionary *sticker;
@@ -68,9 +151,14 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 		self.backgroundColor = [UIColor clearColor];
 		self.exclusiveTouch = YES;
 
-		_pressPlate = [[UIView alloc] initWithFrame:self.bounds];
-		_pressPlate.backgroundColor = [[TGTheme shared] separatorColour];
+		_pressPlate = [[UIImageView alloc] initWithFrame:self.bounds];
+		UIImage *pressed = TGStickerPanelKeyPlate(YES);
+		if (pressed != nil)
+			_pressPlate.image = pressed;
+		else
+			_pressPlate.backgroundColor = [[TGTheme shared] separatorColour];
 		_pressPlate.layer.cornerRadius = TGStickerPanelTileCornerRadius;
+		_pressPlate.clipsToBounds = YES;
 		_pressPlate.userInteractionEnabled = NO;
 		_pressPlate.hidden = YES;
 		[self addSubview:_pressPlate];
@@ -92,21 +180,28 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 
 - (void)layoutSubviews {
 	[super layoutSubviews];
-	_pressPlate.frame = self.bounds;
-	_emojiLabel.frame = self.bounds;
-	_imageView.frame = self.bounds;
+	CGRect bounds = self.bounds;
+	CGPoint centre = CGPointMake(CGRectGetMidX(bounds), CGRectGetMidY(bounds));
+	_pressPlate.frame = bounds;
+	_emojiLabel.bounds = CGRectMake(0, 0, bounds.size.width, bounds.size.height);
+	_emojiLabel.center = centre;
+	_imageView.bounds = CGRectMake(0, 0, bounds.size.width, bounds.size.height);
+	_imageView.center = centre;
 }
 
-/// Telegram highlights a sticker with a rounded plate behind it rather than by
-/// fading the sticker out; a translucent sticker over a fading tile reads as a
-/// loading failure.
 - (void)setHighlighted:(BOOL)highlighted {
 	[super setHighlighted:highlighted];
 	_pressPlate.hidden = !highlighted;
+	CGAffineTransform wanted = highlighted
+			? CGAffineTransformMakeScale(0.88f, 0.88f) : CGAffineTransformIdentity;
+	_imageView.transform = wanted;
+	_emojiLabel.transform = wanted;
 }
 
 - (void)reset {
 	self.pressPlate.hidden = YES;
+	self.imageView.transform = CGAffineTransformIdentity;
+	self.emojiLabel.transform = CGAffineTransformIdentity;
 	self.alpha = 1.0f;
 	self.sticker = nil;
 	self.imageKey = nil;
@@ -133,6 +228,12 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 @property (nonatomic, strong) UIScrollView *tabStrip;
 @property (nonatomic, strong) UIScrollView *grid;
 @property (nonatomic, strong) UIView *topSeparator;
+@property (nonatomic, strong) CAGradientLayer *ground;
+@property (nonatomic, strong) UIView *keyBar;
+@property (nonatomic, strong) UIView *keyBarSeam;
+@property (nonatomic, strong) UIView *keyBarSheen;
+@property (nonatomic, strong) UIButton *backspaceKey;
+@property (nonatomic, strong) UIButton *searchKey;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UIButton *retryButton;
@@ -152,6 +253,7 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 @property (nonatomic, strong) NSMutableArray *tabDividers;
 @property (nonatomic, strong) NSMutableArray *tabImageTokens;
 @property (nonatomic, strong) UIView *previewOverlay;
+@property (nonatomic, strong) UIView *previewPlate;
 @property (nonatomic, strong) UIImageView *previewImageView;
 @property (nonatomic, strong) UILabel *previewEmojiLabel;
 @property (nonatomic, strong) id previewToken;
@@ -161,8 +263,8 @@ static BOOL TGStickerSectionIsSet(NSInteger kind) {
 @property (nonatomic, assign) NSInteger columns;
 @property (nonatomic, assign) CGFloat tileSide;
 @property (nonatomic, assign) CGFloat tileSpacing;
+@property (nonatomic, assign) CGFloat rowSpacing;
 @property (nonatomic, assign) CGFloat sideInset;
-@property (nonatomic, assign) CGFloat tabHeight;
 @property (nonatomic, assign) NSInteger selectedSection;
 @property (nonatomic, assign) CGFloat laidOutWidth;
 @property (nonatomic, assign) BOOL loading;
@@ -184,8 +286,21 @@ static const NSTimeInterval TGStickerPanelSnapshotLifetime = 600.0;
 
 @implementation TGStickerPanelView
 
++ (void)noteSystemKeyboardHeight:(CGFloat)height landscape:(BOOL)landscape {
+	if (height < 80.0f || height > 400.0f)
+		return;
+	if (landscape)
+		TGStickerPanelMeasuredLandscape = height;
+	else
+		TGStickerPanelMeasuredPortrait = height;
+}
+
 + (CGFloat)preferredHeightForLandscape:(BOOL)landscape {
-	return landscape ? 194.0f : 216.0f;
+	CGFloat measured = landscape ? TGStickerPanelMeasuredLandscape : TGStickerPanelMeasuredPortrait;
+	if (measured > 80.0f)
+		return measured;
+	return landscape ? TGStickerPanelKeyboardHeightLandscape
+					 : TGStickerPanelKeyboardHeightPortrait;
 }
 
 - (id)initWithFrame:(CGRect)frame {
@@ -193,6 +308,15 @@ static const NSTimeInterval TGStickerPanelSnapshotLifetime = 600.0;
 	if (self != nil){
 		self.backgroundColor = [[TGTheme shared] listBackgroundColour];
 		self.clipsToBounds = YES;
+
+		if (![TGTheme shared].isFlat){
+			_ground = [CAGradientLayer layer];
+			_ground.colors = [NSArray arrayWithObjects:
+					(id)TGStickerPanelGroundTopColour().CGColor,
+					(id)TGStickerPanelGroundBottomColour().CGColor, nil];
+			_ground.frame = self.bounds;
+			[self.layer insertSublayer:_ground atIndex:0];
+		}
 
 		_recycler = [[TGViewRecycler alloc] init];
 		_allSections = [[NSMutableArray alloc] init];
@@ -206,9 +330,10 @@ static const NSTimeInterval TGStickerPanelSnapshotLifetime = 600.0;
 		_tabImageTokens = [[NSMutableArray alloc] init];
 		_columns = TGStickerPanelMinColumns;
 		_tileSide = TGStickerPanelTileSide;
-		_tileSpacing = TGStickerPanelTileMinSpacing;
-		_sideInset = TGStickerPanelTileMinSpacing;
-		_tabHeight = TGStickerPanelTabHeight;
+		_tileSpacing = 0.0f;
+		_rowSpacing = TGStickerPanelRowSpacing;
+		_sideInset = TGStickerPanelSideInset;
+
 		_selectedSection = -1;
 		_searchQuery = @"";
 
@@ -219,10 +344,34 @@ static const NSTimeInterval TGStickerPanelSnapshotLifetime = 600.0;
 		_grid.backgroundColor = [UIColor clearColor];
 		[self addSubview:_grid];
 
+		_keyBar = [[UIView alloc] initWithFrame:CGRectZero];
+		_keyBar.backgroundColor = [UIColor clearColor];
+		_keyBar.clipsToBounds = NO;
+		[self addSubview:_keyBar];
+
+		_keyBarSeam = [[UIView alloc] initWithFrame:CGRectZero];
+		_keyBarSeam.backgroundColor =
+				[TGStickerPanelSeamColour() colorWithAlphaComponent:0.45f];
+		[_keyBar addSubview:_keyBarSeam];
+
+		_keyBarSheen = [[UIView alloc] initWithFrame:CGRectZero];
+		_keyBarSheen.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.35f];
+		[_keyBar addSubview:_keyBarSheen];
+
 		_tabStrip = [[UIScrollView alloc] initWithFrame:CGRectZero];
 		_tabStrip.showsHorizontalScrollIndicator = NO;
 		_tabStrip.backgroundColor = [UIColor clearColor];
-		[self addSubview:_tabStrip];
+		[_keyBar addSubview:_tabStrip];
+
+		_searchKey = [self functionKeyWithGlyph:TGStickerPanelSearchGlyph() title:@"Find"];
+		[_searchKey addTarget:self action:@selector(toggleSearch)
+			 forControlEvents:UIControlEventTouchUpInside];
+		[_keyBar addSubview:_searchKey];
+
+		_backspaceKey = [self functionKeyWithGlyph:TGStickerPanelBackspaceGlyph() title:nil];
+		[_backspaceKey addTarget:self action:@selector(backspaceTapped)
+				forControlEvents:UIControlEventTouchUpInside];
+		[_keyBar addSubview:_backspaceKey];
 
 		_searchBar = [[UISearchBar alloc] initWithFrame:CGRectZero];
 		_searchBar.delegate = self;
@@ -236,7 +385,8 @@ static const NSTimeInterval TGStickerPanelSnapshotLifetime = 600.0;
 		[self addSubview:_searchBar];
 
 		_topSeparator = [[UIView alloc] initWithFrame:CGRectZero];
-		_topSeparator.backgroundColor = [[TGTheme shared] separatorColour];
+		_topSeparator.backgroundColor = [TGTheme shared].isFlat
+				? [[TGTheme shared] separatorColour] : TGStickerPanelSeamColour();
 		[self addSubview:_topSeparator];
 
 		_spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:
@@ -247,8 +397,11 @@ static const NSTimeInterval TGStickerPanelSnapshotLifetime = 600.0;
 		_statusLabel = [[UILabel alloc] initWithFrame:CGRectZero];
 		_statusLabel.backgroundColor = [UIColor clearColor];
 		_statusLabel.textAlignment = UITextAlignmentCenter;
-		_statusLabel.font = [UIFont systemFontOfSize:14];
-		_statusLabel.textColor = [[TGTheme shared] secondaryTextColour];
+		_statusLabel.font = [UIFont boldSystemFontOfSize:14];
+		_statusLabel.textColor = [TGTheme shared].isFlat
+				? [[TGTheme shared] secondaryTextColour] : TGStickerPanelEngravedColour();
+		_statusLabel.shadowColor = [UIColor colorWithWhite:1.0f alpha:0.5f];
+		_statusLabel.shadowOffset = CGSizeMake(0, 1);
 		_statusLabel.numberOfLines = 2;
 		_statusLabel.hidden = YES;
 		[self addSubview:_statusLabel];
@@ -631,6 +784,7 @@ static const NSTimeInterval TGStickerPanelSnapshotLifetime = 600.0;
 		return;
 	_searchVisible = visible;
 	self.searchBar.hidden = !visible;
+	self.searchKey.selected = visible;
 
 	if (visible){
 		[self setNeedsLayout];
@@ -907,45 +1061,51 @@ static const NSTimeInterval TGStickerPanelSnapshotLifetime = 600.0;
 	CGRect bounds = self.bounds;
 	CGFloat separator = 1.0f / [UIScreen mainScreen].scale;
 	CGFloat searchHeight = self.searchVisible ? TGStickerPanelSearchHeight : 0.0f;
-	BOOL landscape = bounds.size.width > bounds.size.height;
-	CGFloat tabHeight = landscape ? TGStickerPanelTabHeightLandscape : TGStickerPanelTabHeight;
-	self.tabHeight = tabHeight;
+	CGFloat barHeight = TGStickerPanelKeyBarHeight;
+
+	if (self.ground != nil){
+		[CATransaction begin];
+		[CATransaction setDisableActions:YES];
+		self.ground.frame = bounds;
+		[CATransaction commit];
+	}
 
 	self.topSeparator.frame = CGRectMake(0, 0, bounds.size.width, separator);
 	self.searchBar.frame = CGRectMake(0, separator, bounds.size.width, TGStickerPanelSearchHeight);
-	self.tabStrip.frame = CGRectMake(0, separator + searchHeight, bounds.size.width, tabHeight);
-	CGFloat gridTop = separator + searchHeight + tabHeight;
+
+	CGFloat barTop = MAX(0.0f, bounds.size.height - barHeight);
+	self.keyBar.frame = CGRectMake(0, barTop, bounds.size.width, barHeight);
+	self.keyBarSeam.frame = CGRectMake(0, 0, bounds.size.width, separator);
+	self.keyBarSheen.frame = CGRectMake(0, separator, bounds.size.width, separator);
+
+	CGFloat gridTop = separator + searchHeight;
 	self.grid.frame = CGRectMake(0, gridTop, bounds.size.width,
-			MAX(0.0f, bounds.size.height - gridTop));
+			MAX(0.0f, barTop - gridTop));
 
 	CGFloat centreY = floorf(self.grid.frame.origin.y + self.grid.frame.size.height / 2.0f);
 	self.spinner.frame = CGRectMake(floorf((bounds.size.width - 20) / 2.0f), centreY - 10, 20, 20);
 	self.statusLabel.frame = CGRectMake(20, centreY - 34, bounds.size.width - 40, 40);
 	self.retryButton.frame = CGRectMake(floorf((bounds.size.width - 120) / 2.0f), centreY + 12, 120, 43);
 
-	// Columns come from a minimum gap, the tile shrinks only when it has to,
-	// the leftover width becomes the gap between tiles, and the whole block is
-	// centred - so the outer margin is never confused with the inner spacing.
 	CGFloat pixel = 1.0f / [UIScreen mainScreen].scale;
-	CGFloat available = bounds.size.width - TGStickerPanelTileMinSpacing * 2.0f;
-	NSInteger columns = (NSInteger)floorf((available + TGStickerPanelTileMinSpacing) /
-			(TGStickerPanelTileSide + TGStickerPanelTileMinSpacing));
+	CGFloat available = bounds.size.width - TGStickerPanelSideInset * 2.0f;
+	NSInteger columns = (NSInteger)floorf(available / TGStickerPanelTileSide);
 	if (columns < TGStickerPanelMinColumns)
 		columns = TGStickerPanelMinColumns;
 
-	CGFloat proposed = floorf((available - TGStickerPanelTileMinSpacing * (columns - 1)) / columns);
-	CGFloat tileSide = MIN(proposed, TGStickerPanelTileSide);
+	CGFloat tileSide = MIN(floorf(available / columns), TGStickerPanelTileSide);
 	if (tileSide < 1.0f)
 		tileSide = TGStickerPanelTileSide;
 	CGFloat spacing = (columns > 1)
 			? floorf((available - tileSide * columns) / (columns - 1) / pixel) * pixel
 			: 0.0f;
-	if (spacing < TGStickerPanelTileMinSpacing)
-		spacing = TGStickerPanelTileMinSpacing;
+	if (spacing < 0.0f)
+		spacing = 0.0f;
 	CGFloat contentWidth = tileSide * columns + spacing * (columns - 1);
 	CGFloat sideInset = floorf((bounds.size.width - contentWidth) / 2.0f);
 	if (sideInset < 0.0f)
 		sideInset = 0.0f;
+	self.rowSpacing = TGStickerPanelRowSpacing;
 
 	BOOL metricsChanged = (columns != self.columns ||
 			fabsf(tileSide - self.tileSide) > 0.01f ||
@@ -997,40 +1157,43 @@ static const NSTimeInterval TGStickerPanelSnapshotLifetime = 600.0;
 
 		section[@"y"] = @(y);
 
-		UIImage *plate = [UIImage imageNamed:index == 0 ? @"CategoryDividerFirst.png" : @"CategoryDivider.png"];
-		UIImageView *header = [[UIImageView alloc] initWithFrame:
+		UIView *header = [[UIView alloc] initWithFrame:
 				CGRectMake(0, y, width, TGStickerPanelHeaderHeight)];
+		header.backgroundColor = [UIColor clearColor];
 		header.userInteractionEnabled = [section[@"canInstall"] boolValue];
-		if (plate != nil)
-			header.image = [plate stretchableImageWithLeftCapWidth:1 topCapHeight:0];
-		else
+		if ([TGTheme shared].isFlat)
 			header.backgroundColor = [[TGTheme shared] listBackgroundColour];
 
-		// The same plate carries the same 15pt bold caption everywhere else in
-		// the app that uses CategoryDivider.
 		UILabel *label = [[UILabel alloc] initWithFrame:
-				CGRectMake(self.sideInset, 0, width - self.sideInset * 2, TGStickerPanelHeaderHeight)];
+				CGRectMake(self.sideInset + 5.0f, 0,
+						width - (self.sideInset + 5.0f) * 2, TGStickerPanelHeaderHeight)];
 		label.backgroundColor = [UIColor clearColor];
-		label.font = [UIFont boldSystemFontOfSize:15];
-		label.textColor = [UIColor colorWithRed:0x69 / 255.0f green:0x74 / 255.0f
-										   blue:0x87 / 255.0f alpha:1.0f];
-		label.text = section[@"title"];
+		label.font = [UIFont boldSystemFontOfSize:11];
+		label.textColor = [TGTheme shared].isFlat
+				? [[TGTheme shared] sectionHeaderColour] : TGStickerPanelEngravedColour();
+		if (![TGTheme shared].isFlat){
+			label.shadowColor = [UIColor colorWithWhite:1.0f alpha:0.55f];
+			label.shadowOffset = CGSizeMake(0, 1);
+		}
+		NSString *caption = section[@"title"];
+		label.text = [caption isKindOfClass:[NSString class]] ? [caption uppercaseString] : nil;
 		[header addSubview:label];
 
 		if ([section[@"canInstall"] boolValue]){
 			UIButton *add = [self addButtonForSectionIndex:index];
 			CGFloat addWidth = 52.0f;
-			add.frame = CGRectMake(width - self.sideInset - addWidth,
-					floorf((TGStickerPanelHeaderHeight - 20.0f) / 2.0f), addWidth, 20.0f);
-			label.frame = CGRectMake(self.sideInset, 0,
-					MAX(20.0f, width - self.sideInset * 2 - addWidth - 6.0f), TGStickerPanelHeaderHeight);
+			add.frame = CGRectMake(width - self.sideInset - 5.0f - addWidth,
+					floorf((TGStickerPanelHeaderHeight - 19.0f) / 2.0f), addWidth, 19.0f);
+			label.frame = CGRectMake(self.sideInset + 5.0f, 0,
+					MAX(20.0f, width - (self.sideInset + 5.0f) * 2 - addWidth - 6.0f),
+					TGStickerPanelHeaderHeight);
 			[header addSubview:add];
 		}
 		[self.grid addSubview:header];
 		[self.headerViews addObject:header];
 
-		CGFloat body = self.tileSpacing * 2.0f + rows * self.tileSide +
-				(rows - 1) * self.tileSpacing;
+		CGFloat body = self.rowSpacing * 2.0f + rows * self.tileSide +
+				(rows - 1) * self.rowSpacing;
 		section[@"height"] = @(TGStickerPanelHeaderHeight + body);
 		y += TGStickerPanelHeaderHeight + body;
 		index += 1;
@@ -1161,8 +1324,8 @@ static const NSTimeInterval TGStickerPanelSnapshotLifetime = 600.0;
 	NSInteger row = item / self.columns;
 	NSInteger column = item % self.columns;
 	CGFloat x = self.sideInset + column * (self.tileSide + self.tileSpacing);
-	CGFloat y = sectionY + TGStickerPanelHeaderHeight + self.tileSpacing +
-			row * (self.tileSide + self.tileSpacing);
+	CGFloat y = sectionY + TGStickerPanelHeaderHeight + self.rowSpacing +
+			row * (self.tileSide + self.rowSpacing);
 	return CGRectMake(floorf(x), floorf(y), self.tileSide, self.tileSide);
 }
 
@@ -1184,7 +1347,7 @@ static const NSTimeInterval TGStickerPanelSnapshotLifetime = 600.0;
 	// One row of headroom either side, the same window Telegram's own pager
 	// allocates item layers for. Anything past it is recycled and its download
 	// and decode are cancelled.
-	CGFloat row = self.tileSide + self.tileSpacing;
+	CGFloat row = self.tileSide + self.rowSpacing;
 	CGRect visible = CGRectMake(0, self.grid.contentOffset.y - row,
 			self.grid.bounds.size.width, self.grid.bounds.size.height + row * 2.0f);
 
@@ -1428,11 +1591,10 @@ static const NSTimeInterval TGStickerPanelSnapshotLifetime = 600.0;
 	[self.tabButtons removeAllObjects];
 	[self.tabDividers removeAllObjects];
 
-	NSInteger total = (NSInteger)self.sections.count + 2;
 	NSInteger index = 0;
 
 	for (NSMutableDictionary *section in self.sections){
-		UIButton *button = [self tabButtonAtIndex:index total:total];
+		UIButton *button = [self tabKey];
 		button.tag = index;
 		[button addTarget:self action:@selector(tabTapped:)
 		 forControlEvents:UIControlEventTouchUpInside];
@@ -1474,24 +1636,6 @@ static const NSTimeInterval TGStickerPanelSnapshotLifetime = 600.0;
 		index += 1;
 	}
 
-	UIButton *search = [self tabButtonAtIndex:index total:total];
-	search.tag = -2;
-	[search setTitle:@"Find" forState:UIControlStateNormal];
-	search.selected = self.searchVisible;
-	[search addTarget:self action:@selector(toggleSearch)
-	 forControlEvents:UIControlEventTouchUpInside];
-	[self.tabStrip addSubview:search];
-	[self.tabButtons addObject:search];
-	index += 1;
-
-	UIButton *hide = [self tabButtonAtIndex:index total:total];
-	hide.tag = -1;
-	[hide setTitle:@"Hide" forState:UIControlStateNormal];
-	[hide addTarget:self action:@selector(hideTapped)
-   forControlEvents:UIControlEventTouchUpInside];
-	[self.tabStrip addSubview:hide];
-	[self.tabButtons addObject:hide];
-
 	[self layoutTabs];
 	[self updateTabSelection];
 }
@@ -1502,130 +1646,127 @@ static const NSTimeInterval TGStickerPanelSnapshotLifetime = 600.0;
 	return [[title substringToIndex:3] uppercaseString];
 }
 
-- (UIButton *)tabButtonAtIndex:(NSInteger)index total:(NSInteger)total {
-	NSString *name = @"ButtonGroupCenter.png";
-	NSString *highlighted = @"ButtonGroupCenter_Highlighted.png";
-	NSInteger cap = 1;
-	if (index == 0){
-		name = @"ButtonGroupLeft.png";
-		highlighted = @"ButtonGroupLeft_Highlighted.png";
-		cap = 8;
-	}
-	else if (index == total - 1){
-		name = @"ButtonGroupRight.png";
-		highlighted = @"ButtonGroupRight_Highlighted.png";
-		cap = 1;
-	}
-
-	UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
-	UIImage *plate = [UIImage imageNamed:name];
-	UIImage *platePressed = [UIImage imageNamed:highlighted];
+- (void)styleKey:(UIButton *)button {
+	UIImage *plate = TGStickerPanelKeyPlate(NO);
+	UIImage *pressed = TGStickerPanelKeyPlate(YES);
 	if (plate != nil)
-		[button setBackgroundImage:[plate stretchableImageWithLeftCapWidth:cap topCapHeight:0]
-						  forState:UIControlStateNormal];
-	if (platePressed != nil){
-		UIImage *stretched = [platePressed stretchableImageWithLeftCapWidth:cap topCapHeight:0];
-		[button setBackgroundImage:stretched forState:UIControlStateHighlighted];
-		[button setBackgroundImage:stretched forState:UIControlStateSelected];
-		[button setBackgroundImage:stretched
+		[button setBackgroundImage:plate forState:UIControlStateNormal];
+	if (pressed != nil){
+		[button setBackgroundImage:pressed forState:UIControlStateHighlighted];
+		[button setBackgroundImage:pressed forState:UIControlStateSelected];
+		[button setBackgroundImage:pressed
 						  forState:UIControlStateSelected | UIControlStateHighlighted];
+	}
+	if (plate == nil){
+		button.backgroundColor = [[TGTheme shared] listBackgroundColour];
+		button.layer.cornerRadius = 4.0f;
 	}
 	button.adjustsImageWhenHighlighted = NO;
 	button.adjustsImageWhenDisabled = NO;
 	button.exclusiveTouch = YES;
 	button.titleLabel.font = [UIFont boldSystemFontOfSize:12];
-	button.titleLabel.shadowOffset = CGSizeMake(0, -1);
-	[button setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-	[button setTitleShadowColor:[UIColor colorWithRed:0x0e / 255.0f green:0x28 / 255.0f
-												 blue:0x4d / 255.0f alpha:0.4f]
-					   forState:UIControlStateNormal];
+	button.titleLabel.shadowOffset = CGSizeMake(0, 1);
 	button.imageView.contentMode = UIViewContentModeScaleAspectFit;
+	[button setTitleColor:TGStickerPanelEngravedColour() forState:UIControlStateNormal];
+	[button setTitleShadowColor:[UIColor colorWithWhite:1.0f alpha:0.25f]
+					   forState:UIControlStateNormal];
+	[button setTitleColor:[UIColor whiteColor] forState:UIControlStateSelected];
+	[button setTitleShadowColor:[UIColor colorWithRed:0x11 / 255.0f green:0x2e / 255.0f
+												 blue:0x5c / 255.0f alpha:0.2f]
+					   forState:UIControlStateSelected];
+	[button setTitleColor:[UIColor whiteColor] forState:UIControlStateHighlighted];
+}
+
+- (UIButton *)tabKey {
+	UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+	[self styleKey:button];
 	return button;
 }
 
-/// A group-button strip carries a real 2pt divider between neighbours, and the
-/// divider next to the pressed plate is a different piece of art on each side.
-/// Overlapping one plain divider over the seam is what made the strip look
-/// stuck on rather than part of the bar.
-- (UIImageView *)tabDividerView {
-	UIImageView *view = [[UIImageView alloc] initWithFrame:CGRectZero];
-	UIImage *plain = [UIImage imageNamed:@"ButtonGroupDivider.png"];
-	if (plain != nil)
-		view.image = [plain stretchableImageWithLeftCapWidth:6 topCapHeight:0];
-	view.contentMode = UIViewContentModeScaleToFill;
-	return view;
+- (UIButton *)functionKeyWithGlyph:(UIImage *)glyph title:(NSString *)title {
+	UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+	[self styleKey:button];
+	if (glyph != nil)
+		[button setImage:glyph forState:UIControlStateNormal];
+	else if (title.length > 0)
+		[button setTitle:title forState:UIControlStateNormal];
+	return button;
 }
 
 - (void)layoutTabs {
-	for (UIView *view in self.tabDividers)
-		[view removeFromSuperview];
-	[self.tabDividers removeAllObjects];
+	CGFloat barWidth = self.keyBar.bounds.size.width;
+	if (barWidth < 1.0f)
+		return;
 
-	CGFloat height = self.tabHeight;
+	CGFloat keyWidth = TGStickerPanelFunctionKeyWidth;
+	self.searchKey.frame = CGRectMake(0, TGStickerPanelKeyTop, keyWidth, TGStickerPanelKeyHeight);
+	self.backspaceKey.frame = CGRectMake(barWidth - keyWidth, TGStickerPanelKeyTop,
+			keyWidth, TGStickerPanelKeyHeight);
+	self.tabStrip.frame = CGRectMake(keyWidth, TGStickerPanelKeyTop,
+			MAX(0.0f, barWidth - keyWidth * 2.0f), TGStickerPanelKeyHeight);
+
 	CGFloat x = 0;
-	NSInteger index = 0;
-	NSInteger last = (NSInteger)self.tabButtons.count - 1;
-
 	for (UIButton *button in self.tabButtons){
-		CGFloat width = TGStickerPanelTabMinWidth;
+		CGFloat width = TGStickerPanelKeyMinWidth;
 		NSString *title = [button titleForState:UIControlStateNormal];
 		if (title.length > 0){
 			CGSize size = [title sizeWithFont:button.titleLabel.font];
-			width = MAX(TGStickerPanelTabMinWidth, floorf(size.width) + 14.0f);
+			width = MAX(TGStickerPanelKeyMinWidth, floorf(size.width) + 18.0f);
 		}
-		button.frame = CGRectMake(floorf(x), 0, width, height);
+		button.frame = CGRectMake(floorf(x), 0, width, TGStickerPanelKeyHeight);
 		x += width;
-
-		if (index < last){
-			UIImageView *divider = [self tabDividerView];
-			divider.frame = CGRectMake(floorf(x), 0, TGStickerPanelTabDividerWidth, height);
-			[self.tabStrip addSubview:divider];
-			[self.tabDividers addObject:divider];
-			x += TGStickerPanelTabDividerWidth;
-		}
-		index += 1;
 	}
-	self.tabStrip.contentSize = CGSizeMake(x, height);
+	self.tabStrip.contentSize = CGSizeMake(x, TGStickerPanelKeyHeight);
 	[self updateTabDividers];
 }
 
 - (void)updateTabDividers {
+	for (UIView *view in self.tabDividers)
+		[view removeFromSuperview];
+	[self.tabDividers removeAllObjects];
+
+	UIImage *dividerLeft = [UIImage imageNamed:@"SearchScopeBarScopeDividerLeft.png"];
+	UIImage *dividerRight = [UIImage imageNamed:@"SearchScopeBarScopeDividerRight.png"];
+	if (dividerLeft == nil || dividerRight == nil)
+		return;
+
 	NSInteger selected = -1;
-	NSInteger index = 0;
-	for (UIButton *button in self.tabButtons){
-		if (button.selected){
-			selected = index;
+	for (NSInteger i = 0; i < (NSInteger)self.tabButtons.count; i++){
+		UIButton *candidate = self.tabButtons[i];
+		if (candidate.selected){
+			selected = i;
 			break;
 		}
-		index += 1;
 	}
+	if (selected < 0)
+		return;
 
-	UIImage *plain = [UIImage imageNamed:@"ButtonGroupDivider.png"];
-	UIImage *leftLit = [UIImage imageNamed:@"ButtonGroupDivider_LeftHighlighted.png"];
-	UIImage *rightLit = [UIImage imageNamed:@"ButtonGroupDivider_RightHighlighted.png"];
-
-	for (NSInteger i = 0; i < (NSInteger)self.tabDividers.count; i++){
-		UIImageView *divider = self.tabDividers[i];
-		UIImage *wanted = plain;
+	for (NSInteger i = 0; i + 1 < (NSInteger)self.tabButtons.count; i++){
+		UIImage *art = nil;
 		if (selected == i)
-			wanted = leftLit ?: plain;
+			art = dividerLeft;
 		else if (selected == i + 1)
-			wanted = rightLit ?: plain;
-		if (wanted == nil)
+			art = dividerRight;
+		if (art == nil)
 			continue;
-		divider.image = [wanted stretchableImageWithLeftCapWidth:6 topCapHeight:0];
+
+		UIButton *right = self.tabButtons[i + 1];
+		UIImageView *divider = [[UIImageView alloc] initWithImage:art];
+		divider.frame = CGRectMake(right.frame.origin.x - (CGFloat)(int)(art.size.width / 2.0f),
+				0, art.size.width, TGStickerPanelKeyHeight);
+		[self.tabStrip addSubview:divider];
+		[self.tabStrip bringSubviewToFront:divider];
+		[self.tabDividers addObject:divider];
 	}
 }
 
 - (void)updateTabSelection {
 	NSInteger index = 0;
 	for (UIButton *button in self.tabButtons){
-		if (button.tag == -2)
-			button.selected = self.searchVisible;
-		else
-			button.selected = (button.tag >= 0 && index == self.selectedSection);
+		button.selected = (button.tag >= 0 && index == self.selectedSection);
 		index += 1;
 	}
+	self.searchKey.selected = self.searchVisible;
 	[self updateTabDividers];
 }
 
@@ -1657,6 +1798,25 @@ static const NSTimeInterval TGStickerPanelSnapshotLifetime = 600.0;
 		[self.searchBar resignFirstResponder];
 	if (self.onCloseRequested)
 		self.onCloseRequested();
+}
+
+- (void)backspaceTapped {
+	if (self.searchVisible && [self.searchBar isFirstResponder]){
+		NSString *text = self.searchBar.text;
+		if (text.length > 0){
+			NSRange last = [text rangeOfComposedCharacterSequenceAtIndex:text.length - 1];
+			self.searchBar.text = [text substringToIndex:last.location];
+			[self searchBar:self.searchBar textDidChange:self.searchBar.text];
+			return;
+		}
+		[self setSearchVisible:NO];
+		[self updateTabSelection];
+		return;
+	}
+
+	if (self.onBackspace && self.onBackspace())
+		return;
+	[self hideTapped];
 }
 
 #pragma mark - status
@@ -1733,8 +1893,7 @@ static const NSTimeInterval TGStickerPanelSnapshotLifetime = 600.0;
 	CGFloat centreY = floorf(bounds.size.height / 2.0f);
 	self.previewImageView.frame = CGRectMake(floorf(centreX - side / 2.0f),
 			floorf(centreY - side / 2.0f), side, side);
-	// 32pt emoji, 10pt clear of the sticker, exactly as the current client
-	// stacks a peeked sticker.
+	self.previewPlate.frame = CGRectInset(self.previewImageView.frame, -14.0f, -14.0f);
 	self.previewEmojiLabel.frame = CGRectMake(0,
 			CGRectGetMinY(self.previewImageView.frame) - 48.0f, bounds.size.width, 38.0f);
 }
@@ -1744,6 +1903,18 @@ static const NSTimeInterval TGStickerPanelSnapshotLifetime = 600.0;
 		_previewOverlay = [[UIView alloc] initWithFrame:CGRectZero];
 		_previewOverlay.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.45f];
 		_previewOverlay.userInteractionEnabled = NO;
+
+		_previewPlate = [[UIView alloc] initWithFrame:CGRectZero];
+		_previewPlate.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.94f];
+		_previewPlate.layer.cornerRadius = 10.0f;
+		_previewPlate.layer.borderWidth = 1.0f;
+		_previewPlate.layer.borderColor =
+				[UIColor colorWithWhite:1.0f alpha:0.6f].CGColor;
+		_previewPlate.layer.shadowColor = [UIColor blackColor].CGColor;
+		_previewPlate.layer.shadowOffset = CGSizeMake(0, 2);
+		_previewPlate.layer.shadowOpacity = 0.45f;
+		_previewPlate.layer.shadowRadius = 8.0f;
+		[_previewOverlay addSubview:_previewPlate];
 
 		_previewEmojiLabel = [[UILabel alloc] initWithFrame:CGRectZero];
 		_previewEmojiLabel.backgroundColor = [UIColor clearColor];

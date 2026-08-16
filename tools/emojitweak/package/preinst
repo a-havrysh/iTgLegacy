@@ -2,9 +2,11 @@
 set -e
 
 PKG="@PACKAGE@"
-SYSFONT="@SYSFONT@"
 SYSDIR="@SYSDIR@"
-FONT_KB=@FONT_KB@
+FONT_1X="@FONT_1X@"
+FONT_2X="@FONT_2X@"
+FONT_1X_KB=@FONT_1X_KB@
+FONT_2X_KB=@FONT_2X_KB@
 MARGIN_KB=@MARGIN_KB@
 
 say() { echo "$PKG: $*"; }
@@ -36,29 +38,60 @@ install|upgrade)
     [ -d "$SYSDIR" ] || die "$SYSDIR does not exist; this does not look like an iOS 6 system font layout."
     [ -w "$SYSDIR" ] || die "$SYSDIR is not writable. Remount the system partition read-write and install again."
 
+    targets=""
+    need=0
+    cur_kb=0
+    for spec in "$FONT_1X:$FONT_1X_KB" "$FONT_2X:$FONT_2X_KB"; do
+        name=${spec%:*}
+        kb=${spec##*:}
+        [ -f "$SYSDIR/$name" ] || continue
+        targets="$targets $name"
+        need=$(( need + kb ))
+        cur_kb=$(( cur_kb + $(file_kb "$SYSDIR/$name") ))
+    done
+
+    if [ -z "$targets" ]; then
+        {
+            echo ""
+            echo "$PKG: no Apple colour emoji font found in $SYSDIR."
+            echo ""
+            echo "  Looked for:"
+            echo "      $SYSDIR/$FONT_1X       (non-Retina devices)"
+            echo "      $SYSDIR/$FONT_2X    (Retina devices)"
+            echo ""
+            echo "  This package replaces a font that already exists; installing one"
+            echo "  under a name the system does not read would change nothing."
+            echo "  Nothing has been changed."
+            echo ""
+        } >&2
+        exit 1
+    fi
+
+    say "will replace:$targets"
+
     have=$(free_kb "$SYSDIR" || true)
     if [ -z "$have" ]; then
         say "warning: cannot read free space on $SYSDIR; continuing without the space check."
         exit 0
     fi
 
-    need=$(( FONT_KB + MARGIN_KB ))
+    need=$(( need + MARGIN_KB ))
     if [ "$have" -ge "$need" ]; then
         exit 0
     fi
 
-    cur_kb=$(file_kb "$SYSFONT")
     short=$(( (need - have + 1023) / 1024 ))
     {
         echo ""
         echo "$PKG: not enough free space on the system partition."
         echo ""
         echo "  mount point : $SYSDIR"
+        echo "  replacing   :$targets"
         echo "  free        : $(( have / 1024 )) MB"
-        echo "  needed      : $(( need / 1024 )) MB  ($(( FONT_KB / 1024 )) MB font + $(( MARGIN_KB / 1024 )) MB working room)"
+        echo "  needed      : $(( need / 1024 )) MB  (including $(( MARGIN_KB / 1024 )) MB working room)"
         echo ""
-        echo "  The new font is written next to the current one and only then swapped"
-        echo "  in, so the $(( cur_kb / 1024 )) MB the present font occupies does not count as free space."
+        echo "  Each new font is written next to the current one and only then swapped"
+        echo "  in, so the $(( cur_kb / 1024 )) MB the present fonts occupy does not count as free space."
         echo ""
         echo "  Free at least $short MB on / and install again."
         echo "  Nothing has been changed."

@@ -1,12 +1,39 @@
 #import "TGVideoCaptureViewController.h"
 #import "TGVideoRecorder.h"
+#import "TGTheme.h"
 
 #import <AVFoundation/AVFoundation.h>
 #import <QuartzCore/QuartzCore.h>
 
 static const CGFloat TGVideoCaptureShutterSide = 68.0f;
-static const CGFloat TGVideoCaptureRoundSide = 240.0f;
 static const NSTimeInterval TGVideoCaptureMinimum = 0.6;
+
+static const CGFloat TGNoteCircleSide  = 216.0f;
+static const CGFloat TGNoteShadowInset = 19.0f;
+static const CGFloat TGNoteRingSide    = 234.0f;
+static const CGFloat TGNoteRingWidth   = 4.0f;
+static const CGFloat TGNoteMuteSide    = 24.0f;
+static const CGFloat TGNoteCancelSlide = 110.0f;
+static const CGFloat TGNoteLockRise    = 46.0f;
+static const CGFloat TGNoteLockWidth   = 30.0f;
+static const CGFloat TGNoteLockHeight  = 44.0f;
+static const CGFloat TGNoteControlSide = 44.0f;
+
+typedef NS_ENUM(NSInteger, TGNoteStage) {
+	TGNoteStageIdle = 0,
+	TGNoteStageRecording,
+	TGNoteStagePreview
+};
+
+static UIColor *TGNoteRecordColour(void) {
+	return [UIColor colorWithRed:0xf3 / 255.0f green:0x3d / 255.0f
+							blue:0x2b / 255.0f alpha:1.0f];
+}
+
+static UIColor *TGNoteHintColour(void) {
+	return [UIColor colorWithRed:0x95 / 255.0f green:0x97 / 255.0f
+							blue:0xa0 / 255.0f alpha:1.0f];
+}
 
 static UIImage *TGVideoCaptureShutterImage(BOOL recording, BOOL pressed) {
 	CGFloat side = TGVideoCaptureShutterSide;
@@ -36,6 +63,149 @@ static UIImage *TGVideoCaptureShutterImage(BOOL recording, BOOL pressed) {
 				CGRectMake((side - inner) / 2, (side - inner) / 2, inner, inner));
 	}
 
+	UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return image;
+}
+
+static UIImage *TGNoteMuteBadgeImage(void) {
+	static UIImage *badge = nil;
+	if (badge != nil)
+		return badge;
+
+	CGFloat side = TGNoteMuteSide;
+	UIGraphicsBeginImageContextWithOptions(CGSizeMake(side, side), NO, 0.0f);
+	CGContextRef context = UIGraphicsGetCurrentContext();
+	CGContextSetFillColorWithColor(context,
+			[UIColor colorWithWhite:0 alpha:0.4f].CGColor);
+	CGContextFillEllipseInRect(context, CGRectMake(0, 0, side, side));
+
+	[[UIColor whiteColor] setFill];
+	UIBezierPath *speaker = [UIBezierPath bezierPath];
+	[speaker moveToPoint:CGPointMake(6.5f, 10.0f)];
+	[speaker addLineToPoint:CGPointMake(9.5f, 10.0f)];
+	[speaker addLineToPoint:CGPointMake(13.0f, 6.0f)];
+	[speaker addLineToPoint:CGPointMake(13.0f, 18.0f)];
+	[speaker addLineToPoint:CGPointMake(9.5f, 14.0f)];
+	[speaker addLineToPoint:CGPointMake(6.5f, 14.0f)];
+	[speaker closePath];
+	[speaker fill];
+
+	UIBezierPath *slash = [UIBezierPath bezierPath];
+	slash.lineWidth = 1.5f;
+	slash.lineCapStyle = kCGLineCapRound;
+	[slash moveToPoint:CGPointMake(15.5f, 9.0f)];
+	[slash addLineToPoint:CGPointMake(19.5f, 15.0f)];
+	[slash moveToPoint:CGPointMake(19.5f, 9.0f)];
+	[slash addLineToPoint:CGPointMake(15.5f, 15.0f)];
+	[[UIColor whiteColor] setStroke];
+	[slash stroke];
+
+	badge = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return badge;
+}
+
+static UIImage *TGNoteLockPlateImage(BOOL engaged) {
+	CGFloat width = TGNoteLockWidth;
+	CGFloat height = TGNoteLockHeight;
+	UIGraphicsBeginImageContextWithOptions(CGSizeMake(width, height), NO, 0.0f);
+	CGContextRef context = UIGraphicsGetCurrentContext();
+	UIColor *accent = [[TGTheme shared] accentColour];
+
+	CGRect plate = CGRectInset(CGRectMake(0, 0, width, height), 1.0f, 1.0f);
+	UIBezierPath *shell = [UIBezierPath bezierPathWithRoundedRect:plate
+													cornerRadius:plate.size.width / 2];
+	CGContextSetShadowWithColor(context, CGSizeMake(0, 1), 2.0f,
+			[UIColor colorWithWhite:0 alpha:0.25f].CGColor);
+	[(engaged ? accent : [UIColor whiteColor]) setFill];
+	[shell fill];
+	CGContextSetShadowWithColor(context, CGSizeZero, 0, NULL);
+	shell.lineWidth = 1.0f;
+	[[UIColor colorWithWhite:0 alpha:0.15f] setStroke];
+	[shell stroke];
+
+	UIColor *ink = engaged ? [UIColor whiteColor] : accent;
+	[ink setFill];
+	[ink setStroke];
+
+	CGFloat centre = width / 2;
+	CGFloat bodyTop = 17.0f;
+	UIBezierPath *shackle = [UIBezierPath bezierPathWithArcCenter:
+			CGPointMake(centre, bodyTop) radius:4.0f
+													  startAngle:M_PI endAngle:0
+													   clockwise:YES];
+	shackle.lineWidth = 1.5f;
+	[shackle stroke];
+	if (!engaged){
+		UIBezierPath *stem = [UIBezierPath bezierPath];
+		stem.lineWidth = 1.5f;
+		[stem moveToPoint:CGPointMake(centre + 4.0f, bodyTop)];
+		[stem addLineToPoint:CGPointMake(centre + 4.0f, bodyTop + 2.5f)];
+		[stem stroke];
+	}
+	[[UIBezierPath bezierPathWithRoundedRect:
+			CGRectMake(centre - 6.0f, bodyTop, 12.0f, 10.0f) cornerRadius:2.0f] fill];
+
+	if (!engaged){
+		UIBezierPath *chevron = [UIBezierPath bezierPath];
+		chevron.lineWidth = 1.5f;
+		chevron.lineCapStyle = kCGLineCapRound;
+		chevron.lineJoinStyle = kCGLineJoinRound;
+		[chevron moveToPoint:CGPointMake(centre - 4.0f, height - 8.0f)];
+		[chevron addLineToPoint:CGPointMake(centre, height - 12.0f)];
+		[chevron addLineToPoint:CGPointMake(centre + 4.0f, height - 8.0f)];
+		[chevron stroke];
+	}
+
+	UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return image;
+}
+
+static UIImage *TGNoteStopImage(BOOL pressed) {
+	CGFloat side = TGNoteControlSide;
+	UIGraphicsBeginImageContextWithOptions(CGSizeMake(side, side), NO, 0.0f);
+	CGContextRef context = UIGraphicsGetCurrentContext();
+
+	CGRect disc = CGRectInset(CGRectMake(0, 0, side, side), 5.0f, 5.0f);
+	CGContextSetShadowWithColor(context, CGSizeMake(0, 1), 1.5f,
+			[UIColor colorWithWhite:0 alpha:0.25f].CGColor);
+	CGContextSetFillColorWithColor(context,
+			[TGNoteRecordColour() colorWithAlphaComponent:pressed ? 0.7f : 1.0f].CGColor);
+	CGContextFillEllipseInRect(context, disc);
+	CGContextSetShadowWithColor(context, CGSizeZero, 0, NULL);
+
+	CGFloat inner = 13.0f;
+	CGRect square = CGRectMake((side - inner) / 2, (side - inner) / 2, inner, inner);
+	[[UIColor whiteColor] setFill];
+	[[UIBezierPath bezierPathWithRoundedRect:square cornerRadius:2.0f] fill];
+
+	UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return image;
+}
+
+static UIImage *TGNoteTrashImage(BOOL pressed) {
+	UIImage *art = [UIImage imageNamed:@"GalleryTrashIcon.png"];
+	if (art != nil && !pressed)
+		return art;
+	if (art != nil){
+		UIGraphicsBeginImageContextWithOptions(art.size, NO, 0.0f);
+		[art drawAtPoint:CGPointZero blendMode:kCGBlendModeNormal alpha:0.5f];
+		UIImage *dimmed = UIGraphicsGetImageFromCurrentImageContext();
+		UIGraphicsEndImageContext();
+		return dimmed;
+	}
+
+	CGFloat side = 26.0f;
+	UIGraphicsBeginImageContextWithOptions(CGSizeMake(side, side), NO, 0.0f);
+	UIColor *ink = [[TGTheme shared] accentColour];
+	[[ink colorWithAlphaComponent:pressed ? 0.5f : 1.0f] setFill];
+	[[UIBezierPath bezierPathWithRoundedRect:CGRectMake(5, 7, 16, 17)
+								cornerRadius:2.0f] fill];
+	[[UIBezierPath bezierPathWithRect:CGRectMake(3, 4, 20, 2)] fill];
+	[[UIBezierPath bezierPathWithRect:CGRectMake(10, 1, 6, 3)] fill];
 	UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
 	UIGraphicsEndImageContext();
 	return image;
@@ -72,6 +242,34 @@ static UIImage *TGVideoCaptureShutterImage(BOOL recording, BOOL pressed) {
 @property (nonatomic, strong) AVPlayer *player;
 @property (nonatomic, strong) AVPlayerLayer *playerLayer;
 
+@property (nonatomic, assign) BOOL overlay;
+@property (nonatomic, assign) CGRect controlsFrame;
+@property (nonatomic, assign) CGRect overlayBounds;
+@property (nonatomic, assign) TGNoteStage noteStage;
+@property (nonatomic, assign) BOOL locked;
+@property (nonatomic, assign) BOOL holding;
+@property (nonatomic, assign) BOOL startWhenReady;
+@property (nonatomic, assign) BOOL sendWhenFinished;
+@property (nonatomic, assign) BOOL previewMuted;
+
+@property (nonatomic, strong) UIView *curtain;
+@property (nonatomic, strong) UIView *circleWrapper;
+@property (nonatomic, strong) UIView *circle;
+@property (nonatomic, strong) UIView *circleRim;
+@property (nonatomic, strong) CAShapeLayer *noteRing;
+@property (nonatomic, strong) UIImageView *muteBadge;
+@property (nonatomic, strong) UIImageView *lockPlate;
+
+@property (nonatomic, strong) UIView *controlsRow;
+@property (nonatomic, strong) UIView *noteDot;
+@property (nonatomic, strong) UILabel *noteClock;
+@property (nonatomic, strong) UILabel *noteSlide;
+@property (nonatomic, strong) UIButton *noteCancel;
+@property (nonatomic, strong) UIButton *noteStop;
+@property (nonatomic, strong) UIButton *noteTrash;
+@property (nonatomic, strong) UIButton *noteSend;
+@property (nonatomic, assign) CGFloat slideFree;
+
 @end
 
 @implementation TGVideoCaptureViewController
@@ -85,6 +283,7 @@ static UIImage *TGVideoCaptureShutterImage(BOOL recording, BOOL pressed) {
 		_recorder.delegate = self;
 		_maximumDuration = _recorder.maximumDuration;
 		_minimumDuration = TGVideoCaptureMinimum;
+		_previewMuted = YES;
 		self.wantsFullScreenLayout = YES;
 	}
 	return self;
@@ -104,6 +303,12 @@ static UIImage *TGVideoCaptureShutterImage(BOOL recording, BOOL pressed) {
 - (void)viewDidLoad {
 	[super viewDidLoad];
 
+	if (self.roundVideoNote){
+		self.view.backgroundColor = [UIColor clearColor];
+		[self buildNoteOverlay];
+		return;
+	}
+
 	self.view.backgroundColor = [UIColor colorWithRed:0x22 / 255.0f green:0x22 / 255.0f
 												 blue:0x22 / 255.0f alpha:1.0f];
 	[self.navigationController setNavigationBarHidden:YES animated:NO];
@@ -114,6 +319,536 @@ static UIImage *TGVideoCaptureShutterImage(BOOL recording, BOOL pressed) {
 	[self updateChrome];
 }
 
+#pragma mark - round note overlay
+
+- (void)presentOverParent:(UIViewController *)parent controlsFrame:(CGRect)controlsFrame {
+	if (parent == nil || !self.roundVideoNote)
+		return;
+
+	self.overlay = YES;
+	self.controlsFrame = controlsFrame;
+	self.overlayBounds = parent.view.bounds;
+
+	[parent addChildViewController:self];
+	self.view.frame = parent.view.bounds;
+	[parent.view addSubview:self.view];
+	[self didMoveToParentViewController:parent];
+
+	[self transitionNoteIn];
+}
+
+- (void)buildNoteOverlay {
+	CGRect bounds = CGRectIsEmpty(self.overlayBounds) ? self.view.bounds
+													 : self.overlayBounds;
+	CGRect row = self.controlsFrame;
+	if (CGRectIsEmpty(row))
+		row = CGRectMake(0, bounds.size.height - 43.0f, bounds.size.width, 43.0f);
+
+	self.curtain = [[UIView alloc] initWithFrame:
+			CGRectMake(0, 0, bounds.size.width, CGRectGetMinY(row))];
+	self.curtain.backgroundColor = [[TGTheme shared] isDark]
+			? [UIColor colorWithWhite:0 alpha:0.6f]
+			: [UIColor colorWithWhite:1 alpha:0.6f];
+	self.curtain.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	[self.view addSubview:self.curtain];
+
+	CGFloat wrapperSide = TGNoteCircleSide + TGNoteShadowInset * 2;
+	CGFloat wrapperY = floorf((CGRectGetMinY(row) - wrapperSide) / 2);
+	if (wrapperY < 4.0f)
+		wrapperY = 4.0f;
+	self.circleWrapper = [[UIView alloc] initWithFrame:CGRectMake(
+			floorf((bounds.size.width - wrapperSide) / 2), wrapperY,
+			wrapperSide, wrapperSide)];
+	self.circleWrapper.backgroundColor = [UIColor clearColor];
+	[self.view addSubview:self.circleWrapper];
+
+	CGRect rimFrame = CGRectInset(self.circleWrapper.bounds,
+			TGNoteShadowInset - 2.0f, TGNoteShadowInset - 2.0f);
+	self.circleRim = [[UIView alloc] initWithFrame:rimFrame];
+	self.circleRim.backgroundColor = [UIColor whiteColor];
+	self.circleRim.layer.cornerRadius = rimFrame.size.width / 2;
+	self.circleRim.layer.shadowColor = [UIColor blackColor].CGColor;
+	self.circleRim.layer.shadowOpacity = 0.32f;
+	self.circleRim.layer.shadowRadius = 10.0f;
+	self.circleRim.layer.shadowOffset = CGSizeMake(0, 2);
+	self.circleRim.layer.shadowPath = [UIBezierPath bezierPathWithOvalInRect:
+			self.circleRim.bounds].CGPath;
+	[self.circleWrapper addSubview:self.circleRim];
+
+	self.circle = [[UIView alloc] initWithFrame:CGRectMake(
+			TGNoteShadowInset, TGNoteShadowInset, TGNoteCircleSide, TGNoteCircleSide)];
+	self.circle.backgroundColor = [UIColor blackColor];
+	self.circle.layer.cornerRadius = TGNoteCircleSide / 2;
+	self.circle.layer.masksToBounds = YES;
+	[self.circleWrapper addSubview:self.circle];
+	self.stage = self.circle;
+
+	self.noteRing = [CAShapeLayer layer];
+	self.noteRing.frame = CGRectMake(
+			floorf((wrapperSide - TGNoteRingSide) / 2),
+			floorf((wrapperSide - TGNoteRingSide) / 2),
+			TGNoteRingSide, TGNoteRingSide);
+	self.noteRing.path = [UIBezierPath bezierPathWithOvalInRect:CGRectInset(
+			CGRectMake(0, 0, TGNoteRingSide, TGNoteRingSide),
+			TGNoteRingWidth / 2, TGNoteRingWidth / 2)].CGPath;
+	self.noteRing.fillColor = [UIColor clearColor].CGColor;
+	self.noteRing.strokeColor = [[TGTheme shared] accentColour].CGColor;
+	self.noteRing.lineWidth = TGNoteRingWidth;
+	self.noteRing.lineCap = kCALineCapRound;
+	self.noteRing.strokeStart = 0.0f;
+	self.noteRing.strokeEnd = 0.0f;
+	self.noteRing.transform = CATransform3DMakeRotation(-M_PI_2, 0, 0, 1);
+	[self.circleWrapper.layer addSublayer:self.noteRing];
+
+	self.muteBadge = [[UIImageView alloc] initWithImage:TGNoteMuteBadgeImage()];
+	self.muteBadge.frame = CGRectMake(
+			floorf(CGRectGetMidX(self.circle.bounds) - TGNoteMuteSide / 2),
+			CGRectGetMaxY(self.circle.bounds) - TGNoteMuteSide - 8.0f,
+			TGNoteMuteSide, TGNoteMuteSide);
+	self.muteBadge.hidden = YES;
+	[self.circle addSubview:self.muteBadge];
+
+	UITapGestureRecognizer *unmute = [[UITapGestureRecognizer alloc]
+			initWithTarget:self action:@selector(previewTapped)];
+	[self.circle addGestureRecognizer:unmute];
+	self.circle.userInteractionEnabled = YES;
+
+	[self buildNoteControlsRow:row];
+
+	self.lockPlate = [[UIImageView alloc] initWithImage:TGNoteLockPlateImage(NO)];
+	self.lockPlate.frame = CGRectMake(
+			bounds.size.width - TGNoteLockWidth - 14.0f,
+			CGRectGetMinY(row) - TGNoteLockHeight - 12.0f,
+			TGNoteLockWidth, TGNoteLockHeight);
+	self.lockPlate.alpha = 0.0f;
+	[self.view addSubview:self.lockPlate];
+}
+
+- (void)buildNoteControlsRow:(CGRect)row {
+	self.controlsRow = [[UIView alloc] initWithFrame:row];
+	self.controlsRow.backgroundColor = [[TGTheme shared] inputBarColour];
+	self.controlsRow.clipsToBounds = YES;
+	[self.view addSubview:self.controlsRow];
+
+	UIImage *strip = [UIImage imageNamed:@"ConversationInputPanel_Background"];
+	if (strip != nil){
+		UIImageView *stripView = [[UIImageView alloc] initWithFrame:
+				self.controlsRow.bounds];
+		stripView.image = [strip stretchableImageWithLeftCapWidth:0 topCapHeight:0];
+		stripView.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+									 UIViewAutoresizingFlexibleHeight;
+		stripView.userInteractionEnabled = NO;
+		[self.controlsRow addSubview:stripView];
+	}
+
+	UIImage *shadow = [UIImage imageNamed:@"ChatInputContainer_Shadow"];
+	if (shadow != nil){
+		UIImageView *shadowView = [[UIImageView alloc] initWithFrame:CGRectMake(
+				0, 0, row.size.width, shadow.size.height)];
+		shadowView.image = [shadow stretchableImageWithLeftCapWidth:0 topCapHeight:0];
+		shadowView.userInteractionEnabled = NO;
+		[self.controlsRow addSubview:shadowView];
+	} else {
+		UIView *hair = [[UIView alloc] initWithFrame:CGRectMake(0, 0, row.size.width, 1)];
+		hair.backgroundColor = [[TGTheme shared] separatorColour];
+		[self.controlsRow addSubview:hair];
+	}
+
+	CGFloat height = row.size.height;
+
+	self.noteDot = [[UIView alloc] initWithFrame:CGRectMake(
+			11.0f, floorf((height - 9.0f) / 2), 9.0f, 9.0f)];
+	self.noteDot.backgroundColor = TGNoteRecordColour();
+	self.noteDot.layer.cornerRadius = 4.5f;
+	[self.controlsRow addSubview:self.noteDot];
+
+	self.noteClock = [[UILabel alloc] initWithFrame:CGRectMake(
+			26.0f, floorf((height - 20.0f) / 2), 76.0f, 20.0f)];
+	self.noteClock.backgroundColor = [UIColor clearColor];
+	self.noteClock.font = [UIFont systemFontOfSize:15];
+	self.noteClock.textColor = [[TGTheme shared] primaryTextColour];
+	self.noteClock.text = @"0:00,0";
+	[self.controlsRow addSubview:self.noteClock];
+
+	self.noteSlide = [[UILabel alloc] initWithFrame:CGRectZero];
+	self.noteSlide.backgroundColor = [UIColor clearColor];
+	self.noteSlide.font = [UIFont systemFontOfSize:15];
+	self.noteSlide.textColor = TGNoteHintColour();
+	self.noteSlide.text = @"‹ Slide to cancel";
+	[self.noteSlide sizeToFit];
+	self.noteSlide.frame = CGRectMake(
+			floorf((row.size.width - self.noteSlide.frame.size.width) / 2),
+			floorf((height - self.noteSlide.frame.size.height) / 2),
+			self.noteSlide.frame.size.width, self.noteSlide.frame.size.height);
+	[self.controlsRow addSubview:self.noteSlide];
+
+	self.slideFree = MAX(0.0f, CGRectGetMinX(self.noteSlide.frame) - 6.0f -
+			CGRectGetMaxX(self.noteClock.frame));
+
+	self.noteCancel = [UIButton buttonWithType:UIButtonTypeCustom];
+	self.noteCancel.titleLabel.font = [UIFont systemFontOfSize:17];
+	[self.noteCancel setTitle:@"Cancel" forState:UIControlStateNormal];
+	[self.noteCancel setTitleColor:[[TGTheme shared] accentColour]
+						  forState:UIControlStateNormal];
+	[self.noteCancel setTitleColor:[[[TGTheme shared] accentColour]
+			colorWithAlphaComponent:0.5f] forState:UIControlStateHighlighted];
+	[self.noteCancel sizeToFit];
+	self.noteCancel.frame = CGRectMake(
+			floorf((row.size.width - self.noteCancel.frame.size.width) / 2),
+			floorf((height - self.noteCancel.frame.size.height) / 2),
+			self.noteCancel.frame.size.width, self.noteCancel.frame.size.height);
+	self.noteCancel.alpha = 0.0f;
+	[self.noteCancel addTarget:self action:@selector(cancelPressed)
+			  forControlEvents:UIControlEventTouchUpInside];
+	[self.controlsRow addSubview:self.noteCancel];
+
+	self.noteStop = [UIButton buttonWithType:UIButtonTypeCustom];
+	self.noteStop.exclusiveTouch = YES;
+	self.noteStop.frame = CGRectMake(row.size.width - TGNoteControlSide - 4.0f,
+			floorf((height - TGNoteControlSide) / 2),
+			TGNoteControlSide, TGNoteControlSide);
+	[self.noteStop setImage:TGNoteStopImage(NO) forState:UIControlStateNormal];
+	[self.noteStop setImage:TGNoteStopImage(YES) forState:UIControlStateHighlighted];
+	self.noteStop.alpha = 0.0f;
+	self.noteStop.userInteractionEnabled = NO;
+	[self.noteStop addTarget:self action:@selector(stopPressed)
+			forControlEvents:UIControlEventTouchUpInside];
+	[self.controlsRow addSubview:self.noteStop];
+
+	self.noteTrash = [UIButton buttonWithType:UIButtonTypeCustom];
+	self.noteTrash.exclusiveTouch = YES;
+	self.noteTrash.frame = CGRectMake(2.0f, floorf((height - TGNoteControlSide) / 2),
+			TGNoteControlSide, TGNoteControlSide);
+	[self.noteTrash setImage:TGNoteTrashImage(NO) forState:UIControlStateNormal];
+	[self.noteTrash setImage:TGNoteTrashImage(YES) forState:UIControlStateHighlighted];
+	self.noteTrash.alpha = 0.0f;
+	self.noteTrash.userInteractionEnabled = NO;
+	[self.noteTrash addTarget:self action:@selector(cancelPressed)
+			 forControlEvents:UIControlEventTouchUpInside];
+	[self.controlsRow addSubview:self.noteTrash];
+
+	self.noteSend = [UIButton buttonWithType:UIButtonTypeCustom];
+	self.noteSend.exclusiveTouch = YES;
+	self.noteSend.titleLabel.font = [UIFont boldSystemFontOfSize:14.5f];
+	self.noteSend.titleLabel.shadowOffset = CGSizeMake(0, -1);
+	[self.noteSend setTitle:@"Send" forState:UIControlStateNormal];
+	[self.noteSend setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+	[self.noteSend setTitleShadowColor:[UIColor colorWithRed:0.047f green:0.722f
+														blue:0.890f alpha:0.3f]
+							  forState:UIControlStateNormal];
+	UIImage *sendArt = [UIImage imageNamed:@"SendButton"];
+	if (sendArt != nil){
+		[self.noteSend setBackgroundImage:
+				[sendArt stretchableImageWithLeftCapWidth:(int)(sendArt.size.width / 2)
+											 topCapHeight:0]
+								 forState:UIControlStateNormal];
+		UIImage *pressedArt = [UIImage imageNamed:@"SendButton_Pressed"];
+		if (pressedArt != nil)
+			[self.noteSend setBackgroundImage:
+					[pressedArt stretchableImageWithLeftCapWidth:
+							(int)(pressedArt.size.width / 2) topCapHeight:0]
+									 forState:UIControlStateHighlighted];
+	} else {
+		self.noteSend.backgroundColor = [[TGTheme shared] accentColour];
+		self.noteSend.layer.cornerRadius = 4.0f;
+	}
+	self.noteSend.frame = CGRectMake(row.size.width - 67.0f,
+			floorf((height - 29.0f) / 2), 62.0f, 29.0f);
+	self.noteSend.alpha = 0.0f;
+	self.noteSend.userInteractionEnabled = NO;
+	[self.noteSend addTarget:self action:@selector(sendPressed)
+			forControlEvents:UIControlEventTouchUpInside];
+	[self.controlsRow addSubview:self.noteSend];
+}
+
+- (void)transitionNoteIn {
+	self.curtain.alpha = 0.0f;
+	self.controlsRow.alpha = 0.0f;
+	self.circleWrapper.alpha = 0.0f;
+	self.circleWrapper.transform = CGAffineTransformMakeScale(0.3f, 0.3f);
+
+	[UIView animateWithDuration:0.25 animations:^{
+		self.curtain.alpha = 1.0f;
+		self.controlsRow.alpha = 1.0f;
+		self.circleWrapper.alpha = 1.0f;
+	}];
+	[UIView animateWithDuration:0.22 delay:0.0
+						options:UIViewAnimationOptionCurveEaseOut animations:^{
+		self.circleWrapper.transform = CGAffineTransformMakeScale(1.05f, 1.05f);
+	} completion:^(BOOL finished){
+		[UIView animateWithDuration:0.12 animations:^{
+			self.circleWrapper.transform = CGAffineTransformIdentity;
+		}];
+	}];
+}
+
+- (void)dismissOverlay {
+	self.view.userInteractionEnabled = NO;
+	[UIView animateWithDuration:0.15 animations:^{
+		self.circleWrapper.alpha = 0.0f;
+		self.circleWrapper.transform = CGAffineTransformMakeScale(0.3f, 0.3f);
+		self.curtain.alpha = 0.0f;
+		self.controlsRow.alpha = 0.0f;
+		self.lockPlate.alpha = 0.0f;
+	} completion:^(BOOL finished){
+		[self willMoveToParentViewController:nil];
+		[self.view removeFromSuperview];
+		[self removeFromParentViewController];
+	}];
+}
+
+#pragma mark - round note gesture
+
+- (void)beginHold {
+	self.holding = YES;
+	self.startWhenReady = YES;
+	self.sendWhenFinished = YES;
+	if (!self.prepared)
+		[self startSession];
+	if (self.recorder.ready)
+		[self beginRecording];
+}
+
+- (void)holdMovedBy:(CGPoint)offset {
+	if (!self.holding || self.noteStage == TGNoteStagePreview)
+		return;
+
+	if (offset.x < -TGNoteCancelSlide){
+		[self cancelHold];
+		return;
+	}
+	if (offset.y < -TGNoteLockRise){
+		[self engageLock];
+		return;
+	}
+
+	CGFloat slide = MAX(0.0f, -offset.x - 5.0f);
+	self.noteSlide.transform = CGAffineTransformMakeTranslation(-slide, 0);
+	CGFloat free = self.slideFree;
+	CGFloat drag = slide > free ? free - slide : 0.0f;
+	self.noteDot.transform = CGAffineTransformMakeTranslation(drag, 0);
+	self.noteClock.transform = CGAffineTransformMakeTranslation(drag, 0);
+
+	CGFloat rise = MIN(TGNoteLockRise, MAX(0.0f, -offset.y));
+	self.lockPlate.alpha = MIN(1.0f, rise / 12.0f);
+	self.lockPlate.transform = CGAffineTransformMakeTranslation(0, -rise / 4.0f);
+}
+
+- (void)engageLock {
+	if (self.locked)
+		return;
+	self.locked = YES;
+	self.holding = NO;
+	self.sendWhenFinished = NO;
+
+	self.lockPlate.image = TGNoteLockPlateImage(YES);
+	self.lockPlate.alpha = 1.0f;
+	[UIView animateWithDuration:0.2 animations:^{
+		self.lockPlate.transform = CGAffineTransformMakeTranslation(0, -TGNoteLockRise / 4.0f);
+	} completion:^(BOOL finished){
+		[UIView animateWithDuration:0.25 delay:0.25 options:0 animations:^{
+			self.lockPlate.alpha = 0.0f;
+		} completion:nil];
+	}];
+
+	CGAffineTransform gone = CGAffineTransformScale(
+			CGAffineTransformMakeTranslation(0, -22.0f), 0.25f, 0.25f);
+	self.noteCancel.transform = CGAffineTransformScale(
+			CGAffineTransformMakeTranslation(0, 22.0f), 0.25f, 0.25f);
+	self.noteCancel.alpha = 0.0f;
+	self.noteStop.transform = CGAffineTransformMakeScale(0.4f, 0.4f);
+
+	[UIView animateWithDuration:0.3 animations:^{
+		self.noteSlide.transform = gone;
+		self.noteSlide.alpha = 0.0f;
+		self.noteCancel.transform = CGAffineTransformIdentity;
+		self.noteCancel.alpha = 1.0f;
+		self.noteStop.transform = CGAffineTransformIdentity;
+		self.noteStop.alpha = 1.0f;
+	} completion:nil];
+	self.noteStop.userInteractionEnabled = YES;
+}
+
+- (void)endHold {
+	if (!self.holding)
+		return;
+	self.holding = NO;
+
+	if (self.noteStage != TGNoteStageRecording){
+		[self cancelHold];
+		return;
+	}
+	if (self.recorder.duration < self.minimumDuration){
+		[self cancelHold];
+		return;
+	}
+	self.sendWhenFinished = YES;
+	[self stopNoteRecordingChrome];
+	[self.recorder stopRecording];
+}
+
+- (void)cancelHold {
+	self.holding = NO;
+	self.sendWhenFinished = NO;
+	if (self.recorder.recording)
+		[self.recorder cancel];
+	[self cancelPressed];
+}
+
+- (void)beginLockedRecording {
+	self.startWhenReady = YES;
+	self.sendWhenFinished = NO;
+	self.holding = NO;
+	if (!self.prepared)
+		[self startSession];
+	if (self.recorder.ready)
+		[self beginRecording];
+
+	self.noteSlide.alpha = 0.0f;
+	self.noteCancel.alpha = 1.0f;
+	self.noteStop.alpha = 1.0f;
+	self.noteStop.userInteractionEnabled = YES;
+	self.locked = YES;
+}
+
+- (void)stopPressed {
+	self.noteStop.userInteractionEnabled = NO;
+	self.sendWhenFinished = NO;
+	if (self.recorder.recording){
+		[self stopNoteRecordingChrome];
+		[self.recorder stopRecording];
+	}
+}
+
+#pragma mark - round note recording chrome
+
+- (void)showNoteRecordingChrome {
+	CAKeyframeAnimation *blink = [CAKeyframeAnimation animationWithKeyPath:@"opacity"];
+	blink.values = @[@1.0f, @1.0f, @0.0f];
+	blink.keyTimes = @[@0.0f, @0.4546f, @1.0f];
+	blink.duration = 0.5;
+	blink.autoreverses = YES;
+	blink.repeatCount = HUGE_VALF;
+	[self.noteDot.layer addAnimation:blink forKey:@"blink"];
+
+	CABasicAnimation *fill = [CABasicAnimation animationWithKeyPath:@"strokeEnd"];
+	fill.fromValue = @0.0f;
+	fill.toValue = @1.0f;
+	fill.duration = self.maximumDuration;
+	fill.timingFunction = [CAMediaTimingFunction
+			functionWithName:kCAMediaTimingFunctionLinear];
+	fill.fillMode = kCAFillModeForwards;
+	fill.removedOnCompletion = NO;
+	[self.noteRing addAnimation:fill forKey:@"fill"];
+}
+
+- (void)stopNoteRecordingChrome {
+	[self.noteDot.layer removeAnimationForKey:@"blink"];
+	[self.noteRing removeAnimationForKey:@"fill"];
+	[UIView animateWithDuration:0.2 animations:^{
+		self.noteDot.alpha = 0.0f;
+		self.noteDot.transform = CGAffineTransformMakeTranslation(-90.0f, 0);
+		self.noteClock.alpha = 0.0f;
+		self.noteClock.transform = CGAffineTransformMakeTranslation(-90.0f, 0);
+		self.noteSlide.alpha = 0.0f;
+		self.noteCancel.alpha = 0.0f;
+		self.noteStop.alpha = 0.0f;
+		self.lockPlate.alpha = 0.0f;
+	} completion:nil];
+	[CATransaction begin];
+	[CATransaction setDisableActions:YES];
+	self.noteRing.strokeEnd = 0.0f;
+	[CATransaction commit];
+	[UIView animateWithDuration:0.2 animations:^{
+		self.noteRing.opacity = 0.0f;
+	}];
+}
+
+- (void)enterNotePreview {
+	self.noteStage = TGNoteStagePreview;
+	self.reviewing = YES;
+	[self stopSession];
+
+	self.noteTrash.transform = CGAffineTransformMakeScale(0.6f, 0.6f);
+	self.noteSend.transform = CGAffineTransformMakeScale(0.6f, 0.6f);
+	[UIView animateWithDuration:0.25 delay:0.1 options:0 animations:^{
+		self.noteTrash.alpha = 1.0f;
+		self.noteTrash.transform = CGAffineTransformIdentity;
+		self.noteSend.alpha = 1.0f;
+		self.noteSend.transform = CGAffineTransformIdentity;
+	} completion:nil];
+	self.noteTrash.userInteractionEnabled = YES;
+	self.noteSend.userInteractionEnabled = YES;
+
+	self.player = [AVPlayer playerWithURL:[NSURL fileURLWithPath:self.resultPath]];
+	self.player.actionAtItemEnd = AVPlayerActionAtItemEndNone;
+	self.playerLayer = [AVPlayerLayer playerLayerWithPlayer:self.player];
+	self.playerLayer.videoGravity = AVLayerVideoGravityResizeAspectFill;
+	self.playerLayer.frame = self.circle.bounds;
+	[self.circle.layer insertSublayer:self.playerLayer atIndex:0];
+
+	self.previewMuted = YES;
+	[self applyPreviewVolume:0.0f];
+	self.muteBadge.hidden = NO;
+	self.muteBadge.alpha = 1.0f;
+	self.muteBadge.transform = CGAffineTransformIdentity;
+	[self.circle bringSubviewToFront:self.muteBadge];
+
+	[[NSNotificationCenter defaultCenter] addObserver:self
+											 selector:@selector(playbackReachedEnd:)
+												 name:AVPlayerItemDidPlayToEndTimeNotification
+											   object:self.player.currentItem];
+	[self.player play];
+
+	self.recorder.previewLayer.hidden = YES;
+}
+
+- (void)applyPreviewVolume:(float)volume {
+	AVPlayerItem *item = self.player.currentItem;
+	AVAssetTrack *track = [[item.asset tracksWithMediaType:AVMediaTypeAudio] firstObject];
+	if (track == nil)
+		return;
+	AVMutableAudioMixInputParameters *parameters =
+			[AVMutableAudioMixInputParameters audioMixInputParametersWithTrack:track];
+	[parameters setVolume:volume atTime:kCMTimeZero];
+	AVMutableAudioMix *mix = [AVMutableAudioMix audioMix];
+	mix.inputParameters = @[parameters];
+	item.audioMix = mix;
+}
+
+- (void)setPreviewMutedState:(BOOL)muted {
+	if (muted == self.previewMuted)
+		return;
+	self.previewMuted = muted;
+	[self applyPreviewVolume:muted ? 0.0f : 1.0f];
+
+	UIView *badge = self.muteBadge;
+	[badge.layer removeAllAnimations];
+	if (badge.transform.a < 0.3f || badge.alpha < 0.01f){
+		badge.transform = CGAffineTransformMakeScale(0.01f, 0.01f);
+		badge.alpha = 0.0f;
+	}
+	[UIView animateWithDuration:0.3 delay:0.0
+						options:UIViewAnimationOptionBeginFromCurrentState animations:^{
+		badge.transform = muted ? CGAffineTransformIdentity
+								: CGAffineTransformMakeScale(0.01f, 0.01f);
+	} completion:nil];
+	[UIView animateWithDuration:0.2 delay:0.0
+						options:UIViewAnimationOptionBeginFromCurrentState animations:^{
+		badge.alpha = muted ? 1.0f : 0.0f;
+	} completion:nil];
+}
+
+- (void)previewTapped {
+	if (self.noteStage != TGNoteStagePreview || !self.previewMuted)
+		return;
+	[self setPreviewMutedState:NO];
+	[self.player seekToTime:kCMTimeZero];
+	[self.player play];
+}
+
+#pragma mark - full screen camera
+
 - (CGFloat)topPanelHeight {
 	return self.view.bounds.size.height > 440.0f ? 112.0f : 68.0f;
 }
@@ -123,41 +858,10 @@ static UIImage *TGVideoCaptureShutterImage(BOOL recording, BOOL pressed) {
 }
 
 - (void)buildStage {
-	CGRect bounds = self.view.bounds;
-	CGRect frame = bounds;
-	if (self.roundVideoNote){
-		CGFloat side = TGVideoCaptureRoundSide;
-		CGFloat area = bounds.size.height - [self bottomPanelHeight];
-		frame = CGRectMake((int)((bounds.size.width - side) / 2),
-						   (int)((area - side) / 2) + [self topPanelHeight] / 2,
-						   side, side);
-	}
-
-	self.stage = [[UIView alloc] initWithFrame:frame];
+	self.stage = [[UIView alloc] initWithFrame:self.view.bounds];
 	self.stage.backgroundColor = [UIColor blackColor];
 	self.stage.clipsToBounds = YES;
-	if (self.roundVideoNote){
-		self.stage.layer.cornerRadius = frame.size.width / 2;
-		self.stage.layer.masksToBounds = YES;
-	}
 	[self.view addSubview:self.stage];
-
-	if (self.roundVideoNote){
-		CGFloat side = frame.size.width;
-		self.progressRing = [CAShapeLayer layer];
-		self.progressRing.frame = CGRectMake(frame.origin.x - 2, frame.origin.y - 2,
-											 side + 4, side + 4);
-		self.progressRing.path = [UIBezierPath bezierPathWithOvalInRect:
-				CGRectMake(2, 2, side, side)].CGPath;
-		self.progressRing.fillColor = [UIColor clearColor].CGColor;
-		self.progressRing.strokeColor = [UIColor colorWithRed:0.85f green:0.16f blue:0.14f
-														alpha:1.0f].CGColor;
-		self.progressRing.lineWidth = 3.0f;
-		self.progressRing.lineCap = kCALineCapRound;
-		self.progressRing.strokeEnd = 0.0f;
-		self.progressRing.transform = CATransform3DMakeRotation(-M_PI_2, 0, 0, 1);
-		[self.view.layer addSublayer:self.progressRing];
-	}
 }
 
 - (void)attachPreviewLayer {
@@ -228,7 +932,7 @@ static UIImage *TGVideoCaptureShutterImage(BOOL recording, BOOL pressed) {
 	[self.topPanel addSubview:self.timeBadge];
 
 	self.timeDot = [[UIView alloc] initWithFrame:CGRectMake(0, 9, 8, 8)];
-	self.timeDot.backgroundColor = [UIColor colorWithRed:0.85f green:0.16f blue:0.14f alpha:1.0f];
+	self.timeDot.backgroundColor = TGNoteRecordColour();
 	self.timeDot.layer.cornerRadius = 4.0f;
 	[self.timeBadge addSubview:self.timeDot];
 
@@ -296,9 +1000,12 @@ static UIImage *TGVideoCaptureShutterImage(BOOL recording, BOOL pressed) {
 	[self.bottomPanel addSubview:self.send];
 }
 
+#pragma mark - lifecycle
+
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
-	[self.navigationController setNavigationBarHidden:YES animated:animated];
+	if (!self.overlay)
+		[self.navigationController setNavigationBarHidden:YES animated:animated];
 	if (!self.reviewing)
 		[self startSession];
 }
@@ -348,6 +1055,7 @@ static UIImage *TGVideoCaptureShutterImage(BOOL recording, BOOL pressed) {
 - (void)beginRecording {
 	if (!self.prepared)
 		[self startSession];
+	self.startWhenReady = NO;
 	[self.recorder startRecording];
 }
 
@@ -372,19 +1080,35 @@ static UIImage *TGVideoCaptureShutterImage(BOOL recording, BOOL pressed) {
 			(int)(seconds / 60), (int)(seconds % 60)];
 }
 
+#pragma mark - recorder
+
 - (void)videoRecorderDidBecomeReady:(TGVideoRecorder *)recorder {
 	[self attachPreviewLayer];
 	self.shutter.enabled = YES;
 	[self updateChrome];
+	if (self.startWhenReady && !recorder.recording)
+		[self beginRecording];
 }
 
 - (void)videoRecorderDidStartRecording:(TGVideoRecorder *)recorder {
+	if (self.roundVideoNote){
+		self.noteStage = TGNoteStageRecording;
+		[self showNoteRecordingChrome];
+		return;
+	}
 	[self showRecordingChrome];
 }
 
 - (void)videoRecorder:(TGVideoRecorder *)recorder
 	didUpdateDuration:(NSTimeInterval)duration
 			 progress:(float)progress {
+	if (self.roundVideoNote){
+		NSInteger whole = (NSInteger)duration;
+		self.noteClock.text = [NSString stringWithFormat:@"%d:%02d,%d",
+				(int)(whole / 60), (int)(whole % 60), (int)(duration * 10) % 10];
+		return;
+	}
+
 	[self setElapsedText:duration];
 	self.timeDot.alpha = ((NSInteger)(duration * 2)) % 2 == 0 ? 1.0f : 0.2f;
 
@@ -405,22 +1129,43 @@ static UIImage *TGVideoCaptureShutterImage(BOOL recording, BOOL pressed) {
 	didFinishRecordingToPath:(NSString *)path
 					duration:(NSTimeInterval)duration
 				  dimensions:(CGSize)dimensions {
+	self.holding = NO;
 	self.timeDot.alpha = 1.0f;
 	if (path.length == 0 || duration < self.minimumDuration){
 		if (path.length)
 			[[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
+		if (self.roundVideoNote){
+			[self cancelPressed];
+			return;
+		}
 		[self resetToCamera];
 		return;
 	}
 	self.resultPath = path;
 	self.resultDuration = duration;
 	self.resultDimensions = dimensions;
+
+	if (self.roundVideoNote){
+		[self stopNoteRecordingChrome];
+		if (self.sendWhenFinished){
+			[self sendPressed];
+			return;
+		}
+		[self enterNotePreview];
+		return;
+	}
 	[self enterReview];
 }
 
 - (void)videoRecorder:(TGVideoRecorder *)recorder didFailWithError:(NSError *)error {
+	if (self.roundVideoNote){
+		[self cancelPressed];
+		return;
+	}
 	[self resetToCamera];
 }
+
+#pragma mark - review
 
 - (void)enterReview {
 	self.reviewing = YES;
@@ -453,6 +1198,8 @@ static UIImage *TGVideoCaptureShutterImage(BOOL recording, BOOL pressed) {
 
 - (void)playbackReachedEnd:(NSNotification *)notification {
 	[self.player seekToTime:kCMTimeZero];
+	if (self.roundVideoNote && !self.previewMuted)
+		[self setPreviewMutedState:YES];
 	[self.player play];
 }
 
@@ -493,6 +1240,8 @@ static UIImage *TGVideoCaptureShutterImage(BOOL recording, BOOL pressed) {
 }
 
 - (void)updateChrome {
+	if (self.roundVideoNote)
+		return;
 	self.flip.hidden = self.reviewing || self.recorder.recording || !self.recorder.canSwitchCamera;
 	self.progressRing.hidden = self.reviewing;
 	self.recorder.previewLayer.hidden = self.reviewing;
@@ -551,14 +1300,22 @@ static UIImage *TGVideoCaptureShutterImage(BOOL recording, BOOL pressed) {
 }
 
 - (void)cancelPressed {
+	self.holding = NO;
 	if (self.recorder.recording){
 		[self.recorder cancel];
-		[self resetToCamera];
-		return;
+		if (!self.roundVideoNote){
+			[self resetToCamera];
+			return;
+		}
 	}
 	if (self.reviewing){
 		NSString *path = self.resultPath;
-		[self resetToCamera];
+		if (self.roundVideoNote){
+			[self.player pause];
+			self.resultPath = nil;
+		} else {
+			[self resetToCamera];
+		}
 		if (path.length)
 			[[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
 	}
@@ -572,6 +1329,10 @@ static UIImage *TGVideoCaptureShutterImage(BOOL recording, BOOL pressed) {
 }
 
 - (void)dismiss {
+	if (self.overlay){
+		[self dismissOverlay];
+		return;
+	}
 	if (self.navigationController != nil && self.navigationController.viewControllers.count > 1)
 		[self.navigationController popViewControllerAnimated:YES];
 	else if (self.presentingViewController != nil)

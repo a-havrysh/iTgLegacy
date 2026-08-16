@@ -12,7 +12,8 @@ import raster
 HERE = os.path.dirname(os.path.abspath(__file__))
 CACHE = os.path.join(HERE, "cache")
 WORK = os.path.join(HERE, "work")
-OUT = os.path.join(HERE, "out", "AppleColorEmoji.ttf")
+OUTDIR = os.path.join(HERE, "out")
+OUT_NAMES = {"1x": "AppleColorEmoji.ttf", "2x": "AppleColorEmoji@2x.ttf"}
 
 ZWJ = 0x200D
 FE0F = 0xFE0F
@@ -183,27 +184,38 @@ def main():
             strikes[ppem][name] = data
 
     print("assembling")
-    os.makedirs(os.path.dirname(OUT), exist_ok=True)
+    os.makedirs(OUTDIR, exist_ok=True)
     version = "%s;twemoji-%s" % (meta["emoji_ver"], meta["twemoji"].lstrip("v"))
-    fontasm.assemble(glyph_order, cmap, strikes, seqs, zero_advance, version, OUT)
 
-    size, tables, font = fontasm.report(OUT)
-    print("\n=== %s" % OUT)
-    print("total size            %8.2f MB" % (size / 1048576.0))
-    for tag in ("sbix", "morx", "cmap", "glyf", "post", "hmtx"):
-        if tag in tables:
-            print("  %-4s                %8.2f MB" % (tag, tables[tag] / 1048576.0))
-    per_strike = {p: sum(len(v) for v in strikes[p].values()) for p in raster.STRIKES}
-    for p in raster.STRIKES:
-        print("  strike %3d           %8.2f MB  (%d glyphs, %d colors)"
-              % (p, per_strike[p] / 1048576.0, len(strikes[p]), raster.COLORS[p]))
-    print("  glyphs %d  morx subtables %d"
-          % (font["maxp"].numGlyphs,
-             len(font["morx"].table.MorphChain[0].MorphSubtable)))
+    targets = dict(raster.VARIANTS)
+    if os.environ.get("EMOJITWEAK_MEASURE_UNION"):
+        targets["union"] = raster.STRIKES
+        OUT_NAMES["union"] = "AppleColorEmoji-union.ttf"
+
+    for variant in sorted(targets):
+        ppems = targets[variant]
+        subset = {p: strikes[p] for p in ppems}
+        out = os.path.join(OUTDIR, OUT_NAMES[variant])
+        fontasm.assemble(glyph_order, cmap, subset, seqs, zero_advance, version, out)
+
+        size, tables, font = fontasm.report(out)
+        print("\n=== %s  (%s, strikes %s)"
+              % (out, variant, "/".join(str(p) for p in ppems)))
+        print("total size            %8.2f MB" % (size / 1048576.0))
+        for tag in ("sbix", "morx", "cmap", "glyf", "post", "hmtx"):
+            if tag in tables:
+                print("  %-4s                %8.2f MB" % (tag, tables[tag] / 1048576.0))
+        for p in ppems:
+            bytes_at = sum(len(v) for v in subset[p].values())
+            print("  strike %3d           %8.2f MB  (%d glyphs, %d colors)"
+                  % (p, bytes_at / 1048576.0, len(subset[p]), raster.COLORS[p]))
+        print("  glyphs %d  morx subtables %d"
+              % (font["maxp"].numGlyphs,
+                 len(font["morx"].table.MorphChain[0].MorphSubtable)))
     print("  built in %.0fs" % (time.time() - t0))
 
     write_attribution(meta)
-    print("  wrote %s" % os.path.join(HERE, "out", "COPYING"))
+    print("  wrote %s" % os.path.join(OUTDIR, "COPYING"))
     return 0
 
 
@@ -222,7 +234,7 @@ Artwork
   https://creativecommons.org/licenses/by/4.0/
 
   MODIFICATIONS: the Twemoji SVG artwork was rasterised to PNG bitmaps at
-  20, 40, 48 and 96 pixels per em, colour-quantised, and embedded as sbix
+  20, 40, 48, 64, 96 and 192 pixels per em, colour-quantised, and embedded as sbix
   bitmap strikes in a TrueType font. No Twemoji source file is redistributed
   unmodified.
 
@@ -235,7 +247,7 @@ that iOS 6 CoreText resolves the system emoji font to this file.
 def write_attribution(meta):
     text = ATTRIBUTION % dict(emoji_ver=meta["emoji_ver"], ucd=meta["ucd"],
                               twemoji=meta["twemoji"])
-    with open(os.path.join(HERE, "out", "COPYING"), "w", encoding="utf-8") as fh:
+    with open(os.path.join(OUTDIR, "COPYING"), "w", encoding="utf-8") as fh:
         fh.write(text)
 
 

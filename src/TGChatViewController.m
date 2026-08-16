@@ -1000,7 +1000,7 @@ static UIImage *TGReplySwipeArrowImage(void) {
 /// Msg_In.png / Msg_Out.png stretched behind the content box.
 @property (nonatomic, strong) UIImageView *bubbleBg;
 @property (nonatomic, strong) UIImageView *checkView;
-@property (nonatomic, strong) UIView *dateBadge;
+@property (nonatomic, strong) UIImageView *dateBadge;
 @property (nonatomic, assign) CGFloat headerHeight;
 @property (nonatomic, strong) UIView *dayPlate;
 @property (nonatomic, strong) UILabel *dayLabel;
@@ -1079,9 +1079,7 @@ static UIImage *TGReplySwipeArrowImage(void) {
 	self.senderAvatar.hidden = YES;
 	[self.contentView addSubview:self.senderAvatar];
 
-	self.dateBadge = [[UIView alloc] init];
-	self.dateBadge.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.55f];
-	self.dateBadge.layer.cornerRadius = 10.5f;
+	self.dateBadge = [[UIImageView alloc] init];
 	self.dateBadge.hidden = YES;
 	[self.contentView addSubview:self.dateBadge];
 
@@ -2549,7 +2547,14 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 @property (nonatomic, strong) UIView *recordPanel;      // shown while holding
 @property (nonatomic, strong) UILabel *recordClock;
 @property (nonatomic, strong) UIView *recordDot;
-@property (nonatomic, strong) MPMoviePlayerController *videoNotePlayer;
+@property (nonatomic, strong) TGVideoCaptureViewController *videoNoteShooter;
+@property (nonatomic, assign) CGPoint micHoldOrigin;
+@property (nonatomic, strong) AVPlayer *videoNotePlayer;
+@property (nonatomic, strong) AVPlayerLayer *videoNoteLayer;
+@property (nonatomic, strong) CAShapeLayer *videoNoteRing;
+@property (nonatomic, strong) UIImageView *videoNoteMute;
+@property (nonatomic, assign) BOOL videoNoteMuted;
+@property (nonatomic, assign) NSTimeInterval videoNoteLength;
 @property (nonatomic, strong) NSMutableDictionary *senderAvatars;   // userId -> UIImage
 @property (nonatomic, strong) NSMutableSet *senderAvatarsRequested;
 @property (nonatomic, strong) UIView *downloadHUD;
@@ -3376,16 +3381,30 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 - (void)micHeld:(UILongPressGestureRecognizer *)hold {
 	if (hold.state == UIGestureRecognizerStateBegan){
 		self.micDidRecord = YES;
-		if (self.videoNoteMode)
+		if (self.videoNoteMode){
+			self.micHoldOrigin = [hold locationInView:self.view];
 			[self captureVideoRound:YES];
-		else
+			[self.videoNoteShooter beginHold];
+		} else {
 			[self recordStart];
+		}
 		return;
 	}
 
 	if (self.videoNoteMode){
-		if (hold.state != UIGestureRecognizerStateChanged)
-			self.micDidRecord = NO;
+		TGVideoCaptureViewController *shooter = self.videoNoteShooter;
+		CGPoint where = [hold locationInView:self.view];
+		CGPoint offset = CGPointMake(where.x - self.micHoldOrigin.x,
+									 where.y - self.micHoldOrigin.y);
+		if (hold.state == UIGestureRecognizerStateChanged){
+			[shooter holdMovedBy:offset];
+			return;
+		}
+		if (hold.state == UIGestureRecognizerStateEnded)
+			[shooter endHold];
+		else
+			[shooter cancelHold];
+		self.micDidRecord = NO;
 		return;
 	}
 
@@ -5701,6 +5720,18 @@ static UIImage *TGPinnedBadgeGlyph(void) {
 		if (me.stickerPanel)
 			[me toggleStickerPanel];
 	};
+	panel.onBackspace = ^BOOL{
+		TGChatViewController *me = weakSelf;
+		if (me == nil)
+			return NO;
+		NSString *text = me.input.text;
+		if (text.length == 0)
+			return NO;
+		NSRange last = [text rangeOfComposedCharacterSequenceAtIndex:text.length - 1];
+		me.input.text = [text substringToIndex:last.location];
+		[me inputChanged];
+		return YES;
+	};
 
 	[self.view addSubview:panel];
 	self.stickerPanel = panel;
@@ -5883,57 +5914,208 @@ static UIImage *TGPinnedBadgeGlyph(void) {
 
 #pragma mark - video notes
 
-/// Plays a round note over the circle it belongs to, clipped to the same shape.
-/// MPMoviePlayerController is the only decoder iOS 7 offers, but it does not
-/// have to own the screen: its view goes in a mask of our own.
+static const NSInteger kVideoNoteOverlayTag = 0xF119;
+static const NSInteger kRoundNoteRimTag     = 0xF11A;
+static const NSInteger kRoundNoteBadgeTag   = 0xF11B;
+static const NSInteger kRoundNoteMuteTag    = 0xF11C;
+
+static const CGFloat kRoundNoteRimInset  = 2.5f;
+static const CGFloat kRoundNoteRingWidth = 4.0f;
+static const CGFloat kRoundNoteBadgeSide = 24.0f;
+
+static CGFloat TGRoundNoteRimWidth(void) {
+	return 1.0f / [UIScreen mainScreen].scale;
+}
+
+static UIColor *TGRoundNoteRimColour(void) {
+	return [UIColor colorWithRed:0x7d / 255.0f green:0xb4 / 255.0f
+							blue:0xe9 / 255.0f alpha:0.4f];
+}
+
+static UIImage *TGRoundNoteMuteBadge(void) {
+	static UIImage *badge = nil;
+	if (badge)
+		return badge;
+
+	CGFloat side = kRoundNoteBadgeSide;
+	UIGraphicsBeginImageContextWithOptions(CGSizeMake(side, side), NO, 0.0f);
+	CGContextRef ctx = UIGraphicsGetCurrentContext();
+	CGContextSetFillColorWithColor(ctx, [UIColor colorWithWhite:0 alpha:0.4f].CGColor);
+	CGContextFillEllipseInRect(ctx, CGRectMake(0, 0, side, side));
+
+	[[UIColor whiteColor] setFill];
+	UIBezierPath *speaker = [UIBezierPath bezierPath];
+	[speaker moveToPoint:CGPointMake(6.5f, 10.0f)];
+	[speaker addLineToPoint:CGPointMake(9.5f, 10.0f)];
+	[speaker addLineToPoint:CGPointMake(13.0f, 6.0f)];
+	[speaker addLineToPoint:CGPointMake(13.0f, 18.0f)];
+	[speaker addLineToPoint:CGPointMake(9.5f, 14.0f)];
+	[speaker addLineToPoint:CGPointMake(6.5f, 14.0f)];
+	[speaker closePath];
+	[speaker fill];
+
+	UIBezierPath *slash = [UIBezierPath bezierPath];
+	slash.lineWidth = 1.5f;
+	slash.lineCapStyle = kCGLineCapRound;
+	[slash moveToPoint:CGPointMake(15.5f, 9.0f)];
+	[slash addLineToPoint:CGPointMake(19.5f, 15.0f)];
+	[slash moveToPoint:CGPointMake(19.5f, 9.0f)];
+	[slash addLineToPoint:CGPointMake(15.5f, 15.0f)];
+	[[UIColor whiteColor] setStroke];
+	[slash stroke];
+
+	badge = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return badge;
+}
+
 - (void)playVideoNoteAtPath:(NSString *)path row:(NSInteger)row {
 	[self stopVideoNote];
 
 	CGRect rect = [self.table rectForRowAtIndexPath:
 			[NSIndexPath indexPathForRow:row inSection:0]];
 	CGRect inView = [self.table convertRect:rect toView:self.view];
-	// The circle is the row minus the strip its timestamp sits in.
 	CGFloat side = MIN(inView.size.height - 20, inView.size.width);
 	NSDictionary *m = [self messageAtRow:row];
 	CGFloat x = [m[@"outgoing"] boolValue]
 			? CGRectGetMaxX(inView) - side - 8 : 8;
 
-	UIView *circle = [[UIView alloc] initWithFrame:
+	UIView *plate = [[UIView alloc] initWithFrame:
 			CGRectMake(x, CGRectGetMinY(inView) + 3, side, side)];
-	circle.layer.cornerRadius = side / 2;
+	plate.backgroundColor = [UIColor whiteColor];
+	plate.layer.cornerRadius = side / 2;
+	plate.layer.borderWidth = TGRoundNoteRimWidth();
+	plate.layer.borderColor = TGRoundNoteRimColour().CGColor;
+	plate.tag = kVideoNoteOverlayTag;
+
+	CGFloat inner = side - kRoundNoteRimInset * 2;
+	UIView *circle = [[UIView alloc] initWithFrame:
+			CGRectMake(kRoundNoteRimInset, kRoundNoteRimInset, inner, inner)];
+	circle.layer.cornerRadius = inner / 2;
 	circle.clipsToBounds = YES;
 	circle.backgroundColor = [UIColor blackColor];
-	circle.tag = 0xF119;
+	[plate addSubview:circle];
 
-	MPMoviePlayerController *player = [[MPMoviePlayerController alloc]
-			initWithContentURL:[NSURL fileURLWithPath:path]];
-	player.controlStyle = MPMovieControlStyleNone;
-	player.scalingMode = MPMovieScalingModeAspectFill;
-	player.view.frame = circle.bounds;
-	player.shouldAutoplay = YES;
-	[circle addSubview:player.view];
-	[self.view addSubview:circle];
+	AVPlayer *player = [AVPlayer playerWithURL:[NSURL fileURLWithPath:path]];
+	player.actionAtItemEnd = AVPlayerActionAtItemEndNone;
+	AVPlayerLayer *layer = [AVPlayerLayer playerLayerWithPlayer:player];
+	layer.videoGravity = AVLayerVideoGravityResizeAspectFill;
+	layer.frame = circle.bounds;
+	[circle.layer addSublayer:layer];
+
 	self.videoNotePlayer = player;
+	self.videoNoteLayer = layer;
+	self.videoNoteMuted = YES;
+	self.videoNoteLength = MAX(1.0, (NSTimeInterval)[m[@"duration"] doubleValue]);
+	[self applyVideoNoteVolume:0.0f];
 
-	[circle addGestureRecognizer:[[UITapGestureRecognizer alloc]
-			initWithTarget:self action:@selector(stopVideoNote)]];
+	CAShapeLayer *ring = [CAShapeLayer layer];
+	ring.frame = circle.frame;
+	ring.path = [UIBezierPath bezierPathWithOvalInRect:CGRectInset(
+			circle.bounds, kRoundNoteRingWidth / 2, kRoundNoteRingWidth / 2)].CGPath;
+	ring.fillColor = [UIColor clearColor].CGColor;
+	ring.strokeColor = [UIColor colorWithWhite:1.0f alpha:0.6f].CGColor;
+	ring.lineWidth = kRoundNoteRingWidth;
+	ring.lineCap = kCALineCapRound;
+	ring.strokeEnd = 0.0f;
+	ring.transform = CATransform3DMakeRotation(-M_PI_2, 0, 0, 1);
+	[plate.layer addSublayer:ring];
+	self.videoNoteRing = ring;
+
+	self.videoNoteMute = [[UIImageView alloc] initWithImage:TGRoundNoteMuteBadge()];
+	self.videoNoteMute.frame = CGRectMake(
+			floorf(CGRectGetMidX(circle.bounds) - kRoundNoteBadgeSide / 2),
+			CGRectGetMaxY(circle.bounds) - kRoundNoteBadgeSide - 8,
+			kRoundNoteBadgeSide, kRoundNoteBadgeSide);
+	[circle addSubview:self.videoNoteMute];
+
+	[plate addGestureRecognizer:[[UITapGestureRecognizer alloc]
+			initWithTarget:self action:@selector(videoNoteTapped)]];
+	[self.view addSubview:plate];
 
 	[[NSNotificationCenter defaultCenter] addObserver:self
-			selector:@selector(stopVideoNote)
-				name:MPMoviePlayerPlaybackDidFinishNotification
-			  object:player];
-	[player prepareToPlay];
+			selector:@selector(videoNoteReachedEnd:)
+				name:AVPlayerItemDidPlayToEndTimeNotification
+			  object:player.currentItem];
 	[player play];
+	[self startVideoNoteRing];
+}
+
+- (void)startVideoNoteRing {
+	CABasicAnimation *fill = [CABasicAnimation animationWithKeyPath:@"strokeEnd"];
+	fill.fromValue = @0.0f;
+	fill.toValue = @1.0f;
+	fill.duration = self.videoNoteLength;
+	fill.timingFunction = [CAMediaTimingFunction
+			functionWithName:kCAMediaTimingFunctionLinear];
+	fill.fillMode = kCAFillModeForwards;
+	fill.removedOnCompletion = NO;
+	[self.videoNoteRing addAnimation:fill forKey:@"fill"];
+}
+
+- (void)applyVideoNoteVolume:(float)volume {
+	AVPlayerItem *item = self.videoNotePlayer.currentItem;
+	AVAssetTrack *track = [[item.asset tracksWithMediaType:AVMediaTypeAudio] firstObject];
+	if (!track)
+		return;
+	AVMutableAudioMixInputParameters *parameters =
+			[AVMutableAudioMixInputParameters audioMixInputParametersWithTrack:track];
+	[parameters setVolume:volume atTime:kCMTimeZero];
+	AVMutableAudioMix *mix = [AVMutableAudioMix audioMix];
+	mix.inputParameters = @[parameters];
+	item.audioMix = mix;
+}
+
+- (void)videoNoteTapped {
+	if (!self.videoNotePlayer)
+		return;
+
+	if (!self.videoNoteMuted){
+		[self stopVideoNote];
+		return;
+	}
+
+	self.videoNoteMuted = NO;
+	[self applyVideoNoteVolume:1.0f];
+
+	UIImageView *badge = self.videoNoteMute;
+	[badge.layer removeAllAnimations];
+	[UIView animateWithDuration:0.3 animations:^{
+		badge.transform = CGAffineTransformMakeScale(0.01f, 0.01f);
+	} completion:nil];
+	[UIView animateWithDuration:0.2 animations:^{
+		badge.alpha = 0.0f;
+	} completion:nil];
+
+	[self.videoNotePlayer seekToTime:kCMTimeZero];
+	[self.videoNotePlayer play];
+	[self startVideoNoteRing];
+}
+
+- (void)videoNoteReachedEnd:(NSNotification *)note {
+	if (!self.videoNotePlayer)
+		return;
+	if (!self.videoNoteMuted){
+		[self stopVideoNote];
+		return;
+	}
+	[self.videoNotePlayer seekToTime:kCMTimeZero];
+	[self.videoNotePlayer play];
+	[self startVideoNoteRing];
 }
 
 - (void)stopVideoNote {
 	if (!self.videoNotePlayer)
 		return;
 	[[NSNotificationCenter defaultCenter] removeObserver:self
-			name:MPMoviePlayerPlaybackDidFinishNotification
-		  object:self.videoNotePlayer];
-	[self.videoNotePlayer stop];
-	[[self.view viewWithTag:0xF119] removeFromSuperview];
+			name:AVPlayerItemDidPlayToEndTimeNotification
+		  object:self.videoNotePlayer.currentItem];
+	[self.videoNotePlayer pause];
+	[self.videoNoteRing removeAnimationForKey:@"fill"];
+	[[self.view viewWithTag:kVideoNoteOverlayTag] removeFromSuperview];
+	self.videoNoteLayer = nil;
+	self.videoNoteRing = nil;
+	self.videoNoteMute = nil;
 	self.videoNotePlayer = nil;
 }
 
@@ -6082,11 +6264,26 @@ static const NSInteger kFailedMessageSheetTag = 105;
 		TGChatViewController *me = weakSelf;
 		if (!me)
 			return;
+		me.videoNoteShooter = nil;
 		[me sendCapturedVideoAtPath:path duration:duration
 							   size:dimensions round:round];
 	};
+	shooter.onCancel = ^{
+		TGChatViewController *me = weakSelf;
+		me.videoNoteShooter = nil;
+	};
 
-	[self presentViewController:shooter animated:YES completion:nil];
+	if (!round){
+		[self presentViewController:shooter animated:YES completion:nil];
+		return;
+	}
+
+	[self stopVideoNote];
+	[self.input resignFirstResponder];
+	self.videoNoteShooter = shooter;
+	CGRect strip = CGRectMake(0, self.view.bounds.size.height - kInputHeight,
+							  self.view.bounds.size.width, kInputHeight);
+	[shooter presentOverParent:self controlsFrame:strip];
 }
 
 - (void)sendCapturedVideoAtPath:(NSString *)path
@@ -6301,8 +6498,10 @@ static const NSInteger kFailedMessageSheetTag = 105;
 		[self pickPhotoAlbum];
 	else if ([chosen isEqualToString:@"Video"])
 		[self captureVideoRound:NO];
-	else if ([chosen isEqualToString:@"Video Message"])
+	else if ([chosen isEqualToString:@"Video Message"]){
 		[self captureVideoRound:YES];
+		[self.videoNoteShooter beginLockedRecording];
+	}
 	else if ([chosen isEqualToString:@"Location"])
 		[self showLocationOptions];
 	else if ([chosen isEqualToString:@"Contact"])
@@ -10304,6 +10503,11 @@ static UIColor *TGSenderColour(int64_t userId) {
 		badge.origin.x += back; dateX += back; }
 
 	cell.dateBadge.hidden = NO;
+	cell.dateBadge.image = [TGIcons messageTimestampPlateOutgoing:mine];
+	if (!cell.dateBadge.image){
+		cell.dateBadge.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.55f];
+		cell.dateBadge.layer.cornerRadius = 10.5f;
+	}
 	cell.dateBadge.frame = badge;
 	cell.time.textAlignment = NSTextAlignmentLeft;
 	cell.time.textColor = TGMessageDateColour();
@@ -10721,11 +10925,64 @@ static UIColor *TGSenderColour(int64_t userId) {
 	cell.bubble.backgroundColor = [UIColor clearColor];
 	cell.bubble.layer.borderWidth = 0;
 	cell.bubble.frame = CGRectMake(boxX, 0, boxW, boxH);
+
+	UIView *rim = [cell.bubble viewWithTag:kRoundNoteRimTag];
+	if (!rim){
+		rim = [[UIView alloc] initWithFrame:CGRectZero];
+		rim.tag = kRoundNoteRimTag;
+		rim.userInteractionEnabled = NO;
+		[cell.bubble insertSubview:rim belowSubview:cell.picture];
+	}
+	rim.hidden = NO;
+	rim.backgroundColor = [UIColor whiteColor];
+	rim.frame = CGRectMake(circleX, 0, side, side);
+	rim.layer.cornerRadius = side / 2;
+	rim.layer.borderWidth = TGRoundNoteRimWidth();
+	rim.layer.borderColor = TGRoundNoteRimColour().CGColor;
+
+	CGFloat inner = side - kRoundNoteRimInset * 2;
 	cell.picture.hidden = NO;
 	[self applyPictureTo:cell.picture message:m];
-	cell.picture.frame = CGRectMake(circleX, 0, side, side);
-	cell.picture.layer.cornerRadius = side / 2;
+	cell.picture.frame = CGRectMake(circleX + kRoundNoteRimInset,
+									kRoundNoteRimInset, inner, inner);
+	cell.picture.layer.cornerRadius = inner / 2;
 	cell.body.hidden = YES;
+
+	UIImageView *mute = (UIImageView *)[cell.bubble viewWithTag:kRoundNoteMuteTag];
+	if (!mute){
+		mute = [[UIImageView alloc] initWithImage:TGRoundNoteMuteBadge()];
+		mute.tag = kRoundNoteMuteTag;
+		mute.userInteractionEnabled = NO;
+		[cell.bubble addSubview:mute];
+	}
+	mute.hidden = NO;
+	mute.alpha = 1.0f;
+	mute.transform = CGAffineTransformIdentity;
+	CGFloat muteX = floorf(circleX + side / 2 - kRoundNoteBadgeSide / 2);
+	mute.frame = CGRectMake(muteX, side - kRoundNoteBadgeSide - 8,
+							kRoundNoteBadgeSide, kRoundNoteBadgeSide);
+	[cell.bubble bringSubviewToFront:mute];
+
+	UILabel *pill = (UILabel *)[cell.bubble viewWithTag:kRoundNoteBadgeTag];
+	if (!pill){
+		pill = [[UILabel alloc] initWithFrame:CGRectZero];
+		pill.tag = kRoundNoteBadgeTag;
+		pill.font = [UIFont systemFontOfSize:11];
+		pill.textColor = [UIColor whiteColor];
+		pill.textAlignment = NSTextAlignmentCenter;
+		pill.layer.cornerRadius = 9;
+		pill.clipsToBounds = YES;
+		pill.userInteractionEnabled = NO;
+		[cell.bubble addSubview:pill];
+	}
+	NSInteger seconds = [m[@"duration"] integerValue];
+	pill.hidden = NO;
+	pill.backgroundColor = [[TGTheme shared] mediaStampColour];
+	pill.text = [NSString stringWithFormat:@"%ld:%02ld",
+			(long)(seconds / 60), (long)(seconds % 60)];
+	CGFloat pillW = ceilf([pill.text sizeWithFont:pill.font].width) + 11;
+	pill.frame = CGRectMake(floorf(muteX - 6 - pillW), side - 16, pillW, 18);
+	[cell.bubble bringSubviewToFront:pill];
 
 	[self layoutReactionsIn:cell message:m atY:side + kBareChipsTopGap
 				bubbleWidth:boxW inset:0 rightAligned:mine];
@@ -11277,6 +11534,9 @@ static const NSInteger kQuoteTapTag = 0x9009;
 	[cell.bubble viewWithTag:kQuoteTapTag].hidden = YES;
 	[cell.bubble viewWithTag:0x9005].hidden = YES;
 	[cell.bubble viewWithTag:0x9002].hidden = YES;
+	[cell.bubble viewWithTag:kRoundNoteRimTag].hidden = YES;
+	[cell.bubble viewWithTag:kRoundNoteBadgeTag].hidden = YES;
+	[cell.bubble viewWithTag:kRoundNoteMuteTag].hidden = YES;
 
 	if ([self albumAtRow:indexPath.row]){
 		[self configureAlbumCell:cell atIndexPath:indexPath inTable:tableView];
@@ -13166,7 +13426,8 @@ static UIImage *TGFloatingBadgeDisc(UIColor *fill, UIColor *border) {
 		return [self clockGlyphWhite:white];
 	if ([state isEqualToString:@"failed"])
 		return [self failedGlyph];
-	return [TGIcons ticksWhite:white];
+	UIImage *checks = [TGIcons messageChecksRead:[m[@"outgoingRead"] boolValue] white:white];
+	return checks ?: [TGIcons ticksWhite:white];
 }
 
 - (NSString *)sendStateForMessage:(NSDictionary *)m {
@@ -13450,6 +13711,9 @@ static UIImage *TGFloatingBadgeDisc(UIColor *fill, UIColor *border) {
 
 - (void)keyboardWillShow:(NSNotification *)note {
 	CGRect kb = [[note.userInfo objectForKey:UIKeyboardFrameEndUserInfoKey] CGRectValue];
+	CGRect viewBounds = self.view.bounds;
+	[TGStickerPanelView noteSystemKeyboardHeight:MIN(kb.size.width, kb.size.height)
+									   landscape:(viewBounds.size.width > viewBounds.size.height)];
 	if (self.stickerPanel){
 		[self.stickerPanel removeFromSuperview];
 		self.stickerPanel = nil;

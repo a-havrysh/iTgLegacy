@@ -23,6 +23,8 @@
 #import "TGChatEventsViewController.h"
 #import "TGChatViewController.h"
 #import "TGMediaViewController.h"
+#import "TGNewContactViewController.h"
+#import <AddressBook/AddressBook.h>
 #import <ImageIO/ImageIO.h>
 #import <QuartzCore/QuartzCore.h>
 #import <CoreText/CoreText.h>
@@ -1015,8 +1017,7 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 		if (self.isContact)
 			[items addObject:@{@"title" : @"Share Contact", @"action" : @"share"}];
 		else
-			[items addObject:@{@"title" : @"Add Contact", @"action" : @"add",
-							   @"disabled" : @(self.phoneNumber.length == 0)}];
+			[items addObject:@{@"title" : @"Add Contact", @"action" : @"add"}];
 		[items addObject:@{@"title" : @"Call",       @"action" : @"call"}];
 		[items addObject:@{@"title" : @"Video Call", @"action" : @"video"}];
 	} else if (self.chatId){
@@ -1238,6 +1239,7 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 			[items addObject:@{@"title" : @"Start secret chat", @"icon" : @"privacy"}];
 	}
 	if (self.userId && self.isContact){
+		[items addObject:@{@"title" : @"Edit contact", @"icon" : @"privacy"}];
 		[items addObject:@{@"title" : @"Set photo for this contact",
 						   @"icon" : @"privacy"}];
 		[items addObject:@{@"title" : @"Share my phone number", @"icon" : @"privacy"}];
@@ -1269,6 +1271,13 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 		if (!self.userId)
 			return;
 		[self promptToAddContact];
+		return;
+	}
+
+	if ([title isEqualToString:@"Edit contact"]){
+		if (!self.userId)
+			return;
+		[self pushContactFormEditing:YES];
 		return;
 	}
 
@@ -1316,12 +1325,33 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 }
 
 - (void)promptToAddContact {
-	UIAlertView *ask = [[UIAlertView alloc] initWithTitle:@"Add Contact"
-			message:@"Share your phone number with them?"
-		   delegate:self cancelButtonTitle:@"Don't Share"
-		   otherButtonTitles:@"Share", nil];
-	ask.tag = 83;
-	[ask show];
+	[self pushContactFormEditing:NO];
+}
+
+- (void)pushContactFormEditing:(BOOL)editing {
+	TGNewContactViewController *form = [[TGNewContactViewController alloc] init];
+	form.peerUserId = self.userId;
+	form.prefillFirstName = self.firstName.length
+			? self.firstName : (TGProfileText(self.name) ?: @"");
+	form.prefillLastName = self.lastName ?: @"";
+	form.prefillPhone = self.phoneNumber ?: @"";
+	form.editingExistingContact = editing;
+	form.offersShareException = !editing;
+	__weak typeof(self) weakSelf = self;
+	form.onDone = ^(int64_t userId){
+		TGProfileViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (userId){
+			me.isContact = YES;
+			[me loadContactFlags];
+			[me rebuildDetailRows];
+		}
+		[me showToast:(userId
+				? (editing ? @"Contact updated" : @"Added to contacts")
+				: @"Could not save the contact")];
+	};
+	[self.navigationController pushViewController:form animated:YES];
 }
 
 - (void)showContactPhotoActions {
@@ -1391,28 +1421,6 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 	}];
 }
 
-- (void)addContactSharingPhone:(BOOL)share {
-	if (!self.userId)
-		return;
-	NSString *phone = self.phoneNumber ?: @"";
-	NSString *first = self.firstName.length ? self.firstName
-											: (TGProfileText(self.name) ?: phone);
-	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] addContactWithUserId:self.userId
-									  phone:phone
-								  firstName:(first ?: @"")
-								   lastName:(self.lastName ?: @"")
-						   sharePhoneNumber:share
-								 completion:^(BOOL ok){
-		if (ok){
-			weakSelf.isContact = YES;
-			[weakSelf loadContactFlags];
-			[weakSelf rebuildDetailRows];
-		}
-		[weakSelf showToast:(ok ? @"Added to contacts" : @"Could not add contact")];
-	}];
-}
-
 - (void)loadContactFlags {
 	if (!self.userId)
 		return;
@@ -1439,6 +1447,12 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 - (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
 	if (index == sheet.cancelButtonIndex)
 		return;
+
+	if (sheet.tag == 82){
+		if (index == 0)
+			[self deleteContactConfirmed];
+		return;
+	}
 
 	if (sheet.tag == 84){
 		[self handleContactPhotoSheetIndex:index];
@@ -1609,10 +1623,6 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 }
 
 - (void)alertView:(UIAlertView *)alert clickedButtonAtIndex:(NSInteger)index {
-	if (alert.tag == 83){
-		[self addContactSharingPhone:(index != alert.cancelButtonIndex)];
-		return;
-	}
 	if (index == alert.cancelButtonIndex)
 		return;
 	if (alert.tag == 86){
@@ -1639,10 +1649,6 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 	}
 	if (alert.tag == 79){
 		[self postStoryWithCaption:[self textFromAlert:alert]];
-		return;
-	}
-	if (alert.tag == 82){
-		[self deleteContactConfirmed];
 		return;
 	}
 	if (alert.tag == 81 && self.userId){
@@ -3539,24 +3545,77 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 }
 
 - (void)deleteContactTapped {
-	UIAlertView *confirm = [[UIAlertView alloc] initWithTitle:@"Delete Contact"
-			message:@"This person will be removed from your contacts."
-		   delegate:self cancelButtonTitle:@"Cancel" otherButtonTitles:@"Delete", nil];
-	confirm.tag = 82;
-	[confirm show];
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:nil
+			delegate:self cancelButtonTitle:nil
+			destructiveButtonTitle:@"Delete Contact" otherButtonTitles:nil];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = 82;
+	[sheet showInView:self.view];
 }
 
 - (void)deleteContactConfirmed {
 	if (!self.userId)
 		return;
+	NSString *name = TGProfileText(self.name) ?: @"";
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] removeContacts:@[@(self.userId)] completion:^(BOOL ok){
-		if (ok){
-			weakSelf.isContact = NO;
-			[weakSelf rebuildDetailRows];
+		TGProfileViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (!ok){
+			[me showToast:@"Could not delete the contact"];
+			return;
 		}
-		[weakSelf showToast:(ok ? @"Contact deleted" : @"Could not delete the contact")];
+		me.isContact = NO;
+		[me rebuildDetailRows];
+		[me deleteAddressBookRecordForPhone:me.phoneNumber];
+		[me showToast:[NSString stringWithFormat:@"%@ deleted from your contacts", name]];
+		[me.navigationController popViewControllerAnimated:YES];
 	}];
+}
+
+- (void)deleteAddressBookRecordForPhone:(NSString *)phone {
+	NSString *wanted = [self digitsOfPhone:phone];
+	if (wanted.length < 5)
+		return;
+	if (ABAddressBookGetAuthorizationStatus() != kABAuthorizationStatusAuthorized)
+		return;
+	ABAddressBookRef book = ABAddressBookCreateWithOptions(NULL, NULL);
+	if (!book)
+		return;
+	CFArrayRef people = ABAddressBookCopyArrayOfAllPeople(book);
+	for (CFIndex i = 0; people && i < CFArrayGetCount(people); i++){
+		ABRecordRef person = CFArrayGetValueAtIndex(people, i);
+		ABMultiValueRef numbers = ABRecordCopyValue(person, kABPersonPhoneProperty);
+		BOOL matched = NO;
+		for (CFIndex j = 0; numbers && j < ABMultiValueGetCount(numbers); j++){
+			NSString *value = (__bridge_transfer NSString *)
+					ABMultiValueCopyValueAtIndex(numbers, j);
+			if ([[self digitsOfPhone:value] hasSuffix:wanted]
+					|| [wanted hasSuffix:[self digitsOfPhone:value]]){
+				matched = YES;
+				break;
+			}
+		}
+		if (numbers)
+			CFRelease(numbers);
+		if (matched)
+			ABAddressBookRemoveRecord(book, person, NULL);
+	}
+	if (people)
+		CFRelease(people);
+	ABAddressBookSave(book, NULL);
+	CFRelease(book);
+}
+
+- (NSString *)digitsOfPhone:(NSString *)phone {
+	NSMutableString *digits = [NSMutableString string];
+	for (NSUInteger i = 0; i < phone.length; i++){
+		unichar c = [phone characterAtIndex:i];
+		if (c >= '0' && c <= '9')
+			[digits appendString:[NSString stringWithCharacters:&c length:1]];
+	}
+	return digits;
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {

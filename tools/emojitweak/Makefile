@@ -1,7 +1,8 @@
 SHELL := /bin/sh
 HERE  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 OUT   := $(HERE)out
-FONT  := $(OUT)/AppleColorEmoji.ttf
+FONT   := $(OUT)/AppleColorEmoji.ttf
+FONT2X := $(OUT)/AppleColorEmoji@2x.ttf
 PROBE := $(OUT)/emojiprobe2
 IPAD  ?= 192.168.18.217
 
@@ -17,15 +18,15 @@ PROBE_MIN  ?= 6.0
 SOURCE_DATE_EPOCH ?= $(shell python3 -c 'import calendar,time; t=time.gmtime(); print(calendar.timegm((t.tm_year,t.tm_mon,t.tm_mday,0,0,0,0,0,0)))')
 export SOURCE_DATE_EPOCH
 
-.PHONY: deb font probe refresh clean distclean check device-check install-ipad remove-ipad help
+.PHONY: deb font probe refresh clean distclean check pkgtest device-check install-ipad remove-ipad help
 
-deb: $(FONT)
+deb: $(FONT) $(FONT2X)
 	@$(HERE)mkdeb.sh
 
-$(FONT): $(FONT_SRC)
+$(FONT) $(FONT2X): $(FONT_SRC)
 	@cd $(HERE) && python3 build.py
 
-font: $(FONT)
+font: $(FONT) $(FONT2X)
 
 probe: $(PROBE)
 
@@ -51,13 +52,16 @@ $(PROBE): $(HERE)emojiprobe2.m
 refresh:
 	@rm -f $(HERE)cache/emoji-latest-ReadMe.txt $(HERE)cache/twemoji-release.json
 	@rm -rf $(HERE)cache/twemoji
-	@rm -f $(FONT) $(OUT)/COPYING
+	@rm -f $(FONT) $(FONT2X) $(OUT)/COPYING
 	@echo "unpinned Unicode and Twemoji; now run: make deb"
 	@echo "old raster caches are keyed by Twemoji tag and can be deleted:"
 	@ls -1 $(HERE)work/strikes-*.pickle 2>/dev/null || true
 
 check:
 	@cd $(HERE) && python3 coverage.py
+
+pkgtest: $(FONT) $(FONT2X)
+	@$(HERE)pkgtest.sh
 
 device-check: $(PROBE)
 	@cd $(HERE) && IPAD=$(IPAD) python3 devicecheck.py
@@ -69,17 +73,18 @@ remove-ipad: $(PROBE)
 	@cd $(HERE) && IPAD=$(IPAD) ./debtest.sh remove
 
 clean:
-	@rm -rf $(HERE)work/deb $(OUT)/*.deb
+	@rm -rf $(HERE)work/deb $(HERE)work/pkgtest $(OUT)/*.deb
 
 distclean: clean
 	@rm -rf $(HERE)work $(OUT)
 
 help:
-	@echo "make deb           build out/AppleColorEmoji.ttf if needed, then the .deb"
-	@echo "make font          build the font only"
+	@echo "make deb           build both payload fonts if needed, then the .deb"
+	@echo "make font          build the fonts only (1x and @2x strike sets)"
 	@echo "make probe         cross-compile out/emojiprobe2 for the device"
 	@echo "make refresh       unpin Unicode/Twemoji so the next build picks up new releases"
 	@echo "make check         host-side coverage check (HarfBuzz)"
+	@echo "make pkgtest       host-side test of the maintainer scripts (1x/2x/both/neither)"
 	@echo "make device-check  device-side CoreText coverage check (needs IPAD=<ip>)"
 	@echo "make install-ipad  build the .deb, install it, verify on the device"
 	@echo "make remove-ipad   remove the package, verify the stock font is back"

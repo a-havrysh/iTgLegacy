@@ -980,6 +980,21 @@ static NSSet *TGKnownMenuGlyphNames(void) {
 	return image;
 }
 
++ (UIImage *)messageChecksRead:(BOOL)read white:(BOOL)white {
+	NSString *name = read ? @"MessageCheckFull" : @"MessageCheckHalf";
+	if (!white)
+		return TGArtwork(name);
+	return TGArtworkMasked(name, [UIColor whiteColor], CGSizeZero);
+}
+
++ (UIImage *)messageTimestampPlateOutgoing:(BOOL)outgoing {
+	UIImage *art = TGArtwork(outgoing ? @"MessageTimestampBackground"
+									  : @"MessageTimestampBackgroundIncoming");
+	if (!art || art.size.width < 2)
+		return nil;
+	return [art stretchableImageWithLeftCapWidth:(int)(art.size.width / 2) topCapHeight:0];
+}
+
 + (UIImage *)ticksWhite:(BOOL)white {
 	static UIImage *green = nil;
 	static UIImage *pale = nil;

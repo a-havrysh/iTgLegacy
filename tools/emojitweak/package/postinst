@@ -3,13 +3,11 @@ set -e
 
 PKG="@PACKAGE@"
 PKGDIR="@PKGDIR@"
-SYSFONT="@SYSFONT@"
 SYSDIR="@SYSDIR@"
-PAYLOAD="$PKGDIR/AppleColorEmoji.ttf"
-BACKUP="$PKGDIR/AppleColorEmoji.ttf.stock"
-TMP="$SYSFONT.emojitweak-new"
-FONT_BYTES=@FONT_BYTES@
-FONT_KB=@FONT_KB@
+FONT_1X="@FONT_1X@"
+FONT_2X="@FONT_2X@"
+FONT_1X_BYTES=@FONT_1X_BYTES@
+FONT_2X_BYTES=@FONT_2X_BYTES@
 MARGIN_KB=@MARGIN_KB@
 
 say() { echo "$PKG: $*"; }
@@ -35,79 +33,119 @@ file_bytes() {
     esac
 }
 
+install_one() {
+    name="$1"
+    want_bytes="$2"
+    payload="$PKGDIR/$name"
+    backup="$PKGDIR/$name.stock"
+    sysfont="$SYSDIR/$name"
+    tmp="$sysfont.emojitweak-new"
+
+    [ -f "$payload" ] || die "payload $payload is missing; the package did not unpack correctly."
+
+    got=$(file_bytes "$payload")
+    if [ "$got" != "$want_bytes" ]; then
+        die "payload $payload is $got bytes, expected $want_bytes; refusing to install a damaged font."
+    fi
+    font_kb=$(( want_bytes / 1024 + 1 ))
+
+    if [ -f "$backup" ]; then
+        say "keeping the existing stock font backup at $backup"
+    elif [ ! -f "$sysfont" ]; then
+        warn "no font at $sysfont, so there is nothing to back up."
+        warn "removing this package will not be able to restore a stock font."
+    elif cmp -s "$sysfont" "$payload"; then
+        warn "$sysfont is already this package's font and no backup exists."
+        warn "leaving it alone; removing this package will not restore a stock font."
+    else
+        varfree=$(free_kb "$PKGDIR" || echo "")
+        stock_kb=$(( $(file_bytes "$sysfont") / 1024 + 1 ))
+        if [ -n "$varfree" ] && [ "$varfree" -lt "$(( stock_kb + 1024 ))" ]; then
+            die "only $(( varfree / 1024 )) MB free on $PKGDIR, need $(( stock_kb / 1024 + 1 )) MB to back up $sysfont."
+        fi
+        say "backing up the stock font to $backup"
+        rm -f "$backup.part"
+        cp "$sysfont" "$backup.part" || die "could not back up $sysfont; nothing has been changed."
+        mv "$backup.part" "$backup"
+    fi
+
+    if cmp -s "$sysfont" "$payload"; then
+        say "$sysfont is already up to date, nothing to do."
+        return 0
+    fi
+
+    have=$(free_kb "$SYSDIR" || echo "")
+    if [ -n "$have" ]; then
+        need=$(( font_kb + MARGIN_KB ))
+        if [ "$have" -lt "$need" ]; then
+            {
+                echo ""
+                echo "$PKG: not enough free space on the system partition to install $name."
+                echo "  mount point : $SYSDIR"
+                echo "  free        : $(( have / 1024 )) MB"
+                echo "  needed      : $(( need / 1024 )) MB"
+                echo ""
+                echo "  The stock font has NOT been replaced. Free up space and run:"
+                echo "      dpkg --configure $PKG"
+                echo ""
+            } >&2
+            exit 1
+        fi
+    fi
+
+    say "installing $name ($(( font_kb / 1024 )) MB), this takes a moment"
+    rm -f "$tmp"
+    if ! cp "$payload" "$tmp"; then
+        rm -f "$tmp"
+        die "copying $name into $SYSDIR failed. The stock font is untouched."
+    fi
+
+    wrote=$(file_bytes "$tmp")
+    if [ "$wrote" != "$want_bytes" ]; then
+        rm -f "$tmp"
+        die "short write into $SYSDIR ($wrote of $want_bytes bytes). The stock font is untouched."
+    fi
+
+    chown root:wheel "$tmp" 2>/dev/null || true
+    chmod 644 "$tmp"
+    mv "$tmp" "$sysfont"
+    say "installed $sysfont"
+    installed=$(( installed + 1 ))
+}
+
 [ "$1" = "configure" ] || exit 0
-
-[ -f "$PAYLOAD" ] || die "payload $PAYLOAD is missing; the package did not unpack correctly."
-
-got=$(file_bytes "$PAYLOAD")
-if [ "$got" != "$FONT_BYTES" ]; then
-    die "payload $PAYLOAD is $got bytes, expected $FONT_BYTES; refusing to install a damaged font."
-fi
 
 [ -d "$SYSDIR" ] || die "$SYSDIR does not exist; nothing to install into."
 [ -w "$SYSDIR" ] || die "$SYSDIR is not writable. Remount / read-write and run: dpkg --configure $PKG"
 
-if [ -f "$BACKUP" ]; then
-    say "keeping the existing stock font backup at $BACKUP"
-elif [ ! -f "$SYSFONT" ]; then
-    warn "no font at $SYSFONT, so there is nothing to back up."
-    warn "removing this package will not be able to restore a stock font."
-elif cmp -s "$SYSFONT" "$PAYLOAD"; then
-    warn "$SYSFONT is already this package's font and no backup exists."
-    warn "leaving it alone; removing this package will not restore a stock font."
-else
-    varfree=$(free_kb "$PKGDIR" || echo "")
-    stock_kb=$(( $(file_bytes "$SYSFONT") / 1024 + 1 ))
-    if [ -n "$varfree" ] && [ "$varfree" -lt "$(( stock_kb + 1024 ))" ]; then
-        die "only $(( varfree / 1024 )) MB free on $PKGDIR, need $(( stock_kb / 1024 + 1 )) MB to back up the stock font."
+targets=""
+for spec in "$FONT_1X:$FONT_1X_BYTES" "$FONT_2X:$FONT_2X_BYTES"; do
+    name=${spec%:*}
+    if [ -f "$SYSDIR/$name" ] || [ -f "$PKGDIR/$name.stock" ]; then
+        targets="$targets $spec"
     fi
-    say "backing up the stock font to $BACKUP"
-    rm -f "$BACKUP.part"
-    cp "$SYSFONT" "$BACKUP.part" || die "could not back up $SYSFONT; nothing has been changed."
-    mv "$BACKUP.part" "$BACKUP"
+done
+
+if [ -z "$targets" ]; then
+    {
+        echo ""
+        echo "$PKG: no Apple colour emoji font found in $SYSDIR."
+        echo "  Looked for $FONT_1X and $FONT_2X."
+        echo "  Refusing to write a font the system would never read."
+        echo ""
+    } >&2
+    exit 1
 fi
 
-if cmp -s "$SYSFONT" "$PAYLOAD"; then
-    say "font already installed, nothing to do."
+installed=0
+for spec in $targets; do
+    install_one "${spec%:*}" "${spec##*:}"
+done
+
+if [ "$installed" -eq 0 ]; then
+    say "nothing changed; the fonts were already in place."
     exit 0
 fi
-
-have=$(free_kb "$SYSDIR" || echo "")
-if [ -n "$have" ]; then
-    need=$(( FONT_KB + MARGIN_KB ))
-    if [ "$have" -lt "$need" ]; then
-        {
-            echo ""
-            echo "$PKG: not enough free space on the system partition to install the font."
-            echo "  mount point : $SYSDIR"
-            echo "  free        : $(( have / 1024 )) MB"
-            echo "  needed      : $(( need / 1024 )) MB"
-            echo ""
-            echo "  The stock font has NOT been replaced. Free up space and run:"
-            echo "      dpkg --configure $PKG"
-            echo ""
-        } >&2
-        exit 1
-    fi
-fi
-
-say "installing the font ($(( FONT_KB / 1024 )) MB), this takes a moment"
-rm -f "$TMP"
-if ! cp "$PAYLOAD" "$TMP"; then
-    rm -f "$TMP"
-    die "copying the font into $SYSDIR failed. The stock font is untouched."
-fi
-
-wrote=$(file_bytes "$TMP")
-if [ "$wrote" != "$FONT_BYTES" ]; then
-    rm -f "$TMP"
-    die "short write into $SYSDIR ($wrote of $FONT_BYTES bytes). The stock font is untouched."
-fi
-
-chown root:wheel "$TMP" 2>/dev/null || true
-chmod 644 "$TMP"
-mv "$TMP" "$SYSFONT"
-say "installed $SYSFONT"
 
 if [ -n "${EMOJITWEAK_NO_RESPRING:-}" ]; then
     say "EMOJITWEAK_NO_RESPRING is set; respring by hand to see the new emoji."

@@ -1,6 +1,7 @@
 #import "TGNewContactViewController.h"
 #import "TGQRViewController.h"
 #import "TGClient.h"
+#import "TGClient+Contacts.h"
 #import "TGTheme.h"
 #import "TGIcons.h"
 #import <AddressBook/AddressBook.h>
@@ -169,6 +170,7 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 @property (nonatomic, strong) UIImageView *verticalSeparator;
 @property (nonatomic, strong) UITextField *field;
 @property (nonatomic, strong) UIButton *removeButton;
+@property (nonatomic, strong) UILabel *staticValueLabel;
 @property (nonatomic, assign) BOOL lastInGroup;
 - (void)setShowsRemoveControl:(BOOL)shows;
 @end
@@ -236,6 +238,7 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 	self.verticalSeparator.frame = CGRectMake(72, 0, 1.0f, lineHeight);
 	self.field.font = [UIFont boldSystemFontOfSize:15];
 	self.field.frame = CGRectMake(78, 11, bounds.size.width - 80, 20);
+	self.staticValueLabel.frame = CGRectMake(78, 11, bounds.size.width - 80, 20);
 	self.removeButton.frame = CGRectMake(7, 6, 30, 30);
 }
 
@@ -254,6 +257,15 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 @property (nonatomic, strong) NSArray *labelIdentifiers;
 @property (nonatomic, assign) BOOL saving;
 @property (nonatomic, assign) BOOL didFocusNameField;
+@property (nonatomic, assign) BOOL syncToPhone;
+@property (nonatomic, assign) BOOL sharePhoneNumber;
+@property (nonatomic, assign) int64_t resolvedUserId;
+@property (nonatomic, assign) BOOL resolving;
+@property (nonatomic, assign) BOOL resolveFinished;
+@property (nonatomic, copy) NSString *resolvedName;
+@property (nonatomic, copy) NSString *resolvedForPhone;
+@property (nonatomic, strong) UILabel *phoneFooterLabel;
+@property (nonatomic, strong) UIView *phoneFooterView;
 @end
 
 @implementation TGNewContactViewController
@@ -263,7 +275,16 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 	if (!self)
 		return nil;
 	self.phoneEntries = [[NSMutableArray alloc] init];
+	self.syncToPhone = YES;
 	return self;
+}
+
+- (BOOL)hasKnownPeer {
+	return self.peerUserId != 0;
+}
+
+- (BOOL)writesAddressBookRecord {
+	return self.syncToPhone && !self.editingExistingContact && ![self hasKnownPeer];
 }
 
 - (void)buildPhoneLabels {
@@ -340,7 +361,7 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 - (void)viewDidLoad {
 	[super viewDidLoad];
 	[[TGTheme shared] styleNavigationBar:self.navigationController.navigationBar];
-	self.title = @"New Contact";
+	self.title = self.editingExistingContact ? @"Edit Contact" : @"New Contact";
 	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
 	self.tableView.rowHeight = 44.0f;
 	self.tableView.sectionFooterHeight = 0.0f;
@@ -358,11 +379,24 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 
 	self.firstNameField = [self makeFieldWithPlaceholder:@"First" font:[UIFont boldSystemFontOfSize:16]];
 	self.firstNameField.returnKeyType = UIReturnKeyNext;
+	self.firstNameField.text = self.prefillFirstName ?: @"";
 	self.lastNameField  = [self makeFieldWithPlaceholder:@"Last" font:[UIFont boldSystemFontOfSize:16]];
 	self.lastNameField.returnKeyType = UIReturnKeyDefault;
+	self.lastNameField.text = self.prefillLastName ?: @"";
 
-	[self.phoneEntries addObject:[self makePhoneEntry]];
-	[self.phoneEntries addObject:[self makePhoneEntry]];
+	if ([self hasKnownPeer]){
+		self.resolvedUserId = self.peerUserId;
+		self.resolveFinished = YES;
+	} else {
+		[self.phoneEntries addObject:[self makePhoneEntry]];
+		[self.phoneEntries addObject:[self makePhoneEntry]];
+		if (self.prefillPhone.length){
+			UITextField *first = [[self.phoneEntries objectAtIndex:0] objectForKey:@"field"];
+			first.text = [self.prefillPhone hasPrefix:@"+"]
+					? self.prefillPhone
+					: [@"+" stringByAppendingString:self.prefillPhone];
+		}
+	}
 
 	[self buildTableHeader];
 
@@ -386,7 +420,10 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 }
 
 - (void)buildTableHeader {
-	CGFloat width = self.view.bounds.size.width > 0 ? self.view.bounds.size.width : 320.0f;
+	CGFloat width = self.view.bounds.size.width > 0
+			? self.view.bounds.size.width
+			: [UIScreen mainScreen].bounds.size.width;
+	BOOL showsPhoto = !self.editingExistingContact && ![self hasKnownPeer];
 	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, 86)];
 	header.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	header.backgroundColor = [UIColor clearColor];
@@ -442,7 +479,9 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 	self.avatarView.userInteractionEnabled = NO;
 	[header addSubview:self.avatarView];
 
-	self.editNameContainer = [[UIView alloc] initWithFrame:CGRectMake(90, 14, width - 90 - 9, 88)];
+	self.addPhotoButton.hidden = !showsPhoto;
+	CGFloat nameLeft = showsPhoto ? 90.0f : 9.0f;
+	self.editNameContainer = [[UIView alloc] initWithFrame:CGRectMake(nameLeft, 14, width - nameLeft - 9, 88)];
 	self.editNameContainer.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	self.editNameContainer.backgroundColor = [UIColor clearColor];
 
@@ -507,6 +546,7 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 }
 
 - (void)dealloc {
+	[NSObject cancelPreviousPerformRequestsWithTarget:self];
 	[[NSNotificationCenter defaultCenter] removeObserver:self];
 	self.firstNameField.delegate = nil;
 	self.lastNameField.delegate = nil;
@@ -538,7 +578,7 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 	}
 	NSMutableDictionary *entry = [self entryForField:object];
 	if (entry){
-		BOOL hasText = ((UITextField *)object).text.length > 0;
+		BOOL hasText = [self fieldHasNumber:object];
 		BOOL hadText = [[entry objectForKey:@"hadText"] boolValue];
 		[entry setObject:[NSNumber numberWithBool:hasText] forKey:@"hadText"];
 		[self appendEmptyPhoneRowIfNeeded];
@@ -554,13 +594,13 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 			[self.tableView endUpdates];
 		}
 		[self updateDoneEnabled];
+		[self schedulePhoneLookup];
 	}
 }
 
 - (void)appendEmptyPhoneRowIfNeeded {
 	NSMutableDictionary *last = [self.phoneEntries lastObject];
-	UITextField *lastField = [last objectForKey:@"field"];
-	if (!lastField.text.length)
+	if (![self fieldHasNumber:[last objectForKey:@"field"]])
 		return;
 	[self.phoneEntries addObject:[self makePhoneEntry]];
 	NSIndexPath *indexPath = [NSIndexPath indexPathForRow:(NSInteger)self.phoneEntries.count - 1 inSection:0];
@@ -579,11 +619,21 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 	return [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
 }
 
+- (NSString *)digitsOf:(NSString *)text {
+	NSMutableString *digits = [[NSMutableString alloc] init];
+	for (NSUInteger i = 0; i < text.length; i++){
+		unichar c = [text characterAtIndex:i];
+		if (c >= '0' && c <= '9')
+			[digits appendString:[NSString stringWithCharacters:&c length:1]];
+	}
+	return digits;
+}
+
 - (NSArray *)enteredPhones {
 	NSMutableArray *result = [[NSMutableArray alloc] init];
 	for (NSMutableDictionary *entry in self.phoneEntries){
 		NSString *phone = [self trimmed:((UITextField *)[entry objectForKey:@"field"]).text];
-		if (phone.length){
+		if ([self digitsOf:phone].length){
 			NSMutableDictionary *item = [[NSMutableDictionary alloc] init];
 			NSString *display = [entry objectForKey:@"label"];
 			[item setObject:phone forKey:@"phone"];
@@ -596,19 +646,110 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 }
 
 - (BOOL)isFormValid {
-	if (![self enteredPhones].count)
+	if (![self trimmed:self.firstNameField.text].length)
 		return NO;
-	return [self trimmed:self.firstNameField.text].length || [self trimmed:self.lastNameField.text].length;
+	if ([self hasKnownPeer])
+		return YES;
+	return [self enteredPhones].count > 0;
 }
 
 - (void)updateDoneEnabled {
 	BOOL enabled = !self.saving && [self isFormValid];
 	self.doneButton.enabled = enabled;
-	self.doneButton.alpha = 1.0f;
-	for (UIView *sub in self.doneButton.subviews){
-		if ([sub isKindOfClass:[UILabel class]])
-			sub.alpha = enabled ? 1.0f : 0.6f;
+	self.doneButton.alpha = enabled ? 1.0f : 0.5f;
+}
+
+- (BOOL)fieldHasNumber:(UITextField *)field {
+	return [self digitsOf:(field.text ?: @"")].length > 0;
+}
+
+- (NSString *)primaryPhone {
+	NSArray *phones = [self enteredPhones];
+	if (phones.count)
+		return [[phones objectAtIndex:0] objectForKey:@"phone"];
+	return @"";
+}
+
+- (NSString *)phoneStatusText {
+	if ([self hasKnownPeer]){
+		if (self.prefillPhone.length || self.editingExistingContact)
+			return nil;
+		return @"This person's phone number will only be shared with you once you become mutual contacts.";
 	}
+	if (self.resolving)
+		return @"Checking this number...";
+	if (!self.resolveFinished)
+		return nil;
+	if (self.resolvedUserId)
+		return [NSString stringWithFormat:@"%@ is on Telegram.",
+				self.resolvedName.length ? self.resolvedName : @"This number"];
+	return @"This number is not on Telegram yet. The contact will be saved anyway.";
+}
+
+- (void)resetPhoneLookup {
+	self.resolving = NO;
+	self.resolveFinished = NO;
+	self.resolvedUserId = 0;
+	self.resolvedName = nil;
+	self.resolvedForPhone = nil;
+}
+
+- (void)schedulePhoneLookup {
+	if ([self hasKnownPeer])
+		return;
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+											 selector:@selector(runPhoneLookup)
+											   object:nil];
+	NSString *phone = [self primaryPhone];
+	if ([self digitsOf:phone].length < 5){
+		if (self.resolveFinished || self.resolving || self.resolvedForPhone){
+			[self resetPhoneLookup];
+			[self refreshPhoneFooter];
+		}
+		return;
+	}
+	if ([phone isEqualToString:self.resolvedForPhone])
+		return;
+	[self performSelector:@selector(runPhoneLookup) withObject:nil afterDelay:1.0];
+}
+
+- (void)runPhoneLookup {
+	NSString *phone = [self primaryPhone];
+	if ([self digitsOf:phone].length < 5)
+		return;
+	self.resolving = YES;
+	self.resolveFinished = NO;
+	self.resolvedUserId = 0;
+	self.resolvedName = nil;
+	[self refreshPhoneFooter];
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] userForPhone:phone completion:^(NSDictionary *user){
+		TGNewContactViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (![[me primaryPhone] isEqualToString:phone])
+			return;
+		me.resolving = NO;
+		me.resolveFinished = YES;
+		me.resolvedForPhone = phone;
+		me.resolvedUserId = [user[@"id"] longLongValue];
+		NSString *first = user[@"first_name"] ?: @"";
+		NSString *last = user[@"last_name"] ?: @"";
+		NSString *name = [[NSString stringWithFormat:@"%@ %@", first, last]
+				stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+		me.resolvedName = name.length ? name : nil;
+		[me refreshPhoneFooter];
+	}];
+}
+
+- (void)refreshPhoneFooter {
+	NSString *text = [self phoneStatusText];
+	self.phoneFooterLabel.text = text ?: @"";
+	[self.tableView beginUpdates];
+	[self.tableView endUpdates];
+	[self.tableView reloadSections:[NSIndexSet indexSetWithIndex:2]
+				  withRowAnimation:UITableViewRowAnimationNone];
 }
 
 - (UITextField *)makeFieldWithPlaceholder:(NSString *)placeholder font:(UIFont *)font {
@@ -657,32 +798,42 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 	NSString *first = [self trimmed:self.firstNameField.text];
 	NSString *last  = [self trimmed:self.lastNameField.text];
 	NSArray *phones = [self enteredPhones];
-	NSString *primaryPhone = [[phones objectAtIndex:0] objectForKey:@"phone"];
+	NSString *primaryPhone = phones.count
+			? [[phones objectAtIndex:0] objectForKey:@"phone"]
+			: (self.prefillPhone ?: @"");
 
 	self.saving = YES;
 	[self updateDoneEnabled];
 	[self.view endEditing:YES];
 
-	[self saveToAddressBookFirst:first last:last phones:phones];
+	if ([self writesAddressBookRecord])
+		[self saveToAddressBookFirst:first last:last phones:phones];
 
-	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] addContactWithPhone:primaryPhone firstName:first lastName:last
-								 completion:^(BOOL ok){
-		dispatch_block_t finish = ^{
-		TGNewContactViewController *me = weakSelf;
-		if (!me)
-			return;
-		me.saving = NO;
-		[me updateDoneEnabled];
-		if (me.onDone)
-			me.onDone();
-		[me closeSelf];
-		};
-		if ([NSThread isMainThread])
-			finish();
-		else
-			dispatch_async(dispatch_get_main_queue(), finish);
-	}];
+	void (^report)(int64_t) = self.onDone;
+	BOOL share = self.sharePhoneNumber;
+
+	if (self.resolvedUserId){
+		int64_t userId = self.resolvedUserId;
+		[[TGClient shared] addContactWithUserId:userId
+										  phone:primaryPhone
+									  firstName:first
+									   lastName:last
+							   sharePhoneNumber:share
+									 completion:^(BOOL ok){
+			if (report)
+				report(ok ? userId : 0);
+		}];
+	} else {
+		[[TGClient shared] importContactWithPhone:primaryPhone
+										firstName:first
+										 lastName:last
+									   completion:^(int64_t userId){
+			if (report)
+				report(userId);
+		}];
+	}
+
+	[self closeSelf];
 }
 
 - (void)saveToAddressBookFirst:(NSString *)first last:(NSString *)last phones:(NSArray *)phones {
@@ -693,14 +844,6 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 	ABAddressBookRequestAccessWithCompletion(book, ^(bool granted, CFErrorRef error){
 		if (!granted){
 			CFRelease(book);
-			dispatch_async(dispatch_get_main_queue(), ^{
-				UIAlertView *alert = [[UIAlertView alloc] initWithTitle:nil
-															   message:@"Telegram does not have access to your contacts."
-															  delegate:nil
-													 cancelButtonTitle:@"OK"
-													 otherButtonTitles:nil];
-				[alert show];
-			});
 			return;
 		}
 		dispatch_async(dispatch_get_main_queue(), ^{
@@ -794,6 +937,8 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 }
 
 - (void)textFieldDidBeginEditing:(UITextField *)textField {
+	if ([self entryForField:textField] && !textField.text.length)
+		textField.text = @"+";
 	__weak typeof(self) weakSelf = self;
 	dispatch_async(dispatch_get_main_queue(), ^{
 		[weakSelf pruneEmptyPhoneRowsAroundField:textField];
@@ -812,7 +957,7 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 		if (i == focusedIndex || i == lastIndex)
 			continue;
 		NSMutableDictionary *entry = [self.phoneEntries objectAtIndex:i];
-		if (!((UITextField *)[entry objectForKey:@"field"]).text.length){
+		if (![self fieldHasNumber:[entry objectForKey:@"field"]]){
 			[removedPaths addObject:[NSIndexPath indexPathForRow:(NSInteger)i inSection:0]];
 			[removedEntries addObject:entry];
 		}
@@ -864,25 +1009,50 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 	return NO;
 }
 
+- (NSInteger)numberOfOptionRows {
+	NSInteger rows = 0;
+	if (![self hasKnownPeer] && !self.editingExistingContact)
+		rows++;
+	if (self.offersShareException)
+		rows++;
+	return rows;
+}
+
+- (BOOL)showsQRSection {
+	return ![self hasKnownPeer] && !self.editingExistingContact && !self.resolvedUserId;
+}
+
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-	return 2;
+	return 3;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
 	if (section == 0)
-		return (NSInteger)self.phoneEntries.count;
-	return 1;
+		return [self hasKnownPeer] ? 1 : (NSInteger)self.phoneEntries.count;
+	if (section == 1)
+		return [self numberOfOptionRows];
+	return [self showsQRSection] ? 1 : 0;
 }
 
-- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
-	return nil;
+- (CGFloat)phoneFooterHeight {
+	NSString *text = [self phoneStatusText];
+	if (!text.length)
+		return 0.0f;
+	CGFloat width = self.tableView.bounds.size.width > 0
+			? self.tableView.bounds.size.width : self.view.bounds.size.width;
+	CGSize size = [text sizeWithFont:[UIFont systemFontOfSize:14]
+				   constrainedToSize:CGSizeMake(MAX(40.0f, width - 40.0f), 1000)
+					   lineBreakMode:NSLineBreakByWordWrapping];
+	return size.height + 14.0f;
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
-	return indexPath.section == 0 ? 44.0f : 43.0f;
+	return indexPath.section == 2 ? 43.0f : 44.0f;
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
+	if ([self tableView:tableView numberOfRowsInSection:section] == 0)
+		return 0.0f;
 	if (section == 0)
 		return self.tableView.isEditing ? (18.0f + 12.0f) : 12.0f;
 	return 10.0f;
@@ -890,6 +1060,8 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 
 - (CGFloat)tableView:(UITableView *)tableView heightForFooterInSection:(NSInteger)section {
 	if (section == 0)
+		return [self phoneFooterHeight];
+	if ([self tableView:tableView numberOfRowsInSection:section] == 0)
 		return 0.0f;
 	return 1.0f + ([UIScreen mainScreen].scale > 1.0f ? 0.5f : 1.0f);
 }
@@ -901,12 +1073,115 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 }
 
 - (UIView *)tableView:(UITableView *)tableView viewForFooterInSection:(NSInteger)section {
-	UIView *view = [[UIView alloc] initWithFrame:CGRectZero];
-	view.backgroundColor = [UIColor clearColor];
-	return view;
+	if (section != 0){
+		UIView *view = [[UIView alloc] initWithFrame:CGRectZero];
+		view.backgroundColor = [UIColor clearColor];
+		return view;
+	}
+	if (!self.phoneFooterView){
+		self.phoneFooterView = [[UIView alloc] initWithFrame:CGRectZero];
+		self.phoneFooterView.backgroundColor = [UIColor clearColor];
+		self.phoneFooterLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+		self.phoneFooterLabel.autoresizingMask =
+				UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+		self.phoneFooterLabel.backgroundColor = [UIColor clearColor];
+		self.phoneFooterLabel.font = [UIFont systemFontOfSize:14];
+		self.phoneFooterLabel.numberOfLines = 0;
+		self.phoneFooterLabel.lineBreakMode = NSLineBreakByWordWrapping;
+		if ([[TGTheme shared] isDarkStyle]){
+			self.phoneFooterLabel.textColor = [[TGTheme shared] secondaryTextColour];
+		} else {
+			self.phoneFooterLabel.textColor = TGNewContactColour(0x697487, 1.0f);
+			self.phoneFooterLabel.shadowColor = TGNewContactColour(0xdae0e8, 1.0f);
+			self.phoneFooterLabel.shadowOffset = CGSizeMake(0, 1);
+		}
+		[self.phoneFooterView addSubview:self.phoneFooterLabel];
+	}
+	self.phoneFooterLabel.text = [self phoneStatusText] ?: @"";
+	CGFloat width = tableView.bounds.size.width;
+	CGFloat height = [self phoneFooterHeight];
+	self.phoneFooterView.frame = CGRectMake(0, 0, width, height);
+	self.phoneFooterLabel.frame = CGRectMake(20, 7, MAX(40.0f, width - 40.0f),
+											 MAX(0.0f, height - 14.0f));
+	return self.phoneFooterView;
+}
+
+- (UITableViewCell *)optionCellForRow:(NSInteger)row {
+	static NSString *reuse = @"TGNewContactOption";
+	UITableViewCell *cell = [self.tableView dequeueReusableCellWithIdentifier:reuse];
+	if (!cell)
+		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+									  reuseIdentifier:reuse];
+	[[TGTheme shared] styleCell:cell];
+	cell.selectionStyle = UITableViewCellSelectionStyleNone;
+	cell.textLabel.font = [UIFont boldSystemFontOfSize:16];
+
+	BOOL syncRow = ![self hasKnownPeer] && !self.editingExistingContact && row == 0;
+	UISwitch *toggle = [[UISwitch alloc] init];
+	if (syncRow){
+		cell.textLabel.text = @"Save to Phone Contacts";
+		toggle.on = self.syncToPhone;
+		[toggle addTarget:self action:@selector(syncToPhoneToggled:)
+		 forControlEvents:UIControlEventValueChanged];
+	} else {
+		cell.textLabel.text = @"Share My Phone Number";
+		toggle.on = self.sharePhoneNumber;
+		[toggle addTarget:self action:@selector(sharePhoneToggled:)
+		 forControlEvents:UIControlEventValueChanged];
+	}
+	cell.accessoryView = toggle;
+	return cell;
+}
+
+- (void)syncToPhoneToggled:(UISwitch *)toggle {
+	self.syncToPhone = toggle.on;
+}
+
+- (void)sharePhoneToggled:(UISwitch *)toggle {
+	self.sharePhoneNumber = toggle.on;
+}
+
+- (UITableViewCell *)knownPeerPhoneCell {
+	static NSString *reuse = @"TGNewContactKnownPhone";
+	TGNewContactPhoneCell *cell = [self.tableView dequeueReusableCellWithIdentifier:reuse];
+	if (!cell)
+		cell = [[TGNewContactPhoneCell alloc] initWithReuseIdentifier:reuse];
+	cell.labelView.text = @"mobile";
+	cell.field = nil;
+	cell.lastInGroup = YES;
+	[cell setShowsRemoveControl:NO];
+	cell.textLabel.text = nil;
+	[[TGTheme shared] styleCell:cell];
+	cell.selectionStyle = UITableViewCellSelectionStyleNone;
+	if (!cell.staticValueLabel){
+		cell.staticValueLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+		cell.staticValueLabel.backgroundColor = [UIColor clearColor];
+		cell.staticValueLabel.font = [UIFont boldSystemFontOfSize:15];
+		cell.staticValueLabel.textColor = [[TGTheme shared] isDarkStyle]
+				? [[TGTheme shared] primaryTextColour] : [UIColor blackColor];
+		cell.staticValueLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+		[cell.contentView addSubview:cell.staticValueLabel];
+	}
+	NSString *phone = self.prefillPhone.length
+			? ([self.prefillPhone hasPrefix:@"+"] ? self.prefillPhone
+					: [@"+" stringByAppendingString:self.prefillPhone])
+			: @"hidden";
+	cell.staticValueLabel.textColor = self.prefillPhone.length
+			? ([[TGTheme shared] isDarkStyle]
+					? [[TGTheme shared] primaryTextColour] : [UIColor blackColor])
+			: [[TGTheme shared] secondaryTextColour];
+	cell.staticValueLabel.text = phone;
+	[cell setNeedsLayout];
+	return cell;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+	if (indexPath.section == 1)
+		return [self optionCellForRow:indexPath.row];
+
+	if (indexPath.section == 0 && [self hasKnownPeer])
+		return [self knownPeerPhoneCell];
+
 	if (indexPath.section == 0){
 		static NSString *reuse = @"TGNewContactPhone";
 		TGNewContactPhoneCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
@@ -969,7 +1244,7 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 	if (indexPath.section != 0 || indexPath.row >= (NSInteger)self.phoneEntries.count)
 		return NO;
 	NSMutableDictionary *entry = [self.phoneEntries objectAtIndex:(NSUInteger)indexPath.row];
-	return ((UITextField *)[entry objectForKey:@"field"]).text.length > 0;
+	return [self fieldHasNumber:[entry objectForKey:@"field"]];
 }
 
 - (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -1020,7 +1295,7 @@ static UIImage *TGNewContactStretchedImage(NSString *name) {
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
-	if (indexPath.section == 0)
+	if (indexPath.section == 0 && ![self hasKnownPeer])
 		[self presentLabelPickerForRow:indexPath.row];
 }
 

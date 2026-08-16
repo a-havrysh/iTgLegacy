@@ -1005,6 +1005,8 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 	} else if ([ctype isEqualToString:@"messageVideoNote"]){
 		photoFileId = content[@"video_note"][@"thumbnail"][@"file"][@"id"];
 		docFileId   = content[@"video_note"][@"video"][@"id"];
+		duration    = content[@"video_note"][@"duration"];
+		minithumb   = content[@"video_note"][@"minithumbnail"];
 
 	} else if ([ctype isEqualToString:@"messageAnimation"]){
 		// Telegram GIFs are MP4, so they play like any video.

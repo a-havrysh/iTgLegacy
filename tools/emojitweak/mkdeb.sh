@@ -4,14 +4,16 @@ set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 OUTDIR="$HERE/out"
 STAGE="$HERE/work/deb"
-FONT="$OUTDIR/AppleColorEmoji.ttf"
+FONT_1X_NAME=AppleColorEmoji.ttf
+FONT_2X_NAME=AppleColorEmoji@2x.ttf
+FONT_1X="$OUTDIR/$FONT_1X_NAME"
+FONT_2X="$OUTDIR/$FONT_2X_NAME"
 COPYING="$OUTDIR/COPYING"
 TEMPLATES="$HERE/package"
 
 PKGDIRNAME=emojitweak
-PKGDIR="/var/lib/$PKGDIRNAME"
-SYSFONT="/System/Library/Fonts/Cache/AppleColorEmoji.ttf"
-SYSDIR="/System/Library/Fonts/Cache"
+PKGDIR=${EMOJITWEAK_PKGDIR:-/var/lib/$PKGDIRNAME}
+SYSDIR=${EMOJITWEAK_SYSDIR:-/System/Library/Fonts/Cache}
 MARGIN_KB=${EMOJITWEAK_MARGIN_KB:-4096}
 
 PACKAGE=${EMOJITWEAK_PACKAGE:-com.havrysh.moderncoloremoji}
@@ -25,25 +27,45 @@ die() { echo "mkdeb: $*" >&2; exit 1; }
 
 command -v dpkg-deb >/dev/null 2>&1 || die "dpkg-deb not found (brew install dpkg)"
 command -v python3 >/dev/null 2>&1 || die "python3 not found"
-[ -f "$FONT" ] || die "$FONT missing -- run ./build.py first"
+[ -f "$FONT_1X" ] || die "$FONT_1X missing -- run ./build.py first"
+[ -f "$FONT_2X" ] || die "$FONT_2X missing -- run ./build.py first"
 [ -f "$COPYING" ] || die "$COPYING missing -- run ./build.py first"
 
-meta=$(python3 - "$FONT" <<'PY'
+meta=$(python3 - "$FONT_1X" "$FONT_2X" <<'PYEOF'
 import sys
 from fontTools.ttLib import TTFont
-font = TTFont(sys.argv[1], lazy=True)
-version = next(str(r) for r in font["name"].names if r.nameID == 5)
-emoji, _, twemoji = version.partition(";twemoji-")
-strike = font["sbix"].strikes[sorted(font["sbix"].strikes)[0]]
-imaged = sum(1 for g in strike.glyphs.values() if g.imageData)
+
+versions = set()
+strikes = []
+imaged = []
+for path in sys.argv[1:]:
+    font = TTFont(path, lazy=True)
+    versions.add(next(str(r) for r in font["name"].names if r.nameID == 5))
+    ppems = sorted(font["sbix"].strikes)
+    strikes.append("/".join(str(p) for p in ppems))
+    first = font["sbix"].strikes[ppems[0]]
+    imaged.append(sum(1 for g in first.glyphs.values() if g.imageData))
+
+if len(versions) != 1:
+    raise SystemExit("the payload fonts disagree on version: %s" % sorted(versions))
+if len(set(imaged)) != 1:
+    raise SystemExit("the payload fonts have different glyph counts: %s" % imaged)
+
+emoji, _, twemoji = versions.pop().partition(";twemoji-")
 print(emoji.strip())
 print(twemoji.strip() or "unknown")
-print(imaged)
-PY
-)
+print(imaged[0])
+print(strikes[0])
+print(strikes[1])
+PYEOF
+) || die "could not read metadata out of the payload fonts"
 EMOJI_VERSION=$(echo "$meta" | sed -n 1p)
 TWEMOJI_VERSION=$(echo "$meta" | sed -n 2p)
 GLYPH_COUNT=$(echo "$meta" | sed -n 3p)
+STRIKES_1X=$(echo "$meta" | sed -n 4p)
+STRIKES_2X=$(echo "$meta" | sed -n 5p)
+[ -n "$STRIKES_1X" ] || die "could not read the strike list out of $FONT_1X"
+[ -n "$STRIKES_2X" ] || die "could not read the strike list out of $FONT_2X"
 [ -n "$EMOJI_VERSION" ] || die "could not read the emoji version out of $FONT"
 
 if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then
@@ -57,18 +79,24 @@ TOUCH_STAMP=$(python3 -c "import time,sys; print(time.strftime('%Y%m%d%H%M.%S', 
 
 VERSION=${EMOJITWEAK_VERSION:-$EMOJI_VERSION-$BUILD_DATE}
 
-FONT_BYTES=$(python3 -c 'import os,sys; print(os.path.getsize(sys.argv[1]))' "$FONT")
-FONT_KB=$(( (FONT_BYTES + 1023) / 1024 ))
-REQUIRED_MB=$(( (FONT_KB + MARGIN_KB) / 1024 ))
-COPYING_KB=$(python3 -c 'import os,sys; print((os.path.getsize(sys.argv[1])+1023)//1024)' "$COPYING")
-INSTALLED_SIZE=$(( FONT_KB + COPYING_KB + 1 ))
+bytes_of() { python3 -c 'import os,sys; print(os.path.getsize(sys.argv[1]))' "$1"; }
+
+FONT_1X_BYTES=$(bytes_of "$FONT_1X")
+FONT_2X_BYTES=$(bytes_of "$FONT_2X")
+FONT_1X_KB=$(( (FONT_1X_BYTES + 1023) / 1024 ))
+FONT_2X_KB=$(( (FONT_2X_BYTES + 1023) / 1024 ))
+if [ "$FONT_1X_KB" -ge "$FONT_2X_KB" ]; then MAX_FONT_KB=$FONT_1X_KB; else MAX_FONT_KB=$FONT_2X_KB; fi
+REQUIRED_MB=$(( (MAX_FONT_KB + MARGIN_KB) / 1024 ))
+COPYING_KB=$(( ( $(bytes_of "$COPYING") + 1023 ) / 1024 ))
+INSTALLED_SIZE=$(( FONT_1X_KB + FONT_2X_KB + COPYING_KB + 1 ))
 
 DEB="$OUTDIR/${PACKAGE}_${VERSION}_iphoneos-arm.deb"
 
 echo "mkdeb: $PACKAGE $VERSION"
 echo "  emoji     Unicode $EMOJI_VERSION / twemoji $TWEMOJI_VERSION / $GLYPH_COUNT images"
-echo "  payload   $FONT_KB KB -> $PKGDIR/AppleColorEmoji.ttf"
-echo "  needs     $REQUIRED_MB MB free on $SYSDIR at install time"
+echo "  payload   $FONT_1X_KB KB strikes $STRIKES_1X -> $SYSDIR/$FONT_1X_NAME"
+echo "  payload   $FONT_2X_KB KB strikes $STRIKES_2X -> $SYSDIR/$FONT_2X_NAME"
+echo "  needs     $REQUIRED_MB MB free on $SYSDIR at install time, per font replaced"
 echo "  epoch     $EPOCH ($BUILD_DATE, UTC)"
 
 rm -rf "$STAGE"
@@ -77,7 +105,8 @@ mkdir -p "$ROOT/DEBIAN" "$ROOT$PKGDIR"
 
 COPYFILE_DISABLE=1
 export COPYFILE_DISABLE
-cp "$FONT" "$ROOT$PKGDIR/AppleColorEmoji.ttf"
+cp "$FONT_1X" "$ROOT$PKGDIR/$FONT_1X_NAME"
+cp "$FONT_2X" "$ROOT$PKGDIR/$FONT_2X_NAME"
 cp "$COPYING" "$ROOT$PKGDIR/COPYING"
 cp "$TEMPLATES/respring" "$ROOT$PKGDIR/respring"
 
@@ -98,13 +127,18 @@ subst() {
         -e "s|@TWEMOJI_VERSION@|$(esc "$TWEMOJI_VERSION")|g" \
         -e "s|@GLYPH_COUNT@|$GLYPH_COUNT|g" \
         -e "s|@INSTALLED_SIZE@|$INSTALLED_SIZE|g" \
-        -e "s|@FONT_BYTES@|$FONT_BYTES|g" \
-        -e "s|@FONT_KB@|$FONT_KB|g" \
+        -e "s|@FONT_1X@|$(esc "$FONT_1X_NAME")|g" \
+        -e "s|@FONT_2X@|$(esc "$FONT_2X_NAME")|g" \
+        -e "s|@FONT_1X_BYTES@|$FONT_1X_BYTES|g" \
+        -e "s|@FONT_2X_BYTES@|$FONT_2X_BYTES|g" \
+        -e "s|@FONT_1X_KB@|$FONT_1X_KB|g" \
+        -e "s|@FONT_2X_KB@|$FONT_2X_KB|g" \
+        -e "s|@STRIKES_1X@|$(esc "$STRIKES_1X")|g" \
+        -e "s|@STRIKES_2X@|$(esc "$STRIKES_2X")|g" \
         -e "s|@MARGIN_KB@|$MARGIN_KB|g" \
         -e "s|@REQUIRED_MB@|$REQUIRED_MB|g" \
         -e "s|@PKGDIR@|$(esc "$PKGDIR")|g" \
         -e "s|@PKGDIRNAME@|$(esc "$PKGDIRNAME")|g" \
-        -e "s|@SYSFONT@|$(esc "$SYSFONT")|g" \
         -e "s|@SYSDIR@|$(esc "$SYSDIR")|g" \
         "$1"
 }
@@ -130,13 +164,20 @@ md5here() {
 done
 
 chmod 755 "$ROOT$PKGDIR/respring"
-chmod 644 "$ROOT$PKGDIR/AppleColorEmoji.ttf" "$ROOT$PKGDIR/COPYING" \
+chmod 644 "$ROOT$PKGDIR/$FONT_1X_NAME" "$ROOT$PKGDIR/$FONT_2X_NAME" \
+          "$ROOT$PKGDIR/COPYING" \
           "$ROOT/DEBIAN/control" "$ROOT/DEBIAN/md5sums"
 find "$ROOT" -type d -exec chmod 755 {} +
 
 command -v xattr >/dev/null 2>&1 && xattr -cr "$ROOT" 2>/dev/null || true
 find "$ROOT" -name '._*' -delete 2>/dev/null || true
 find "$ROOT" -exec touch -h -t "$TOUCH_STAMP" {} +
+
+if [ -n "${EMOJITWEAK_STAGE_ONLY:-}" ]; then
+    echo ""
+    echo "  EMOJITWEAK_STAGE_ONLY is set; stopped after staging $ROOT"
+    exit 0
+fi
 
 mkdir -p "$OUTDIR"
 rm -f "$DEB"

@@ -5,8 +5,12 @@ import subprocess
 from PIL import Image, ImageDraw, ImageFont
 
 MASTER = 192
-STRIKES = (20, 40, 48, 96)
-COLORS = {20: 128, 40: 128, 48: 128, 96: 200}
+VARIANTS = {
+    "1x": (20, 40, 48, 96),
+    "2x": (40, 64, 96, 192),
+}
+STRIKES = tuple(sorted({p for s in VARIANTS.values() for p in s}))
+COLORS = {20: 128, 40: 128, 48: 128, 64: 160, 96: 200, 192: 256}
 
 RSVG = os.environ.get("RSVG_CONVERT", "rsvg-convert")
 

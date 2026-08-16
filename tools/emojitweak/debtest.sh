@@ -6,7 +6,7 @@ IPAD=${IPAD:-192.168.18.217}
 export IPAD
 SH="$HERE/ipad.sh"
 PACKAGE=${EMOJITWEAK_PACKAGE:-com.havrysh.moderncoloremoji}
-SYSFONT=/System/Library/Fonts/Cache/AppleColorEmoji.ttf
+SYSDIR=/System/Library/Fonts/Cache
 PKGDIR=/var/lib/emojitweak
 PROBE=/tmp/emojiprobe2
 SAMPLES=/tmp/debtest-samples.txt
@@ -41,7 +41,7 @@ PY
 
 report() {
     echo "--- $1"
-    "$SH" "ls -l $SYSFONT 2>/dev/null || echo 'NO FONT AT $SYSFONT'"
+    "$SH" "ls -l $SYSDIR/AppleColorEmoji.ttf $SYSDIR/AppleColorEmoji@2x.ttf 2>/dev/null || true"
     "$SH" "dpkg -s $PACKAGE 2>/dev/null | grep -E '^(Package|Status|Version):' || echo 'package not installed'"
     "$SH" "ls -l $PKGDIR 2>/dev/null || echo '$PKGDIR absent'"
     echo "--- CoreText sees:"

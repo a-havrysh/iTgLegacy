@@ -3,10 +3,9 @@ set -e
 
 PKG="@PACKAGE@"
 PKGDIR="@PKGDIR@"
-SYSFONT="@SYSFONT@"
 SYSDIR="@SYSDIR@"
-BACKUP="$PKGDIR/AppleColorEmoji.ttf.stock"
-TMP="$SYSFONT.emojitweak-old"
+FONT_1X="@FONT_1X@"
+FONT_2X="@FONT_2X@"
 
 say() { echo "$PKG: $*"; }
 warn() { echo "$PKG: $*" >&2; }
@@ -30,67 +29,84 @@ file_bytes() {
     esac
 }
 
-restore() {
-    if [ ! -f "$BACKUP" ]; then
+restore_one() {
+    name="$1"
+    backup="$PKGDIR/$name.stock"
+    sysfont="$SYSDIR/$name"
+    tmp="$sysfont.emojitweak-old"
+
+    [ -f "$sysfont" ] || return 0
+
+    if [ ! -f "$backup" ]; then
         {
             echo ""
-            echo "$PKG: no stock font backup found at $BACKUP."
+            echo "$PKG: no stock font backup found at $backup."
             echo ""
-            echo "  The font now at $SYSFONT has been left in place on purpose:"
+            echo "  The font now at $sysfont has been left in place on purpose:"
             echo "  deleting it would leave the device with no colour emoji at all."
             echo ""
-            echo "  To get Apple's original font back, copy AppleColorEmoji.ttf out of an"
+            echo "  To get Apple's original font back, copy $name out of an"
             echo "  iOS 6.1.3 IPSW (or another backup of this device) to:"
-            echo "      $SYSFONT"
+            echo "      $sysfont"
             echo "  then respring."
             echo ""
         } >&2
         return 0
     fi
 
-    if cmp -s "$SYSFONT" "$BACKUP"; then
-        say "the stock font is already in place at $SYSFONT"
+    if cmp -s "$sysfont" "$backup"; then
+        say "the stock font is already in place at $sysfont"
         return 0
     fi
 
-    want=$(file_bytes "$BACKUP")
+    want=$(file_bytes "$backup")
     if [ "$want" -lt 1024 ]; then
-        warn "backup $BACKUP looks truncated ($want bytes); leaving the current font in place."
+        warn "backup $backup looks truncated ($want bytes); leaving the current font in place."
         return 0
     fi
 
     if [ ! -w "$SYSDIR" ]; then
         warn "$SYSDIR is not writable; the stock font was NOT restored."
-        warn "remount / read-write and copy $BACKUP to $SYSFONT by hand."
+        warn "remount / read-write and copy $backup to $sysfont by hand."
         return 0
     fi
 
     need_kb=$(( want / 1024 + 1024 ))
     have=$(free_kb "$SYSDIR" || echo "")
-    rm -f "$TMP"
+    rm -f "$tmp"
 
     if [ -n "$have" ] && [ "$have" -lt "$need_kb" ]; then
-        say "little space on $SYSDIR; removing the replacement font before restoring"
-        rm -f "$SYSFONT"
-        if ! cp "$BACKUP" "$SYSFONT"; then
-            warn "restoring $SYSFONT from $BACKUP FAILED and there is now no emoji font."
-            warn "free up space and run: cp $BACKUP $SYSFONT"
+        say "little space on $SYSDIR; removing the replacement font before restoring $name"
+        rm -f "$sysfont"
+        if ! cp "$backup" "$sysfont"; then
+            warn "restoring $sysfont from $backup FAILED and there is now no emoji font."
+            warn "free up space and run: cp $backup $sysfont"
             return 0
         fi
     else
-        if ! cp "$BACKUP" "$TMP"; then
-            rm -f "$TMP"
-            warn "restoring the stock font failed; $SYSFONT still holds this package's font."
-            warn "run by hand: cp $BACKUP $SYSFONT"
+        if ! cp "$backup" "$tmp"; then
+            rm -f "$tmp"
+            warn "restoring the stock font failed; $sysfont still holds this package's font."
+            warn "run by hand: cp $backup $sysfont"
             return 0
         fi
-        mv "$TMP" "$SYSFONT"
+        mv "$tmp" "$sysfont"
     fi
 
-    chown root:wheel "$SYSFONT" 2>/dev/null || true
-    chmod 644 "$SYSFONT"
-    say "restored the stock font to $SYSFONT"
-    say "the backup is kept at $BACKUP; purging this package deletes it"
+    chown root:wheel "$sysfont" 2>/dev/null || true
+    chmod 644 "$sysfont"
+    say "restored the stock font to $sysfont"
+    restored=$(( restored + 1 ))
+}
+
+restore() {
+    restored=0
+    for name in "$FONT_1X" "$FONT_2X"; do
+        restore_one "$name"
+    done
+    [ "$restored" -gt 0 ] || return 0
+
+    say "the backups are kept in $PKGDIR; purging this package deletes them"
 
     if [ -n "${EMOJITWEAK_NO_RESPRING:-}" ]; then
         say "EMOJITWEAK_NO_RESPRING is set; respring by hand."
@@ -106,8 +122,11 @@ remove)
     restore
     ;;
 purge)
-    [ -f "$BACKUP" ] && restore || true
-    rm -f "$BACKUP" "$BACKUP.part" "$PKGDIR/respring"
+    restore
+    for name in "$FONT_1X" "$FONT_2X"; do
+        rm -f "$PKGDIR/$name.stock" "$PKGDIR/$name.stock.part"
+    done
+    rm -f "$PKGDIR/respring"
     rmdir "$PKGDIR" 2>/dev/null || true
     ;;
 upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)

@@ -1,7 +1,15 @@
 # emojitweak
 
-A replacement `AppleColorEmoji.ttf` for jailbroken iOS 6, and the Cydia package that
-installs it.
+A replacement Apple colour emoji font for jailbroken iOS 6, and the Cydia package
+that installs it.
+
+iOS 6 keeps the emoji font under two different names. Non-Retina devices read
+`/System/Library/Fonts/Cache/AppleColorEmoji.ttf`; Retina devices read
+`AppleColorEmoji@2x.ttf` in the same directory and have no `AppleColorEmoji.ttf`
+at all. CoreText asks the `@2x` file for twice the point size, so its strikes live
+in a different range: Apple ships 20/40/48 in the 1x file and 40/64/96 in the `@2x`
+one. The package carries a payload for each and picks by looking at which of the two
+files the device actually has.
 
 iOS 6 shipped 1359 emoji glyphs. This font carries 4005, built from Twemoji artwork
 against the current `emoji-test.txt`, with an AAT `morx` table that composes skin
@@ -16,7 +24,9 @@ make deb
 ```
 
 That downloads `emoji-test.txt` and the Twemoji release, rasterises every glyph at
-20/40/48/96 ppem, assembles the font, and packs it into
+20/40/48/64/96/192 ppem, assembles the two payload fonts (`out/AppleColorEmoji.ttf`
+with strikes 20/40/48/96, `out/AppleColorEmoji@2x.ttf` with 40/64/96/192), and packs
+them into
 `out/com.havrysh.moderncoloremoji_<emoji-version>-<date>_iphoneos-arm.deb`.
 
 Cold, that is about 17 s for the font plus a few seconds for the package. With
@@ -79,45 +89,56 @@ builds on the same day.
 
 ### Payload layout
 
-The font ships to `/var/lib/emojitweak/`, not to `/System`. The data partition has
-gigabytes free; the system partition on a 4S has a couple of hundred megabytes, and
-dpkg unpacks a `.dpkg-new` temporary alongside every file it installs. Keeping the
-25 MB payload off `/` means dpkg can never fill the system partition on its own, and
-it means the maintainer scripts — not dpkg's file list — own the system font path, so
-a removal can always put the stock font back.
+Both payloads ship to `/var/lib/emojitweak/`, not to `/System`. On a 4S that is a
+separate 60 GB partition, while the system partition has a couple of hundred megabytes
+free, and dpkg unpacks a `.dpkg-new` temporary alongside every file it installs.
+Keeping the payloads off `/` means dpkg can never fill the system partition on its own,
+and it means the maintainer scripts — not dpkg's file list — own the system font paths,
+so a removal can always put the stock font back. Carrying both payloads costs ~61 MB on
+the roomy partition and saves ~7-9 MB on the tight one compared with a single font
+holding the union of every strike, which would put strikes on each device that it can
+never ask for.
 
 ```
-/var/lib/emojitweak/AppleColorEmoji.ttf         the payload
-/var/lib/emojitweak/AppleColorEmoji.ttf.stock   your stock font, made on first install
-/var/lib/emojitweak/COPYING                     licence and attribution
-/var/lib/emojitweak/respring                    detached respring helper
+/var/lib/emojitweak/AppleColorEmoji.ttf              1x payload, strikes 20/40/48/96
+/var/lib/emojitweak/AppleColorEmoji@2x.ttf           2x payload, strikes 40/64/96/192
+/var/lib/emojitweak/AppleColorEmoji.ttf.stock        stock 1x font, if that name existed
+/var/lib/emojitweak/AppleColorEmoji@2x.ttf.stock     stock 2x font, if that name existed
+/var/lib/emojitweak/COPYING                          licence and attribution
+/var/lib/emojitweak/respring                         detached respring helper
 ```
 
 ### Install
 
 `preinst` refuses the install, before anything is unpacked, unless
-`/System/Library/Fonts/Cache` exists, is writable, and has the font size plus 4 MB
-free. The message names the mount point, the free space, the needed space and the
-shortfall, and says nothing has been changed.
+`/System/Library/Fonts/Cache` exists, is writable, holds at least one of the two font
+names, and has room for the payloads that will actually be written plus 4 MB. It prints
+the names it is going to replace. If **neither** name is present it refuses outright
+rather than writing a font nobody would read; if the space is short the message names
+the mount point, the free space, the needed space and the shortfall, and says nothing
+has been changed.
 
-`postinst` then:
+`postinst` decides its targets the same way — every one of the two names that exists in
+`/System/Library/Fonts/Cache`, or that already has a `.stock` backup from an earlier
+install — and refuses if that set is empty. A device carrying both names gets both
+replaced, each with its own strike set and its own backup. For each target it:
 
 1. checks the payload is the exact byte count baked in at build time;
 2. backs the stock font up to `…ttf.stock`, **unless** a backup already exists (second
    install) or the font currently installed is byte-identical to the payload (our own
    font — backing that up would destroy the only copy of the stock one);
-3. re-checks free space;
-4. copies to `AppleColorEmoji.ttf.emojitweak-new`, verifies the byte count, `chmod 644`,
-   then renames over the live path — so a failed or short copy never leaves a broken
-   font behind;
-5. resprings via a detached helper that sleeps first, so dpkg (and Cydia) finish before
-   SpringBoard dies.
+3. re-checks free space against that font's size;
+4. copies to `<name>.emojitweak-new`, verifies the byte count, `chmod 644`, then renames
+   over the live path — so a failed or short copy never leaves a broken font behind;
+5. once every target is done, resprings via a detached helper that sleeps first, so dpkg
+   (and Cydia) finish before SpringBoard dies.
 
 Set `EMOJITWEAK_NO_RESPRING=1` to skip step 5.
 
 ### Remove
 
-`postrm remove` copies `…ttf.stock` back, verifies, resprings, and keeps the backup
+`postrm remove` copies every `…ttf.stock` it finds back over its own name, verifies,
+resprings, and keeps the backups
 (it is your only copy — `dpkg -P` deletes it along with the directory). If the system
 partition is too tight for the temp-then-rename dance it deletes the replacement font
 first and copies directly, which is safe because the backup is what it is copying from.
@@ -223,7 +244,7 @@ decoration; it is what makes redistribution lawful.
 - **Artwork: Twemoji, CC-BY 4.0.** [jdecked/twemoji](https://github.com/jdecked/twemoji),
   © Twitter, Inc and other contributors. CC-BY 4.0 requires attribution, a link to the
   licence, and an indication that the material was modified. `COPYING` carries all
-  three, including an explicit modifications notice (rasterised to PNG at four ppem
+  three, including an explicit modifications notice (rasterised to PNG at six ppem
   sizes, colour-quantised, embedded as sbix strikes). CC-BY is not copyleft, so the
   font and the package are not forced under any particular licence — but the attribution
   travels with the artwork wherever it goes. If you publish a depiction page for the
@@ -246,6 +267,10 @@ given the font is deliberately named `Apple Color Emoji`.
 
 ## Testing on a device
 
+`make pkgtest` runs the maintainer scripts on the host against a fake system font
+directory, covering a device with only the 1x name, only the `@2x` name, both, and
+neither, plus the disk-space refusal and a corrupted payload. It needs no device.
+
 ```sh
 make probe                      # cross-compile out/emojiprobe2 (once)
 ./debtest.sh prepare            # push the probe binary and a 10-sequence sample set
@@ -257,7 +282,8 @@ make probe                      # cross-compile out/emojiprobe2 (once)
 ./debtest.sh purge              # dpkg -P, also deletes the stock backup
 ```
 
-`IPAD=<ip>` selects the device (default `192.168.18.217`); `ipad.sh` handles the legacy
+`IPAD=<ip>` selects the device (default `192.168.18.217`); it works for any iOS 6
+device, Retina or not, and `status` lists whichever of the two font names is present; `ipad.sh` handles the legacy
 SSH algorithms iOS 6 needs. `status` prints CoreText's font header — `glyphs=1359` is
 stock, `glyphs=4005` is this package — and one line per sample showing how many glyphs
 the sequence shaped to and which font served them. One glyph from `emoji` is a pass.
@@ -273,7 +299,7 @@ To exercise the disk-space refusal, fill the system partition first:
 ## Interactions
 
 PoomSmart's **EmojiFontManager** (`com.ps.emojifontmanager`) can redirect CoreText to a
-font somewhere other than `/System/Library/Fonts/Cache/AppleColorEmoji.ttf`. It owns no
+font somewhere other than `/System/Library/Fonts/Cache`. It owns no
 files at that path so there is no dpkg conflict, and this package installs and removes
 cleanly alongside it — but if EFM is pointing elsewhere you will not see this font.
 **EmojiPortLegacy** and **EmojiAttributes** are keyboard and layout tweaks and do not
