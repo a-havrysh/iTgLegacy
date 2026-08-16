@@ -23,4 +23,8 @@
 /// itglegacy://tap/N so playback and viewers can be exercised remotely.
 - (void)simulateTapOnRow:(NSInteger)row;
 
+/// The menu behind a long press on the pinned banner. Exposed so
+/// itglegacy://pinnedmenu can open it without a finger.
+- (void)showPinnedBannerMenu;
+
 @end

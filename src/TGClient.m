@@ -433,6 +433,12 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 		[self applyChatUpdate:obj];
 		return;
 	}
+	if ([type isEqualToString:@"updateMessageIsPinned"]){
+		[[NSNotificationCenter defaultCenter]
+				postNotificationName:TGChatPinnedMessagesDidChangeNotification
+							  object:obj[@"chat_id"]];
+		return;
+	}
 	if ([type isEqualToString:@"updateConnectionState"]){
 		[self handleUpdateConnectionState:obj];
 		return;
@@ -860,6 +866,8 @@ static NSString *TGReactionSummary(NSDictionary *m) {
 /// better answer for a content type nobody has written a branch for than
 /// either an empty bubble or the word "unsupported".
 NSString *const TGUserStatusDidChangeNotification = @"TGUserStatusDidChangeNotification";
+NSString *const TGChatReadOutboxDidChangeNotification = @"TGChatReadOutboxDidChangeNotification";
+NSString *const TGChatPinnedMessagesDidChangeNotification = @"TGChatPinnedMessagesDidChangeNotification";
 
 static NSDictionary *TGUserStatusInfo(NSDictionary *status) {
 	NSString *type = status[@"@type"];
@@ -2383,6 +2391,32 @@ static int64_t TGArchiveOrder(NSArray *positions) {
 	}];
 }
 
+- (void)pinnedMessagesForChat:(int64_t)chatId
+				   completion:(void (^)(NSArray *messages))completion {
+	if (!completion)
+		return;
+	[self request:@{
+		@"@type"           : @"searchChatMessages",
+		@"chat_id"         : [NSNumber numberWithLongLong:chatId],
+		@"query"           : @"",
+		@"from_message_id" : @(0),
+		@"offset"          : @(0),
+		@"limit"           : @(100),
+		@"filter"          : @{@"@type" : @"searchMessagesFilterPinned"},
+	} completion:^(NSDictionary *result){
+		NSMutableArray *out = [NSMutableArray array];
+		NSArray *found = [result isKindOfClass:NSDictionary.class] ? result[@"messages"] : nil;
+		if ([found isKindOfClass:NSArray.class]){
+			for (NSDictionary *m in found){
+				NSDictionary *flat = TGFlattenMessage(m);
+				if (flat)
+					[out insertObject:flat atIndex:0];
+			}
+		}
+		completion(out);
+	}];
+}
+
 - (void)setChat:(int64_t)chatId pinned:(BOOL)pinned {
 	[self send:@{
 		@"@type"     : @"toggleChatIsPinned",
@@ -2910,8 +2944,13 @@ static NSArray *TGPacksFrom(NSDictionary *target) {
 
 	info[@"draft"] = TGDraftText(chat[@"draft_message"]);
 
-	if (chat[@"last_read_outbox_message_id"])
+	if (chat[@"last_read_outbox_message_id"] &&
+		![chat[@"last_read_outbox_message_id"] isEqual:info[@"lastReadOutboxId"]]){
 		info[@"lastReadOutboxId"] = chat[@"last_read_outbox_message_id"];
+		[[NSNotificationCenter defaultCenter]
+				postNotificationName:TGChatReadOutboxDidChangeNotification
+							  object:chatId];
+	}
 
 	NSDictionary *last = chat[@"last_message"];
 	if ([last isKindOfClass:NSDictionary.class]){
@@ -2947,8 +2986,10 @@ static NSArray *TGPacksFrom(NSDictionary *target) {
 		long long lastRead = [chat[@"last_read_outbox_message_id"] longLongValue];
 		if (me && lastRead != 0){
 			NSMutableDictionary *info = me.chatsById[@(chatId)];
-			if (info)
+			if (info){
 				info[@"lastReadOutboxId"] = @(lastRead);
+				[me refreshOutgoingReadStateIn:info];
+			}
 		}
 		if (completion)
 			completion(lastRead);
@@ -3007,6 +3048,9 @@ static NSArray *TGPacksFrom(NSDictionary *target) {
 	if (update[@"last_read_outbox_message_id"]){
 		info[@"lastReadOutboxId"] = update[@"last_read_outbox_message_id"];
 		[self refreshOutgoingReadStateIn:info];
+		[[NSNotificationCenter defaultCenter]
+				postNotificationName:TGChatReadOutboxDidChangeNotification
+							  object:chatId];
 	}
 
 	if ([updateType isEqualToString:@"updateChatPhoto"]){

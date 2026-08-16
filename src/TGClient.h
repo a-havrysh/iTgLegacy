@@ -11,6 +11,8 @@
 #import <Foundation/Foundation.h>
 
 extern NSString *const TGUserStatusDidChangeNotification;
+extern NSString *const TGChatReadOutboxDidChangeNotification;
+extern NSString *const TGChatPinnedMessagesDidChangeNotification;
 
 typedef NS_ENUM(NSInteger, TGAuthState) {
     TGAuthStateUnknown = 0,
@@ -191,6 +193,10 @@ typedef NS_ENUM(NSInteger, TGConnectionState) {
 /// The pinned message of a chat, flattened, or nil if there is none.
 - (void)pinnedMessageForChat:(int64_t)chatId
                   completion:(void (^)(NSDictionary *message))completion;
+
+/// Every pinned message of a chat, flattened, oldest first.
+- (void)pinnedMessagesForChat:(int64_t)chatId
+                   completion:(void (^)(NSArray *messages))completion;
 
 /// Pin or unpin a chat in the main list.
 - (void)setChat:(int64_t)chatId pinned:(BOOL)pinned;
