@@ -1629,13 +1629,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	if (shown <= 0 || shown >= kSearchBarHeight)
 		return;
 
-	CGFloat target = -1;
-	if (self.scrollAnchor >= kSearchBarHeight)
-		target = shown < kSearchBarHeight - 15 ? 0 : kSearchBarHeight;
-	else if (self.scrollAnchor <= 15)
-		target = shown < 15 ? 0 : kSearchBarHeight;
-	if (target < 0)
-		return;
+	CGFloat target = shown < kSearchBarHeight / 2 ? 0 : kSearchBarHeight;
 
 	[scrollView setContentOffset:CGPointMake(0, target - top) animated:YES];
 }
