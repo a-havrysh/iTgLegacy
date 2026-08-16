@@ -141,6 +141,7 @@ static const CGFloat kFileTile    = 71.0f;
 static const CGFloat kFileDisc    = 37.0f;
 // A picture in a bubble is clipped to the same radius their media uses.
 static const CGFloat kMediaRadius = 6.0f;
+static const CGFloat kAlbumBareInset = 2.0f;
 static const CGFloat kAlbumGap    = 2.0f;
 static const CGFloat kMosaicMinTileSide = 68.0f;
 // One option of a poll: a 16 circle, the text, the share, and the bar under it.
@@ -8844,6 +8845,18 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 	return nil;
 }
 
+- (CGFloat)albumInsetForRow:(NSInteger)row {
+	NSDictionary *head = [self messageAtRow:row];
+	if ([self albumCaptionMessageAtRow:row] || [[self chipsFor:head] count])
+		return kPadH;
+	if ([self decorationHeightFor:head] > 0.5f)
+		return kPadH;
+	if (self.isGroup && ![head[@"outgoing"] boolValue] &&
+		[[TGClient shared] nameForUserId:[head[@"senderId"] longLongValue]])
+		return kPadH;
+	return kAlbumBareInset;
+}
+
 - (CGFloat)albumRowHeight:(NSInteger)row {
 	CGFloat mosaic = [self mosaicHeightForRow:row];
 	if (mosaic < 1)
@@ -8852,6 +8865,10 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 	NSDictionary *head = [self messageAtRow:row];
 	NSDictionary *caption = [self albumCaptionMessageAtRow:row];
 	CGSize body = caption ? [self bodySizeFor:caption] : CGSizeZero;
+	CGFloat inset = [self albumInsetForRow:row];
+
+	if (inset == kAlbumBareInset)
+		return inset * 2 + mosaic + 3;
 
 	CGFloat h = kPadV * 2 + [self decorationHeightFor:head] + mosaic + 4;
 	if (self.isGroup && ![head[@"outgoing"] boolValue] &&
@@ -9573,7 +9590,8 @@ static UIColor *TGSenderColour(int64_t userId) {
 	CGFloat albumContentW = MAX(groupSize.width, body.width);
 	if ([[self chipsFor:head] count])
 		albumContentW = MAX(albumContentW, [self chipsRowWidthFor:head]);
-	CGFloat bubbleW = albumContentW + 2 * kPadH;
+	CGFloat inset = [self albumInsetForRow:indexPath.row];
+	CGFloat bubbleW = albumContentW + 2 * inset;
 	CGFloat x = mine ? (tableView.bounds.size.width - bubbleW - 8) : 8;
 	CGFloat avatarX = x - kBubbleTailOverhang + 4;
 	if (senderName.length)
@@ -9602,10 +9620,10 @@ static UIColor *TGSenderColour(int64_t userId) {
 		cell.sender.frame = CGRectMake(kPadH, kPadV + 2, bubbleW - 2 * kPadH, 16);
 	}
 
-	CGFloat y = kPadV + senderH;
+	CGFloat y = (inset == kAlbumBareInset) ? inset : kPadV + senderH;
 	y += [self layoutForwardIn:cell message:head atY:y width:bubbleW];
 	y = [self layoutQuoteIn:cell message:head atY:y bubbleWidth:bubbleW];
-	cell.album.frame = CGRectMake(kPadH, y, groupSize.width, groupSize.height);
+	cell.album.frame = CGRectMake(inset, y, groupSize.width, groupSize.height);
 
 	for (NSUInteger i = 0; i < album.count && i < frames.count; i++){
 		NSDictionary *member = album[i];
@@ -9653,14 +9671,35 @@ static UIColor *TGSenderColour(int64_t userId) {
 											 : TGMessageBodyColour();
 		cell.body.text = [self textOf:caption] ?: @"";
 		[self highlightTimestampInLabel:cell.body];
-		cell.body.frame = CGRectMake(kPadH, afterAlbum, body.width, body.height);
+		cell.body.frame = CGRectMake(inset, afterAlbum, body.width, body.height);
 		afterAlbum += body.height;
 	}
 
 	[self layoutReactionsIn:cell message:head atY:afterAlbum bubbleWidth:bubbleW];
 	cell.time.text = [self stampFor:head];
-	[self placeDateBesideBubbleFor:cell message:head outgoing:mine
-						tableWidth:tableView.bounds.size.width];
+	if (inset == kAlbumBareInset){
+		cell.time.hidden = YES;
+		cell.ticks.hidden = YES;
+		NSString *stamp = [self stampFor:head];
+		CGFloat plateW = [stamp sizeWithFont:cell.mediaStamp.font].width +
+				(mine ? 30 : 14);
+		cell.mediaStamp.hidden = NO;
+		cell.mediaStamp.backgroundColor = [theme mediaStampColour];
+		cell.mediaStamp.text = stamp;
+		cell.mediaStamp.frame = CGRectMake(
+				inset + groupSize.width - plateW - 6,
+				y + groupSize.height - 22, plateW, 16);
+		if (mine){
+			cell.ticks.hidden = NO;
+			cell.ticks.image = [self statusGlyphForMessage:head white:YES];
+			cell.ticks.frame = CGRectMake(
+					x + CGRectGetMaxX(cell.mediaStamp.frame) - 20,
+					top + CGRectGetMidY(cell.mediaStamp.frame) - 4, 15, 9);
+		}
+	} else {
+		[self placeDateBesideBubbleFor:cell message:head outgoing:mine
+							tableWidth:tableView.bounds.size.width];
+	}
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {

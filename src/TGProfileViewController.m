@@ -453,10 +453,6 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 	if (self.chatId)
 		self.muted = [[TGClient shared] isChatMuted:self.chatId];
 
-	[[NSString stringWithFormat:@"viewDidLoad %@\n", [NSDate date]]
-			writeToFile:[NSTemporaryDirectory()
-					stringByAppendingPathComponent:@"tgprof.log"]
-			 atomically:YES encoding:NSUTF8StringEncoding error:NULL];
 	[self buildHeader];
 	[self loadDetails];
 	[self loadMedia];
@@ -776,7 +772,7 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 										   : kTitleContainerHeight;
 
 	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, height)];
-	header.backgroundColor = [UIColor redColor];
+	header.backgroundColor = [UIColor clearColor];
 
 	self.avatarView = [[UIImageView alloc] initWithFrame:
 			CGRectMake(kGroupedInset, 14, side, side)];
@@ -3190,6 +3186,8 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 - (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell
 		forRowAtIndexPath:(NSIndexPath *)indexPath {
 	NSString *kind = [self kindForSection:indexPath.section];
+	if ([kind isEqualToString:@"details"] || [kind isEqualToString:@"manage"])
+		[self adoptGroupedInsetFromCell:cell inTable:tableView];
 	if (![kind isEqualToString:@"actions"] && ![kind isEqualToString:@"delete"]
 			&& ![kind isEqualToString:@"story"])
 		return;
