@@ -25,6 +25,9 @@
 #import <ImageIO/ImageIO.h>
 #import <QuartzCore/QuartzCore.h>
 #import <CoreText/CoreText.h>
+#import "TGEmoji.h"
+#import "TGDateLabel.h"
+#import "TGDateUtils.h"
 
 @interface TGProfilePermissionsController : UITableViewController
 @property (nonatomic, assign) int64_t chatId;
@@ -332,26 +335,10 @@ static BOOL TGProfileCanRenderText(NSString *text) {
 static NSString *TGProfileLastSeenText(long long wasOnline) {
 	if (wasOnline <= 0)
 		return nil;
-	NSDate *date = [NSDate dateWithTimeIntervalSince1970:(NSTimeInterval)wasOnline];
-	NSCalendar *calendar = [NSCalendar currentCalendar];
-	NSUInteger units = NSYearCalendarUnit | NSMonthCalendarUnit | NSDayCalendarUnit;
-	NSDateComponents *then = [calendar components:units fromDate:date];
-	NSDateComponents *now = [calendar components:units fromDate:[NSDate date]];
-	NSInteger days = [calendar components:NSDayCalendarUnit
-								 fromDate:[calendar dateFromComponents:then]
-								   toDate:[calendar dateFromComponents:now]
-								  options:0].day;
-
-	NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-	if (then.year != now.year || days < 0 || days > 1){
-		[formatter setDateFormat:@"dd.MM.yy"];
-		return [NSString stringWithFormat:@"last seen %@",
-				[formatter stringFromDate:date]];
-	}
-	[formatter setTimeStyle:NSDateFormatterShortStyle];
-	[formatter setDateStyle:NSDateFormatterNoStyle];
-	return [NSString stringWithFormat:@"last seen %@ at %@",
-			days == 0 ? @"today" : @"yesterday", [formatter stringFromDate:date]];
+	NSString *stamp = [TGDateUtils stringForLastSeen:(int)wasOnline];
+	if (!stamp.length)
+		return nil;
+	return [NSString stringWithFormat:@"last seen %@", stamp];
 }
 
 @implementation TGProfileButtonsCell
@@ -466,6 +453,10 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 	if (self.chatId)
 		self.muted = [[TGClient shared] isChatMuted:self.chatId];
 
+	[[NSString stringWithFormat:@"viewDidLoad %@\n", [NSDate date]]
+			writeToFile:[NSTemporaryDirectory()
+					stringByAppendingPathComponent:@"tgprof.log"]
+			 atomically:YES encoding:NSUTF8StringEncoding error:NULL];
 	[self buildHeader];
 	[self loadDetails];
 	[self loadMedia];
@@ -635,8 +626,9 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 	}
 	self.emojiStatusShown = YES;
 	NSString *emoji = TGProfileText(badge[@"emoji"]);
-	self.badgeLabel.text = emoji ?: @"⭐";
-	self.badgeLabel.hidden = NO;
+	NSString *glyph = emoji ?: @"⭐";
+	self.badgeLabel.text = glyph;
+	self.badgeLabel.hidden = !TGProfileCanRenderText(glyph);
 	self.badgeView.hidden = YES;
 	[self layoutNameBadge];
 	NSString *statusValue = [self statusRowValueFor:badge emoji:self.badgeLabel.text];
@@ -698,10 +690,6 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 							   completion:^(NSDictionary *badge){
 		[weakSelf applyEmojiStatus:badge];
 	}];
-	[[TGClient shared] accentColorsForUser:self.userId
-								completion:^(NSDictionary *colours){
-		[weakSelf applyAccentColours:colours];
-	}];
 	[[TGClient shared] birthdateForUser:self.userId
 							 completion:^(NSDictionary *birthdate){
 		if (![birthdate isKindOfClass:[NSDictionary class]])
@@ -732,10 +720,6 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 	[[TGClient shared] emojiStatusForChat:self.chatId
 							   completion:^(NSDictionary *badge){
 		[weakSelf applyEmojiStatus:badge];
-	}];
-	[[TGClient shared] accentColorsForChat:self.chatId
-								completion:^(NSDictionary *colours){
-		[weakSelf applyAccentColours:colours];
 	}];
 	[[TGClient shared] badgesForChat:self.chatId completion:^(NSDictionary *badges){
 		if (![badges isKindOfClass:[NSDictionary class]] || weakSelf.emojiStatusShown)
@@ -792,7 +776,7 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 										   : kTitleContainerHeight;
 
 	UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, height)];
-	header.backgroundColor = [UIColor clearColor];
+	header.backgroundColor = [UIColor redColor];
 
 	self.avatarView = [[UIImageView alloc] initWithFrame:
 			CGRectMake(kGroupedInset, 14, side, side)];
@@ -846,8 +830,7 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 - (CGRect)headerStatusFrameForLeft:(CGFloat)labelLeft width:(CGFloat)available {
 	if ([self isGroupProfile])
 		return CGRectMake(labelLeft + 1, 49 + TGProfileRetinaPixel(), available, 24);
-	CGFloat line = [UIFont systemFontOfSize:14].lineHeight;
-	return CGRectMake(labelLeft, 52, available, ceilf(line));
+	return CGRectMake(labelLeft, 52, available, 24);
 }
 
 - (void)buildHeaderLabelsInto:(UIView *)header width:(CGFloat)width {
@@ -855,7 +838,7 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 
 	CGFloat labelLeft = kGroupedInset + kProfileAvatarSide + [self headerNameGap];
 
-	UILabel *nameLabel = [[UILabel alloc] initWithFrame:
+	UILabel *nameLabel = [[TGEmojiLabel alloc] initWithFrame:
 			CGRectMake(labelLeft, 24, width - labelLeft - kGroupedInset, 24)];
 	nameLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	nameLabel.text = TGProfileText(self.name) ?: @"";
@@ -881,9 +864,20 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 	self.badgeView.hidden = YES;
 	[header addSubview:self.badgeView];
 
-	self.statusLabel = [[UILabel alloc] initWithFrame:
-			[self headerStatusFrameForLeft:labelLeft
-									 width:width - labelLeft - kGroupedInset]];
+	CGRect statusFrame = [self headerStatusFrameForLeft:labelLeft
+												  width:width - labelLeft - kGroupedInset];
+	if ([self isGroupProfile]){
+		self.statusLabel = [[UILabel alloc] initWithFrame:statusFrame];
+	} else {
+		TGDateLabel *dated = [[TGDateLabel alloc] initWithFrame:statusFrame];
+		dated.dateFont = [UIFont systemFontOfSize:14];
+		dated.dateTextFont = dated.dateFont;
+		dated.dateLabelFont = [UIFont systemFontOfSize:12];
+		dated.amWidth = 20;
+		dated.pmWidth = 20;
+		dated.dstOffset = 2 + TGProfileRetinaPixel();
+		self.statusLabel = dated;
+	}
 	self.statusLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	self.statusLabel.font = [UIFont systemFontOfSize:14];
 	self.statusLabel.textColor = theme.isDark ? [theme secondaryTextColour]
@@ -968,13 +962,13 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 					? TGProfileText(info[@"text"]) : nil;
 			if ([info isKindOfClass:[NSDictionary class]])
 				weakSelf.statusInfo = info;
+			NSString *dated = TGProfileLastSeenText(
+					[info[@"wasOnline"] isKindOfClass:[NSNumber class]]
+							? [info[@"wasOnline"] longLongValue] : 0);
+			if (dated)
+				text = dated;
 			if (text){
 				weakSelf.statusLabel.text = text;
-				weakSelf.statusLabel.textColor = TGProfileBool(info[@"isOnline"])
-						? TGProfileColour(0x316ea1)
-						: ([TGTheme shared].isDark
-								? [[TGTheme shared] secondaryTextColour]
-								: TGProfileColour(0x6d7d90));
 				return;
 			}
 			[[TGClient shared] statusForUser:weakSelf.userId
@@ -3327,11 +3321,16 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 }
 
 - (void)adoptGroupedInsetFromCell:(UITableViewCell *)cell inTable:(UITableView *)tableView {
-	CGFloat content = cell.contentView.bounds.size.width;
 	CGFloat width = tableView.bounds.size.width;
-	if (content < 1 || width < 1)
+	if (width < 1)
 		return;
-	CGFloat inset = floorf((width - content) / 2);
+	CGFloat inset = cell.frame.origin.x;
+	if (inset < 1){
+		CGFloat content = cell.contentView.bounds.size.width;
+		if (content < 1)
+			return;
+		inset = floorf((width - content) / 2);
+	}
 	if (inset < 0 || fabsf(inset - self.groupedInset) < 0.5f)
 		return;
 	self.groupedInset = inset;
@@ -3347,16 +3346,13 @@ static NSString *TGProfileLastSeenText(long long wasOnline) {
 	self.avatarOverlayView.frame = avatar;
 
 	CGFloat width = self.tableView.bounds.size.width;
-	CGFloat labelLeft = inset + kProfileAvatarSide + 15;
-	for (UILabel *label in @[self.nameLabel ?: (id)[NSNull null],
-							 self.statusLabel ?: (id)[NSNull null]]){
-		if (![label isKindOfClass:[UILabel class]])
-			continue;
-		CGRect frame = label.frame;
-		frame.origin.x = labelLeft;
-		frame.size.width = MAX(40, width - labelLeft - inset);
-		label.frame = frame;
-	}
+	CGFloat labelLeft = inset + kProfileAvatarSide + [self headerNameGap];
+	CGFloat available = MAX(40, width - labelLeft - inset);
+	CGRect name = self.nameLabel.frame;
+	name.origin.x = labelLeft;
+	name.size.width = available;
+	self.nameLabel.frame = name;
+	self.statusLabel.frame = [self headerStatusFrameForLeft:labelLeft width:available];
 	[self layoutNameBadge];
 }
 

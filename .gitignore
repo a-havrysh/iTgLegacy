@@ -36,3 +36,16 @@ Makefile.in
 /tdlib/native-build
 .DS_Store
 /.zsign_cache
+
+# libtgvoip ships an autotools build we do not use - the root Makefile compiles it directly
+src/libtgvoip/.deps/
+src/libtgvoip/**/.deps/
+src/libtgvoip/**/.dirstamp
+src/libtgvoip/configure
+src/libtgvoip/libtool
+src/libtgvoip/stamp-h1
+
+# Generated design-proposal artefacts: tools/render_mockups.py, tools/build_gallery*.py
+docs/design-proposals/png/
+docs/design-proposals/gallery*.html
+docs/design-proposals/limits-ru.html
