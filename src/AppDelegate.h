@@ -9,6 +9,9 @@ void TGMarkLaunchStage(NSString *stage);
 void TGMarkOpenStage(NSString *stage);
 void TGBeginOpenTiming(void);
 
+unsigned long long TGResidentBytes(void);
+void TGMemMark(NSString *tag);
+
 @interface AppDelegate : UIResponder <UIApplicationDelegate, UIAlertViewDelegate>
 
 @property (strong, nonatomic) UIWindow *window;

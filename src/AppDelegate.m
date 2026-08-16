@@ -24,6 +24,7 @@
 #import "TGAlertView.h"
 #import <QuartzCore/QuartzCore.h>
 #include <stdio.h>
+#include <mach/mach.h>
 
 @protocol TGTabBarHitTesting <NSObject>
 - (int)indexForLocation:(CGPoint)location;
@@ -31,12 +32,49 @@
 
 static NSTimeInterval TGLaunchStarted = 0;
 static NSTimeInterval TGOpenStarted = 0;
+static unsigned long long TGResidentPeak = 0;
+static volatile double TGMainPingAt = 0;
+
+unsigned long long TGResidentBytes(void) {
+	struct task_basic_info info;
+	mach_msg_type_number_t count = TASK_BASIC_INFO_COUNT;
+	if (task_info(mach_task_self(), TASK_BASIC_INFO, (task_info_t)&info, &count) != KERN_SUCCESS)
+		return 0;
+	unsigned long long rss = (unsigned long long)info.resident_size;
+	if (rss > TGResidentPeak)
+		TGResidentPeak = rss;
+	return rss;
+}
+
+static double TGProcessCPUSeconds(void) {
+	double total = 0;
+	struct task_basic_info basic;
+	mach_msg_type_number_t count = TASK_BASIC_INFO_COUNT;
+	if (task_info(mach_task_self(), TASK_BASIC_INFO, (task_info_t)&basic, &count) == KERN_SUCCESS){
+		total += basic.user_time.seconds + basic.user_time.microseconds / 1e6;
+		total += basic.system_time.seconds + basic.system_time.microseconds / 1e6;
+	}
+	struct task_thread_times_info times;
+	count = TASK_THREAD_TIMES_INFO_COUNT;
+	if (task_info(mach_task_self(), TASK_THREAD_TIMES_INFO, (task_info_t)&times, &count) == KERN_SUCCESS){
+		total += times.user_time.seconds + times.user_time.microseconds / 1e6;
+		total += times.system_time.seconds + times.system_time.microseconds / 1e6;
+	}
+	return total;
+}
+
+void TGMemMark(NSString *tag) {
+	NSLog(@"PERF mem %@ rss=%.2f MB peak=%.2f MB cpu=%.2f s",
+			tag, TGResidentBytes() / 1048576.0, TGResidentPeak / 1048576.0,
+			TGProcessCPUSeconds());
+}
 
 void TGMarkLaunchStage(NSString *stage) {
 	if (TGLaunchStarted <= 0)
 		TGLaunchStarted = [NSDate timeIntervalSinceReferenceDate];
-	NSLog(@"PERF launch +%.0f ms: %@",
-			([NSDate timeIntervalSinceReferenceDate] - TGLaunchStarted) * 1000.0, stage);
+	NSLog(@"PERF launch +%.0f ms: %@ rss=%.2f MB cpu=%.2f s",
+			([NSDate timeIntervalSinceReferenceDate] - TGLaunchStarted) * 1000.0, stage,
+			TGResidentBytes() / 1048576.0, TGProcessCPUSeconds());
 }
 
 void TGBeginOpenTiming(void) {
@@ -55,6 +93,47 @@ void TGMarkOpenStage(NSString *stage) {
 }
 
 @implementation AppDelegate
+
++ (void)tgPingMainThread {
+	TGMainPingAt = [NSDate timeIntervalSinceReferenceDate];
+}
+
++ (void)tgMemorySamplerLoop {
+	NSTimeInterval started = [NSDate timeIntervalSinceReferenceDate];
+	double worstStall = 0;
+	while (1){
+		@autoreleasepool {
+			NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+			double stall = TGMainPingAt > 0 ? (now - TGMainPingAt) : 0;
+			if (stall > worstStall)
+				worstStall = stall;
+			NSLog(@"PERF sample +%.0f ms rss=%.2f MB peak=%.2f MB cpu=%.2f s stall=%.0f worst=%.0f",
+					(now - started) * 1000.0,
+					TGResidentBytes() / 1048576.0,
+					TGResidentPeak / 1048576.0,
+					TGProcessCPUSeconds(),
+					stall * 1000.0, worstStall * 1000.0);
+		}
+		usleep(250000);
+	}
+}
+
+static void TGStartMemorySampler(void) {
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		TGMainPingAt = [NSDate timeIntervalSinceReferenceDate];
+		dispatch_async(dispatch_get_main_queue(), ^{
+			[NSTimer scheduledTimerWithTimeInterval:0.05
+											 target:[AppDelegate class]
+										   selector:@selector(tgPingMainThread)
+										   userInfo:nil
+											repeats:YES];
+		});
+		[NSThread detachNewThreadSelector:@selector(tgMemorySamplerLoop)
+								 toTarget:[AppDelegate class]
+							   withObject:nil];
+	});
+}
 
 static UIBackgroundTaskIdentifier TGBackgroundTask;
 static BOOL TGBackgroundTaskActive = NO;
@@ -76,6 +155,7 @@ static void TGWatchForIncomingCalls(void) {
 		didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
 {
 	TGMarkLaunchStage(@"didFinishLaunching");
+	TGStartMemorySampler();
 	[TGHacks hackSetAnimationDuration];
 
 	NSString *cache = [NSSearchPathForDirectoriesInDomains(
@@ -428,6 +508,11 @@ static void TGWatchForIncomingCalls(void) {
 	NSString *host = url.host;
 	NSString *arg = [url.path stringByReplacingOccurrencesOfString:@"/" withString:@""];
 	NSLog(@"handleOpenURL: %@", host ?: @"(launch)");
+
+	if ([host isEqualToString:@"mem"]){
+		TGMemMark(arg.length ? arg : @"probe");
+		return YES;
+	}
 
 	if ([host isEqualToString:@"phone"] && arg.length){
 		self.currentPhoneNumber = arg;

@@ -16,6 +16,11 @@ UIImage *TGDecodeThumbnail(NSString *path, CGFloat maxPixelSize) {
 	CFRelease(src);
 	if (!cgImage) return nil;
 	UIImage *image = [UIImage imageWithCGImage:cgImage];
+	NSLog(@"PERF decode %@ max=%d -> %dx%d %.0f KB %@",
+			[path lastPathComponent], (int)maxPixelSize,
+			(int)CGImageGetWidth(cgImage), (int)CGImageGetHeight(cgImage),
+			CGImageGetHeight(cgImage) * CGImageGetBytesPerRow(cgImage) / 1024.0,
+			[NSThread isMainThread] ? @"MAINTHREAD" : @"bg");
 	CGImageRelease(cgImage);
 	return image;
 }
