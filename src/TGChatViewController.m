@@ -9250,11 +9250,12 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 
 	CGFloat topPad = (pic.height > 0 && [self decorationHeightFor:m] < 0.5f)
 			? kPadH : kPadV;
-	CGFloat h = kPadV + topPad + [self decorationHeightFor:m];
+	CGFloat bottomPad = (pic.height > 0 && body.height < 0.5f) ? kPadH : kPadV;
+	CGFloat h = bottomPad + topPad + [self decorationHeightFor:m];
 	if (self.isGroup && ![m[@"outgoing"] boolValue] &&
 		[[TGClient shared] nameForUserId:[m[@"senderId"] longLongValue]])
 		h += 17;
-	if (pic.height > 0) h += pic.height + 4;
+	if (pic.height > 0) h += pic.height + (body.height > 0 ? 4 : 0);
 	if (body.height > 0) h += body.height;
 	h = MAX(h, kBubbleMinH);
 	return h + 3;
@@ -9283,7 +9284,9 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 	CGFloat inset = [self albumInsetForRow:row];
 
 	CGFloat topPad = [self decorationHeightFor:head] < 0.5f ? kPadH : kPadV;
-	CGFloat h = kPadV + topPad + [self decorationHeightFor:head] + mosaic + 4;
+	CGFloat bottomPad = body.height < 0.5f ? kPadH : kPadV;
+	CGFloat h = bottomPad + topPad + [self decorationHeightFor:head] + mosaic +
+			(body.height > 0 ? 4 : 0);
 	if ([head[@"forward"] length])
 		h += 2;
 	if (self.isGroup && ![head[@"outgoing"] boolValue] &&
@@ -10254,9 +10257,13 @@ static const NSInteger kQuoteTapTag = 0x9009;
 	CGFloat maxBubbleW = [self maxBubbleWidthFor:m];
 	CGFloat bubbleW = MAX(contentW + 2 * kPadH, kBubbleMinW - kBubbleTailOverhang);
 	bubbleW = MIN(bubbleW, maxBubbleW);
-	CGFloat bubbleH  = senderH + kPadV * 2 +
+	BOOL mediaOnly = pic.height > 0 && body.height < 0.5f;
+	CGFloat mediaTopPad = (pic.height > 0 && [self decorationHeightFor:m] < 0.5f)
+			? kPadH : kPadV;
+	CGFloat mediaBottomPad = mediaOnly ? kPadH : kPadV;
+	CGFloat bubbleH  = senderH + mediaTopPad + mediaBottomPad +
 			[self decorationHeightFor:m] +
-			(pic.height ? pic.height + 4 : 0) + body.height;
+			(pic.height ? pic.height + (body.height > 0 ? 4 : 0) : 0) + body.height;
 	bubbleH = MAX(bubbleH, kBubbleMinH);
 	// The voice block has its own size: a 40pt disc with the bars beside it.
 	if (isVoice)
