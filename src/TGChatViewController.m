@@ -9248,7 +9248,9 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 		[m[@"kind"] isEqualToString:@"messageContact"])
 		return kFileTile + 2 * kPadV + 3 + forwarded;
 
-	CGFloat h = kPadV * 2 + [self decorationHeightFor:m];
+	CGFloat topPad = (pic.height > 0 && [self decorationHeightFor:m] < 0.5f)
+			? kPadH : kPadV;
+	CGFloat h = kPadV + topPad + [self decorationHeightFor:m];
 	if (self.isGroup && ![m[@"outgoing"] boolValue] &&
 		[[TGClient shared] nameForUserId:[m[@"senderId"] longLongValue]])
 		h += 17;
@@ -9280,7 +9282,8 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 	CGSize body = caption ? [self bodySizeFor:caption] : CGSizeZero;
 	CGFloat inset = [self albumInsetForRow:row];
 
-	CGFloat h = kPadV * 2 + [self decorationHeightFor:head] + mosaic + 4;
+	CGFloat topPad = [self decorationHeightFor:head] < 0.5f ? kPadH : kPadV;
+	CGFloat h = kPadV + topPad + [self decorationHeightFor:head] + mosaic + 4;
 	if ([head[@"forward"] length])
 		h += 2;
 	if (self.isGroup && ![head[@"outgoing"] boolValue] &&
@@ -10068,7 +10071,7 @@ static const NSInteger kQuoteTapTag = 0x9009;
 		cell.sender.frame = CGRectMake(kPadH, kPadV + 2, bubbleW - 2 * kPadH, 16);
 	}
 
-	CGFloat y = kPadV + senderH;
+	CGFloat y = ([self decorationHeightFor:head] < 0.5f ? kPadH : kPadV) + senderH;
 	CGFloat forwardHeight = [self layoutForwardIn:cell message:head atY:y width:bubbleW];
 	y += forwardHeight;
 	if (forwardHeight > 0.5f)
@@ -10328,7 +10331,8 @@ static const NSInteger kQuoteTapTag = 0x9009;
 		[self configureAnimatedStickerCell:cell message:m path:tgsPath inTable:tableView];
 		return cell;
 	}
-	CGFloat y = kPadV + senderH;
+	CGFloat y = ((pic.height > 0 && [self decorationHeightFor:m] < 0.5f)
+			? kPadH : kPadV) + senderH;
 
 	// "Forwarded from X", then the quote block, then the message itself.
 	cell.quoteBar.hidden = YES;
