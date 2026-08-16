@@ -878,6 +878,7 @@ static void TGWatchForIncomingCalls(void) {
  *   itglegacy://theme/NAME       apply a theme file from Documents ("none" clears,
  *                                "skeuomorphic"/"flat"/"dark" pick a built-in)
  *   itglegacy://stickers         open the sticker strip in the chat on screen
+ *   itglegacy://pinnedmenu       the menu behind a long press on the pinned banner
  *   itglegacy://tab/N            switch to tab N (0 contacts, 1 chats, 2 settings)
  *   itglegacy://device           open the Device screen
  *   itglegacy://call/USERID      place a call, for testing without a tap
@@ -1327,6 +1328,17 @@ static void TGWatchForIncomingCalls(void) {
 			UIViewController *top = [self topControllerOnScreen];
 			if ([top respondsToSelector:@selector(toggleStickerPanel)])
 				[top performSelector:@selector(toggleStickerPanel)];
+		});
+		return YES;
+	}
+
+	// itglegacy://pinnedmenu - the pinned banner's menu, which a URL cannot
+	// otherwise reach because it hangs off a long press.
+	if ([host isEqualToString:@"pinnedmenu"]){
+		dispatch_async(dispatch_get_main_queue(), ^{
+			UIViewController *top = [self topControllerOnScreen];
+			if ([top respondsToSelector:@selector(showPinnedBannerMenu)])
+				[top performSelector:@selector(showPinnedBannerMenu)];
 		});
 		return YES;
 	}

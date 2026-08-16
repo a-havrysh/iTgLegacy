@@ -69,6 +69,8 @@ static const CGFloat kFloatingButtonSide = 36.0f;
 static const CGFloat kFloatingButtonGap  = 7.0f;
 static const CGFloat kComposeBannerHeight = 28.0f;
 static const NSInteger kPinnedBannerHighlightTag = 991;
+static const NSInteger kPinnedBannerCaptionTag = 992;
+static const NSInteger kPinnedBannerBodyTag = 993;
 // Msg_In.png / Msg_Out.png carry the tail inside the artwork: their body
 // padding is 15+1 on the tail side against 9+1 on the other, so the picture
 // hangs 6pt past the content box.
@@ -2587,8 +2589,13 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 @property (nonatomic, assign) BOOL postingBlocked;
 @property (nonatomic, assign) int64_t pinnedMessageId;
 @property (nonatomic, strong) NSDictionary *pinnedMessage;
+@property (nonatomic, strong) NSArray *pinnedMessages;
+@property (nonatomic, assign) NSInteger pinnedIndex;
 @property (nonatomic, strong) UIView *pinnedBanner;
 @property (nonatomic, assign) CGFloat pinnedBannerInset;
+@property (nonatomic, strong) NSArray *messagesBeforePinnedList;
+@property (nonatomic, strong) UIBarButtonItem *rightItemBeforePinnedList;
+@property (nonatomic, strong) UIView *titleViewBeforePinnedList;
 @property (nonatomic, assign) CGFloat shortContentInset;
 @property (nonatomic, assign) BOOL deeperHistoryPending;
 @property (nonatomic, assign) BOOL localHistoryShown;
@@ -3031,6 +3038,14 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 	}];
 
 	[self loadPinnedMessage];
+	[[NSNotificationCenter defaultCenter] addObserver:self
+											 selector:@selector(outgoingReadStateChanged:)
+												 name:TGChatReadOutboxDidChangeNotification
+											   object:nil];
+	[[NSNotificationCenter defaultCenter] addObserver:self
+											 selector:@selector(pinnedMessagesChanged:)
+												 name:TGChatPinnedMessagesDidChangeNotification
+											   object:nil];
 	__weak typeof(self) weakReadSelf = self;
 	[[TGClient shared] refreshOutgoingReadStateForChat:self.chatId
 										   completion:^(long long lastReadId){
@@ -3583,6 +3598,30 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 
 - (void)dealloc {
 	[[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)outgoingReadStateChanged:(NSNotification *)note {
+	if ([note.object longLongValue] != self.chatId)
+		return;
+	dispatch_async(dispatch_get_main_queue(), ^{
+		[self reloadTicksInVisibleRows];
+	});
+}
+
+- (void)pinnedMessagesChanged:(NSNotification *)note {
+	if ([note.object longLongValue] != self.chatId)
+		return;
+	dispatch_async(dispatch_get_main_queue(), ^{
+		[self loadPinnedMessage];
+	});
+}
+
+- (void)reloadTicksInVisibleRows {
+	NSArray *visible = [self.table indexPathsForVisibleRows];
+	if (!visible.count)
+		return;
+	[self.table reloadRowsAtIndexPaths:visible
+					  withRowAnimation:UITableViewRowAnimationNone];
 }
 
 #pragma mark - data
@@ -5195,21 +5234,81 @@ static UIImage *TGPinnedBadgeGlyph(void) {
 /// A strip under the navigation bar, the way clients surface what is pinned.
 - (void)loadPinnedMessage {
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] pinnedMessageForChat:self.chatId completion:^(NSDictionary *m){
+	[[TGClient shared] pinnedMessagesForChat:self.chatId completion:^(NSArray *found){
 		TGChatViewController *me = weakSelf;
 		if (!me)
 			return;
-		NSString *text = [m[@"text"] isKindOfClass:NSString.class] ? m[@"text"] : nil;
-		NSNumber *messageId = m[@"id"];
-		me.pinnedMessageId = [messageId isKindOfClass:NSNumber.class]
-				? messageId.longLongValue : 0;
-		me.pinnedMessage = [m isKindOfClass:NSDictionary.class] ? m : nil;
-		if (!text.length && me.pinnedMessageId == 0){
-			[me hidePinnedBanner];
+		if (found.count){
+			[me adoptPinnedMessages:found];
 			return;
 		}
-		[me showPinnedBanner:(text.length ? text : (m[@"kind"] ?: @"Message"))];
+		[[TGClient shared] pinnedMessageForChat:me.chatId completion:^(NSDictionary *m){
+			TGChatViewController *inner = weakSelf;
+			if (!inner)
+				return;
+			[inner adoptPinnedMessages:[m isKindOfClass:NSDictionary.class] ? @[m] : @[]];
+		}];
 	}];
+}
+
+- (void)adoptPinnedMessages:(NSArray *)messages {
+	int64_t previous = self.pinnedMessageId;
+	self.pinnedMessages = messages ?: @[];
+	if (!self.pinnedMessages.count){
+		self.pinnedMessageId = 0;
+		self.pinnedMessage = nil;
+		self.pinnedIndex = 0;
+		[self hidePinnedBanner];
+		[self leavePinnedListIfShowing];
+		return;
+	}
+
+	NSInteger keep = NSNotFound;
+	for (NSInteger i = 0; i < (NSInteger)self.pinnedMessages.count; i++){
+		if ([self.pinnedMessages[i][@"id"] longLongValue] == previous){
+			keep = i;
+			break;
+		}
+	}
+	self.pinnedIndex = (keep != NSNotFound)
+			? keep : (NSInteger)self.pinnedMessages.count - 1;
+	[self showPinnedMessageAtIndex:self.pinnedIndex];
+	if (self.messagesBeforePinnedList)
+		[self showAllPinnedMessages];
+}
+
+- (void)showPinnedMessageAtIndex:(NSInteger)index {
+	if (!self.pinnedMessages.count)
+		return;
+	if (index < 0 || index >= (NSInteger)self.pinnedMessages.count)
+		index = 0;
+	self.pinnedIndex = index;
+
+	NSDictionary *m = self.pinnedMessages[index];
+	self.pinnedMessage = m;
+	self.pinnedMessageId = [m[@"id"] longLongValue];
+
+	NSString *text = [m[@"text"] isKindOfClass:NSString.class] ? m[@"text"] : nil;
+	if (!text.length)
+		text = [m[@"kind"] isKindOfClass:NSString.class] ? m[@"kind"] : @"Message";
+	NSString *caption = [self pinnedBannerCaption];
+
+	UILabel *captionLabel = (UILabel *)[self.pinnedBanner viewWithTag:kPinnedBannerCaptionTag];
+	UILabel *bodyLabel = (UILabel *)[self.pinnedBanner viewWithTag:kPinnedBannerBodyTag];
+	if (captionLabel && bodyLabel){
+		captionLabel.text = caption;
+		bodyLabel.text = text;
+		return;
+	}
+	[self showPinnedBanner:text caption:caption];
+}
+
+- (NSString *)pinnedBannerCaption {
+	NSInteger total = (NSInteger)self.pinnedMessages.count;
+	if (total < 2)
+		return @"Pinned message";
+	return [NSString stringWithFormat:@"Pinned message #%ld of %ld",
+									  (long)(self.pinnedIndex + 1), (long)total];
 }
 
 - (void)hidePinnedBanner {
@@ -5227,6 +5326,10 @@ static UIImage *TGPinnedBadgeGlyph(void) {
 }
 
 - (void)showPinnedBanner:(NSString *)text {
+	[self showPinnedBanner:text caption:@"Pinned message"];
+}
+
+- (void)showPinnedBanner:(NSString *)text caption:(NSString *)captionText {
 	[self hidePinnedBanner];
 	CGRect b = self.view.bounds;
 	const CGFloat height = 39;
@@ -5247,11 +5350,12 @@ static UIImage *TGPinnedBadgeGlyph(void) {
 	const CGFloat textLeft = 12;
 	UILabel *caption = [[UILabel alloc] initWithFrame:
 			CGRectMake(textLeft, 3, b.size.width - textLeft - 10, 16)];
-	caption.text = @"Pinned message";
+	caption.text = captionText.length ? captionText : @"Pinned message";
 	caption.font = [UIFont boldSystemFontOfSize:13];
 	caption.textColor = [UIColor colorWithRed:0.302f green:0.408f blue:0.549f alpha:1.0f];
 	caption.backgroundColor = [UIColor clearColor];
 	caption.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	caption.tag = kPinnedBannerCaptionTag;
 	[banner addSubview:caption];
 
 	UILabel *body = [[UILabel alloc] initWithFrame:
@@ -5262,6 +5366,7 @@ static UIImage *TGPinnedBadgeGlyph(void) {
 	body.backgroundColor = [UIColor clearColor];
 	body.numberOfLines = 1;
 	body.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+	body.tag = kPinnedBannerBodyTag;
 	[banner addSubview:body];
 
 	UIView *hair = [[UIView alloc] initWithFrame:
@@ -5304,16 +5409,94 @@ static UIImage *TGPinnedBadgeGlyph(void) {
 }
 
 - (void)pinnedBannerTapped {
+	if (self.messagesBeforePinnedList)
+		return;
 	if (self.pinnedMessageId == 0)
 		return;
-	if ([self scrollToMessageId:self.pinnedMessageId])
+
+	int64_t target = self.pinnedMessageId;
+	if ([self scrollToMessageId:target]){
+		[self advancePinnedBanner];
 		return;
+	}
 
 	if ([self insertPinnedMessagePlaceholder]){
 		[self.table reloadData];
-		[self scrollToMessageId:self.pinnedMessageId];
+		[self scrollToMessageId:target];
 	}
-	[self loadDeeperHistoryAndScrollTo:self.pinnedMessageId];
+	[self loadDeeperHistoryAndScrollTo:target];
+	[self advancePinnedBanner];
+}
+
+- (void)advancePinnedBanner {
+	if (self.pinnedMessages.count < 2)
+		return;
+	NSInteger next = self.pinnedIndex + 1;
+	if (next >= (NSInteger)self.pinnedMessages.count)
+		next = 0;
+	[self showPinnedMessageAtIndex:next];
+}
+
+- (void)showAllPinnedMessages {
+	if (!self.pinnedMessages.count)
+		return;
+	if (!self.messagesBeforePinnedList){
+		self.messagesBeforePinnedList = self.messages ?: @[];
+		self.rightItemBeforePinnedList = self.navigationItem.rightBarButtonItem;
+		self.titleViewBeforePinnedList = self.navigationItem.titleView;
+		self.navigationItem.titleView = nil;
+		self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
+				initWithTitle:@"Done"
+						style:UIBarButtonItemStyleDone
+					   target:self
+					   action:@selector(leavePinnedList)];
+	}
+	[self hidePinnedBanner];
+	self.messages = self.pinnedMessages;
+	self.anchorToBottom = NO;
+	[self.table reloadData];
+	[self updateEmptyState];
+	[self setPinnedListTitle];
+}
+
+- (void)setPinnedListTitle {
+	NSInteger total = (NSInteger)self.pinnedMessages.count;
+	self.navigationItem.title = total == 1
+			? @"Pinned Message"
+			: [NSString stringWithFormat:@"%ld Pinned Messages", (long)total];
+}
+
+- (void)leavePinnedList {
+	if (!self.messagesBeforePinnedList)
+		return;
+	self.messages = self.messagesBeforePinnedList;
+	self.messagesBeforePinnedList = nil;
+	self.navigationItem.rightBarButtonItem = self.rightItemBeforePinnedList;
+	self.rightItemBeforePinnedList = nil;
+	self.navigationItem.title = nil;
+	if (self.titleViewBeforePinnedList){
+		self.navigationItem.titleView = self.titleViewBeforePinnedList;
+		self.titleViewBeforePinnedList = nil;
+	}
+	[self.table reloadData];
+	[self updateEmptyState];
+	[self scrollToBottomAnimated:NO];
+	if (self.pinnedMessages.count)
+		[self showPinnedMessageAtIndex:self.pinnedIndex];
+}
+
+- (BOOL)isMessagePinnedLocally:(int64_t)messageId {
+	if (messageId == 0)
+		return NO;
+	for (NSDictionary *m in self.pinnedMessages)
+		if ([m[@"id"] longLongValue] == messageId)
+			return YES;
+	return self.pinnedMessageId == messageId;
+}
+
+- (void)leavePinnedListIfShowing {
+	if (self.messagesBeforePinnedList)
+		[self leavePinnedList];
 }
 
 - (BOOL)insertPinnedMessagePlaceholder {
@@ -5386,11 +5569,15 @@ static UIImage *TGPinnedBadgeGlyph(void) {
 - (void)pinnedBannerHeld:(UILongPressGestureRecognizer *)hold {
 	if (hold.state != UIGestureRecognizerStateBegan)
 		return;
+	[self showPinnedBannerMenu];
+}
+
+- (void)showPinnedBannerMenu {
 	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"Pinned messages"
 													   delegate:self
 											  cancelButtonTitle:@"Cancel"
 										 destructiveButtonTitle:@"Unpin All Messages"
-											  otherButtonTitles:nil];
+											  otherButtonTitles:@"Show All Messages", nil];
 	sheet.tag = kPinnedSheetTag;
 	[sheet showInView:self.view];
 }
@@ -5406,6 +5593,9 @@ static UIImage *TGPinnedBadgeGlyph(void) {
 			return;
 		}
 		me.pinnedMessageId = 0;
+		me.pinnedMessages = @[];
+		me.pinnedIndex = 0;
+		[me leavePinnedListIfShowing];
 		[me hidePinnedBanner];
 		[me reload];
 	}];
@@ -6452,7 +6642,11 @@ static const NSInteger kFailedMessageSheetTag = 105;
 		return;
 	}
 	if (sheet.tag == kPinnedSheetTag){
-		[self unpinEverything];
+		NSString *chosen = [sheet buttonTitleAtIndex:index] ?: @"";
+		if ([chosen isEqualToString:@"Show All Messages"])
+			[self showAllPinnedMessages];
+		else
+			[self unpinEverything];
 		return;
 	}
 	if (sheet.tag == kSelectionMoreSheetTag){
@@ -7933,7 +8127,7 @@ static const NSInteger kFailedMessageSheetTag = 105;
 	TGMessageActionsSheet *sheet = [TGMessageActionsSheet sheetForMessage:messageId
 																   inChat:self.chatId];
 	sheet.messageText = [self textOf:m];
-	sheet.pinned = (self.pinnedMessageId == messageId);
+	sheet.pinned = [self isMessagePinnedLocally:messageId];
 	sheet.allowsSelection = YES;
 	self.actionsSheet = sheet;
 	[self setPressedRow:row];
@@ -8096,7 +8290,6 @@ static const NSInteger kFailedMessageSheetTag = 105;
 				[me showAlertTitle:@"" message:@"This message could not be pinned."];
 				return;
 			}
-			me.pinnedMessageId = messageId;
 			[me loadPinnedMessage];
 		}];
 
@@ -8109,10 +8302,6 @@ static const NSInteger kFailedMessageSheetTag = 105;
 			if (!ok){
 				[me showAlertTitle:@"" message:@"This message could not be unpinned."];
 				return;
-			}
-			if (me.pinnedMessageId == messageId){
-				me.pinnedMessageId = 0;
-				[me hidePinnedBanner];
 			}
 			[me loadPinnedMessage];
 		}];

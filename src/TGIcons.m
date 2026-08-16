@@ -23,6 +23,8 @@ static CGFloat TGAvatarCornerRadius(CGFloat side) {
 	return roundf(side * 0.09f);
 }
 
+static const CGFloat kTGMessageCheckOverlap = 4.0f;
+
 static UIImage *TGArtwork(NSString *name) {
 	return [UIImage imageNamed:name];
 }
@@ -981,10 +983,39 @@ static NSSet *TGKnownMenuGlyphNames(void) {
 }
 
 + (UIImage *)messageChecksRead:(BOOL)read white:(BOOL)white {
-	NSString *name = read ? @"MessageCheckFull" : @"MessageCheckHalf";
-	if (!white)
-		return TGArtwork(name);
-	return TGArtworkMasked(name, [UIColor whiteColor], CGSizeZero);
+	if (!sCache)
+		sCache = [NSMutableDictionary dictionary];
+	NSString *key = [NSString stringWithFormat:@"messageChecks-%d-%d", (int)read, (int)white];
+	UIImage *cached = sCache[key];
+	if (cached)
+		return cached;
+
+	UIImage *full = white ? TGArtworkMasked(@"MessageCheckFull", [UIColor whiteColor], CGSizeZero)
+						  : TGArtwork(@"MessageCheckFull");
+	if (!full || full.size.width < 1)
+		return nil;
+	if (!read){
+		sCache[key] = full;
+		return full;
+	}
+
+	UIImage *half = white ? TGArtworkMasked(@"MessageCheckHalf", [UIColor whiteColor], CGSizeZero)
+						  : TGArtwork(@"MessageCheckHalf");
+	if (!half || half.size.width < 1){
+		sCache[key] = full;
+		return full;
+	}
+
+	CGSize size = CGSizeMake(full.size.width + kTGMessageCheckOverlap,
+							 MAX(full.size.height, half.size.height));
+	UIGraphicsBeginImageContextWithOptions(size, NO, 0);
+	[full drawAtPoint:CGPointZero];
+	[half drawAtPoint:CGPointMake(kTGMessageCheckOverlap, 0)];
+	UIImage *pair = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	if (pair)
+		sCache[key] = pair;
+	return pair ?: full;
 }
 
 + (UIImage *)messageTimestampPlateOutgoing:(BOOL)outgoing {
