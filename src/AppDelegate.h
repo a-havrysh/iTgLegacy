@@ -9,6 +9,12 @@ void TGMarkLaunchStage(NSString *stage);
 void TGWaitForTextWarm(void);
 void TGMarkOpenStage(NSString *stage);
 void TGBeginOpenTiming(void);
+void TGBeginOpenTimingFromTap(void);
+void TGMarkFirstFrame(NSString *stage);
+void TGRedirectLogToFile(void);
+void TGNoteImageReady(NSTimeInterval when);
+void TGMarkOpenFrame(NSString *stage);
+void TGMarkOpenSettledFrame(NSString *stage);
 
 unsigned long long TGResidentBytes(void);
 void TGMemMark(NSString *tag);

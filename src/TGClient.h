@@ -173,6 +173,17 @@ typedef NS_ENUM(NSInteger, TGConnectionState) {
              onlyLocal:(BOOL)onlyLocal
             completion:(void (^)(NSArray *messages))completion;
 
+/// The same walk, but reporting each batch as TDLib hands it over. Asking for
+/// sixty messages takes several round trips and the first one usually answers
+/// with a single message; `progress` is what lets a conversation paint that
+/// message instead of an empty screen while the rest is fetched.
+- (void)historyForChat:(int64_t)chatId
+                thread:(int64_t)threadId
+                 limit:(NSInteger)limit
+             onlyLocal:(BOOL)onlyLocal
+              progress:(void (^)(NSArray *messages))progress
+            completion:(void (^)(NSArray *messages))completion;
+
 /// Someone is typing (or recording, or uploading) in a chat. `action` is a
 /// short phrase to show, or nil when they stopped.
 @property (nonatomic, copy) void (^onChatAction)(int64_t chatId, NSString *action);

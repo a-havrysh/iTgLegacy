@@ -2464,6 +2464,7 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 @property (nonatomic, strong) NSMutableDictionary *mosaics;
 @property (nonatomic, strong) NSMutableDictionary *tileSizes;
 @property (nonatomic, strong) NSMutableDictionary *tileBitmaps;
+@property (nonatomic, strong) NSMutableSet *tileBitmapsRequested;
 @property (nonatomic, strong) NSMutableDictionary *images; // fileId -> UIImage
 @property (nonatomic, strong) NSMutableArray *imageOrder;  // fileId, oldest first
 @property (nonatomic, assign) BOOL tableReloadPending;
@@ -2653,6 +2654,7 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 	self.mosaics = [NSMutableDictionary dictionary];
 	self.tileSizes = [NSMutableDictionary dictionary];
 	self.tileBitmaps = [NSMutableDictionary dictionary];
+	self.tileBitmapsRequested = [NSMutableSet set];
 	self.messages = @[];
 	self.senderAvatars = [NSMutableDictionary dictionary];
 	self.senderAvatarsRequested = [NSMutableSet set];
@@ -2839,6 +2841,7 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 			NSMutableArray *next = [me.messages mutableCopy];
 			[next addObject:message];
 			me.messages = next;
+			[me warmMinithumbnailsFor:@[message]];
 			[me.table reloadData];
 			[me updateEmptyState];
 			[me scrollToBottomAnimated:YES];
@@ -3335,6 +3338,7 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	[self.mosaics removeAllObjects];
 	[self.tileSizes removeAllObjects];
 	[self.tileBitmaps removeAllObjects];
+	[self.tileBitmapsRequested removeAllObjects];
 
 	NSArray *visible = [self.table indexPathsForVisibleRows];
 	NSIndexPath *anchor = visible.count ? visible.lastObject : nil;
@@ -3418,6 +3422,7 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 		}
 	}
 	[self.tileBitmaps removeAllObjects];
+	[self.tileBitmapsRequested removeAllObjects];
 	for (NSNumber *key in [self.maps allKeys])
 		if (![keep containsObject:key])
 			[self.maps removeObjectForKey:key];
@@ -3447,19 +3452,48 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	__weak typeof(self) weakSelf = self;
 	self.localHistoryShown = NO;
 	self.networkHistoryShown = NO;
-	if (self.messages.count == 0){
-		[[TGClient shared] historyForChat:self.chatId thread:self.threadId limit:60
-								onlyLocal:YES completion:^(NSArray *messages){
-			TGChatViewController *me = weakSelf;
-			if (!me || !messages.count || me.networkHistoryShown)
-				return;
+	if (self.messages.count != 0){
+		[self reloadFromNetwork];
+		return;
+	}
+
+	// TDLib answers the first getChatHistory of a chat with a single message
+	// and needs several more round trips to produce sixty, which is most of a
+	// second. The conversation opens on whatever the first answer holds,
+	// anchored at the bottom, and grows upwards as the rest arrives - the same
+	// order the messages would have been read in.
+	void (^partial)(NSArray *) = ^(NSArray *messages){
+		TGChatViewController *me = weakSelf;
+		if (!me || !messages.count || me.networkHistoryShown ||
+			messages.count <= me.messages.count)
+			return;
+		me.localHistoryShown = YES;
+		TGMarkOpenStage([NSString stringWithFormat:@"%lu of the cached messages drawn",
+				(unsigned long)messages.count]);
+		[me applyHistory:messages final:NO partial:YES];
+	};
+
+	// The two walks used to run at once, and TDLib served them alternately:
+	// every batch was fetched twice and each answer waited behind the other
+	// request. The cache is what the screen needs first, so it goes first, and
+	// the server is asked afterwards.
+	[[TGClient shared] historyForChat:self.chatId thread:self.threadId limit:60
+							onlyLocal:YES progress:partial completion:^(NSArray *messages){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		if (messages.count && !me.networkHistoryShown){
 			me.localHistoryShown = YES;
 			TGMarkOpenStage([NSString stringWithFormat:@"%lu cached messages drawn",
 					(unsigned long)messages.count]);
-			[me applyHistory:messages final:NO];
-		}];
-	}
+			[me applyHistory:messages final:NO partial:NO];
+		}
+		[me reloadFromNetwork];
+	}];
+}
 
+- (void)reloadFromNetwork {
+	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] historyForChat:self.chatId thread:self.threadId limit:60
 							onlyLocal:NO completion:^(NSArray *messages){
 		TGChatViewController *me = weakSelf;
@@ -3470,12 +3504,13 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 		me.networkHistoryShown = YES;
 		TGMarkOpenStage([NSString stringWithFormat:@"%lu messages from TDLib",
 				(unsigned long)messages.count]);
-		[me applyHistory:messages final:YES];
+		[me applyHistory:messages final:YES partial:NO];
 	}];
 }
 
-- (void)applyHistory:(NSArray *)messages final:(BOOL)final {
+- (void)applyHistory:(NSArray *)messages final:(BOOL)final partial:(BOOL)partial {
 	self.messages = messages;
+	[self warmMinithumbnailsFor:messages];
 	[self.reactionChipsRequested removeAllObjects];
 	[self.reactionChips removeAllObjects];
 	[self.chipsRowWidths removeAllObjects];
@@ -3495,6 +3530,13 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	NSLog(@"TDLIB HISTORY%@: %lu msgs: %@", final ? @"" : @" (cached)",
 			(unsigned long)messages.count, [kinds componentsJoinedByString:@", "]);
 	[self.table reloadData];
+	if (messages.count){
+		TGMarkOpenFrame([NSString stringWithFormat:@"FIRST FRAME with %lu messages",
+				(unsigned long)messages.count]);
+		if (!partial)
+			TGMarkOpenSettledFrame([NSString stringWithFormat:
+					@"SETTLED FRAME with %lu messages", (unsigned long)messages.count]);
+	}
 	[self updateEmptyState];
 	[self scrollToBottomAnimated:NO];
 	[self fetchMissingImages];
@@ -4027,8 +4069,9 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	for (UIImage *image in [self.tileBitmaps allValues])
 		tiles += TGImageBitmapBytes(image);
 	NSUInteger thumbs = 0;
-	for (UIImage *image in [self.minithumbnails allValues])
-		thumbs += TGImageBitmapBytes(image);
+	for (id image in [self.minithumbnails allValues])
+		if ([image isKindOfClass:[UIImage class]])
+			thumbs += TGImageBitmapBytes(image);
 	NSUInteger avatars = 0;
 	for (UIImage *image in [self.senderAvatars allValues])
 		avatars += TGImageBitmapBytes(image);
@@ -9260,27 +9303,57 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 	return CGSizeZero;
 }
 
+/// A lookup and nothing more. The JPEG behind it is tiny, but decoding it here
+/// would be an image decode inside cellForRow, which is the one place on this
+/// device that cannot afford any.
 - (UIImage *)minithumbnailImageFor:(NSDictionary *)m {
-	id raw = m[@"minithumbnail"];
-	if (!raw || raw == [NSNull null])
-		return nil;
 	NSNumber *key = [m[@"id"] isKindOfClass:NSNumber.class] ? m[@"id"] : nil;
-	if (key){
-		UIImage *cached = self.minithumbnails[key];
-		if (cached)
-			return cached;
-	}
-	NSData *data = nil;
-	if ([raw isKindOfClass:NSData.class])
-		data = raw;
-	else if ([raw isKindOfClass:NSDictionary.class])
-		data = [[TGClient shared] minithumbnailData:raw];
-	if (!data.length)
+	if (!key)
 		return nil;
-	UIImage *image = [UIImage imageWithData:data];
-	if (image && key)
-		self.minithumbnails[key] = image;
-	return image;
+	id cached = self.minithumbnails[key];
+	return [cached isKindOfClass:[UIImage class]] ? cached : nil;
+}
+
+/// TDLib carries a forty-pixel JPEG of every picture inside the message, so a
+/// bubble can show a blurred version of what is coming while the real file is
+/// still being fetched. They are decoded here, off the main thread, as soon as
+/// the history they belong to arrives.
+- (void)warmMinithumbnailsFor:(NSArray *)messages {
+	NSMutableArray *pending = [NSMutableArray array];
+	for (NSDictionary *m in messages){
+		NSNumber *key = [m[@"id"] isKindOfClass:NSNumber.class] ? m[@"id"] : nil;
+		id raw = m[@"minithumbnail"];
+		if (!key || !raw || raw == [NSNull null] || self.minithumbnails[key])
+			continue;
+		self.minithumbnails[key] = [NSNull null];
+		[pending addObject:@[key, raw]];
+	}
+	if (!pending.count)
+		return;
+
+	__weak typeof(self) weakSelf = self;
+	dispatch_async(TGImageDecodeQueue(), ^{
+		NSMutableDictionary *decoded = [NSMutableDictionary dictionary];
+		@autoreleasepool {
+			for (NSArray *entry in pending){
+				id raw = entry[1];
+				NSData *data = [raw isKindOfClass:NSData.class]
+						? raw : [[TGClient shared] minithumbnailData:raw];
+				UIImage *image = data.length ? [UIImage imageWithData:data] : nil;
+				if (image)
+					decoded[entry[0]] = image;
+			}
+		}
+		if (!decoded.count)
+			return;
+		dispatch_async(dispatch_get_main_queue(), ^{
+			TGChatViewController *me = weakSelf;
+			if (!me)
+				return;
+			[me.minithumbnails addEntriesFromDictionary:decoded];
+			[me setNeedsTableReload];
+		});
+	});
 }
 
 - (BOOL)pictureFailedFor:(NSDictionary *)m {
@@ -9355,13 +9428,35 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 	if (cached)
 		return cached;
 
-	UIImage *drawn = TGImageDrawnAtPointSize(image, target);
-	if (drawn){
-		if (self.tileBitmaps.count > 80)
-			[self.tileBitmaps removeAllObjects];
-		self.tileBitmaps[key] = drawn;
+	// Redrawing the picture at the size the bubble shows it saves the
+	// compositor some work, but it is a Core Graphics pass, and doing one
+	// inside cellForRow drops a frame of the scroll that asked for it. The
+	// picture already in hand is the same picture; the smaller copy is made
+	// off the main thread and used from the next time the row is built.
+	if (![self.tileBitmapsRequested containsObject:key]){
+		[self.tileBitmapsRequested addObject:key];
+		__weak typeof(self) weakSelf = self;
+		dispatch_async(TGImageDecodeQueue(), ^{
+			UIImage *drawn = nil;
+			@autoreleasepool {
+				drawn = TGImageDrawnAtPointSize(image, target);
+			}
+			dispatch_async(dispatch_get_main_queue(), ^{
+				TGChatViewController *me = weakSelf;
+				if (!me)
+					return;
+				[me.tileBitmapsRequested removeObject:key];
+				if (!drawn)
+					return;
+				if (me.tileBitmaps.count > 80){
+					[me.tileBitmaps removeAllObjects];
+					[me.tileBitmapsRequested removeAllObjects];
+				}
+				me.tileBitmaps[key] = drawn;
+			});
+		});
 	}
-	return drawn;
+	return image;
 }
 
 - (void)applyPictureTo:(UIImageView *)view message:(NSDictionary *)m {

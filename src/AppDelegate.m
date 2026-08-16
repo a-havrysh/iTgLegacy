@@ -25,6 +25,7 @@
 #import <QuartzCore/QuartzCore.h>
 #import <CoreText/CoreText.h>
 #include <stdio.h>
+#include <sys/sysctl.h>
 #include <mach/mach.h>
 #include <dlfcn.h>
 #include <malloc/malloc.h>
@@ -35,6 +36,8 @@
 
 static NSTimeInterval TGLaunchStarted = 0;
 static NSTimeInterval TGOpenStarted = 0;
+static BOOL TGOpenFrameSeen = NO;
+static BOOL TGOpenSettledSeen = NO;
 static unsigned long long TGResidentPeak = 0;
 static volatile double TGMainPingAt = 0;
 
@@ -204,12 +207,102 @@ void TGMemMark(NSString *tag) {
 			inUse / 1048576.0, TGProcessCPUSeconds());
 }
 
+/// The stage marks below used to start counting at didFinishLaunching, which
+/// hides everything dyld does first. A tap starts the process, so the honest
+/// zero is the exec time the kernel recorded for this pid.
+static NSTimeInterval TGProcessStarted(void) {
+	static NSTimeInterval started = -1;
+	if (started >= 0)
+		return started;
+	int name[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid() };
+	struct kinfo_proc info;
+	size_t length = sizeof(info);
+	memset(&info, 0, sizeof(info));
+	if (sysctl(name, 4, &info, &length, NULL, 0) != 0 || length == 0){
+		started = 0;
+		return started;
+	}
+	NSTimeInterval unix = info.kp_proc.p_starttime.tv_sec +
+			info.kp_proc.p_starttime.tv_usec / 1e6;
+	started = unix - NSTimeIntervalSince1970;
+	return started;
+}
+
+static double TGSinceTap(void) {
+	NSTimeInterval started = TGProcessStarted();
+	if (started <= 0)
+		return -1;
+	return ([NSDate timeIntervalSinceReferenceDate] - started) * 1000.0;
+}
+
+/// stderr into a file so TDLib's own diagnostics survive a crash and can be
+/// read off the device; scripts/devrun.sh pulls it. This runs from main, not
+/// from didFinishLaunching, because everything UIKit does in between - and
+/// every stage mark taken there - is otherwise written to a stderr nobody
+/// reads. The previous run is kept: an uncaught exception prints its reason to
+/// stderr and the process dies, so without the rotation the one message that
+/// explains a crash is deleted by the next launch.
+void TGRedirectLogToFile(void) {
+	NSString *cache = [NSSearchPathForDirectoriesInDomains(
+			NSCachesDirectory, NSUserDomainMask, YES) objectAtIndex:0];
+	NSString *log = [cache stringByAppendingPathComponent:@"log.txt"];
+	NSString *lastlog = [cache stringByAppendingPathComponent:@"lastlog.txt"];
+	[[NSFileManager defaultManager] removeItemAtPath:lastlog error:nil];
+	[[NSFileManager defaultManager] moveItemAtPath:log toPath:lastlog error:nil];
+	freopen(log.UTF8String, "a+", stderr);
+}
+
+void TGNoteImageReady(NSTimeInterval when) {
+	if (when <= 0)
+		return;
+	NSTimeInterval started = TGProcessStarted();
+	if (started <= 0)
+		return;
+	NSLog(@"PERF launch (tap +%.0f ms): image ready, dyld and the kernel done",
+			(when - started) * 1000.0);
+}
+
 void TGMarkLaunchStage(NSString *stage) {
 	if (TGLaunchStarted <= 0)
 		TGLaunchStarted = [NSDate timeIntervalSinceReferenceDate];
-	NSLog(@"PERF launch +%.0f ms: %@ rss=%.2f MB cpu=%.2f s",
-			([NSDate timeIntervalSinceReferenceDate] - TGLaunchStarted) * 1000.0, stage,
+	NSLog(@"PERF launch +%.0f ms (tap +%.0f ms): %@ rss=%.2f MB cpu=%.2f s",
+			([NSDate timeIntervalSinceReferenceDate] - TGLaunchStarted) * 1000.0,
+			TGSinceTap(), stage,
 			TGResidentBytes() / 1048576.0, TGProcessCPUSeconds());
+}
+
+/// A stage mark says when the app handed a layer tree to Core Animation, not
+/// when the pixels appeared. The completion block of the transaction that
+/// carries those layers is the last point this process can observe, so the
+/// frame marks below hang off it.
+/// A frame mark is a number; the screenshot is the evidence behind it. The
+/// capture costs 100 ms of its own, so it happens only when a measuring run
+/// has asked for it and always after the timestamp has been taken.
+static void TGCaptureFrame(NSString *name) {
+	if (![[NSUserDefaults standardUserDefaults] boolForKey:@"tgCaptureFrames"])
+		return;
+	UIWindow *window = [[UIApplication sharedApplication] keyWindow];
+	if (!window)
+		return;
+	CGFloat scale = [UIScreen mainScreen].scale;
+	UIGraphicsBeginImageContextWithOptions(window.bounds.size, YES, scale);
+	[window.layer renderInContext:UIGraphicsGetCurrentContext()];
+	UIImage *shot = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	NSString *cache = [NSSearchPathForDirectoriesInDomains(
+			NSCachesDirectory, NSUserDomainMask, YES) objectAtIndex:0];
+	[UIImagePNGRepresentation(shot)
+			writeToFile:[cache stringByAppendingPathComponent:name] atomically:YES];
+	NSLog(@"PERF captured %@", name);
+}
+
+void TGMarkFirstFrame(NSString *stage) {
+	[CATransaction begin];
+	[CATransaction setCompletionBlock:^{
+		TGMarkLaunchStage(stage);
+		TGCaptureFrame(@"firstframe.png");
+	}];
+	[CATransaction commit];
 }
 
 static dispatch_semaphore_t TGTextWarmGate(void) {
@@ -229,8 +322,20 @@ void TGWaitForTextWarm(void) {
 	});
 }
 
-void TGBeginOpenTiming(void) {
+/// The clock for opening a conversation starts at the tap, not at viewDidLoad -
+/// pushing the controller is itself part of what the finger waits through.
+void TGBeginOpenTimingFromTap(void) {
 	TGOpenStarted = [NSDate timeIntervalSinceReferenceDate];
+	TGOpenFrameSeen = NO;
+	TGOpenSettledSeen = NO;
+}
+
+void TGBeginOpenTiming(void) {
+	if (TGOpenStarted > 0)
+		return;
+	TGOpenStarted = [NSDate timeIntervalSinceReferenceDate];
+	TGOpenFrameSeen = NO;
+	TGOpenSettledSeen = NO;
 }
 
 void TGMarkOpenStage(NSString *stage) {
@@ -242,6 +347,35 @@ void TGMarkOpenStage(NSString *stage) {
 		return;
 	}
 	NSLog(@"PERF open +%.0f ms: %@", elapsed * 1000.0, stage);
+}
+
+/// The one that matters: the first frame in which the conversation is
+/// readable, and later the frame that holds the whole history. Each is
+/// reported once, and the second closes the open timing so the next tap starts
+/// from zero.
+void TGMarkOpenFrame(NSString *stage) {
+	if (TGOpenStarted <= 0 || TGOpenFrameSeen)
+		return;
+	TGOpenFrameSeen = YES;
+	[CATransaction begin];
+	[CATransaction setCompletionBlock:^{
+		TGMarkOpenStage(stage);
+		TGCaptureFrame(@"openframe.png");
+	}];
+	[CATransaction commit];
+}
+
+void TGMarkOpenSettledFrame(NSString *stage) {
+	if (TGOpenStarted <= 0 || TGOpenSettledSeen)
+		return;
+	TGOpenSettledSeen = YES;
+	[CATransaction begin];
+	[CATransaction setCompletionBlock:^{
+		TGMarkOpenStage(stage);
+		TGOpenStarted = 0;
+		TGCaptureFrame(@"settledframe.png");
+	}];
+	[CATransaction commit];
 }
 
 @implementation AppDelegate
@@ -288,6 +422,10 @@ void TGMarkOpenStage(NSString *stage) {
 static void TGStartMemorySampler(void) {
 	static dispatch_once_t once;
 	dispatch_once(&once, ^{
+		// A launch is over before a URL can turn sampling on, so the switch
+		// for it has to survive the previous run.
+		if ([[NSUserDefaults standardUserDefaults] boolForKey:@"tgStacksAtLaunch"])
+			TGStackSamplingOn = YES;
 		TGMainThreadPort = mach_thread_self();
 		TGMainPingAt = [NSDate timeIntervalSinceReferenceDate];
 		dispatch_async(dispatch_get_main_queue(), ^{
@@ -369,17 +507,6 @@ static void TGWatchForIncomingCalls(void) {
 	NSString *cache = [NSSearchPathForDirectoriesInDomains(
 			NSCachesDirectory, NSUserDomainMask, YES) objectAtIndex:0];
 
-	// stderr into a file so TDLib's own diagnostics survive a crash and can be
-	// read off the device; scripts/devrun.sh pulls it.
-	NSString *log = [cache stringByAppendingPathComponent:@"log.txt"];
-	// Keep the previous run: an uncaught exception prints its reason to stderr
-	// and the process dies, so without this rotation the one message that
-	// explains a crash is deleted by the next launch.
-	NSString *lastlog = [cache stringByAppendingPathComponent:@"lastlog.txt"];
-	[[NSFileManager defaultManager] removeItemAtPath:lastlog error:nil];
-	[[NSFileManager defaultManager] moveItemAtPath:log toPath:lastlog error:nil];
-	self.log = freopen(log.UTF8String, "a+", stderr);
-
 	NSLog(@"start...");
 	TGWatchForIncomingCalls();
 
@@ -416,6 +543,7 @@ static void TGWatchForIncomingCalls(void) {
 	TGMarkLaunchStage(@"before makeKeyAndVisible");
 	[self.window makeKeyAndVisible];
 	TGMarkLaunchStage(@"window on screen");
+	TGMarkFirstFrame(@"FIRST FRAME");
 
 	[self startTDLib];
 	[TGDiskCache sweep];
@@ -727,6 +855,14 @@ static void TGWatchForIncomingCalls(void) {
 		return YES;
 	}
 
+	if ([host isEqualToString:@"captureframes"]){
+		[[NSUserDefaults standardUserDefaults] setBool:[arg isEqualToString:@"on"]
+												forKey:@"tgCaptureFrames"];
+		[[NSUserDefaults standardUserDefaults] synchronize];
+		NSLog(@"PERF captureframes %@", arg);
+		return YES;
+	}
+
 	if ([host isEqualToString:@"perflog"]){
 		TGPerfLoggingOn = [arg isEqualToString:@"on"];
 		NSLog(@"PERF perflog %@", TGPerfLoggingOn ? @"on" : @"off");
@@ -736,6 +872,14 @@ static void TGWatchForIncomingCalls(void) {
 	if ([host isEqualToString:@"stacks"]){
 		TGStackSamplingOn = [arg isEqualToString:@"on"];
 		NSLog(@"PERF stacks %@", TGStackSamplingOn ? @"on" : @"off");
+		return YES;
+	}
+
+	if ([host isEqualToString:@"stacksatlaunch"]){
+		[[NSUserDefaults standardUserDefaults] setBool:[arg isEqualToString:@"on"]
+												forKey:@"tgStacksAtLaunch"];
+		[[NSUserDefaults standardUserDefaults] synchronize];
+		NSLog(@"PERF stacksatlaunch %@", arg);
 		return YES;
 	}
 
@@ -777,6 +921,7 @@ static void TGWatchForIncomingCalls(void) {
 
 	if ([host isEqualToString:@"chatindex"]){
 		dispatch_async(dispatch_get_main_queue(), ^{
+			TGBeginOpenTimingFromTap();
 			NSArray *chats = [TGClient shared].chats;
 			NSInteger idx = [arg integerValue];
 			if (idx < 0 || idx >= (NSInteger)chats.count){
