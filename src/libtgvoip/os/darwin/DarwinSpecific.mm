@@ -5,6 +5,7 @@
 //
 
 #include "DarwinSpecific.h"
+#import "TGLazyFramework.h"
 #include "../../VoIPController.h"
 #include "../../logging.h"
 
@@ -93,7 +94,7 @@ CellularCarrierInfo DarwinSpecific::GetCarrierInfo(){
 
 void DarwinSpecific::ConfigureAudioSession(){
 #if TARGET_OS_IOS
-	AVAudioSession* session=[AVAudioSession sharedInstance];
+	AVAudioSession* session=[TGAVClass(AVAudioSession) sharedInstance];
 	NSError* error=nil;
 	[session setPreferredSampleRate:48000.0 error:&error];
 	if(error){

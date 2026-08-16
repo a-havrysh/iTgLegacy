@@ -1,4 +1,5 @@
 #import "TGVideoCaptureViewController.h"
+#import "TGLazyFramework.h"
 #import "TGVideoRecorder.h"
 #import "TGTheme.h"
 
@@ -780,10 +781,10 @@ static UIImage *TGNoteTrashImage(BOOL pressed) {
 	self.noteTrash.userInteractionEnabled = YES;
 	self.noteSend.userInteractionEnabled = YES;
 
-	self.player = [AVPlayer playerWithURL:[NSURL fileURLWithPath:self.resultPath]];
+	self.player = [TGAVClass(AVPlayer) playerWithURL:[NSURL fileURLWithPath:self.resultPath]];
 	self.player.actionAtItemEnd = AVPlayerActionAtItemEndNone;
-	self.playerLayer = [AVPlayerLayer playerLayerWithPlayer:self.player];
-	self.playerLayer.videoGravity = AVLayerVideoGravityResizeAspectFill;
+	self.playerLayer = [TGAVClass(AVPlayerLayer) playerLayerWithPlayer:self.player];
+	self.playerLayer.videoGravity = TGAVString(AVLayerVideoGravityResizeAspectFill);
 	self.playerLayer.frame = self.circle.bounds;
 	[self.circle.layer insertSublayer:self.playerLayer atIndex:0];
 
@@ -796,7 +797,7 @@ static UIImage *TGNoteTrashImage(BOOL pressed) {
 
 	[[NSNotificationCenter defaultCenter] addObserver:self
 											 selector:@selector(playbackReachedEnd:)
-												 name:AVPlayerItemDidPlayToEndTimeNotification
+												 name:TGAVString(AVPlayerItemDidPlayToEndTimeNotification)
 											   object:self.player.currentItem];
 	[self.player play];
 
@@ -805,13 +806,13 @@ static UIImage *TGNoteTrashImage(BOOL pressed) {
 
 - (void)applyPreviewVolume:(float)volume {
 	AVPlayerItem *item = self.player.currentItem;
-	AVAssetTrack *track = [[item.asset tracksWithMediaType:AVMediaTypeAudio] firstObject];
+	AVAssetTrack *track = [[item.asset tracksWithMediaType:TGAVString(AVMediaTypeAudio)] firstObject];
 	if (track == nil)
 		return;
 	AVMutableAudioMixInputParameters *parameters =
-			[AVMutableAudioMixInputParameters audioMixInputParametersWithTrack:track];
+			[TGAVClass(AVMutableAudioMixInputParameters) audioMixInputParametersWithTrack:track];
 	[parameters setVolume:volume atTime:kCMTimeZero];
-	AVMutableAudioMix *mix = [AVMutableAudioMix audioMix];
+	AVMutableAudioMix *mix = [TGAVClass(AVMutableAudioMix) audioMix];
 	mix.inputParameters = @[parameters];
 	item.audioMix = mix;
 }
@@ -1182,15 +1183,15 @@ static UIImage *TGNoteTrashImage(BOOL pressed) {
 	self.timeDot.hidden = YES;
 	self.timeBadge.hidden = NO;
 
-	self.player = [AVPlayer playerWithURL:[NSURL fileURLWithPath:self.resultPath]];
-	self.playerLayer = [AVPlayerLayer playerLayerWithPlayer:self.player];
-	self.playerLayer.videoGravity = AVLayerVideoGravityResizeAspectFill;
+	self.player = [TGAVClass(AVPlayer) playerWithURL:[NSURL fileURLWithPath:self.resultPath]];
+	self.playerLayer = [TGAVClass(AVPlayerLayer) playerLayerWithPlayer:self.player];
+	self.playerLayer.videoGravity = TGAVString((AVLayerVideoGravityResizeAspectFill));
 	self.playerLayer.frame = self.stage.bounds;
 	[self.stage.layer addSublayer:self.playerLayer];
 
 	[[NSNotificationCenter defaultCenter] addObserver:self
 											 selector:@selector(playbackReachedEnd:)
-												 name:AVPlayerItemDidPlayToEndTimeNotification
+												 name:TGAVString(AVPlayerItemDidPlayToEndTimeNotification)
 											   object:self.player.currentItem];
 	[self.player play];
 	[self updateChrome];
@@ -1206,7 +1207,7 @@ static UIImage *TGNoteTrashImage(BOOL pressed) {
 - (void)resetToCamera {
 	[[NSNotificationCenter defaultCenter]
 			removeObserver:self
-					  name:AVPlayerItemDidPlayToEndTimeNotification
+					  name:TGAVString(AVPlayerItemDidPlayToEndTimeNotification)
 					object:nil];
 	[self.player pause];
 	self.player = nil;

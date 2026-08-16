@@ -78,15 +78,13 @@ DEFINES   :=
 WEBP_ARMV7 := -F$(ROOT_DIR)/src -framework WebP
 WEBP_ARM64 := -lwebp
 
-FRAMEWORKS := -framework UIKit -framework Foundation -framework QuickLook \
-              -framework SystemConfiguration -framework CoreGraphics \
-              -framework QuartzCore -framework MediaPlayer \
-              -framework AVFoundation -framework AudioToolbox \
+FRAMEWORKS := -framework UIKit -framework Foundation \
+              -framework CoreGraphics \
+              -framework QuartzCore -framework AudioToolbox \
               -framework CoreMedia -framework CoreVideo -framework AddressBook \
               -framework AddressBookUI -framework MobileCoreServices \
-              -framework CoreLocation -framework MapKit \
               -framework CoreTelephony -framework ImageIO \
-              -framework CoreText -framework AssetsLibrary \
+              -framework CoreText \
               -framework CFNetwork \
 
 
@@ -197,6 +195,8 @@ APP_SRC_M := \
 	src/TGClient+UserStatus.m \
 	src/TGClient+WebLinks.m \
 	src/TGDevice.m \
+	src/TGLazyFramework.m \
+	src/TGLaunchSnapshot.m \
 	src/TGCapabilities.m \
 	src/TGTheme.m \
 	src/TGThemeFile.m \

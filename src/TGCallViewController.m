@@ -1,4 +1,5 @@
 #import "TGCallViewController.h"
+#import "TGLazyFramework.h"
 #import "TGEmoji.h"
 #import <AVFoundation/AVFoundation.h>
 #import <AudioToolbox/AudioToolbox.h>
@@ -221,7 +222,7 @@
 	[self stopTone];
 	if (self.speakerOn){
 		self.speakerOn = NO;
-		[[AVAudioSession sharedInstance] overrideOutputAudioPort:AVAudioSessionPortOverrideNone
+		[[TGAVClass(AVAudioSession) sharedInstance] overrideOutputAudioPort:AVAudioSessionPortOverrideNone
 														   error:nil];
 	}
 	[self setProximityEnabled:NO];
@@ -372,13 +373,13 @@ static NSData *TGCallToneWrap(NSData *samples, double rate) {
 	[self stopTone];
 	if (data == nil)
 		return;
-	AVAudioSession *session = [AVAudioSession sharedInstance];
+	AVAudioSession *session = [TGAVClass(AVAudioSession) sharedInstance];
 	if ([TGCall shared].state != TGCallStateEstablished){
-		[session setCategory:AVAudioSessionCategoryPlayback error:nil];
+		[session setCategory:TGAVString(AVAudioSessionCategoryPlayback) error:nil];
 		[session setActive:YES error:nil];
 	}
 	NSError *error = nil;
-	AVAudioPlayer *player = [[AVAudioPlayer alloc] initWithData:data error:&error];
+	AVAudioPlayer *player = [[TGAVClass(AVAudioPlayer) alloc] initWithData:data error:&error];
 	if (player == nil)
 		return;
 	player.numberOfLoops = loop ? -1 : 0;
@@ -564,7 +565,7 @@ static NSData *TGCallToneWrap(NSData *samples, double rate) {
 }
 
 - (void)applySpeakerRoute {
-	AVAudioSession *session = [AVAudioSession sharedInstance];
+	AVAudioSession *session = [TGAVClass(AVAudioSession) sharedInstance];
 	[session overrideOutputAudioPort:(self.speakerOn
 			? AVAudioSessionPortOverrideSpeaker
 			: AVAudioSessionPortOverrideNone) error:nil];

@@ -11,13 +11,13 @@
 #import "TGCapabilities.h"
 #import "TGMosaicLayout.h"
 #import "TGEmoji.h"
+#import "TGLazyFramework.h"
 #import <AddressBookUI/AddressBookUI.h>
 #import <CoreLocation/CoreLocation.h>
 #import <AssetsLibrary/AssetsLibrary.h>
 #import <MobileCoreServices/MobileCoreServices.h>
 #import <QuartzCore/QuartzCore.h>
 #import <MediaPlayer/MediaPlayer.h>
-#import <MapKit/MapKit.h>
 #import <AVFoundation/AVFoundation.h>
 #import "TGVoiceDecoder.h"
 #import "TGMusicPlayer.h"
@@ -5992,10 +5992,10 @@ static UIImage *TGRoundNoteMuteBadge(void) {
 	circle.backgroundColor = [UIColor blackColor];
 	[plate addSubview:circle];
 
-	AVPlayer *player = [AVPlayer playerWithURL:[NSURL fileURLWithPath:path]];
+	AVPlayer *player = [TGAVClass(AVPlayer) playerWithURL:[NSURL fileURLWithPath:path]];
 	player.actionAtItemEnd = AVPlayerActionAtItemEndNone;
-	AVPlayerLayer *layer = [AVPlayerLayer playerLayerWithPlayer:player];
-	layer.videoGravity = AVLayerVideoGravityResizeAspectFill;
+	AVPlayerLayer *layer = [TGAVClass(AVPlayerLayer) playerLayerWithPlayer:player];
+	layer.videoGravity = TGAVString(AVLayerVideoGravityResizeAspectFill);
 	layer.frame = circle.bounds;
 	[circle.layer addSublayer:layer];
 
@@ -6031,7 +6031,7 @@ static UIImage *TGRoundNoteMuteBadge(void) {
 
 	[[NSNotificationCenter defaultCenter] addObserver:self
 			selector:@selector(videoNoteReachedEnd:)
-				name:AVPlayerItemDidPlayToEndTimeNotification
+				name:TGAVString(AVPlayerItemDidPlayToEndTimeNotification)
 			  object:player.currentItem];
 	[player play];
 	[self startVideoNoteRing];
@@ -6051,13 +6051,13 @@ static UIImage *TGRoundNoteMuteBadge(void) {
 
 - (void)applyVideoNoteVolume:(float)volume {
 	AVPlayerItem *item = self.videoNotePlayer.currentItem;
-	AVAssetTrack *track = [[item.asset tracksWithMediaType:AVMediaTypeAudio] firstObject];
+	AVAssetTrack *track = [[item.asset tracksWithMediaType:TGAVString(AVMediaTypeAudio)] firstObject];
 	if (!track)
 		return;
 	AVMutableAudioMixInputParameters *parameters =
-			[AVMutableAudioMixInputParameters audioMixInputParametersWithTrack:track];
+			[TGAVClass(AVMutableAudioMixInputParameters) audioMixInputParametersWithTrack:track];
 	[parameters setVolume:volume atTime:kCMTimeZero];
-	AVMutableAudioMix *mix = [AVMutableAudioMix audioMix];
+	AVMutableAudioMix *mix = [TGAVClass(AVMutableAudioMix) audioMix];
 	mix.inputParameters = @[parameters];
 	item.audioMix = mix;
 }
@@ -6104,7 +6104,7 @@ static UIImage *TGRoundNoteMuteBadge(void) {
 	if (!self.videoNotePlayer)
 		return;
 	[[NSNotificationCenter defaultCenter] removeObserver:self
-			name:AVPlayerItemDidPlayToEndTimeNotification
+			name:TGAVString(AVPlayerItemDidPlayToEndTimeNotification)
 		  object:self.videoNotePlayer.currentItem];
 	[self.videoNotePlayer pause];
 	[self.videoNoteRing removeAnimationForKey:@"fill"];
@@ -8490,7 +8490,7 @@ static const NSInteger kFailedMessageSheetTag = 105;
 - (void)pickMusic {
 	if (self.postingBlocked)
 		return;
-	MPMediaPickerController *picker = [[MPMediaPickerController alloc]
+	MPMediaPickerController *picker = [[TGMPClass(MPMediaPickerController) alloc]
 			initWithMediaTypes:MPMediaTypeMusic];
 	picker.delegate = self;
 	picker.allowsPickingMultipleItems = NO;
@@ -8503,19 +8503,19 @@ static const NSInteger kFailedMessageSheetTag = 105;
 	[mediaPicker dismissViewControllerAnimated:YES completion:nil];
 
 	MPMediaItem *item = [collection.items firstObject];
-	NSURL *asset = [item valueForProperty:MPMediaItemPropertyAssetURL];
+	NSURL *asset = [item valueForProperty:TGMPString(MPMediaItemPropertyAssetURL)];
 	if (!asset){
 		[self showAlertTitle:@"" message:@"This track cannot be sent."];
 		return;
 	}
 
-	NSString *title = [item valueForProperty:MPMediaItemPropertyTitle];
-	NSString *performer = [item valueForProperty:MPMediaItemPropertyArtist];
-	NSNumber *seconds = [item valueForProperty:MPMediaItemPropertyPlaybackDuration];
+	NSString *title = [item valueForProperty:TGMPString(MPMediaItemPropertyTitle)];
+	NSString *performer = [item valueForProperty:TGMPString(MPMediaItemPropertyArtist)];
+	NSNumber *seconds = [item valueForProperty:TGMPString(MPMediaItemPropertyPlaybackDuration)];
 
-	AVURLAsset *source = [AVURLAsset URLAssetWithURL:asset options:nil];
-	AVAssetExportSession *export = [[AVAssetExportSession alloc]
-			initWithAsset:source presetName:AVAssetExportPresetAppleM4A];
+	AVURLAsset *source = [TGAVClass(AVURLAsset) URLAssetWithURL:asset options:nil];
+	AVAssetExportSession *export = [[TGAVClass(AVAssetExportSession) alloc]
+			initWithAsset:source presetName:TGAVString(AVAssetExportPresetAppleM4A)];
 	if (!export){
 		[self showAlertTitle:@"" message:@"This track cannot be sent."];
 		return;
@@ -8525,7 +8525,7 @@ static const NSInteger kFailedMessageSheetTag = 105;
 			[NSString stringWithFormat:@"music-%.0f.m4a",
 					[[NSDate date] timeIntervalSince1970] * 1000]];
 	export.outputURL = [NSURL fileURLWithPath:path];
-	export.outputFileType = AVFileTypeAppleM4A;
+	export.outputFileType = TGAVString(AVFileTypeAppleM4A);
 
 	__weak typeof(self) weakSelf = self;
 	[export exportAsynchronouslyWithCompletionHandler:^{
@@ -8570,11 +8570,22 @@ static const NSInteger kFailedMessageSheetTag = 105;
 }
 
 /// One fix, then stop - a chat wants a pin, not a running trace.
+static CLLocationAccuracy TGHundredMeters(void) {
+	CLLocationAccuracy *value = TGFrameworkSymbol(@"CoreLocation",
+			"kCLLocationAccuracyHundredMeters");
+	return value ? *value : 100.0;
+}
+
 - (void)sendCurrentLocation {
 	if (!self.locationManager){
-		self.locationManager = [[CLLocationManager alloc] init];
+		Class managerClass = TGFrameworkClass(@"CoreLocation", @"CLLocationManager");
+		if (!managerClass){
+			[self showAlertTitle:@"" message:@"Location is not available."];
+			return;
+		}
+		self.locationManager = [[managerClass alloc] init];
 		self.locationManager.delegate = self;
-		self.locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters;
+		self.locationManager.desiredAccuracy = TGHundredMeters();
 	}
 	[self.locationManager startUpdatingLocation];
 }
@@ -8614,7 +8625,7 @@ static const NSInteger kFailedMessageSheetTag = 105;
 			}
 			me.liveLocationMessageId = messageId;
 			me.locationMode = @"tracking";
-			me.locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters;
+			me.locationManager.desiredAccuracy = TGHundredMeters();
 			me.locationManager.distanceFilter = 50;
 			[me.locationManager startUpdatingLocation];
 			[TGSnackbar showInView:me.view text:@"Sharing your location for an hour"
@@ -8880,7 +8891,7 @@ static const NSInteger kFailedMessageSheetTag = 105;
 		[me endDownloadHUDForFile:[docId integerValue]];
 		if (!path)
 			return;
-		MPMoviePlayerViewController *player = [[MPMoviePlayerViewController alloc]
+		MPMoviePlayerViewController *player = [[TGMPClass(MPMoviePlayerViewController) alloc]
 				initWithContentURL:[NSURL fileURLWithPath:path]];
 		[me presentMoviePlayerViewControllerAnimated:player];
 	}];

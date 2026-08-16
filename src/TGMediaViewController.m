@@ -1,4 +1,5 @@
 #import "TGMediaViewController.h"
+#import "TGLazyFramework.h"
 
 #import <MediaPlayer/MediaPlayer.h>
 #import <QuartzCore/QuartzCore.h>
@@ -2187,7 +2188,7 @@ static NSDictionary *TGMediaListItemFromMessage(NSDictionary *message, NSInteger
 			[me showMessage:@"Could not download"];
 			return;
 		}
-		MPMoviePlayerViewController *player = [[MPMoviePlayerViewController alloc]
+		MPMoviePlayerViewController *player = [[TGMPClass(MPMoviePlayerViewController) alloc]
 				initWithContentURL:[NSURL fileURLWithPath:path]];
 		[me presentMoviePlayerViewControllerAnimated:player];
 	}];
@@ -3425,7 +3426,7 @@ static const long long TGMediaExportLimit = 12 * 1024 * 1024;
 			return;
 		}
 		if (isMusic){
-			MPMoviePlayerViewController *player = [[MPMoviePlayerViewController alloc]
+			MPMoviePlayerViewController *player = [[TGMPClass(MPMoviePlayerViewController) alloc]
 					initWithContentURL:[NSURL fileURLWithPath:path]];
 			[me presentMoviePlayerViewControllerAnimated:player];
 			return;
