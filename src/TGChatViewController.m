@@ -47,6 +47,7 @@
 #import "TGClient+Files.h"
 #import "TGClient+ChatList.h"
 #import "TGMediaViewController.h"
+#import "TGImageDecode.h"
 #import <UIKit/UIGestureRecognizerSubclass.h>
 #import "TGAlertView.h"
 
@@ -102,6 +103,8 @@ static UIColor *TGMessageBodyColour(void) {
 	return colour;
 }
 static const CGFloat kImageMax    = 200.0f;
+static const NSUInteger kPictureMemoryBudget = 5 * 1024 * 1024;
+static const NSUInteger kMaxLivePictures = 12;
 static const CGFloat kDayRowHeight    = 27.0f;
 static const CGFloat kUnreadRowHeight = 34.0f;
 static const CGFloat kSystemPlateHeight = 21.0f;
@@ -2462,6 +2465,9 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 @property (nonatomic, strong) NSMutableDictionary *tileSizes;
 @property (nonatomic, strong) NSMutableDictionary *tileBitmaps;
 @property (nonatomic, strong) NSMutableDictionary *images; // fileId -> UIImage
+@property (nonatomic, strong) NSMutableArray *imageOrder;  // fileId, oldest first
+@property (nonatomic, assign) BOOL tableReloadPending;
+@property (nonatomic, assign) BOOL fetchImagesPending;
 @property (nonatomic, strong) NSMutableSet *imagesRequested;
 @property (nonatomic, strong) NSMutableSet *photoFilesInFlight;
 @property (nonatomic, strong) NSMutableSet *photoFilesCancelled;
@@ -2650,6 +2656,7 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 	self.senderAvatars = [NSMutableDictionary dictionary];
 	self.senderAvatarsRequested = [NSMutableSet set];
 	self.images = [NSMutableDictionary dictionary];
+	self.imageOrder = [NSMutableArray array];
 	self.imagesRequested = [NSMutableSet set];
 	self.photoFilesInFlight = [NSMutableSet set];
 	self.photoFilesCancelled = [NSMutableSet set];
@@ -3399,15 +3406,34 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	[super didReceiveMemoryWarning];
 
 	NSMutableSet *keep = [NSMutableSet set];
+	NSMutableSet *keepFiles = [NSMutableSet set];
 	for (NSIndexPath *path in [self.table indexPathsForVisibleRows]){
-		for (NSDictionary *m in [self messagesAtRow:path.row])
+		for (NSDictionary *m in [self messagesAtRow:path.row]){
 			if ([m[@"id"] isKindOfClass:NSNumber.class])
 				[keep addObject:m[@"id"]];
+			NSNumber *fileId = [self pictureFileIdFor:m];
+			if (fileId)
+				[keepFiles addObject:fileId];
+		}
 	}
 	[self.tileBitmaps removeAllObjects];
 	for (NSNumber *key in [self.maps allKeys])
 		if (![keep containsObject:key])
 			[self.maps removeObjectForKey:key];
+	for (NSNumber *key in [self.minithumbnails allKeys])
+		if (![keep containsObject:key])
+			[self.minithumbnails removeObjectForKey:key];
+
+	// The pictures are the largest thing this screen holds; under pressure
+	// only what is actually on screen survives.
+	for (NSNumber *fileId in [self.images allKeys]){
+		if ([keepFiles containsObject:fileId])
+			continue;
+		[self.images removeObjectForKey:fileId];
+		[self.imagesRequested removeObject:fileId];
+		[self.imageOrder removeObject:fileId];
+	}
+	self.photoWindow = NSMakeRange(NSNotFound, 0);
 }
 
 - (void)dealloc {
@@ -3594,17 +3620,58 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 		if (!me || fileId <= 0)
 			return;
 		[[TGClient shared] downloadFile:fileId completion:^(NSString *path){
-			TGChatViewController *inner = weakSelf;
-			if (!inner || !path.length)
+			if (!path.length)
 				return;
-			UIImage *tile = [UIImage imageWithContentsOfFile:path];
-			if (!tile)
-				return;
-			inner.maps[key] = TGImageDrawnAtPointSize(tile,
-					CGSizeMake(kMapCardW, kMapCardH));
-			[inner.table reloadData];
+			CGFloat cardPixels = MAX(kMapCardW, kMapCardH) * [UIScreen mainScreen].scale;
+			dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+				UIImage *tile = TGDecodeThumbnail(path, cardPixels);
+				if (!tile)
+					return;
+				UIImage *card = TGImageDrawnAtPointSize(tile,
+						CGSizeMake(kMapCardW, kMapCardH));
+				dispatch_async(dispatch_get_main_queue(), ^{
+					TGChatViewController *inner = weakSelf;
+					if (!inner)
+						return;
+					inner.maps[key] = card;
+					[inner setNeedsTableReload];
+				});
+			});
 		}];
 	}];
+}
+
+/// Quotes, reaction chips, link previews and sender names all arrive one reply
+/// at a time, and each used to reload the whole table. Every reload re-measures
+/// every row, so a chat where fifty messages carry reactions paid for fifty
+/// full height passes. These fold all the replies that land in one turn of the
+/// runloop into a single reload.
+- (void)setNeedsTableReload {
+	if (self.tableReloadPending)
+		return;
+	self.tableReloadPending = YES;
+	__weak typeof(self) weakSelf = self;
+	dispatch_async(dispatch_get_main_queue(), ^{
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		me.tableReloadPending = NO;
+		[me.table reloadData];
+	});
+}
+
+- (void)setNeedsFetchMissingImages {
+	if (self.fetchImagesPending)
+		return;
+	self.fetchImagesPending = YES;
+	__weak typeof(self) weakSelf = self;
+	dispatch_async(dispatch_get_main_queue(), ^{
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		me.fetchImagesPending = NO;
+		[me fetchMissingImages];
+	});
 }
 
 /// Group messages need a name over the bubble, and TDLib only volunteers
@@ -3620,7 +3687,7 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 
 	for (NSNumber *uid in wanted){
 		[[TGClient shared] ensureUserName:uid.longLongValue completion:^{
-			[weakSelf.table reloadData];
+			[weakSelf setNeedsTableReload];
 		}];
 	}
 }
@@ -3645,8 +3712,8 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 			if (!me || !original)
 				return;
 			me.quotes[replyId] = original;
-			[me.table reloadData];
-			[me fetchMissingImages];
+			[me setNeedsTableReload];
+			[me setNeedsFetchMissingImages];
 		}];
 	}
 }
@@ -3672,7 +3739,7 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 				return;
 			me.reactionChips[messageId] = chips;
 			[me.chipsRowWidths removeObjectForKey:messageId];
-			[me.table reloadData];
+			[me setNeedsTableReload];
 		}];
 	}
 }
@@ -3706,18 +3773,25 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 			if ([photo isKindOfClass:NSNumber.class] && photo.integerValue != 0 &&
 				!me.images[photo] && ![me.imagesRequested containsObject:photo]){
 				[me.imagesRequested addObject:photo];
+				CGFloat limit = [me pictureDecodeLimit];
 				[[TGClient shared] downloadFile:photo.integerValue completion:^(NSString *path){
-					TGChatViewController *inner = weakSelf;
-					if (!inner || !path)
+					if (!path.length)
 						return;
-					UIImage *image = [UIImage imageWithContentsOfFile:path];
-					if (!image)
-						return;
-					inner.images[photo] = image;
-					[inner.table reloadData];
+					dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+						UIImage *image = TGDecodeThumbnail(path, limit);
+						if (!image)
+							return;
+						dispatch_async(dispatch_get_main_queue(), ^{
+							TGChatViewController *inner = weakSelf;
+							if (!inner)
+								return;
+							inner.images[photo] = image;
+							[inner setNeedsTableReload];
+						});
+					});
 				}];
 			}
-			[me.table reloadData];
+			[me setNeedsTableReload];
 		}];
 	}
 }
@@ -3829,8 +3903,8 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 		first = MAX(0, count - 12);
 		last = count - 1;
 	}
-	first = MAX(0, first - 6);
-	last = MIN(count - 1, last + 6);
+	first = MAX(0, first - 3);
+	last = MIN(count - 1, last + 3);
 	if (last < first)
 		return NSMakeRange(0, 0);
 	return NSMakeRange((NSUInteger)first, (NSUInteger)(last - first + 1));
@@ -3845,18 +3919,43 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 		return;
 	self.photoWindow = window;
 
+	// Furthest row first, so that after each is moved to the end of the
+	// use order the rows nearest the screen sit newest, and the budget below
+	// gives up the far ones first.
 	NSMutableSet *wanted = [NSMutableSet set];
-	for (NSUInteger row = window.location; row < window.location + window.length; row++){
-		for (NSDictionary *m in [self messagesAtRow:(NSInteger)row]){
-			NSNumber *fileId = [self pictureFileIdFor:m];
-			if (fileId)
+	NSMutableArray *byProximity = [NSMutableArray array];
+	NSUInteger centre = window.location + window.length / 2;
+	for (NSInteger step = (NSInteger)window.length; step >= 0; step--){
+		for (NSInteger side = 0; side < 2; side++){
+			NSInteger row = (NSInteger)centre + (side ? step : -step);
+			if (row < (NSInteger)window.location ||
+				row >= (NSInteger)(window.location + window.length))
+				continue;
+			for (NSDictionary *m in [self messagesAtRow:row]){
+				NSNumber *fileId = [self pictureFileIdFor:m];
+				if (!fileId || [wanted containsObject:fileId])
+					continue;
 				[wanted addObject:fileId];
+				[byProximity addObject:fileId];
+			}
+			if (!step)
+				break;
 		}
 	}
 	for (NSDictionary *quoted in [self.quotes allValues]){
 		NSNumber *fileId = [self pictureFileIdFor:quoted];
-		if (fileId)
+		if (fileId && ![wanted containsObject:fileId]){
 			[wanted addObject:fileId];
+			[byProximity insertObject:fileId atIndex:0];
+		}
+	}
+
+	// Only the nearest handful is ever held, so asking for more than that
+	// would download bytes that get thrown away before anyone sees them.
+	if (byProximity.count > kMaxLivePictures){
+		NSRange far = NSMakeRange(0, byProximity.count - kMaxLivePictures);
+		[wanted minusSet:[NSSet setWithArray:[byProximity subarrayWithRange:far]]];
+		[byProximity removeObjectsInRange:far];
 	}
 
 	for (NSNumber *fileId in [self.photoFilesInFlight allObjects]){
@@ -3879,6 +3978,88 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 			continue;
 		[self startPictureDownload:fileId];
 	}
+
+	[self prunePicturesInUseOrder:byProximity];
+}
+
+/// A fixed number of megabytes of pictures is kept, the ones nearest the screen
+/// first, and everything past that is let go. A dropped picture also loses its
+/// "already asked for" mark, or it would never come back.
+- (void)prunePicturesInUseOrder:(NSArray *)nearestLast {
+	for (NSNumber *fileId in nearestLast){
+		[self.imageOrder removeObject:fileId];
+		[self.imageOrder addObject:fileId];
+	}
+
+	NSUInteger budget = 0;
+	NSMutableSet *keep = [NSMutableSet set];
+	for (NSNumber *fileId in [self.imageOrder reverseObjectEnumerator]){
+		UIImage *image = self.images[fileId];
+		if (!image)
+			continue;
+		NSUInteger cost = TGImageBitmapBytes(image);
+		if (keep.count && budget + cost > kPictureMemoryBudget)
+			continue;
+		budget += cost;
+		[keep addObject:fileId];
+	}
+
+	for (NSNumber *fileId in [self.images allKeys]){
+		if ([keep containsObject:fileId])
+			continue;
+		[self.images removeObjectForKey:fileId];
+		[self.imagesRequested removeObject:fileId];
+		[self.imageOrder removeObject:fileId];
+	}
+	[self dropTileBitmapsOutside:keep];
+
+	NSUInteger tiles = 0;
+	for (UIImage *image in [self.tileBitmaps allValues])
+		tiles += TGImageBitmapBytes(image);
+	NSUInteger thumbs = 0;
+	for (UIImage *image in [self.minithumbnails allValues])
+		thumbs += TGImageBitmapBytes(image);
+	NSUInteger avatars = 0;
+	for (UIImage *image in [self.senderAvatars allValues])
+		avatars += TGImageBitmapBytes(image);
+	NSLog(@"PERF chatmem pictures=%u/%.2f MB tiles=%u/%.2f MB thumbs=%u/%.2f MB avatars=%.2f MB",
+			(unsigned)self.images.count, budget / 1048576.0,
+			(unsigned)self.tileBitmaps.count, tiles / 1048576.0,
+			(unsigned)self.minithumbnails.count, thumbs / 1048576.0,
+			avatars / 1048576.0);
+}
+
+/// The scaled copies the cells actually draw are keyed by file, so they follow
+/// the pictures they were made from out of memory.
+- (void)dropTileBitmapsOutside:(NSSet *)keep {
+	if (!self.tileBitmaps.count)
+		return;
+	NSMutableSet *live = [NSMutableSet set];
+	for (NSNumber *fileId in keep)
+		[live addObject:[fileId stringValue]];
+	for (NSString *key in [self.tileBitmaps allKeys]){
+		NSRange at = [key rangeOfString:@"@"];
+		if (at.location == NSNotFound)
+			continue;
+		if (![live containsObject:[key substringToIndex:at.location]])
+			[self.tileBitmaps removeObjectForKey:key];
+	}
+}
+
+/// No bubble is wider than the budget, so nothing above that many pixels can
+/// ever reach the screen. Decoding to it turns a multi-megabyte camera photo
+/// into a few hundred kilobytes.
+- (CGFloat)pictureDecodeLimit {
+	CGFloat scale = [UIScreen mainScreen].scale;
+	if (scale < 1.0f)
+		scale = 1.0f;
+	return MAX(kImageMax, [self bubbleWidthBudget]) * scale;
+}
+
+- (void)pictureFailed:(NSNumber *)fileId {
+	[self.imagesRequested removeObject:fileId];
+	[self.photoFilesFailed addObject:fileId];
+	[self refreshRowsShowingFile:fileId withImage:nil];
 }
 
 - (void)startPictureDownload:(NSNumber *)fileId {
@@ -3888,6 +4069,7 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	[self.photoFilesInFlight addObject:fileId];
 	[self.photoFilesCancelled removeObject:fileId];
 
+	CGFloat limit = [self pictureDecodeLimit];
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] downloadFile:[fileId integerValue] completion:^(NSString *path){
 		TGChatViewController *me = weakSelf;
@@ -3899,19 +4081,42 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 			[me.imagesRequested removeObject:fileId];
 			return;
 		}
-		// Stickers arrive as WebP, which UIImage does not know on iOS 7.
-		UIImage *img = path.length ? [UIImage imageWithContentsOfFile:path] : nil;
-		if (!img && [path.pathExtension.lowercaseString isEqualToString:@"webp"])
-			img = [UIImage convertFromWebP:path compressedData:nil error:nil];
-		if (!img){
-			[me.imagesRequested removeObject:fileId];
-			[me.photoFilesFailed addObject:fileId];
-			[me refreshRowsShowingFile:fileId withImage:nil];
+		if (!path.length){
+			[me pictureFailed:fileId];
 			return;
 		}
-		[me.photoFilesFailed removeObject:fileId];
-		me.images[fileId] = img;
-		[me applyArrivedImage:img forFile:fileId];
+
+		// The whole decode happens here, off the main thread and already
+		// scaled down: TDLib answers on the main thread, and a full-resolution
+		// photo drawn from there is what used to stall the first frame of a
+		// chat for over a second.
+		dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+			UIImage *img = nil;
+			@autoreleasepool {
+				img = TGDecodeThumbnail(path, limit);
+				// Stickers arrive as WebP, which UIImage does not know on iOS 7.
+				if (!img && [path.pathExtension.lowercaseString isEqualToString:@"webp"])
+					img = TGImageWithinPixelLimit(
+							[UIImage convertFromWebP:path compressedData:nil error:nil], limit);
+			}
+			dispatch_async(dispatch_get_main_queue(), ^{
+				TGChatViewController *inner = weakSelf;
+				if (!inner)
+					return;
+				if ([inner.photoFilesCancelled containsObject:fileId]){
+					[inner.photoFilesCancelled removeObject:fileId];
+					[inner.imagesRequested removeObject:fileId];
+					return;
+				}
+				if (!img){
+					[inner pictureFailed:fileId];
+					return;
+				}
+				[inner.photoFilesFailed removeObject:fileId];
+				inner.images[fileId] = img;
+				[inner applyArrivedImage:img forFile:fileId];
+			});
+		});
 	}];
 }
 
@@ -4218,9 +4423,18 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	NSNumber *fileId = [[TGClient shared] photoFileIdForChat:self.chatId];
 	if (!fileId)
 		return;
+	CGFloat avatarPixels = side * [UIScreen mainScreen].scale;
 	[[TGClient shared] downloadFile:fileId.integerValue completion:^(NSString *path){
-		UIImage *photo = path ? [UIImage imageWithContentsOfFile:path] : nil;
-		if (photo) [button setImage:photo forState:UIControlStateNormal];
+		if (!path.length)
+			return;
+		dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+			UIImage *photo = TGDecodeThumbnail(path, avatarPixels);
+			if (!photo)
+				return;
+			dispatch_async(dispatch_get_main_queue(), ^{
+				[button setImage:photo forState:UIControlStateNormal];
+			});
+		});
 	}];
 }
 
@@ -4967,14 +5181,24 @@ static UIImage *TGPinnedBadgeGlyph(void) {
 	void (^fetch)(NSNumber *) = ^(NSNumber *fileId){
 		if (!fileId)
 			return;
+		CGFloat sidePixels = kAvatarSide * [UIScreen mainScreen].scale;
 		[[TGClient shared] downloadFile:fileId.integerValue completion:^(NSString *path){
-			TGChatViewController *me = weakSelf;
-			UIImage *photo = path.length ? [UIImage imageWithContentsOfFile:path] : nil;
-			if (!me || !photo)
+			if (!path.length)
 				return;
-			me.senderAvatars[key] = TGImageDrawnAtPointSize(photo,
-					CGSizeMake(kAvatarSide, kAvatarSide));
-			[me refreshAvatarForUser:key];
+			dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+				UIImage *photo = TGDecodeThumbnail(path, sidePixels);
+				if (!photo)
+					return;
+				UIImage *sized = TGImageDrawnAtPointSize(photo,
+						CGSizeMake(kAvatarSide, kAvatarSide));
+				dispatch_async(dispatch_get_main_queue(), ^{
+					TGChatViewController *me = weakSelf;
+					if (!me)
+						return;
+					me.senderAvatars[key] = sized;
+					[me refreshAvatarForUser:key];
+				});
+			});
 		}];
 	};
 
@@ -11050,24 +11274,28 @@ static const NSInteger kQuoteTapTag = 0x9009;
 			if (!fileId)
 				continue;
 			started++;
-			UIImage *have = self.images[fileId];
-			if (have){
-				UIImageWriteToSavedPhotosAlbum(have, self,
-						@selector(image:didFinishSavingWithError:contextInfo:), NULL);
-				continue;
-			}
+			// Always off the file, never off what the bubble is showing: the
+			// bubble's copy is scaled down to the size it is drawn at, and the
+			// Camera Roll deserves the picture that was actually sent.
 			__weak typeof(self) weakForPhoto = self;
 			[[TGClient shared] downloadFile:[fileId integerValue]
 								 completion:^(NSString *path){
-				TGChatViewController *me = weakForPhoto;
-				if (!me)
+				if (!path.length)
 					return;
-				UIImage *loaded = path ? [UIImage imageWithContentsOfFile:path] : nil;
-				if (!loaded && [path.pathExtension.lowercaseString isEqualToString:@"webp"])
-					loaded = [UIImage convertFromWebP:path compressedData:nil error:nil];
-				if (loaded)
-					UIImageWriteToSavedPhotosAlbum(loaded, me,
-							@selector(image:didFinishSavingWithError:contextInfo:), NULL);
+				dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+					UIImage *loaded = [UIImage imageWithContentsOfFile:path];
+					if (!loaded && [path.pathExtension.lowercaseString isEqualToString:@"webp"])
+						loaded = [UIImage convertFromWebP:path compressedData:nil error:nil];
+					if (!loaded)
+						return;
+					dispatch_async(dispatch_get_main_queue(), ^{
+						TGChatViewController *me = weakForPhoto;
+						if (!me)
+							return;
+						UIImageWriteToSavedPhotosAlbum(loaded, me,
+								@selector(image:didFinishSavingWithError:contextInfo:), NULL);
+					});
+				});
 			}];
 			continue;
 		}

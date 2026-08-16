@@ -26,6 +26,8 @@
 #import <CoreText/CoreText.h>
 #include <stdio.h>
 #include <mach/mach.h>
+#include <dlfcn.h>
+#include <malloc/malloc.h>
 
 @protocol TGTabBarHitTesting <NSObject>
 - (int)indexForLocation:(CGPoint)location;
@@ -64,10 +66,133 @@ static double TGProcessCPUSeconds(void) {
 	return total;
 }
 
+static thread_t TGMainThreadPort = MACH_PORT_NULL;
+static volatile BOOL TGStackSamplingOn = NO;
+
+static BOOL TGPeek(const void *address, void *into, size_t length) {
+	vm_size_t got = 0;
+	if (vm_read_overwrite(mach_task_self(), (vm_address_t)address, length,
+			(vm_address_t)into, &got) != KERN_SUCCESS)
+		return NO;
+	return got == length;
+}
+
+static int TGCaptureMainStack(void **frames, int maximum) {
+	if (TGMainThreadPort == MACH_PORT_NULL)
+		return 0;
+	if (thread_suspend(TGMainThreadPort) != KERN_SUCCESS)
+		return 0;
+	int found = 0;
+#if defined(__arm__)
+	_STRUCT_ARM_THREAD_STATE state;
+	mach_msg_type_number_t count = ARM_THREAD_STATE_COUNT;
+	if (thread_get_state(TGMainThreadPort, ARM_THREAD_STATE,
+			(thread_state_t)&state, &count) == KERN_SUCCESS){
+		frames[found++] = (void *)state.__pc;
+		if (state.__lr && found < maximum)
+			frames[found++] = (void *)state.__lr;
+		const void **link = (const void **)state.__r[7];
+		while (found < maximum && link && ((uintptr_t)link & 3) == 0){
+			const void *next = NULL;
+			const void *returnAddress = NULL;
+			if (!TGPeek(link, &next, sizeof(next)))
+				break;
+			if (!TGPeek(link + 1, &returnAddress, sizeof(returnAddress)))
+				break;
+			if (!returnAddress)
+				break;
+			frames[found++] = (void *)returnAddress;
+			if ((const void **)next <= link)
+				break;
+			link = (const void **)next;
+		}
+	}
+#endif
+	thread_resume(TGMainThreadPort);
+	return found;
+}
+
+static void TGLogMainStack(void) {
+	void *frames[48];
+	int found = TGCaptureMainStack(frames, 48);
+	if (found <= 0)
+		return;
+	char line[4000];
+	size_t used = 0;
+	for (int i = 0; i < found && used < sizeof(line) - 90; i++){
+		Dl_info info;
+		memset(&info, 0, sizeof(info));
+		const char *symbol = "?";
+		const char *image = "?";
+		if (dladdr(frames[i], &info)){
+			if (info.dli_sname)
+				symbol = info.dli_sname;
+			if (info.dli_fname){
+				const char *slash = strrchr(info.dli_fname, '/');
+				image = slash ? slash + 1 : info.dli_fname;
+			}
+		}
+		used += snprintf(line + used, sizeof(line) - used, "%s%s`%s",
+				i ? " < " : "", image, symbol);
+	}
+	line[sizeof(line) - 1] = 0;
+	NSLog(@"PERF stack | %s", line);
+}
+
+/// RSS split by what asked the kernel for the pages. malloc statistics only
+/// see the heap, and on this app the heap is a fifth of the resident size, so
+/// the answer to "what is resident" is only ever visible here.
+static void TGRegionReport(NSString *tag) {
+	vm_address_t address = 0;
+	unsigned long long byTag[256];
+	unsigned long long dirtyByTag[256];
+	memset(byTag, 0, sizeof(byTag));
+	memset(dirtyByTag, 0, sizeof(dirtyByTag));
+
+	while (1){
+		vm_size_t size = 0;
+		uint32_t depth = 1;
+		struct vm_region_submap_info_64 info;
+		mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
+		if (vm_region_recurse_64(mach_task_self(), &address, &size, &depth,
+				(vm_region_recurse_info_t)&info, &count) != KERN_SUCCESS)
+			break;
+		if (info.is_submap){
+			depth++;
+			continue;
+		}
+		unsigned int slot = info.user_tag & 0xFF;
+		byTag[slot] += (unsigned long long)info.pages_resident * vm_page_size;
+		dirtyByTag[slot] += (unsigned long long)info.pages_dirtied * vm_page_size;
+		address += size;
+	}
+
+	for (unsigned int i = 0; i < 256; i++){
+		if (byTag[i] < 1048576)
+			continue;
+		NSLog(@"PERF region %@ tag=%u resident=%.2f MB dirty=%.2f MB",
+				tag, i, byTag[i] / 1048576.0, dirtyByTag[i] / 1048576.0);
+	}
+}
+
 void TGMemMark(NSString *tag) {
-	NSLog(@"PERF mem %@ rss=%.2f MB peak=%.2f MB cpu=%.2f s",
+	vm_address_t *zones = NULL;
+	unsigned int count = 0;
+	unsigned long long inUse = 0;
+	if (malloc_get_all_zones(mach_task_self(), NULL, &zones, &count) == KERN_SUCCESS){
+		for (unsigned int i = 0; i < count; i++){
+			malloc_zone_t *zone = (malloc_zone_t *)zones[i];
+			if (!zone || !zone->introspect)
+				continue;
+			malloc_statistics_t stats;
+			memset(&stats, 0, sizeof(stats));
+			malloc_zone_statistics(zone, &stats);
+			inUse += stats.size_in_use;
+		}
+	}
+	NSLog(@"PERF mem %@ rss=%.2f MB peak=%.2f MB heap=%.2f MB cpu=%.2f s",
 			tag, TGResidentBytes() / 1048576.0, TGResidentPeak / 1048576.0,
-			TGProcessCPUSeconds());
+			inUse / 1048576.0, TGProcessCPUSeconds());
 }
 
 void TGMarkLaunchStage(NSString *stage) {
@@ -116,6 +241,17 @@ void TGMarkOpenStage(NSString *stage) {
 	TGMainPingAt = [NSDate timeIntervalSinceReferenceDate];
 }
 
++ (void)tgStackSamplerLoop {
+	while (1){
+		if (TGStackSamplingOn){
+			@autoreleasepool {
+				TGLogMainStack();
+			}
+		}
+		usleep(25000);
+	}
+}
+
 + (void)tgMemorySamplerLoop {
 	NSTimeInterval started = [NSDate timeIntervalSinceReferenceDate];
 	double worstStall = 0;
@@ -139,6 +275,7 @@ void TGMarkOpenStage(NSString *stage) {
 static void TGStartMemorySampler(void) {
 	static dispatch_once_t once;
 	dispatch_once(&once, ^{
+		TGMainThreadPort = mach_thread_self();
 		TGMainPingAt = [NSDate timeIntervalSinceReferenceDate];
 		dispatch_async(dispatch_get_main_queue(), ^{
 			[NSTimer scheduledTimerWithTimeInterval:0.05
@@ -148,6 +285,9 @@ static void TGStartMemorySampler(void) {
 											repeats:YES];
 		});
 		[NSThread detachNewThreadSelector:@selector(tgMemorySamplerLoop)
+								 toTarget:[AppDelegate class]
+							   withObject:nil];
+		[NSThread detachNewThreadSelector:@selector(tgStackSamplerLoop)
 								 toTarget:[AppDelegate class]
 							   withObject:nil];
 	});
@@ -565,6 +705,18 @@ static void TGWatchForIncomingCalls(void) {
 
 	if ([host isEqualToString:@"mem"]){
 		TGMemMark(arg.length ? arg : @"probe");
+		return YES;
+	}
+
+	if ([host isEqualToString:@"regions"]){
+		TGMemMark(arg.length ? arg : @"regions");
+		TGRegionReport(arg.length ? arg : @"regions");
+		return YES;
+	}
+
+	if ([host isEqualToString:@"stacks"]){
+		TGStackSamplingOn = [arg isEqualToString:@"on"];
+		NSLog(@"PERF stacks %@", TGStackSamplingOn ? @"on" : @"off");
 		return YES;
 	}
 

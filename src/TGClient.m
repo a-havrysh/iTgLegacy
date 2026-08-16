@@ -3,6 +3,7 @@
 #import "TGClient+Stories.h"
 #import "TGCall.h"
 #import "TGDiskCache.h"
+#import "AppDelegate.h"
 #import <UIKit/UIKit.h>
 #include <dlfcn.h>
 #include "api_id.h"
@@ -112,7 +113,9 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 	NSString *path = [[NSBundle mainBundle].bundlePath
 			stringByAppendingPathComponent:@"libtdjson.dylib"];
 
+	TGMemMark(@"before dlopen tdjson");
 	self.handle = dlopen(path.UTF8String, RTLD_NOW | RTLD_LOCAL);
+	TGMemMark(@"after dlopen tdjson");
 	if (!self.handle){
 		NSLog(@"TGClient: dlopen failed: %s", dlerror());
 		return NO;
@@ -131,6 +134,7 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 		exec(NULL, "{\"@type\":\"setLogVerbosityLevel\",\"new_verbosity_level\":1}");
 
 	self.client = create();
+	TGMemMark(@"after td_json_client_create");
 	if (!self.client){
 		NSLog(@"TGClient: td_json_client_create returned NULL");
 		return NO;

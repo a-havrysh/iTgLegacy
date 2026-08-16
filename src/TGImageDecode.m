@@ -25,6 +25,34 @@ UIImage *TGDecodeThumbnail(NSString *path, CGFloat maxPixelSize) {
 	return image;
 }
 
+NSUInteger TGImageBitmapBytes(UIImage *image) {
+	CGImageRef cg = image.CGImage;
+	if (!cg)
+		return 0;
+	return (NSUInteger)(CGImageGetHeight(cg) * CGImageGetBytesPerRow(cg));
+}
+
+UIImage *TGImageWithinPixelLimit(UIImage *image, CGFloat maxPixelSize) {
+	if (!image || maxPixelSize < 1)
+		return image;
+	CGFloat scale = image.scale > 0 ? image.scale : 1.0f;
+	CGFloat w = image.size.width * scale;
+	CGFloat h = image.size.height * scale;
+	if (w < 1 || h < 1)
+		return image;
+	CGFloat shrink = MIN(maxPixelSize / w, maxPixelSize / h);
+	if (shrink >= 1.0f)
+		return image;
+
+	CGSize points = CGSizeMake(MAX(1.0f, floorf(w * shrink)),
+							   MAX(1.0f, floorf(h * shrink)));
+	UIGraphicsBeginImageContextWithOptions(points, NO, 1.0f);
+	[image drawInRect:CGRectMake(0, 0, points.width, points.height)];
+	UIImage *smaller = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return smaller ?: image;
+}
+
 UIImage *TGDecodeSquareThumbnail(NSString *path, CGFloat side) {
 	UIImage *square = nil;
 	@autoreleasepool {

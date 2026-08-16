@@ -1719,10 +1719,24 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 	BOOL _watching;
 }
 
-+ (CGFloat)chipWidthForEmoji:(NSString *)emoji count:(NSInteger)count {
+/// The emoji sits in a fixed slot, so the width follows only the digits of the
+/// count - a handful of distinct answers. Measuring them once matters: a chat
+/// full of reactions asks this for every chip of every row on every reload,
+/// and text measurement was the largest single cost in that pass.
++ (CGFloat)chipWidthForEmoji:(NSString *)__unused emoji count:(NSInteger)count {
 	NSString *countText = [NSString stringWithFormat:@"%d", (int)MAX(1, count)];
+
+	static NSMutableDictionary *widths = nil;
+	if (!widths)
+		widths = [[NSMutableDictionary alloc] init];
+	NSNumber *known = [widths objectForKey:countText];
+	if (known)
+		return [known floatValue];
+
 	CGFloat countWidth = [countText sizeWithFont:[UIFont boldSystemFontOfSize:kChipCountFontSize]].width;
-	return ceilf(kChipPadding * 2 + kChipGlyphSlot + kChipCountGap + countWidth);
+	CGFloat width = ceilf(kChipPadding * 2 + kChipGlyphSlot + kChipCountGap + countWidth);
+	[widths setObject:[NSNumber numberWithFloat:width] forKey:countText];
+	return width;
 }
 
 + (CGFloat)heightForChips:(NSArray *)chips width:(CGFloat)width {
