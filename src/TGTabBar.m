@@ -24,7 +24,7 @@ static const CGFloat TGTabBarPadLabelFontSize = 13.0f;
 }
 
 - (BOOL)isPadLayout {
-	return UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad;
+	return NO;
 }
 
 - (CGFloat)barHeight {

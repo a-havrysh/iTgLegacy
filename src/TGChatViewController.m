@@ -50,6 +50,16 @@
 #import <UIKit/UIGestureRecognizerSubclass.h>
 #import "TGAlertView.h"
 
+// SafariServices arrived after this deployment target, so Add to Reading List
+// is declared rather than linked and only offered where the class exists.
+@interface NSObject (TGReadingList)
++ (id)defaultReadingList;
+- (BOOL)addReadingListItemWithURL:(NSURL *)url
+							title:(NSString *)title
+					  previewText:(NSString *)previewText
+							error:(NSError **)error;
+@end
+
 // Their design system is drawn for Android at 360dp; a 4S is 320pt, so
 // everything taken from it is scaled by 0.889 and rounded to a whole point.
 static const CGFloat kInputHeight = 43.0f;
@@ -145,7 +155,6 @@ static const CGFloat kFileTile    = 71.0f;
 static const CGFloat kFileDisc    = 37.0f;
 // A picture in a bubble is clipped to the same radius their media uses.
 static const CGFloat kMediaRadius = 6.0f;
-static const CGFloat kAlbumBareInset = 4.0f;
 static const CGFloat kAlbumGap    = 2.0f;
 static const CGFloat kMosaicMinTileSide = 68.0f;
 // One option of a poll: a 16 circle, the text, the share, and the bar under it.
@@ -2551,6 +2560,11 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 @property (nonatomic, weak) TGBubbleCell *swipingCell;
 @property (nonatomic, assign) CGFloat swipeOffset;
 @property (nonatomic, assign) BOOL swipeArmed;
+@property (nonatomic, assign) NSInteger pressedRow;
+@property (nonatomic, assign) int64_t peerMenuUserId;
+@property (nonatomic, copy) NSString *peerMenuName;
+@property (nonatomic, copy) NSString *heldLinkURL;
+@property (nonatomic, assign) int64_t failedMessageId;
 @property (nonatomic, strong) NSMutableDictionary *translations;
 @property (nonatomic, copy) NSString *pendingInviteLink;
 @property (nonatomic, assign) int64_t moderationUserId;
@@ -2704,6 +2718,7 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 	[self.table addGestureRecognizer:self.backgroundTap];
 
 	self.swipingRow = -1;
+	self.pressedRow = -1;
 
 	[self.view addSubview:self.table];
 
@@ -4879,6 +4894,18 @@ static UIImage *TGPinnedBadgeGlyph(void) {
 	[self endChatSearch];
 }
 
+/// A tapped #hashtag opens the chat's own search with the tag already in it.
+- (void)searchChatForTag:(NSString *)tag {
+	if (!tag.length)
+		return;
+	if (!self.chatSearchBar)
+		[self toggleChatSearch];
+	if (!self.chatSearchBar)
+		return;
+	self.chatSearchBar.text = tag;
+	[self searchBar:self.chatSearchBar textDidChange:tag];
+}
+
 - (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)query {
 	if (!query.length){
 		self.messages = self.messagesBeforeSearch ?: @[];
@@ -5376,6 +5403,9 @@ static const NSInteger kBotStartAlertTag    = 99;
 static const NSInteger kAllowBotAlertTag    = 100;
 static const NSInteger kTextLinksSheetTag   = 101;
 static const NSInteger kStickerLinkAlertTag = 102;
+static const NSInteger kPeerMenuSheetTag    = 103;
+static const NSInteger kHeldLinkSheetTag    = 104;
+static const NSInteger kFailedMessageSheetTag = 105;
 
 - (Class)videoCaptureClass {
 	if (![UIImagePickerController isSourceTypeAvailable:
@@ -5499,13 +5529,34 @@ static const NSInteger kStickerLinkAlertTag = 102;
 }
 
 - (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
-	if (index == sheet.cancelButtonIndex)
+	if (index == sheet.cancelButtonIndex){
+		if (sheet.tag == kPeerMenuSheetTag){
+			self.peerMenuUserId = 0;
+			self.peerMenuName = nil;
+		} else if (sheet.tag == kHeldLinkSheetTag){
+			self.heldLinkURL = nil;
+		} else if (sheet.tag == kFailedMessageSheetTag){
+			self.failedMessageId = 0;
+		}
 		return;
+	}
 
 	if (sheet.tag == kTextLinksSheetTag){
 		if (index >= 0 && index < (NSInteger)self.tappedLinkTargets.count)
 			[self followTextTarget:[self.tappedLinkTargets objectAtIndex:index]];
 		self.tappedLinkTargets = nil;
+		return;
+	}
+	if (sheet.tag == kPeerMenuSheetTag){
+		[self runPeerMenuOption:([sheet buttonTitleAtIndex:index] ?: @"")];
+		return;
+	}
+	if (sheet.tag == kHeldLinkSheetTag){
+		[self runHeldLinkOption:([sheet buttonTitleAtIndex:index] ?: @"")];
+		return;
+	}
+	if (sheet.tag == kFailedMessageSheetTag){
+		[self runFailedMessageOption:([sheet buttonTitleAtIndex:index] ?: @"")];
 		return;
 	}
 	if (sheet.tag == kMessageSheetTag){
@@ -6059,10 +6110,26 @@ static const NSInteger kStickerLinkAlertTag = 102;
 			} else if ([kind isEqualToString:@"mention"] && fragment.length > 1){
 				[targets addObject:@{ @"label" : fragment,
 									  @"mention" : [fragment substringFromIndex:1] }];
+			} else if ([kind isEqualToString:@"mentionname"]){
+				int64_t mentioned = [entity[@"userId"] longLongValue];
+				if (mentioned > 0)
+					[targets addObject:@{ @"label" : fragment,
+										  @"userId" : @(mentioned) }];
+			} else if (([kind isEqualToString:@"hashtag"] ||
+						[kind isEqualToString:@"cashtag"]) && fragment.length > 1){
+				[targets addObject:@{ @"label" : fragment, @"hashtag" : fragment }];
+			} else if ([kind isEqualToString:@"botcommand"] && fragment.length > 1){
+				[targets addObject:@{ @"label" : fragment, @"command" : fragment }];
+			} else if ([kind isEqualToString:@"phonenumber"]){
+				[targets addObject:@{ @"label" : fragment,
+									  @"url" : [@"tel:" stringByAppendingString:fragment] }];
+			} else if ([kind isEqualToString:@"emailaddress"]){
+				[targets addObject:@{ @"label" : fragment,
+									  @"url" : [@"mailto:" stringByAppendingString:fragment] }];
 			}
 		}
 		if (!targets.count){
-			[me touchedMessageBackground];
+			[me tapFellThroughOnMessage:m];
 			return;
 		}
 		if (targets.count == 1){
@@ -6088,6 +6155,26 @@ static const NSInteger kStickerLinkAlertTag = 102;
 	NSString *url = target[@"url"];
 	if ([url isKindOfClass:NSString.class] && url.length){
 		[self openLink:url];
+		return;
+	}
+	// A hashtag searches this chat, which is what openHashtag does when it is
+	// given no peer name of its own.
+	NSString *hashtag = target[@"hashtag"];
+	if ([hashtag isKindOfClass:NSString.class] && hashtag.length){
+		[self searchChatForTag:hashtag];
+		return;
+	}
+	NSString *command = target[@"command"];
+	if ([command isKindOfClass:NSString.class] && command.length){
+		[[TGClient shared] sendText:command toChat:self.chatId
+							 thread:self.threadId];
+		return;
+	}
+	// A text mention names a user rather than a username, so it goes straight
+	// to that profile.
+	NSNumber *userId = target[@"userId"];
+	if ([userId isKindOfClass:NSNumber.class] && [userId longLongValue] > 0){
+		[self openProfileForUserId:[userId longLongValue]];
 		return;
 	}
 	NSString *mention = target[@"mention"];
@@ -6369,7 +6456,278 @@ static const NSInteger kStickerLinkAlertTag = 102;
 		return;
 
 	[self.table deselectRowAtIndexPath:path animated:NO];
+
+	// A link under the finger answers for itself: their long press on a URL
+	// opens Open / Copy / Add to Reading List, never the message menu.
+	UITableViewCell *cell = [self.table cellForRowAtIndexPath:path];
+	if ([cell isKindOfClass:TGBubbleCell.class] && !self.selecting){
+		TGBubbleCell *bubbleCell = (TGBubbleCell *)cell;
+		NSString *held = [self urlInLabel:bubbleCell.body
+								  atPoint:[hold locationInView:bubbleCell.body]];
+		if (held.length){
+			[self showHeldLinkSheetFor:held];
+			return;
+		}
+	}
+
 	[self showActionsForRow:path.row];
+}
+
+#pragma mark - a link under the finger
+
+/// UILabel keeps no character geometry on iOS 6, so the line box is rebuilt
+/// the way UILabel wraps it - greedily, on whitespace - and the touch is
+/// resolved against that. A miss simply falls through to the message menu.
+- (NSArray *)lineRangesOfText:(NSString *)text font:(UIFont *)font width:(CGFloat)width {
+	NSMutableArray *lines = [NSMutableArray array];
+	if (!text.length || !font || width < 1)
+		return lines;
+
+	NSUInteger length = text.length;
+	NSUInteger lineStart = 0;
+	NSUInteger cursor = 0;
+	NSUInteger lastBreak = NSNotFound;
+	NSCharacterSet *spaces = [NSCharacterSet whitespaceCharacterSet];
+
+	while (cursor < length){
+		unichar c = [text characterAtIndex:cursor];
+		if (c == '\n'){
+			[lines addObject:[NSValue valueWithRange:
+					NSMakeRange(lineStart, cursor - lineStart)]];
+			cursor++;
+			lineStart = cursor;
+			lastBreak = NSNotFound;
+			continue;
+		}
+		if ([spaces characterIsMember:c])
+			lastBreak = cursor;
+
+		NSRange sofar = NSMakeRange(lineStart, cursor - lineStart + 1);
+		CGFloat used = [[text substringWithRange:sofar] sizeWithFont:font].width;
+		if (used > width && cursor > lineStart){
+			NSUInteger breakAt = (lastBreak != NSNotFound && lastBreak > lineStart)
+					? lastBreak : cursor;
+			[lines addObject:[NSValue valueWithRange:
+					NSMakeRange(lineStart, breakAt - lineStart)]];
+			lineStart = (breakAt == lastBreak) ? breakAt + 1 : breakAt;
+			cursor = lineStart;
+			lastBreak = NSNotFound;
+			continue;
+		}
+		cursor++;
+	}
+	if (lineStart <= length)
+		[lines addObject:[NSValue valueWithRange:
+				NSMakeRange(lineStart, length - lineStart)]];
+	return lines;
+}
+
+- (NSInteger)characterIndexInLabel:(UILabel *)label atPoint:(CGPoint)point {
+	NSString *text = label.text;
+	if (!text.length || label.hidden)
+		return -1;
+	if (!CGRectContainsPoint(CGRectInset(label.bounds, -4, -2), point))
+		return -1;
+
+	UIFont *font = label.font;
+	CGFloat lineHeight = [@"Ag" sizeWithFont:font].height;
+	if (lineHeight < 1)
+		return -1;
+
+	NSArray *lines = [self lineRangesOfText:text font:font
+									  width:label.bounds.size.width];
+	if (!lines.count)
+		return -1;
+	NSInteger index = (NSInteger)floorf(MAX(0.0f, point.y) / lineHeight);
+	if (index < 0 || index >= (NSInteger)lines.count)
+		return -1;
+
+	NSRange line = [[lines objectAtIndex:index] rangeValue];
+	CGFloat x = 0;
+	for (NSUInteger i = 0; i < line.length; i++){
+		NSString *prefix = [text substringWithRange:
+				NSMakeRange(line.location, i + 1)];
+		CGFloat next = [prefix sizeWithFont:font].width;
+		if (point.x >= x && point.x < next)
+			return (NSInteger)(line.location + i);
+		x = next;
+	}
+	return -1;
+}
+
+- (NSString *)urlInLabel:(UILabel *)label atPoint:(CGPoint)point {
+	NSString *text = label.text;
+	if (!text.length || label.hidden)
+		return nil;
+	// The substituted-emoji path draws its own glyphs, so the measured line
+	// boxes no longer describe what is on screen - do not guess there.
+	if (TGEmojiTextNeedsSubstitution(text))
+		return nil;
+
+	NSError *error = nil;
+	NSDataDetector *detector = [NSDataDetector
+			dataDetectorWithTypes:NSTextCheckingTypeLink error:&error];
+	if (!detector)
+		return nil;
+	NSArray *matches = [detector matchesInString:text options:0
+										   range:NSMakeRange(0, text.length)];
+	if (!matches.count)
+		return nil;
+
+	NSInteger index = [self characterIndexInLabel:label atPoint:point];
+	if (index < 0)
+		return nil;
+	for (NSTextCheckingResult *match in matches){
+		if (!NSLocationInRange((NSUInteger)index, match.range))
+			continue;
+		NSURL *found = match.URL;
+		if (found)
+			return found.absoluteString;
+		return [text substringWithRange:match.range];
+	}
+	return nil;
+}
+
+/// Their sheet for a held link: Open, Copy, Add to Reading List. Reading List
+/// has no API before SafariServices, so the row only appears where the class
+/// exists - the same gate their own canAddToReadingList applies.
+- (void)showHeldLinkSheetFor:(NSString *)url {
+	self.heldLinkURL = url;
+	NSString *title = url;
+	if (title.length > 60)
+		title = [[title substringToIndex:57] stringByAppendingString:@"..."];
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:title
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:nil];
+	[sheet addButtonWithTitle:@"Open"];
+	[sheet addButtonWithTitle:@"Copy Link"];
+	if ([self readingListClass])
+		[sheet addButtonWithTitle:@"Add to Reading List"];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = kHeldLinkSheetTag;
+	[sheet showInView:self.view];
+}
+
+- (Class)readingListClass {
+	return NSClassFromString(@"SSReadingList");
+}
+
+- (void)runHeldLinkOption:(NSString *)chosen {
+	NSString *url = self.heldLinkURL;
+	self.heldLinkURL = nil;
+	if (!url.length)
+		return;
+	if ([chosen isEqualToString:@"Open"]){
+		[self openLink:url];
+		return;
+	}
+	if ([chosen isEqualToString:@"Copy Link"]){
+		[UIPasteboard generalPasteboard].string = url;
+		return;
+	}
+	if (![chosen isEqualToString:@"Add to Reading List"])
+		return;
+	Class readingList = [self readingListClass];
+	NSURL *target = [NSURL URLWithString:url];
+	if (!readingList || !target)
+		return;
+	id list = [readingList defaultReadingList];
+	if (![list respondsToSelector:
+			@selector(addReadingListItemWithURL:title:previewText:error:)])
+		return;
+	[list addReadingListItemWithURL:target title:nil previewText:nil error:NULL];
+}
+
+#pragma mark - the sender beside a message
+
+/// Their avatar and their name both open the profile; holding either one is
+/// what offers Mention, which is the only place a mention is inserted.
+- (void)showPeerMenuForUserId:(int64_t)userId {
+	if (userId <= 0 || self.selecting)
+		return;
+	self.peerMenuUserId = userId;
+	self.peerMenuName = [[TGClient shared] nameForUserId:userId] ?: @"";
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:
+			(self.peerMenuName.length ? self.peerMenuName : nil)
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:nil];
+	[sheet addButtonWithTitle:@"Open Profile"];
+	[sheet addButtonWithTitle:@"Send Message"];
+	if (!self.postingBlocked)
+		[sheet addButtonWithTitle:@"Mention"];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = kPeerMenuSheetTag;
+	[sheet showInView:self.view];
+}
+
+- (void)runPeerMenuOption:(NSString *)chosen {
+	int64_t userId = self.peerMenuUserId;
+	NSString *name = self.peerMenuName;
+	self.peerMenuUserId = 0;
+	self.peerMenuName = nil;
+	if (userId <= 0)
+		return;
+
+	if ([chosen isEqualToString:@"Open Profile"]){
+		[self openProfileForUserId:userId];
+		return;
+	}
+	if ([chosen isEqualToString:@"Send Message"]){
+		__weak typeof(self) weakSelf = self;
+		[[TGClient shared] privateChatWithUser:userId completion:^(int64_t chatId){
+			TGChatViewController *me = weakSelf;
+			if (!me || !chatId)
+				return;
+			[me openChatId:chatId title:(name.length ? name : @"Chat") isGroup:NO];
+		}];
+		return;
+	}
+	if ([chosen isEqualToString:@"Mention"])
+		[self insertMentionOfUser:userId name:name];
+}
+
+- (void)insertMentionOfUser:(int64_t)userId name:(NSString *)name {
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] userInfo:userId completion:^(NSDictionary *user){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		NSString *username = [me publicUsernameIn:user];
+		NSString *insert = username.length
+				? [NSString stringWithFormat:@"@%@ ", username]
+				: [NSString stringWithFormat:@"%@ ", (name.length ? name : @"")];
+		if (insert.length < 2)
+			return;
+		NSString *current = me.input.text ?: @"";
+		if (current.length && ![current hasSuffix:@" "])
+			current = [current stringByAppendingString:@" "];
+		me.input.text = [current stringByAppendingString:insert];
+		[me inputChanged];
+		[me.input becomeFirstResponder];
+	}];
+}
+
+- (NSString *)publicUsernameIn:(NSDictionary *)user {
+	if (![user isKindOfClass:NSDictionary.class])
+		return nil;
+	NSString *plain = user[@"username"];
+	if ([plain isKindOfClass:NSString.class] && plain.length)
+		return plain;
+	NSDictionary *usernames = user[@"usernames"];
+	if (![usernames isKindOfClass:NSDictionary.class])
+		return nil;
+	NSString *editable = usernames[@"editable_username"];
+	if ([editable isKindOfClass:NSString.class] && editable.length)
+		return editable;
+	NSArray *active = usernames[@"active_usernames"];
+	if (![active isKindOfClass:NSArray.class])
+		return nil;
+	NSString *first = [active firstObject];
+	return [first isKindOfClass:NSString.class] ? first : nil;
 }
 
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)recognizer {
@@ -6791,14 +7149,59 @@ static const NSInteger kStickerLinkAlertTag = 102;
 	sheet.allowsSelection = YES;
 	self.actionsSheet = sheet;
 
+	// The bubble under the finger stays lit for as long as the card is up, on
+	// Msg_In_Selected / Msg_Out_Selected - the pressed artwork of the period.
+	[self setPressedRow:row];
+
 	__weak typeof(self) weakSelf = self;
 	[sheet presentAtPoint:where inView:self.view completion:^(NSString *action){
+		[weakSelf setPressedRow:-1];
 		if (action)
 			[weakSelf performMessageAction:action];
 	}];
 }
 
-/// A double tap is how a chat reacts to a message that carries no chips yet.
+- (void)setPressedRow:(NSInteger)row {
+	if (_pressedRow == row)
+		return;
+	NSInteger before = _pressedRow;
+	_pressedRow = row;
+	if (before >= 0)
+		[self repaintBubbleArtworkOnRow:before];
+	if (row >= 0)
+		[self repaintBubbleArtworkOnRow:row];
+}
+
+- (void)repaintBubbleArtworkOnRow:(NSInteger)row {
+	if (row < 0 || row >= [self displayRowCount])
+		return;
+	NSIndexPath *path = [NSIndexPath indexPathForRow:row inSection:0];
+	UITableViewCell *cell = [self.table cellForRowAtIndexPath:path];
+	if (![cell isKindOfClass:TGBubbleCell.class])
+		return;
+	TGBubbleCell *bubbleCell = (TGBubbleCell *)cell;
+	if (bubbleCell.bubbleBg.hidden)
+		return;
+	NSDictionary *m = [self messageAtRow:row];
+	if (!m)
+		return;
+
+	BOOL mine = [m[@"outgoing"] boolValue];
+	BOOL lit = (row == _pressedRow);
+	NSString *name = mine ? @"Msg_Out" : @"Msg_In";
+	if (lit)
+		name = [name stringByAppendingString:@"_Selected"];
+	UIImage *art = [UIImage imageNamed:name];
+	if (!art)
+		art = [UIImage imageNamed:(mine ? @"Msg_Out" : @"Msg_In")];
+	if (!art)
+		return;
+	bubbleCell.bubbleBg.image = [art stretchableImageWithLeftCapWidth:(mine ? 15 : 20)
+														 topCapHeight:15];
+}
+
+/// A double tap sends the quick reaction, the way their bubble does: no
+/// picker, the default emoji straight onto the message.
 - (void)messageDoubleTapped:(UITapGestureRecognizer *)tap {
 	NSIndexPath *path = [self.table indexPathForRowAtPoint:[tap locationInView:self.table]];
 	NSDictionary *m = path ? [self messageAtRow:path.row] : nil;
@@ -6806,10 +7209,42 @@ static const NSInteger kStickerLinkAlertTag = 102;
 		return;
 	if ([m[@"service"] boolValue] || ![m[@"id"] isKindOfClass:NSNumber.class])
 		return;
-	UITableViewCell *cell = [self.table cellForRowAtIndexPath:path];
-	UIView *bubble = [cell isKindOfClass:TGBubbleCell.class]
-			? ((TGBubbleCell *)cell).bubble : cell;
-	[self showReactionPickerForMessage:[m[@"id"] longLongValue] fromView:(bubble ?: self.table)];
+	[self sendQuickReactionToMessage:[m[@"id"] longLongValue]];
+}
+
+- (void)sendQuickReactionToMessage:(int64_t)messageId {
+	if (!messageId || self.selecting)
+		return;
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] availableReactionsForMessage:messageId inChat:self.chatId
+										 completion:^(NSDictionary *info){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		NSString *reason = [info[@"reason"] isKindOfClass:NSString.class]
+				? info[@"reason"] : @"";
+		if (reason.length){
+			[me showAlertTitle:@"" message:reason];
+			return;
+		}
+		NSArray *allowed = [info[@"allEmoji"] isKindOfClass:NSArray.class]
+				? info[@"allEmoji"] : nil;
+		NSString *emoji = [[TGClient shared] quickReactionEmoji];
+		if (allowed.count && ![allowed containsObject:emoji])
+			emoji = [allowed objectAtIndex:0];
+		if (!emoji.length)
+			return;
+		[[TGClient shared] toggleReaction:emoji onMessage:messageId
+								   inChat:me.chatId big:NO
+							   completion:^(BOOL nowChosen){
+			TGChatViewController *inner = weakSelf;
+			if (!inner)
+				return;
+			[inner.reactionChipsRequested removeObject:@(messageId)];
+			dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+					dispatch_get_main_queue(), ^{ [inner reload]; });
+		}];
+	}];
 }
 
 /// The rows TGMessageActionsSheet reports back, each wired to the category
@@ -7708,6 +8143,21 @@ static const NSInteger kStickerLinkAlertTag = 102;
 		return;
 	}
 
+	// A message of yours that never left offers to go again, which is what
+	// their delivery-failed marker does when it is tapped.
+	if ([m[@"outgoing"] boolValue] &&
+		[[self sendStateForMessage:m] isEqualToString:@"failed"] &&
+		[m[@"id"] isKindOfClass:NSNumber.class]){
+		[self offerResendOfMessage:[m[@"id"] longLongValue]];
+		return;
+	}
+
+	// "X pinned a message" goes to the message it is about.
+	if ([kind isEqualToString:@"messagePinMessage"]){
+		[self jumpToPinnedMessageBehind:m];
+		return;
+	}
+
 	NSTimeInterval offset = [self mediaTimestampInMessage:m];
 	if (offset >= 0 && [self openMediaTimestamp:offset forRow:indexPath.row])
 		return;
@@ -7732,14 +8182,6 @@ static const NSInteger kStickerLinkAlertTag = 102;
 			[[TGClient shared] openContentOfMessage:[m[@"id"] longLongValue]
 											 inChat:self.chatId];
 	}
-
-	// A reply is unreadable if you cannot get to what it answers.
-	// The flattened message stores absent values as NSNull, which answers no
-	// number selector - asking it for a long long is what brought the app
-	// down on the first tap on a voice note.
-	NSNumber *replyTo = [m[@"replyId"] isKindOfClass:NSNumber.class] ? m[@"replyId"] : nil;
-	if (replyTo && [self scrollToMessageId:replyTo.longLongValue])
-		return;
 
 	if ([m[@"id"] isKindOfClass:NSNumber.class] && [self largeEmojiCountFor:m] > 0){
 		[self playAnimatedEmojiEffectFor:[m[@"id"] longLongValue]];
@@ -7825,7 +8267,87 @@ static const NSInteger kStickerLinkAlertTag = 102;
 		return;
 	}
 
+	[self tapFellThroughOnMessage:m];
+}
+
+/// Their reply header is the only part of a bubble that jumps, but a 3.5"
+/// screen makes a 38pt strip a small target, so a tap that found nothing else
+/// to do still goes to the answered message rather than dying on the spot.
+- (void)tapFellThroughOnMessage:(NSDictionary *)m {
+	NSNumber *replyTo = [m[@"replyId"] isKindOfClass:NSNumber.class] ? m[@"replyId"] : nil;
+	if (replyTo && [self scrollToMessageId:replyTo.longLongValue])
+		return;
 	[self touchedMessageBackground];
+}
+
+/// messagePinMessage carries the pinned id in its content; older histories
+/// only have it as the reply target, so both are tried.
+- (void)jumpToPinnedMessageBehind:(NSDictionary *)m {
+	NSNumber *replyTo = [m[@"replyId"] isKindOfClass:NSNumber.class] ? m[@"replyId"] : nil;
+	if (replyTo && [self scrollToMessageId:replyTo.longLongValue])
+		return;
+	if (![m[@"id"] isKindOfClass:NSNumber.class]){
+		[self touchedMessageBackground];
+		return;
+	}
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] request:@{@"@type"      : @"getRepliedMessage",
+								 @"chat_id"    : @(self.chatId),
+								 @"message_id" : m[@"id"]}
+					completion:^(NSDictionary *result){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		int64_t pinned = [result[@"id"] longLongValue];
+		if (!pinned || ![me scrollToMessageId:pinned])
+			[me showAlertTitle:@"" message:@"That message is not in the loaded history."];
+	}];
+}
+
+/// Their failed bubble offers Send Again and Delete, nothing else.
+- (void)offerResendOfMessage:(int64_t)messageId {
+	self.failedMessageId = messageId;
+	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"This message was not sent"
+													   delegate:self
+											  cancelButtonTitle:nil
+										 destructiveButtonTitle:nil
+											  otherButtonTitles:@"Send Again", nil];
+	[sheet addButtonWithTitle:@"Delete"];
+	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
+	sheet.tag = kFailedMessageSheetTag;
+	[sheet showInView:self.view];
+}
+
+- (void)runFailedMessageOption:(NSString *)chosen {
+	int64_t messageId = self.failedMessageId;
+	self.failedMessageId = 0;
+	if (!messageId)
+		return;
+
+	if ([chosen isEqualToString:@"Delete"]){
+		NSInteger row = [self rowForMessageId:messageId];
+		NSDictionary *found = (row != NSNotFound) ? [self messageAtRow:row] : nil;
+		if (found)
+			[self deleteMessage:found forEveryone:NO];
+		return;
+	}
+	if (![chosen isEqualToString:@"Send Again"])
+		return;
+
+	__weak typeof(self) weakSelf = self;
+	[[TGClient shared] resendMessages:@[@(messageId)] inChat:self.chatId
+						   completion:^(NSArray *messages){
+		TGChatViewController *me = weakSelf;
+		if (!me)
+			return;
+		[me.sendStates removeObjectForKey:@(messageId)];
+		[me.sendStatesRequested removeObject:@(messageId)];
+		if (!messages.count){
+			[me showAlertTitle:@"" message:@"This could not be sent again."];
+			return;
+		}
+		[me reload];
+	}];
 }
 
 /// The effect is a sticker TDLib names for us: fetch it, show it over the
@@ -8221,28 +8743,59 @@ static const NSInteger kForwardTapTag = 0x9200;
 }
 
 static const NSInteger kAvatarTapTag = 0x9300;
+static const NSInteger kSenderTapTag = 0x9301;
 
+/// Both the avatar beside a group message and the name above it open that
+/// member's profile, and holding either one offers Mention.
 - (void)attachAvatarTapIn:(TGBubbleCell *)cell sender:(int64_t)senderId {
 	cell.avatarUserId = senderId;
-	cell.senderAvatar.userInteractionEnabled = (senderId > 0 && !self.selecting);
-	if (cell.senderAvatar.tag == kAvatarTapTag)
-		return;
-	UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc]
-			initWithTarget:self action:@selector(senderAvatarTapped:)];
-	[cell.senderAvatar addGestureRecognizer:tap];
-	cell.senderAvatar.tag = kAvatarTapTag;
+	BOOL live = (senderId > 0 && !self.selecting);
+	cell.senderAvatar.userInteractionEnabled = live;
+	cell.sender.userInteractionEnabled = live;
+
+	if (cell.senderAvatar.tag != kAvatarTapTag){
+		[cell.senderAvatar addGestureRecognizer:[[UITapGestureRecognizer alloc]
+				initWithTarget:self action:@selector(senderAvatarTapped:)]];
+		[cell.senderAvatar addGestureRecognizer:[self senderHoldRecognizer]];
+		cell.senderAvatar.tag = kAvatarTapTag;
+	}
+	if (cell.sender.tag != kSenderTapTag){
+		[cell.sender addGestureRecognizer:[[UITapGestureRecognizer alloc]
+				initWithTarget:self action:@selector(senderAvatarTapped:)]];
+		[cell.sender addGestureRecognizer:[self senderHoldRecognizer]];
+		cell.sender.tag = kSenderTapTag;
+	}
+}
+
+/// Shorter than the table's own hold, so pressing a name reaches the member
+/// menu instead of being taken by the message menu behind it.
+- (UILongPressGestureRecognizer *)senderHoldRecognizer {
+	UILongPressGestureRecognizer *hold = [[UILongPressGestureRecognizer alloc]
+			initWithTarget:self action:@selector(senderHeld:)];
+	hold.minimumPressDuration = 0.24;
+	hold.allowableMovement = 10.0f;
+	return hold;
+}
+
+- (int64_t)senderOfGestureView:(UIView *)view {
+	while (view && ![view isKindOfClass:TGBubbleCell.class])
+		view = view.superview;
+	TGBubbleCell *cell = (TGBubbleCell *)view;
+	if (!cell || self.selecting)
+		return 0;
+	return cell.avatarUserId;
 }
 
 - (void)senderAvatarTapped:(UITapGestureRecognizer *)tap {
 	if (tap.state != UIGestureRecognizerStateRecognized)
 		return;
-	UIView *view = tap.view;
-	while (view && ![view isKindOfClass:TGBubbleCell.class])
-		view = view.superview;
-	TGBubbleCell *cell = (TGBubbleCell *)view;
-	if (!cell || cell.senderAvatar.hidden || self.selecting)
+	[self openProfileForUserId:[self senderOfGestureView:tap.view]];
+}
+
+- (void)senderHeld:(UILongPressGestureRecognizer *)hold {
+	if (hold.state != UIGestureRecognizerStateBegan)
 		return;
-	[self openProfileForUserId:cell.avatarUserId];
+	[self showPeerMenuForUserId:[self senderOfGestureView:hold.view]];
 }
 
 - (void)openProfileForUserId:(int64_t)userId {
@@ -8748,15 +9301,8 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 }
 
 - (CGFloat)albumInsetForRow:(NSInteger)row {
-	NSDictionary *head = [self messageAtRow:row];
-	if ([self albumCaptionMessageAtRow:row] || [[self chipsFor:head] count])
-		return kPadH;
-	if ([self decorationHeightFor:head] > 0.5f)
-		return kPadH;
-	if (self.isGroup && ![head[@"outgoing"] boolValue] &&
-		[[TGClient shared] nameForUserId:[head[@"senderId"] longLongValue]])
-		return kPadH;
-	return kAlbumBareInset;
+	(void)row;
+	return kPadH;
 }
 
 - (CGFloat)albumRowHeight:(NSInteger)row {
@@ -8769,10 +9315,9 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 	CGSize body = caption ? [self bodySizeFor:caption] : CGSizeZero;
 	CGFloat inset = [self albumInsetForRow:row];
 
-	if (inset == kAlbumBareInset)
-		return inset * 2 + mosaic + 3;
-
 	CGFloat h = kPadV * 2 + [self decorationHeightFor:head] + mosaic + 4;
+	if ([head[@"forward"] length])
+		h += 2;
 	if (self.isGroup && ![head[@"outgoing"] boolValue] &&
 		[[TGClient shared] nameForUserId:[head[@"senderId"] longLongValue]])
 		h += 17;
@@ -9231,6 +9776,8 @@ static UIColor *TGSenderColour(int64_t userId) {
 						tableWidth:tableView.bounds.size.width];
 }
 
+static const NSInteger kQuoteTapTag = 0x9009;
+
 - (CGFloat)layoutQuoteIn:(TGBubbleCell *)cell
 				 message:(NSDictionary *)m
 					 atY:(CGFloat)y
@@ -9288,14 +9835,50 @@ static UIColor *TGSenderColour(int64_t userId) {
 		cell.quote.textColor = [theme primaryTextColour];
 		cell.quote.text = [self quoteDisplayTextFor:m];
 		cell.quote.frame = CGRectMake(textX, y + 17, quoteW, 17);
+		[self placeQuoteTapTargetIn:cell
+							  frame:CGRectMake(kPadH, y, bubbleW - 2 * kPadH, 38)];
 		y += 38;
 	} else {
 		cell.quoteBar.hidden = YES;
 		cell.quote.hidden = YES;
 		quoteAuthor.hidden = YES;
 		quoteThumb.hidden = YES;
+		[cell.bubble viewWithTag:kQuoteTapTag].hidden = YES;
 	}
 	return y;
+}
+
+/// Their reply header is what navigates - not the whole bubble - so the strip
+/// carries an invisible target of its own rather than the row's tap doing it.
+- (void)placeQuoteTapTargetIn:(TGBubbleCell *)cell frame:(CGRect)frame {
+	UIView *target = [cell.bubble viewWithTag:kQuoteTapTag];
+	if (!target){
+		target = [[UIView alloc] initWithFrame:frame];
+		target.tag = kQuoteTapTag;
+		target.backgroundColor = [UIColor clearColor];
+		[target addGestureRecognizer:[[UITapGestureRecognizer alloc]
+				initWithTarget:self action:@selector(quoteHeaderTapped:)]];
+		[cell.bubble addSubview:target];
+	}
+	target.hidden = NO;
+	target.userInteractionEnabled = !self.selecting;
+	target.frame = frame;
+	[cell.bubble bringSubviewToFront:target];
+}
+
+- (void)quoteHeaderTapped:(UITapGestureRecognizer *)tap {
+	if (tap.state != UIGestureRecognizerStateRecognized || self.selecting)
+		return;
+	UIView *view = tap.view;
+	while (view && ![view isKindOfClass:TGBubbleCell.class])
+		view = view.superview;
+	NSIndexPath *path = view ? [self.table indexPathForCell:(TGBubbleCell *)view] : nil;
+	NSDictionary *m = path ? [self messageAtRow:path.row] : nil;
+	NSNumber *replyTo = [m[@"replyId"] isKindOfClass:NSNumber.class] ? m[@"replyId"] : nil;
+	if (!replyTo)
+		return;
+	if (![self scrollToMessageId:replyTo.longLongValue])
+		[self showAlertTitle:@"" message:@"That message is not in the loaded history."];
 }
 
 - (void)configureVoiceCell:(TGBubbleCell *)cell
@@ -9431,7 +10014,7 @@ static UIColor *TGSenderColour(int64_t userId) {
 
 	BOOL picked = self.selecting && [m[@"id"] isKindOfClass:NSNumber.class] &&
 			[self.selectedIds containsObject:m[@"id"]];
-	self.drawingSelectedRow = picked;
+	self.drawingSelectedRow = picked || (indexPath.row == self.pressedRow);
 	cell.checkView.hidden = !self.selecting || [m[@"service"] boolValue];
 	if (!cell.checkView.hidden){
 		cell.checkView.image = [self selectionGlyphChecked:picked];
@@ -9522,8 +10105,11 @@ static UIColor *TGSenderColour(int64_t userId) {
 		cell.sender.frame = CGRectMake(kPadH, kPadV + 2, bubbleW - 2 * kPadH, 16);
 	}
 
-	CGFloat y = (inset == kAlbumBareInset) ? inset : kPadV + senderH;
-	y += [self layoutForwardIn:cell message:head atY:y width:bubbleW];
+	CGFloat y = kPadV + senderH;
+	CGFloat forwardHeight = [self layoutForwardIn:cell message:head atY:y width:bubbleW];
+	y += forwardHeight;
+	if (forwardHeight > 0.5f)
+		y += 2;
 	y = [self layoutQuoteIn:cell message:head atY:y bubbleWidth:bubbleW];
 	cell.album.frame = CGRectMake(inset, y, groupSize.width, groupSize.height);
 	CGFloat innerRadius = [theme bubbleCornerRadius] - inset;
