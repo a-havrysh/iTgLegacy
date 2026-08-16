@@ -107,8 +107,8 @@ make
 ## Авторы и мейнтейнеры
 
 - **Оригинальный автор и создатель**: Игорь В. Семенцов ([@igkuzm](https://github.com/igkuzm))
-- **Текущий мейнтейнер**: [bla1r1](https://github.com/bla1r1)
-- **Репозиторий**: https://github.com/bla1r1/iTgLegacy
+- **Апстрим**: [bla1r1/iTgLegacy](https://github.com/bla1r1/iTgLegacy)
+- **Этот форк**: [a-havrysh/iTgLegacy](https://github.com/a-havrysh/iTgLegacy)
 
 ## Отказ от ответственности
 
