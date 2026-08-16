@@ -35,8 +35,10 @@ static UIView *TGStarsSectionHeaderWithTitle(NSString *title) {
 	}
 	[label sizeToFit];
 	label.frame = CGRectOffset(label.frame, 21, 16);
-	UIView *container = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 320, 46)];
+	UIView *container = [[UIView alloc] initWithFrame:
+			CGRectMake(0, 0, [UIScreen mainScreen].bounds.size.width, 46)];
 	container.backgroundColor = [UIColor clearColor];
+	container.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	[container addSubview:label];
 	return container;
 }

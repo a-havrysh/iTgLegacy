@@ -877,7 +877,8 @@ static NSString *TGStickersCacheKey(NSInteger fileId, CGFloat side) {
 - (UIView *)gridFooterView {
 	UIImage *plate = TGStickersStretch(@"Footer.png", 1);
 	if (!plate || [[TGTheme shared] isFlat])
-		return [[UIView alloc] initWithFrame:CGRectMake(0, 0, 320, 1)];
+		return [[UIView alloc] initWithFrame:
+				CGRectMake(0, 0, self.view.bounds.size.width, 1)];
 	UIImageView *footer = [[UIImageView alloc] initWithImage:plate];
 	footer.frame = CGRectMake(0, 0, self.view.bounds.size.width, plate.size.height);
 	footer.autoresizingMask = UIViewAutoresizingFlexibleWidth;

@@ -11,7 +11,7 @@
 //
 //   TGReactionChipsView   the compact row of chips drawn under a bubble, each
 //                         one an emoji, its count, and whether we picked it.
-//                         Chip height 20, emoji 13pt, count bold 11pt, filled
+//                         Chip height 26, emoji 14pt, count bold 11pt, filled
 //                         with the bubble's own selected-state plate.
 //
 // Nothing here talks to TDLib directly; everything goes through
@@ -93,6 +93,10 @@ typedef void (^TGReactionChipTappedBlock)(NSString *emoji, BOOL chosen);
 /// How tall a row of these chips is at `width`, so a bubble can size itself
 /// before the view exists. 0 when there is nothing to draw.
 + (CGFloat)heightForChips:(NSArray *)chips width:(CGFloat)width;
+
++ (CGSize)sizeForChips:(NSArray *)chips width:(CGFloat)width;
+
++ (CGFloat)rowHeight;
 
 @end
 

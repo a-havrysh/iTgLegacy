@@ -1,4 +1,5 @@
 #import "TGSettingsViewController.h"
+#import "TGEmoji.h"
 #import "RootViewController.h"
 #import "TGClient.h"
 #import "TGTheme.h"
@@ -172,6 +173,7 @@ static NSString *TGSettingsDuration(double seconds) {
 @property (nonatomic, strong) NSString *sessionDetail;
 @property (nonatomic, strong) NSArray *chatPicks;
 @property (nonatomic, strong) NSArray *usernamePicks;
+@property (nonatomic, strong) UIPopoverController *pickerPopover;
 @end
 
 @implementation TGAccountSettingsViewController
@@ -219,9 +221,14 @@ static NSString *TGSettingsDuration(double seconds) {
 					? number[@"formatted"] : phone;
 			NSString *country = [number[@"countryName"] isKindOfClass:[NSString class]]
 					? number[@"countryName"] : nil;
-			weakSelf.phoneDetail = country.length
-					? [NSString stringWithFormat:@"+%@ (%@)", formatted, country]
+			NSString *calling = [number[@"callingCode"] isKindOfClass:[NSString class]]
+					? number[@"callingCode"] : nil;
+			NSString *dialled = calling.length
+					? [NSString stringWithFormat:@"+%@ %@", calling, formatted]
 					: [NSString stringWithFormat:@"+%@", formatted];
+			weakSelf.phoneDetail = country.length
+					? [NSString stringWithFormat:@"%@ (%@)", dialled, country]
+					: dialled;
 			[weakSelf.tableView reloadData];
 		}];
 	}];
@@ -497,7 +504,7 @@ static NSString *TGSettingsDuration(double seconds) {
 		  otherButtonTitles:@"Choose from Library", @"Delete Current Photo", nil];
 		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 		sheet.tag = 11;
-		[sheet showInView:self.view];
+		[self showSheet:sheet];
 		return;
 	}
 	if (row == 1){
@@ -506,7 +513,7 @@ static NSString *TGSettingsDuration(double seconds) {
 		  otherButtonTitles:@"Set Birthday", @"Clear Birthday", nil];
 		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 		sheet.tag = 12;
-		[sheet showInView:self.view];
+		[self showSheet:sheet];
 		return;
 	}
 	[self showPersonalChatSheet];
@@ -535,7 +542,7 @@ static NSString *TGSettingsDuration(double seconds) {
 	self.usernamePicks = picks;
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 	sheet.tag = 10;
-	[sheet showInView:self.view];
+	[self showSheet:sheet];
 }
 
 - (void)showPersonalChatSheet {
@@ -562,7 +569,7 @@ static NSString *TGSettingsDuration(double seconds) {
 	[sheet addButtonWithTitle:@"None"];
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 	sheet.tag = 13;
-	[sheet showInView:self.view];
+	[self showSheet:sheet];
 }
 
 - (void)beginChangeNumber {
@@ -884,7 +891,7 @@ static NSString *TGSettingsDuration(double seconds) {
 		UIImagePickerController *picker = [[UIImagePickerController alloc] init];
 		picker.sourceType = UIImagePickerControllerSourceTypePhotoLibrary;
 		picker.delegate = self;
-		[self presentViewController:picker animated:YES completion:nil];
+		[self showPicker:picker];
 		return;
 	}
 	if (!self.photos.count){
@@ -941,9 +948,51 @@ static NSString *TGSettingsDuration(double seconds) {
 	}];
 }
 
+- (void)showPicker:(UIImagePickerController *)picker {
+	if (UI_USER_INTERFACE_IDIOM() != UIUserInterfaceIdiomPad
+			|| picker.sourceType == UIImagePickerControllerSourceTypeCamera){
+		[self presentViewController:picker animated:YES completion:nil];
+		return;
+	}
+	[self dismissPickerPopover];
+	UIPopoverController *popover =
+			[[UIPopoverController alloc] initWithContentViewController:picker];
+	self.pickerPopover = popover;
+	[popover presentPopoverFromRect:[self anchorRect]
+							 inView:self.view
+		   permittedArrowDirections:UIPopoverArrowDirectionAny
+						   animated:YES];
+}
+
+- (void)showSheet:(UIActionSheet *)sheet {
+	if (UI_USER_INTERFACE_IDIOM() != UIUserInterfaceIdiomPad){
+		[sheet showInView:self.view];
+		return;
+	}
+	[sheet showFromRect:[self anchorRect] inView:self.view animated:YES];
+}
+
+- (CGRect)anchorRect {
+	NSIndexPath *selected = [self.tableView indexPathForSelectedRow];
+	if (selected)
+		return [self.view convertRect:[self.tableView rectForRowAtIndexPath:selected]
+							 fromView:self.tableView];
+	CGRect bounds = self.view.bounds;
+	return CGRectMake(CGRectGetMidX(bounds), CGRectGetMidY(bounds), 1, 1);
+}
+
+- (BOOL)dismissPickerPopover {
+	if (!self.pickerPopover)
+		return NO;
+	[self.pickerPopover dismissPopoverAnimated:YES];
+	self.pickerPopover = nil;
+	return YES;
+}
+
 - (void)imagePickerController:(UIImagePickerController *)picker
 		didFinishPickingMediaWithInfo:(NSDictionary *)info {
-	[picker dismissViewControllerAnimated:YES completion:nil];
+	if (![self dismissPickerPopover])
+		[picker dismissViewControllerAnimated:YES completion:nil];
 	UIImage *image = info[UIImagePickerControllerOriginalImage];
 	if (!image)
 		return;
@@ -983,7 +1032,8 @@ static NSString *TGSettingsDuration(double seconds) {
 }
 
 - (void)imagePickerControllerDidCancel:(UIImagePickerController *)picker {
-	[picker dismissViewControllerAnimated:YES completion:nil];
+	if (![self dismissPickerPopover])
+		[picker dismissViewControllerAnimated:YES completion:nil];
 }
 
 @end
@@ -1040,8 +1090,18 @@ static NSString *TGSettingsDuration(double seconds) {
 @property (nonatomic, strong) NSDictionary *pressedSound;
 @property (nonatomic, assign) NSInteger activeProxyId;
 @property (nonatomic, assign) BOOL pickingProfilePhoto;
+@property (nonatomic, strong) UIPopoverController *pickerPopover;
 @property (nonatomic, strong) NSArray *photoSheetActions;
 @property (nonatomic, assign) BOOL detailPaneShown;
+- (void)showPicker:(UIImagePickerController *)picker;
+- (void)showSheet:(UIActionSheet *)sheet;
+- (CGRect)anchorRect;
+- (BOOL)dismissPickerPopover;
+- (UIImage *)blankSwatchOfSize:(CGSize)size;
++ (NSString *)kindOfBackground:(NSDictionary *)background;
++ (NSString *)titleForBackground:(NSDictionary *)background at:(NSInteger)index;
+- (NSInteger)ordinalOfBackgroundAtRow:(NSInteger)row;
++ (NSString *)detailForBackground:(NSDictionary *)background;
 - (void)openViewController:(UIViewController *)next;
 + (NSString *)pollVoteSource;
 - (void)writeReactionSource:(NSString *)source
@@ -1340,7 +1400,7 @@ static NSString *TGSettingsDuration(double seconds) {
 						  dark:(BOOL)dark
 						  name:(NSString *)name {
 	CGFloat inset = TGSettingsGroupedInset(width);
-	UILabel *nameLabel = [[UILabel alloc] initWithFrame:
+	UILabel *nameLabel = [[TGEmojiLabel alloc] initWithFrame:
 			CGRectMake(94 + inset, 24, MAX(20.0f, width - 94 - 9 - inset * 2), 24)];
 	nameLabel.text = name;
 	nameLabel.font = [UIFont boldSystemFontOfSize:19];
@@ -2834,7 +2894,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 	sheet.tag = 160;
 	self.photoSheetActions = actions;
-	[sheet showInView:self.view];
+	[self showSheet:sheet];
 }
 
 - (void)presentProfilePhotoPickerFromSource:(UIImagePickerControllerSourceType)source {
@@ -2842,7 +2902,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	UIImagePickerController *picker = [[UIImagePickerController alloc] init];
 	picker.sourceType = source;
 	picker.delegate = self;
-	[self presentViewController:picker animated:YES completion:nil];
+	[self showPicker:picker];
 }
 
 - (void)takeProfilePhoto:(UIImage *)image {
@@ -3454,6 +3514,60 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	return cell;
 }
 
++ (NSString *)kindOfBackground:(NSDictionary *)background {
+	NSString *kind = [background isKindOfClass:[NSDictionary class]]
+			&& [background[@"kind"] isKindOfClass:[NSString class]]
+			? background[@"kind"] : nil;
+	return kind.length ? kind : @"wallpaper";
+}
+
++ (NSString *)colourWord:(NSDictionary *)background {
+	NSNumber *top = background[@"topColor"];
+	NSNumber *bottom = background[@"bottomColor"];
+	if (![top isKindOfClass:[NSNumber class]])
+		return nil;
+	unsigned int topValue = [top unsignedIntValue] & 0xffffffu;
+	if (![bottom isKindOfClass:[NSNumber class]]
+			|| ([bottom unsignedIntValue] & 0xffffffu) == topValue)
+		return [NSString stringWithFormat:@"#%06X", topValue];
+	return [NSString stringWithFormat:@"#%06X to #%06X", topValue,
+			[bottom unsignedIntValue] & 0xffffffu];
+}
+
++ (NSString *)titleForBackground:(NSDictionary *)background at:(NSInteger)index {
+	NSString *kind = [TGSettingsViewController kindOfBackground:background];
+	if ([kind isEqualToString:@"fill"]){
+		NSNumber *top = background[@"topColor"];
+		NSNumber *bottom = background[@"bottomColor"];
+		BOOL gradient = [top isKindOfClass:[NSNumber class]]
+				&& [bottom isKindOfClass:[NSNumber class]]
+				&& [top unsignedIntValue] != [bottom unsignedIntValue];
+		return gradient ? @"Gradient" : @"Solid colour";
+	}
+	if ([kind isEqualToString:@"theme"])
+		return @"Chat theme";
+	if ([kind isEqualToString:@"pattern"])
+		return [NSString stringWithFormat:@"Pattern %ld", (long)(index + 1)];
+	return [NSString stringWithFormat:@"Photograph %ld", (long)(index + 1)];
+}
+
++ (NSString *)detailForBackground:(NSDictionary *)background {
+	NSString *kind = [TGSettingsViewController kindOfBackground:background];
+	NSMutableArray *parts = [NSMutableArray array];
+	NSString *colours = [TGSettingsViewController colourWord:background];
+	if ([kind isEqualToString:@"wallpaper"])
+		[parts addObject:@"photo"];
+	if (colours.length)
+		[parts addObject:colours];
+	if ([background[@"isBlurred"] boolValue])
+		[parts addObject:@"blurred"];
+	if ([background[@"isMoving"] boolValue])
+		[parts addObject:@"moving"];
+	if ([background[@"isDefault"] boolValue])
+		[parts addObject:@"built in"];
+	return [parts componentsJoinedByString:@", "];
+}
+
 - (UIImage *)swatchForBackground:(NSDictionary *)background size:(CGSize)size {
 	NSNumber *top = background[@"topColor"];
 	NSNumber *bottom = background[@"bottomColor"];
@@ -3512,17 +3626,47 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	NSDictionary *background = self.backgrounds[path.row];
 	if (![background isKindOfClass:[NSDictionary class]])
 		return cell;
-	NSString *name = [background[@"name"] isKindOfClass:[NSString class]]
-			? background[@"name"] : @"Background";
-	NSString *kind = [background[@"kind"] isKindOfClass:[NSString class]]
-			? background[@"kind"] : @"wallpaper";
-	cell.textLabel.text = name;
-	cell.detailTextLabel.text = [background[@"topColor"] isKindOfClass:[NSNumber class]]
-			? kind : [NSString stringWithFormat:@"%@, photo", kind];
+	cell.textLabel.text = [TGSettingsViewController
+			titleForBackground:background
+							at:[self ordinalOfBackgroundAtRow:path.row]];
+	cell.detailTextLabel.text = [TGSettingsViewController detailForBackground:background];
 	cell.detailTextLabel.textColor = [[TGTheme shared] secondaryTextColour];
-	cell.imageView.image = [self swatchForBackground:background
-											   size:CGSizeMake(30, 30)];
+	CGSize swatch = CGSizeMake(30, 30);
+	cell.imageView.image = [self swatchForBackground:background size:swatch]
+			?: [self blankSwatchOfSize:swatch];
 	return cell;
+}
+
+- (NSInteger)ordinalOfBackgroundAtRow:(NSInteger)row {
+	if ((NSUInteger)row >= self.backgrounds.count)
+		return 0;
+	NSString *kind = [TGSettingsViewController kindOfBackground:self.backgrounds[row]];
+	NSInteger ordinal = 0;
+	for (NSInteger index = 0; index < row; index++)
+		if ([[TGSettingsViewController kindOfBackground:self.backgrounds[index]]
+				isEqualToString:kind])
+			ordinal++;
+	return ordinal;
+}
+
+- (UIImage *)blankSwatchOfSize:(CGSize)size {
+	static UIImage *cached = nil;
+	if (cached && CGSizeEqualToSize(cached.size, size))
+		return cached;
+	UIGraphicsBeginImageContextWithOptions(size, YES, 1.0f);
+	CGContextRef context = UIGraphicsGetCurrentContext();
+	if (!context){
+		UIGraphicsEndImageContext();
+		return nil;
+	}
+	CGContextSetFillColorWithColor(context, TGSettingsRGB(0xd6dae0).CGColor);
+	CGContextFillRect(context, CGRectMake(0, 0, size.width, size.height));
+	CGContextSetStrokeColorWithColor(context, TGSettingsRGB(0xb0b6be).CGColor);
+	CGContextStrokeRect(context, CGRectMake(0.5f, 0.5f, size.width - 1, size.height - 1));
+	UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	cached = image;
+	return image;
 }
 
 - (UITableViewCell *)fillWallpaperChooserCell:(UITableViewCell *)cell
@@ -3848,7 +3992,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		otherButtonTitles:@"Everybody", @"My Contacts", @"Nobody", nil];
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 	sheet.tag = 142;
-	[sheet showInView:self.view];
+	[self showSheet:sheet];
 }
 
 - (void)showReactionSourceSheet {
@@ -3860,7 +4004,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		otherButtonTitles:@"Everybody", @"My Contacts", @"Nobody", nil];
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 	sheet.tag = 141;
-	[sheet showInView:self.view];
+	[self showSheet:sheet];
 }
 
 - (void)confirmResetAllNotifications {
@@ -3928,7 +4072,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		otherButtonTitles:nil];
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 	sheet.tag = 155;
-	[sheet showInView:self.view];
+	[self showSheet:sheet];
 }
 
 - (void)tapException:(NSIndexPath *)path {
@@ -3959,6 +4103,9 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	self.detailPaneShown = NO;
 	[self handleSelectionAtIndexPath:indexPath inTable:tableView];
+	if (indexPath.section >= [tableView numberOfSections]
+			|| indexPath.row >= [tableView numberOfRowsInSection:indexPath.section])
+		return;
 	if (self.detailPaneShown){
 		[tableView selectRowAtIndexPath:indexPath animated:NO
 						 scrollPosition:UITableViewScrollPositionNone];
@@ -4184,7 +4331,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	}
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 	sheet.tag = 120 + tool;
-	[sheet showInView:self.view];
+	[self showSheet:sheet];
 }
 
 - (void)openGroupTool:(NSInteger)tool forChat:(NSDictionary *)chat {
@@ -4272,7 +4419,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 															   @"6 months", @"12 months", nil];
 		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 		sheet.tag = 90;
-		[sheet showInView:self.view];
+		[self showSheet:sheet];
 		return;
 	}
 
@@ -4284,7 +4431,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		otherButtonTitles:@"everybody", @"contacts", @"nobody", nil];
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 	sheet.tag = 91 + indexPath.row;
-	[sheet showInView:self.view];
+	[self showSheet:sheet];
 }
 
 - (void)tapLanguage:(NSIndexPath *)indexPath {
@@ -4351,7 +4498,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		otherButtonTitles:@"Update Strings", @"Delete Downloaded Pack", nil];
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 	sheet.tag = 153;
-	[sheet showInView:self.view];
+	[self showSheet:sheet];
 }
 
 - (void)pressBackgroundAtRow:(NSInteger)row {
@@ -4362,15 +4509,16 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		return;
 	self.pressedBackground = background;
 	UIActionSheet *sheet = [[UIActionSheet alloc]
-			initWithTitle:[background[@"name"] isKindOfClass:[NSString class]]
-					? background[@"name"] : @"Background"
+			initWithTitle:[TGSettingsViewController
+					titleForBackground:background
+									at:[self ordinalOfBackgroundAtRow:row]]
 				 delegate:self
 		cancelButtonTitle:nil
    destructiveButtonTitle:@"Remove from List"
 		otherButtonTitles:@"Copy Link", nil];
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 	sheet.tag = 152;
-	[sheet showInView:self.view];
+	[self showSheet:sheet];
 }
 
 - (void)showProxySheet {
@@ -4393,7 +4541,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		otherButtonTitles:on ? nil : @"Use Last Proxy", nil];
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 	sheet.tag = 154;
-	[sheet showInView:self.view];
+	[self showSheet:sheet];
 }
 
 - (void)tapBlocked:(NSIndexPath *)indexPath {
@@ -4461,7 +4609,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 														   @"17 pt", @"19 pt", nil];
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 	sheet.tag = 88;
-	[sheet showInView:self.view];
+	[self showSheet:sheet];
 }
 
 #pragma mark - auto-download
@@ -4480,7 +4628,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		otherButtonTitles:@"Low", @"Medium", @"High", @"Nothing", nil];
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 	sheet.tag = 130 + indexPath.row;
-	[sheet showInView:self.view];
+	[self showSheet:sheet];
 }
 
 - (void)applyPresetIndex:(NSInteger)index toNetworkRow:(NSInteger)row {
@@ -4612,7 +4760,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		[sheet addButtonWithTitle:name];
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 	sheet.tag = 150;
-	[sheet showInView:self.view];
+	[self showSheet:sheet];
 }
 
 - (void)showWallpaperGradientSheet {
@@ -4623,13 +4771,14 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		[sheet addButtonWithTitle:name];
 	sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 	sheet.tag = 151;
-	[sheet showInView:self.view];
+	[self showSheet:sheet];
 }
 
 - (void)applyBackground:(NSDictionary *)background {
-	BOOL isFill = [background[@"topColor"] isKindOfClass:[NSNumber class]]
-			&& ![background[@"fileId"] isKindOfClass:[NSNumber class]];
-	if (!isFill && ![TGCapabilities canShowWallpaper]){
+	BOOL isPhoto = [background[@"fileId"] isKindOfClass:[NSNumber class]]
+			&& ![[TGSettingsViewController kindOfBackground:background]
+					isEqualToString:@"pattern"];
+	if (isPhoto && ![TGCapabilities canShowWallpaper]){
 		UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Chat wallpaper"
 				message:@"This device has too little memory to hold a photographic "
 						@"wallpaper. Colours and gradients still work."
@@ -4637,16 +4786,13 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 		[alert show];
 		return;
 	}
-	if (![background[@"id"] isKindOfClass:[NSString class]])
-		return;
 
 	BOOL dark = [[TGTheme shared] isDark];
 	__weak typeof(self) weakSelf = self;
-	[[TGClient shared] setDefaultBackgroundId:background[@"id"]
-									  blurred:(!isFill && self.wallpaperBlurred)
-									   moving:NO
-								 forDarkTheme:dark
-								   completion:^(NSDictionary *applied){
+	[[TGClient shared] setDefaultBackgroundRow:background
+									   blurred:(isPhoto && self.wallpaperBlurred)
+								  forDarkTheme:dark
+									completion:^(NSDictionary *applied){
 		if (!applied){
 			UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Chat wallpaper"
 					message:@"Telegram would not apply this background."
@@ -4660,7 +4806,10 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 
 - (void)adoptBackgroundLocally:(NSDictionary *)background {
 	NSNumber *fileId = background[@"fileId"];
-	if ([fileId isKindOfClass:[NSNumber class]] && [TGCapabilities canShowWallpaper]){
+	BOOL isPhoto = [[TGSettingsViewController kindOfBackground:background]
+			isEqualToString:@"wallpaper"];
+	if (isPhoto && [fileId isKindOfClass:[NSNumber class]]
+			&& [TGCapabilities canShowWallpaper]){
 		__weak typeof(self) weakSelf = self;
 		[[TGClient shared] downloadFile:fileId.integerValue
 							 completion:^(NSString *path){
@@ -4690,7 +4839,7 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 												 otherButtonTitles:@"Choose another", nil];
 		sheet.cancelButtonIndex = [sheet addButtonWithTitle:@"Cancel"];
 		sheet.tag = 89;
-		[sheet showInView:self.view];
+		[self showSheet:sheet];
 		return;
 	}
 	[self presentWallpaperPicker];
@@ -4988,12 +5137,54 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 	UIImagePickerController *picker = [[UIImagePickerController alloc] init];
 	picker.sourceType = UIImagePickerControllerSourceTypePhotoLibrary;
 	picker.delegate = self;
-	[self presentViewController:picker animated:YES completion:nil];
+	[self showPicker:picker];
+}
+
+- (void)showPicker:(UIImagePickerController *)picker {
+	if (UI_USER_INTERFACE_IDIOM() != UIUserInterfaceIdiomPad
+			|| picker.sourceType == UIImagePickerControllerSourceTypeCamera){
+		[self presentViewController:picker animated:YES completion:nil];
+		return;
+	}
+	[self dismissPickerPopover];
+	UIPopoverController *popover =
+			[[UIPopoverController alloc] initWithContentViewController:picker];
+	self.pickerPopover = popover;
+	[popover presentPopoverFromRect:[self anchorRect]
+							 inView:self.view
+		   permittedArrowDirections:UIPopoverArrowDirectionAny
+						   animated:YES];
+}
+
+- (void)showSheet:(UIActionSheet *)sheet {
+	if (UI_USER_INTERFACE_IDIOM() != UIUserInterfaceIdiomPad){
+		[sheet showInView:self.view];
+		return;
+	}
+	[sheet showFromRect:[self anchorRect] inView:self.view animated:YES];
+}
+
+- (CGRect)anchorRect {
+	NSIndexPath *selected = [self.tableView indexPathForSelectedRow];
+	if (selected)
+		return [self.view convertRect:[self.tableView rectForRowAtIndexPath:selected]
+							 fromView:self.tableView];
+	CGRect bounds = self.view.bounds;
+	return CGRectMake(CGRectGetMidX(bounds), CGRectGetMidY(bounds), 1, 1);
+}
+
+- (BOOL)dismissPickerPopover {
+	if (!self.pickerPopover)
+		return NO;
+	[self.pickerPopover dismissPopoverAnimated:YES];
+	self.pickerPopover = nil;
+	return YES;
 }
 
 - (void)imagePickerController:(UIImagePickerController *)picker
 		didFinishPickingMediaWithInfo:(NSDictionary *)info {
-	[picker dismissViewControllerAnimated:YES completion:nil];
+	if (![self dismissPickerPopover])
+		[picker dismissViewControllerAnimated:YES completion:nil];
 	UIImage *image = info[UIImagePickerControllerOriginalImage];
 	if (self.pickingProfilePhoto){
 		self.pickingProfilePhoto = NO;
@@ -5108,7 +5299,8 @@ static inline CGFloat TGSettingsRetinaPixel(void) {
 
 - (void)imagePickerControllerDidCancel:(UIImagePickerController *)picker {
 	self.pickingProfilePhoto = NO;
-	[picker dismissViewControllerAnimated:YES completion:nil];
+	if (![self dismissPickerPopover])
+		[picker dismissViewControllerAnimated:YES completion:nil];
 }
 
 - (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {

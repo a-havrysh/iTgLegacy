@@ -1,4 +1,5 @@
 #import "TGCallViewController.h"
+#import "TGEmoji.h"
 #import <AVFoundation/AVFoundation.h>
 #import <AudioToolbox/AudioToolbox.h>
 #import "TGCall.h"
@@ -111,7 +112,7 @@
 	UIColor *chromeShadow = [UIColor colorWithRed:0x32 / 255.0f green:0x3c / 255.0f
 											 blue:0x4a / 255.0f alpha:1.0f];
 
-	self.nameLabel = [[UILabel alloc] initWithFrame:
+	self.nameLabel = [[TGEmojiLabel alloc] initWithFrame:
 			CGRectMake(9, avatarY + side + 18 + retinaPixel, b.size.width - 18, 24)];
 	self.nameLabel.text = self.peerName.length ? self.peerName : @"Unknown";
 	self.nameLabel.adjustsFontSizeToFitWidth = YES;

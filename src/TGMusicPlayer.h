@@ -11,6 +11,8 @@ extern NSString *const TGMusicTrackPerformer;
 extern NSString *const TGMusicTrackFileName;
 extern NSString *const TGMusicTrackDuration;
 extern NSString *const TGMusicTrackIsVoice;
+extern NSString *const TGMusicTrackSender;
+extern NSString *const TGMusicTrackDate;
 
 @interface TGMusicPlayer : NSObject
 
@@ -20,6 +22,8 @@ extern NSString *const TGMusicTrackIsVoice;
 @property (nonatomic, readonly) NSDictionary *currentTrack;
 @property (nonatomic, readonly) int64_t currentMessageId;
 @property (nonatomic, readonly) int64_t currentChatId;
+@property (nonatomic, readonly) BOOL isVoice;
+@property (nonatomic, readonly) float voiceRate;
 @property (nonatomic, readonly) BOOL isPlaying;
 @property (nonatomic, readonly) BOOL isLoading;
 @property (nonatomic, readonly) NSTimeInterval currentTime;
@@ -38,9 +42,13 @@ extern NSString *const TGMusicTrackIsVoice;
 - (void)playPrevious;
 - (void)seekToFraction:(CGFloat)fraction;
 - (void)seekToSeconds:(NSTimeInterval)seconds;
+- (void)cycleVoiceRate;
 - (void)stop;
 
 - (BOOL)isCurrentMessage:(int64_t)messageId inChat:(int64_t)chatId;
+
+- (void)chatClosed:(int64_t)chatId;
+- (void)chatOpened:(int64_t)chatId;
 
 - (void)handleRemoteControlEvent:(UIEvent *)event;
 

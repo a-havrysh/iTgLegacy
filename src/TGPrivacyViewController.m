@@ -1471,7 +1471,7 @@ typedef void (^TGPrivacyPickerBlock)(NSArray *userIds);
 	if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
 		self.edgesForExtendedLayout = UIRectEdgeNone;
 	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
-	self.tableView.rowHeight = 48;
+	self.tableView.rowHeight = 44;
 	self.senders = [NSMutableArray array];
 	[self reload];
 }
@@ -1504,7 +1504,8 @@ typedef void (^TGPrivacyPickerBlock)(NSArray *userIds);
 	if (!self.loaded)
 		return @"Loading...";
 	if (!self.senders.count)
-		return @"Blocked users cannot write to you. Swipe a name to unblock.";
+		return @"You have not blocked anyone. Blocked users cannot send you "
+				"messages or add you to groups.";
 	return @"Swipe a name to unblock.";
 }
 
@@ -1666,7 +1667,7 @@ typedef void (^TGPrivacyPickerBlock)(NSArray *userIds);
 @interface TGConnectedWebsitesViewController : UITableViewController
 @end
 
-@interface TGConnectedWebsitesViewController ()
+@interface TGConnectedWebsitesViewController () <UIActionSheetDelegate>
 @property (nonatomic, strong) NSMutableArray *websites;
 @property (nonatomic, assign) BOOL loaded;
 @end
@@ -1805,6 +1806,19 @@ typedef void (^TGPrivacyPickerBlock)(NSArray *userIds);
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 	[tableView deselectRowAtIndexPath:indexPath animated:YES];
 	if (indexPath.section != 1)
+		return;
+	UIActionSheet *sheet = [[UIActionSheet alloc]
+					 initWithTitle:@"Every website will have to sign you in again."
+						  delegate:self
+				 cancelButtonTitle:@"Cancel"
+			destructiveButtonTitle:@"Disconnect All Websites"
+				 otherButtonTitles:nil];
+	sheet.tag = 91;
+	[sheet showInView:self.navigationController.view ?: self.view];
+}
+
+- (void)actionSheet:(UIActionSheet *)sheet clickedButtonAtIndex:(NSInteger)index {
+	if (sheet.tag != 91 || index != sheet.destructiveButtonIndex)
 		return;
 	__weak typeof(self) weakSelf = self;
 	[[TGClient shared] disconnectAllWebsitesWithCompletion:^(BOOL ok){

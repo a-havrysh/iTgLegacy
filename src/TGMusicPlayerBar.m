@@ -1,10 +1,13 @@
 #import "TGMusicPlayerBar.h"
 #import "TGMusicPlayer.h"
 #import "TGTheme.h"
+#import "TGDateUtils.h"
+#import "RootViewController.h"
 
 static const CGFloat kBarHeight  = 37.0f;
 static const CGFloat kLineHeight = 2.0f;
 static const CGFloat kGlyphSide  = 24.0f;
+static const CGFloat kRateWidth  = 38.0f;
 
 static TGMusicPlayerBar *sBar = nil;
 
@@ -86,17 +89,18 @@ static CGFloat TGNavigationBarBottom(UIView *host, UIView *view, int depth) {
 	return best;
 }
 
-static UIScrollView *TGFrontmostScrollView(UIView *view, int depth) {
-	if (depth > 7 || view.hidden || view.alpha < 0.05f || view.window == nil)
-		return nil;
-	if ([view isKindOfClass:UIScrollView.class] && view.bounds.size.height > 120)
-		return (UIScrollView *)view;
-	for (UIView *child in [view.subviews reverseObjectEnumerator]){
-		UIScrollView *found = TGFrontmostScrollView(child, depth + 1);
-		if (found)
-			return found;
+static void TGCollectCoveredScrollViews(UIView *host, UIView *view, CGRect area,
+										NSMutableArray *found, int depth) {
+	if (depth > 8 || view.hidden || view.alpha < 0.05f || view.window == nil)
+		return;
+	if ([view isKindOfClass:UIScrollView.class]){
+		CGRect frame = [view convertRect:view.bounds toView:host];
+		if (frame.size.height > 120 && CGRectIntersectsRect(frame, area))
+			[found addObject:view];
+		return;
 	}
-	return nil;
+	for (UIView *child in view.subviews)
+		TGCollectCoveredScrollViews(host, child, area, found, depth + 1);
 }
 
 #pragma mark -
@@ -106,15 +110,16 @@ static UIScrollView *TGFrontmostScrollView(UIView *view, int depth) {
 	UIButton *_toggle;
 	UIButton *_next;
 	UIButton *_close;
+	UIButton *_rate;
 	UILabel  *_title;
 	UILabel  *_performer;
 	UIView   *_track;
 	UIView   *_progress;
 	UIView   *_hairline;
 	NSTimer  *_anchorTimer;
-	__weak UIScrollView *_insetView;
-	BOOL      _insetApplied;
+	NSMutableArray *_insetViews;
 	BOOL      _scrubbing;
+	BOOL      _voice;
 	CGFloat   _scrubFraction;
 }
 
@@ -125,8 +130,7 @@ static UIScrollView *TGFrontmostScrollView(UIView *view, int depth) {
 + (void)activate {
 	if (sBar)
 		return;
-	sBar = [[TGMusicPlayerBar alloc] initWithFrame:
-			CGRectMake(0, 0, [UIScreen mainScreen].bounds.size.width, kBarHeight)];
+	sBar = [[TGMusicPlayerBar alloc] initWithFrame:CGRectMake(0, 0, 0, kBarHeight)];
 	[sBar sync];
 }
 
@@ -136,11 +140,21 @@ static UIScrollView *TGFrontmostScrollView(UIView *view, int depth) {
 
 	self.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 	self.clipsToBounds = YES;
+	_insetViews = [NSMutableArray array];
 
 	_previous = [self buttonWithGlyph:@"previous" action:@selector(previousTapped)];
 	_toggle   = [self buttonWithGlyph:@"pause"    action:@selector(toggleTapped)];
 	_next     = [self buttonWithGlyph:@"next"     action:@selector(nextTapped)];
 	_close    = [self buttonWithGlyph:@"close"    action:@selector(closeTapped)];
+
+	_rate = [UIButton buttonWithType:UIButtonTypeCustom];
+	_rate.titleLabel.font = [UIFont boldSystemFontOfSize:11];
+	_rate.hidden = YES;
+	_rate.layer.cornerRadius = 3.0f;
+	_rate.layer.borderWidth = 1.0f;
+	[_rate addTarget:self action:@selector(rateTapped)
+			forControlEvents:UIControlEventTouchUpInside];
+	[self addSubview:_rate];
 
 	_title = [[UILabel alloc] initWithFrame:CGRectZero];
 	_title.backgroundColor = [UIColor clearColor];
@@ -223,7 +237,15 @@ static UIScrollView *TGFrontmostScrollView(UIView *view, int depth) {
 	[_next setImage:TGMusicGlyph(@"next", ink) forState:UIControlStateNormal];
 	[_close setImage:TGMusicGlyph(@"close", [theme secondaryTextColour])
 			forState:UIControlStateNormal];
+	[_rate setTitleColor:ink forState:UIControlStateNormal];
+	_rate.layer.borderColor = ink.CGColor;
 	[self syncToggleGlyph];
+}
+
+- (void)syncRateTitle {
+	float rate = [TGMusicPlayer shared].voiceRate;
+	NSString *title = (rate > 1.75f) ? @"2x" : ((rate > 1.25f) ? @"1.5x" : @"1x");
+	[_rate setTitle:title forState:UIControlStateNormal];
 }
 
 - (void)syncToggleGlyph {
@@ -241,9 +263,11 @@ static UIScrollView *TGFrontmostScrollView(UIView *view, int depth) {
 	_toggle.frame   = CGRectMake(34, 0, 34, row);
 	_next.frame     = CGRectMake(68, 0, 32, row);
 	_close.frame    = CGRectMake(w - 34, 0, 32, row);
+	_rate.frame     = CGRectMake(w - 36 - kRateWidth, (row - 20) / 2, kRateWidth, 20);
 
 	CGFloat left  = 106;
-	CGFloat width = MAX((CGFloat)40, w - left - 40);
+	CGFloat right = _voice ? (40 + kRateWidth) : 40;
+	CGFloat width = MAX((CGFloat)40, w - left - right);
 	BOOL twoLines = _performer.text.length > 0;
 	if (twoLines){
 		_title.frame     = CGRectMake(left, 2, width, 16);
@@ -269,6 +293,9 @@ static UIScrollView *TGFrontmostScrollView(UIView *view, int depth) {
 #pragma mark - placement
 
 - (UIView *)host {
+	UINavigationController *detail = [RootViewController detailNavigationController];
+	if (detail && detail.isViewLoaded && detail.view.window)
+		return detail.view;
 	UIWindow *window = [UIApplication sharedApplication].keyWindow;
 	if (!window)
 		window = [[UIApplication sharedApplication].windows count]
@@ -302,32 +329,41 @@ static UIScrollView *TGFrontmostScrollView(UIView *view, int depth) {
 
 - (void)applyInset {
 	UIView *host = [self host];
-	UIScrollView *wanted = host ? TGFrontmostScrollView(host, 0) : nil;
-	if (wanted == self.superview)
-		wanted = nil;
-	if (wanted == _insetView)
-		return;
-	[self dropInset];
-	if (!wanted)
-		return;
-	UIEdgeInsets insets = wanted.contentInset;
-	insets.top += kBarHeight;
-	wanted.contentInset = insets;
-	wanted.scrollIndicatorInsets = insets;
-	_insetView = wanted;
-	_insetApplied = YES;
+	NSMutableArray *wanted = [NSMutableArray array];
+	if (host && self.superview == host){
+		for (UIView *child in host.subviews){
+			if (child == self)
+				continue;
+			TGCollectCoveredScrollViews(host, child, self.frame, wanted, 1);
+		}
+	}
+	for (UIScrollView *scroll in [_insetViews copy])
+		if (![wanted containsObject:scroll])
+			[self shiftScrollView:scroll by:-kBarHeight];
+	for (UIScrollView *scroll in wanted)
+		if (![_insetViews containsObject:scroll])
+			[self shiftScrollView:scroll by:kBarHeight];
+}
+
+- (void)shiftScrollView:(UIScrollView *)scroll by:(CGFloat)amount {
+	UIEdgeInsets content = scroll.contentInset;
+	BOOL wasAtTop = scroll.contentOffset.y <= -content.top + 0.5f;
+	content.top += amount;
+	scroll.contentInset = content;
+	UIEdgeInsets indicator = scroll.scrollIndicatorInsets;
+	indicator.top += amount;
+	scroll.scrollIndicatorInsets = indicator;
+	if (wasAtTop)
+		scroll.contentOffset = CGPointMake(scroll.contentOffset.x, -content.top);
+	if (amount > 0)
+		[_insetViews addObject:scroll];
+	else
+		[_insetViews removeObject:scroll];
 }
 
 - (void)dropInset {
-	UIScrollView *previous = _insetView;
-	if (previous && _insetApplied){
-		UIEdgeInsets insets = previous.contentInset;
-		insets.top -= kBarHeight;
-		previous.contentInset = insets;
-		previous.scrollIndicatorInsets = insets;
-	}
-	_insetView = nil;
-	_insetApplied = NO;
+	for (UIScrollView *scroll in [_insetViews copy])
+		[self shiftScrollView:scroll by:-kBarHeight];
 }
 
 - (void)detach {
@@ -351,10 +387,23 @@ static UIScrollView *TGFrontmostScrollView(UIView *view, int depth) {
 		return;
 	}
 
-	NSString *title = track[TGMusicTrackTitle];
-	NSString *performer = track[TGMusicTrackPerformer];
-	_title.text = title.length ? title : @"Audio";
-	_performer.text = player.isLoading ? @"Loading…" : (performer.length ? performer : @"");
+	_voice = [track[TGMusicTrackIsVoice] boolValue];
+	if (_voice){
+		NSString *sender = track[TGMusicTrackSender];
+		_title.text = sender.length ? sender : @"Voice message";
+		_performer.text = player.isLoading
+				? @"Loading…"
+				: [TGDateUtils stringForLastSeen:[track[TGMusicTrackDate] intValue]];
+		_rate.hidden = NO;
+		[self syncRateTitle];
+	} else {
+		NSString *title = track[TGMusicTrackTitle];
+		NSString *performer = track[TGMusicTrackPerformer];
+		_title.text = title.length ? title : @"Audio";
+		_performer.text = player.isLoading
+				? @"Loading…" : (performer.length ? performer : @"");
+		_rate.hidden = YES;
+	}
 
 	BOOL alone = (player.playlist.count < 2);
 	_previous.enabled = !alone;
@@ -388,9 +437,14 @@ static UIScrollView *TGFrontmostScrollView(UIView *view, int depth) {
 - (void)previousTapped { [[TGMusicPlayer shared] playPrevious]; }
 - (void)closeTapped    { [[TGMusicPlayer shared] stop]; }
 
+- (void)rateTapped {
+	[[TGMusicPlayer shared] cycleVoiceRate];
+	[self syncRateTitle];
+}
+
 - (void)scrubbed:(UIPanGestureRecognizer *)pan {
 	CGFloat width = self.bounds.size.width;
-	if (width <= 0)
+	if (width <= 0 || _voice)
 		return;
 	CGFloat x = [pan locationInView:self].x;
 	_scrubFraction = MAX((CGFloat)0, MIN((CGFloat)1, x / width));

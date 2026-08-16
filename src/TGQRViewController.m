@@ -646,7 +646,7 @@ static Class TGQRMetadataOutputClass(void) {
 		UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"QR Code"
 				message:text delegate:self
 				cancelButtonTitle:isLink ? @"Cancel" : @"OK"
-				otherButtonTitles:isLink ? @"Open" : nil];
+				otherButtonTitles:(isLink ? @"Open" : nil), nil];
 		[alert show];
 		return;
 	}

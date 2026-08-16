@@ -8,6 +8,7 @@
 + (UIImage *)imageForKey:(NSString *)key scale:(CGFloat)scale;
 + (void)storeImage:(UIImage *)image forKey:(NSString *)key;
 + (void)removeImageForKey:(NSString *)key;
++ (void)clearImages;
 
 + (void)protectPath:(NSString *)path;
 + (void)protectTreeAtPath:(NSString *)path;

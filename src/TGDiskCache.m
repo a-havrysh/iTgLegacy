@@ -208,6 +208,22 @@ static NSString *TGDiskCacheImagePath(NSString *key) {
 	});
 }
 
++ (void)clearImages {
+	NSString *dir = TGDiskCacheImageDirectory();
+	dispatch_async(TGDiskCacheQueue(), ^{
+		@autoreleasepool {
+			NSFileManager *fm = [NSFileManager defaultManager];
+			NSUInteger removed = 0;
+			for (NSString *name in [fm contentsOfDirectoryAtPath:dir error:NULL]){
+				if ([fm removeItemAtPath:[dir stringByAppendingPathComponent:name]
+								   error:NULL])
+					removed++;
+			}
+			NSLog(@"TGDiskCache: discarded %lu cached images", (unsigned long)removed);
+		}
+	});
+}
+
 + (void)sweepIfDue {
 	static NSTimeInterval last = 0;
 	NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];

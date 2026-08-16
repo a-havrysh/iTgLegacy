@@ -216,6 +216,7 @@ APP_SRC_M := \
 	src/TGCallViewController.m \
 	src/TGProfileViewController.m \
 	src/TGEditProfileViewController.m \
+	src/TGPollComposerViewController.m \
 	src/TGDeviceViewController.m \
 	src/TGStorageViewController.m \
 	src/TGSessionsViewController.m \

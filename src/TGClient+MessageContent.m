@@ -682,6 +682,7 @@ static NSDictionary *TGMCMediaInfo(NSDictionary *message) {
 				   anonymous:(BOOL)anonymous
 			 multipleAnswers:(BOOL)multipleAnswers
 		   quizCorrectOption:(NSInteger)quizCorrectOption
+			 quizExplanation:(NSString *)quizExplanation
 					  toChat:(int64_t)chatId
 					  thread:(int64_t)threadId
 				  completion:(void (^)(int64_t))completion {
@@ -706,10 +707,14 @@ static NSDictionary *TGMCMediaInfo(NSDictionary *message) {
 
 	BOOL isQuiz = quizCorrectOption >= 0 &&
 				  quizCorrectOption < (NSInteger)pollOptions.count;
+	NSString *explanation = [quizExplanation isKindOfClass:[NSString class]]
+			? quizExplanation : @"";
+	if (explanation.length > 200)
+		explanation = [explanation substringToIndex:200];
 	NSDictionary *type = isQuiz
 		? @{@"@type" : @"inputPollTypeQuiz",
 			@"correct_option_ids" : @[@(quizCorrectOption)],
-			@"explanation" : TGMCFormattedText(@"")}
+			@"explanation" : TGMCFormattedText(explanation)}
 		: @{@"@type" : @"inputPollTypeRegular", @"allow_adding_options" : @NO};
 
 	[self mc_send:@{

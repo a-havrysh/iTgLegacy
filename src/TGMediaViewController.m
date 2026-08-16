@@ -131,13 +131,19 @@ static UIImage *TGMediaMinithumbImage(NSDictionary *item) {
 	return image;
 }
 
+static CGFloat TGMediaFullScreenWidth(void) {
+	CGSize screen = [UIScreen mainScreen].bounds.size;
+	return MAX(screen.width, screen.height);
+}
+
 static NSMutableDictionary *TGMediaPhotoFields(NSDictionary *content, TGClient *client,
 											   CGFloat scale) {
 	NSArray *sizes = content[@"photo"][@"sizes"];
 	if (![sizes isKindOfClass:NSArray.class] || sizes.count == 0)
 		return nil;
 	NSDictionary *small = [client bestPhotoSizeIn:sizes forWidth:TGMediaTileSide scale:scale];
-	NSDictionary *large = [client bestPhotoSizeIn:sizes forWidth:320.0f scale:scale];
+	NSDictionary *large = [client bestPhotoSizeIn:sizes
+										 forWidth:TGMediaFullScreenWidth() scale:scale];
 
 	NSMutableDictionary *fields = [NSMutableDictionary dictionary];
 	id thumbId = small[@"fileId"];

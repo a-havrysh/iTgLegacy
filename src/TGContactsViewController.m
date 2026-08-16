@@ -1115,6 +1115,9 @@ static UIImage *TGSecretKeyImage(NSArray *cells) {
 @property (nonatomic, assign) BOOL sortByLastSeen;
 @property (nonatomic, strong) UIButton *sortButton;
 @property (nonatomic, strong) NSMutableArray *reusableSectionHeaders;
+@property (nonatomic, strong) UIView *emptyPlaceholder;
+@property (nonatomic, strong) UILabel *emptyTitleLabel;
+@property (nonatomic, strong) UILabel *emptyHelpLabel;
 @end
 
 @implementation TGContactsViewController
@@ -2308,6 +2311,7 @@ static NSString *TGContactSectionLetter(NSDictionary *u, BOOL byFirstName) {
 		[me applyFilter];
 		[me rebuildSections];
 		[me.tableView reloadData];
+		[me updateEmptyState];
 	}];
 }
 
@@ -2728,6 +2732,77 @@ static NSString *TGContactSectionLetter(NSDictionary *u, BOOL byFirstName) {
 	background.backgroundColor = [[TGTheme shared] listBackgroundColour];
 	background.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
 	self.tableView.backgroundView = background;
+
+	self.emptyPlaceholder = [[UIView alloc] initWithFrame:
+			CGRectMake(0, 0, background.bounds.size.width, 70)];
+	self.emptyPlaceholder.autoresizingMask = UIViewAutoresizingFlexibleWidth
+			| UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
+	self.emptyPlaceholder.backgroundColor = [UIColor clearColor];
+	self.emptyPlaceholder.hidden = YES;
+
+	UIColor *placeholderColour = [[TGTheme shared] secondaryTextColour];
+	BOOL flat = [[TGTheme shared] isFlat];
+
+	self.emptyTitleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	self.emptyTitleLabel.backgroundColor = [UIColor clearColor];
+	self.emptyTitleLabel.font = [UIFont boldSystemFontOfSize:14];
+	self.emptyTitleLabel.textColor = placeholderColour;
+	self.emptyTitleLabel.textAlignment = NSTextAlignmentCenter;
+	if (!flat){
+		self.emptyTitleLabel.shadowColor = [UIColor colorWithWhite:1.0f alpha:0.5f];
+		self.emptyTitleLabel.shadowOffset = CGSizeMake(0, 1);
+	}
+	[self.emptyPlaceholder addSubview:self.emptyTitleLabel];
+
+	self.emptyHelpLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	self.emptyHelpLabel.backgroundColor = [UIColor clearColor];
+	self.emptyHelpLabel.font = [UIFont systemFontOfSize:14];
+	self.emptyHelpLabel.textColor = placeholderColour;
+	self.emptyHelpLabel.textAlignment = NSTextAlignmentCenter;
+	self.emptyHelpLabel.numberOfLines = 0;
+	if (!flat){
+		self.emptyHelpLabel.shadowColor = [UIColor colorWithWhite:1.0f alpha:0.5f];
+		self.emptyHelpLabel.shadowOffset = CGSizeMake(0, 1);
+	}
+	[self.emptyPlaceholder addSubview:self.emptyHelpLabel];
+
+	[background addSubview:self.emptyPlaceholder];
+}
+
+- (void)updateEmptyState {
+	if (!self.emptyPlaceholder)
+		return;
+	NSString *query = [self.searchQuery
+			stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+	if (!self.filteredUsers || self.filteredUsers.count || !query.length){
+		self.emptyPlaceholder.hidden = YES;
+		return;
+	}
+
+	CGFloat width = self.emptyPlaceholder.bounds.size.width;
+	CGFloat helpWidth = MIN(260.0f, MAX(160.0f, width - 40.0f));
+
+	self.emptyTitleLabel.text = @"No results";
+	CGSize titleSize = [self.emptyTitleLabel.text sizeWithFont:self.emptyTitleLabel.font];
+	self.emptyTitleLabel.frame = CGRectMake(0, 0, width, titleSize.height);
+
+	self.emptyHelpLabel.text = @"No contact or Telegram user matches that name.";
+	CGSize helpSize = [self.emptyHelpLabel.text sizeWithFont:self.emptyHelpLabel.font
+										   constrainedToSize:CGSizeMake(helpWidth, 1000)
+											   lineBreakMode:NSLineBreakByWordWrapping];
+	self.emptyHelpLabel.frame = CGRectMake((CGFloat)(int)((width - helpWidth) / 2), 26,
+			helpWidth, helpSize.height);
+
+	CGFloat totalHeight = 26 + helpSize.height;
+	UIView *host = self.emptyPlaceholder.superview;
+	CGFloat hostHeight = host ? host.bounds.size.height : totalHeight;
+	CGRect frame = self.emptyPlaceholder.frame;
+	frame.size.height = totalHeight;
+	frame.origin.y = (CGFloat)(int)((hostHeight - totalHeight) / 2) - 40;
+	if (frame.origin.y < 0)
+		frame.origin.y = 0;
+	self.emptyPlaceholder.frame = frame;
+	self.emptyPlaceholder.hidden = NO;
 }
 
 - (void)buildAddButton {
@@ -2974,6 +3049,7 @@ static NSString *TGContactSectionLetter(NSDictionary *u, BOOL byFirstName) {
 	[self applyFilter];
 	[self rebuildSections];
 	[self.tableView reloadData];
+	[self updateEmptyState];
 	[NSObject cancelPreviousPerformRequestsWithTarget:self
 											 selector:@selector(runServerContactSearch)
 											   object:nil];
@@ -3000,6 +3076,7 @@ static NSString *TGContactSectionLetter(NSDictionary *u, BOOL byFirstName) {
 	self.serverQuery = nil;
 	[self rebuildSections];
 	[self.tableView reloadData];
+	[self updateEmptyState];
 	[searchBar resignFirstResponder];
 }
 

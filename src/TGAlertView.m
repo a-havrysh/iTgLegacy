@@ -43,6 +43,7 @@ static const CGFloat TGAlertPanelButtonRadius = 7.0f;
 static const CGFloat TGAlertPanelGlossHeight = 31.0f;
 static const CGFloat TGAlertPanelScreenMargin = 20.0f;
 static const CGFloat TGAlertPanelButtonLabelPadding = 24.0f;
+static const CGFloat TGAlertPanelDimAlpha = 0.485f;
 
 static NSMutableSet *TGAlertViewVisiblePanels(void)
 {
@@ -172,10 +173,27 @@ static void TGAlertPanelAddRoundedRect(CGContextRef context, CGRect rect, CGFloa
 
 @end
 
-@interface TGAlertPanelView : UIView
+@interface TGAlertPanelView : UIView <UITextFieldDelegate>
+
+@property (nonatomic, strong) id owner;
+
 @end
 
 @implementation TGAlertPanelView
+
+- (void)panelButtonTapped:(UIButton *)button
+{
+    if ([self.owner respondsToSelector:@selector(panelButtonTapped:)])
+        [self.owner performSelector:@selector(panelButtonTapped:) withObject:button];
+}
+
+- (BOOL)textFieldShouldReturn:(UITextField *)textField
+{
+    if ([self.owner respondsToSelector:@selector(panelFieldShouldReturn)])
+        [self.owner performSelector:@selector(panelFieldShouldReturn)];
+
+    return NO;
+}
 
 - (id)initWithFrame:(CGRect)frame
 {
@@ -228,8 +246,9 @@ static void TGAlertPanelAddRoundedRect(CGContextRef context, CGRect rect, CGFloa
 
 @end
 
-@interface TGAlertView () <UIAlertViewDelegate, UITextFieldDelegate>
+@interface TGAlertView () <UIAlertViewDelegate>
 {
+    UIAlertViewStyle _requestedStyle;
     UIView *_panelHost;
     TGAlertPanelView *_panel;
     UILabel *_panelTitleLabel;
@@ -287,23 +306,61 @@ static void TGAlertPanelAddRoundedRect(CGContextRef context, CGRect rect, CGFloa
     return self;
 }
 
+- (NSInteger)firstOtherButtonIndex
+{
+    NSInteger index = [super firstOtherButtonIndex];
+    if (index >= 0)
+        return index;
+
+    for (NSInteger candidate = 0; candidate < self.numberOfButtons; candidate++)
+    {
+        if (candidate != self.cancelButtonIndex)
+            return candidate;
+    }
+
+    return -1;
+}
+
 - (void)dealloc
 {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
-- (BOOL)usesOwnLayout
+- (BOOL)usesOwnLayoutForStyle:(UIAlertViewStyle)style
 {
     if (TGAlertViewSystemVersionComponent(0) >= 7)
         return NO;
 
-    if (![self respondsToSelector:@selector(alertViewStyle)])
+    if (![self respondsToSelector:@selector(setAlertViewStyle:)])
         return NO;
 
-    if (self.alertViewStyle == UIAlertViewStyleDefault)
+    if (style == UIAlertViewStyleDefault)
         return NO;
 
     return self.numberOfButtons > 2;
+}
+
+- (BOOL)usesOwnLayout
+{
+    return [self usesOwnLayoutForStyle:_requestedStyle];
+}
+
+- (void)setAlertViewStyle:(UIAlertViewStyle)alertViewStyle
+{
+    _requestedStyle = alertViewStyle;
+
+    if ([self usesOwnLayoutForStyle:alertViewStyle])
+        return;
+
+    [super setAlertViewStyle:alertViewStyle];
+}
+
+- (UIAlertViewStyle)alertViewStyle
+{
+    if (_requestedStyle != UIAlertViewStyleDefault)
+        return _requestedStyle;
+
+    return [super alertViewStyle];
 }
 
 - (UITextField *)ownTextField
@@ -316,8 +373,7 @@ static void TGAlertPanelAddRoundedRect(CGContextRef context, CGRect rect, CGFloa
     field.backgroundColor = [UIColor whiteColor];
     field.font = TGAlertPanelMessageFont();
     field.textColor = [UIColor blackColor];
-    field.delegate = self;
-    field.secureTextEntry = (self.alertViewStyle == UIAlertViewStyleSecureTextInput);
+    field.secureTextEntry = (_requestedStyle == UIAlertViewStyleSecureTextInput);
     field.layer.borderWidth = 1.0f;
     field.layer.cornerRadius = 4.0f;
     field.layer.borderColor = [UIColor colorWithRed:0.184f green:0.227f blue:0.318f alpha:1.0f].CGColor;
@@ -393,10 +449,11 @@ static void TGAlertPanelAddRoundedRect(CGContextRef context, CGRect rect, CGFloa
     [TGAlertViewVisiblePanels() addObject:self];
 
     _panelHost = [[UIView alloc] initWithFrame:host.bounds];
-    _panelHost.backgroundColor = [UIColor clearColor];
+    _panelHost.backgroundColor = [UIColor colorWithWhite:0.0f alpha:TGAlertPanelDimAlpha];
     _panelHost.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
 
     _panel = [[TGAlertPanelView alloc] initWithFrame:CGRectZero];
+    _panel.owner = self;
     [_panelHost addSubview:_panel];
 
     if (self.title.length != 0)
@@ -429,7 +486,8 @@ static void TGAlertPanelAddRoundedRect(CGContextRef context, CGRect rect, CGFloa
         [_panel addSubview:_panelMessageLabel];
     }
 
-    [_panel addSubview:[self ownTextField]];
+    [self ownTextField].delegate = _panel;
+    [_panel addSubview:_panelField];
 
     _panelButtons = [[NSMutableArray alloc] init];
     for (NSInteger index = 0; index < self.numberOfButtons; index++)
@@ -451,15 +509,19 @@ static void TGAlertPanelAddRoundedRect(CGContextRef context, CGRect rect, CGFloa
                                              selector:@selector(panelKeyboardChanged:)
                                                  name:UIKeyboardWillHideNotification
                                                object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(panelOrientationChanged:)
+                                                 name:UIApplicationDidChangeStatusBarOrientationNotification
+                                               object:nil];
 
     [self layoutPanel];
 
-    _panel.alpha = 0.0f;
+    _panelHost.alpha = 0.0f;
     _panel.transform = CGAffineTransformMakeScale(1.18f, 1.18f);
     [UIView animateWithDuration:0.2
                      animations:^
     {
-        _panel.alpha = 1.0f;
+        _panelHost.alpha = 1.0f;
         _panel.transform = CGAffineTransformIdentity;
     }];
 
@@ -474,7 +536,7 @@ static void TGAlertPanelAddRoundedRect(CGContextRef context, CGRect rect, CGFloa
     TGAlertPanelButton *button = [[TGAlertPanelButton alloc] initWithFrame:CGRectZero];
     [button setTitle:title forState:UIControlStateNormal];
     button.tag = index;
-    [button addTarget:self action:@selector(panelButtonPressed:) forControlEvents:UIControlEventTouchUpInside];
+    [button addTarget:_panel action:@selector(panelButtonTapped:) forControlEvents:UIControlEventTouchUpInside];
     [_panel addSubview:button];
     [_panelButtons addObject:button];
 }
@@ -500,6 +562,16 @@ static void TGAlertPanelAddRoundedRect(CGContextRef context, CGRect rect, CGFloa
     {
         [self layoutPanel];
     }];
+}
+
+- (void)panelOrientationChanged:(NSNotification *)notification
+{
+    (void)notification;
+
+    if (!_panelVisible)
+        return;
+
+    [self layoutPanel];
 }
 
 - (CGFloat)panelContentWidth:(CGFloat)panelWidth
@@ -643,15 +715,13 @@ static void TGAlertPanelAddRoundedRect(CGContextRef context, CGRect rect, CGFloa
     [_panel setNeedsDisplay];
 }
 
-- (void)panelButtonPressed:(UIButton *)button
+- (void)panelButtonTapped:(UIButton *)button
 {
     [self dismissPanelWithButtonIndex:button.tag];
 }
 
-- (BOOL)textFieldShouldReturn:(UITextField *)textField
+- (void)panelFieldShouldReturn
 {
-    (void)textField;
-
     NSInteger index = self.firstOtherButtonIndex;
     if (index < 0)
         index = self.cancelButtonIndex;
@@ -659,7 +729,6 @@ static void TGAlertPanelAddRoundedRect(CGContextRef context, CGRect rect, CGFloa
         index = 0;
 
     [self dismissPanelWithButtonIndex:index];
-    return NO;
 }
 
 - (void)dismissPanelWithButtonIndex:(NSInteger)index
@@ -671,8 +740,10 @@ static void TGAlertPanelAddRoundedRect(CGContextRef context, CGRect rect, CGFloa
 
     [[NSNotificationCenter defaultCenter] removeObserver:self name:UIKeyboardWillShowNotification object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:UIKeyboardWillHideNotification object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:UIApplicationDidChangeStatusBarOrientationNotification object:nil];
 
     [_panelField resignFirstResponder];
+    _panelField.delegate = nil;
 
     UIView *host = _panelHost;
     _panelHost = nil;

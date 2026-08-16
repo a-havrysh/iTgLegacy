@@ -4574,7 +4574,7 @@ static UIImage *TGStatsStretch(NSString *name, int leftCap) {
 	avatar.clipsToBounds = YES;
 	[cell.contentView addSubview:avatar];
 
-	UILabel *name = [[UILabel alloc] initWithFrame:
+	UILabel *name = [[TGEmojiLabel alloc] initWithFrame:
 			CGRectMake(54, 4, tableView.bounds.size.width - 118, 20)];
 	name.tag = 22;
 	name.autoresizingMask = UIViewAutoresizingFlexibleWidth;

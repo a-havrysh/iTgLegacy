@@ -17,6 +17,8 @@ NSString *const TGMusicTrackPerformer = @"performer";
 NSString *const TGMusicTrackFileName  = @"fileName";
 NSString *const TGMusicTrackDuration  = @"duration";
 NSString *const TGMusicTrackIsVoice   = @"voice";
+NSString *const TGMusicTrackSender    = @"sender";
+NSString *const TGMusicTrackDate      = @"date";
 
 static const NSInteger kPlaylistLimit = 100;
 
@@ -62,6 +64,7 @@ static NSString *TGMusicPathWithExtension(NSString *path, NSString *fileName) {
 	NSTimeInterval _pendingOffset;
 	NSTimeInterval _lastNowPlayingUpdate;
 	NSString *_chatTitle;
+	float _voiceRate;
 }
 
 + (instancetype)shared {
@@ -76,6 +79,7 @@ static NSString *TGMusicPathWithExtension(NSString *path, NSString *fileName) {
 		return nil;
 	_playlist = [NSMutableArray array];
 	_index = NSNotFound;
+	_voiceRate = 1.0f;
 	NSNotificationCenter *centre = [NSNotificationCenter defaultCenter];
 	[centre addObserver:self selector:@selector(applicationBackgrounded:)
 				   name:UIApplicationDidEnterBackgroundNotification object:nil];
@@ -85,6 +89,13 @@ static NSString *TGMusicPathWithExtension(NSString *path, NSString *fileName) {
 }
 
 #pragma mark - tracks
+
+static NSString *TGMusicSenderName(int64_t senderId, BOOL outgoing) {
+	if (outgoing)
+		return @"You";
+	NSString *name = senderId ? [[TGClient shared] nameForUserId:senderId] : nil;
+	return name.length ? name : @"";
+}
 
 + (NSDictionary *)trackFromMessage:(NSDictionary *)message chatId:(int64_t)chatId {
 	if (![message isKindOfClass:NSDictionary.class])
@@ -112,6 +123,9 @@ static NSString *TGMusicPathWithExtension(NSString *path, NSString *fileName) {
 		TGMusicTrackFileName  : fileName,
 		TGMusicTrackDuration  : message[@"duration"] ?: @0,
 		TGMusicTrackIsVoice   : [NSNumber numberWithBool:voice],
+		TGMusicTrackSender    : TGMusicSenderName([message[@"senderId"] longLongValue],
+												  [message[@"outgoing"] boolValue]),
+		TGMusicTrackDate      : message[@"date"] ?: @0,
 	};
 }
 
@@ -138,6 +152,9 @@ static NSDictionary *TGMusicTrackFromRawMessage(NSDictionary *m) {
 		title = voice ? @"Voice message"
 					  : (fileName.length ? fileName.lastPathComponent : @"Audio");
 
+	NSDictionary *sender = [m[@"sender_id"] isKindOfClass:NSDictionary.class]
+			? m[@"sender_id"] : nil;
+
 	return @{
 		TGMusicTrackMessageId : m[@"id"],
 		TGMusicTrackChatId    : m[@"chat_id"] ?: @0,
@@ -147,6 +164,9 @@ static NSDictionary *TGMusicTrackFromRawMessage(NSDictionary *m) {
 		TGMusicTrackFileName  : fileName,
 		TGMusicTrackDuration  : media[@"duration"] ?: @0,
 		TGMusicTrackIsVoice   : [NSNumber numberWithBool:voice],
+		TGMusicTrackSender    : TGMusicSenderName([sender[@"user_id"] longLongValue],
+												  [m[@"is_outgoing"] boolValue]),
+		TGMusicTrackDate      : m[@"date"] ?: @0,
 	};
 }
 
@@ -168,6 +188,14 @@ static NSDictionary *TGMusicTrackFromRawMessage(NSDictionary *m) {
 
 - (int64_t)currentChatId {
 	return [self.currentTrack[TGMusicTrackChatId] longLongValue];
+}
+
+- (BOOL)isVoice {
+	return [self.currentTrack[TGMusicTrackIsVoice] boolValue];
+}
+
+- (float)voiceRate {
+	return _voiceRate;
 }
 
 - (BOOL)isPlaying {
@@ -236,10 +264,10 @@ static NSDictionary *TGMusicTrackFromRawMessage(NSDictionary *m) {
 - (NSDictionary *)named:(NSDictionary *)track {
 	if (![track[TGMusicTrackIsVoice] boolValue] || !_chatTitle.length)
 		return track;
-	if ([track[TGMusicTrackPerformer] length])
+	if ([track[TGMusicTrackSender] length])
 		return track;
 	NSMutableDictionary *named = [track mutableCopy];
-	named[TGMusicTrackPerformer] = _chatTitle;
+	named[TGMusicTrackSender] = _chatTitle;
 	return named;
 }
 
@@ -274,8 +302,9 @@ static NSDictionary *TGMusicTrackFromRawMessage(NSDictionary *m) {
 		NSMutableArray *tracks = [NSMutableArray arrayWithCapacity:messages.count];
 		for (NSDictionary *raw in [messages reverseObjectEnumerator]){
 			NSDictionary *entry = TGMusicTrackFromRawMessage(raw);
-			if (entry)
-				[tracks addObject:[me named:entry]];
+			if (!entry)
+				continue;
+			[tracks addObject:[me named:entry]];
 		}
 
 		NSInteger found = NSNotFound;
@@ -360,12 +389,17 @@ static AVAudioPlayer *TGMusicOpenPlayer(NSString *path, NSString *fileName, BOOL
 	_loading = NO;
 	_player = player;
 	_player.delegate = self;
+	if (self.isVoice){
+		_player.enableRate = YES;
+		[_player prepareToPlay];
+	}
 	[self activateSession];
 	if (_pendingOffset > 0){
 		_player.currentTime = MIN(_pendingOffset, _player.duration);
 		_pendingOffset = 0;
 	}
 	[_player play];
+	[self applyVoiceRate];
 	[self startTick];
 	[self updateNowPlaying];
 	[self postStateChanged];
@@ -398,6 +432,7 @@ static AVAudioPlayer *TGMusicOpenPlayer(NSString *path, NSString *fileName, BOOL
 	} else {
 		[self activateSession];
 		[_player play];
+		[self applyVoiceRate];
 		[self startTick];
 	}
 	[self updateNowPlaying];
@@ -441,6 +476,44 @@ static AVAudioPlayer *TGMusicOpenPlayer(NSString *path, NSString *fileName, BOOL
 	_player.currentTime = MAX((NSTimeInterval)0, MIN(seconds, _player.duration));
 	[self updateNowPlaying];
 	[self postProgress];
+}
+
+- (void)applyVoiceRate {
+	if (!_player || !self.isVoice)
+		return;
+	_player.enableRate = YES;
+	_player.rate = _voiceRate;
+}
+
+- (void)cycleVoiceRate {
+	if (!self.isVoice)
+		return;
+	if (_voiceRate < 1.25f)
+		_voiceRate = 1.5f;
+	else if (_voiceRate < 1.75f)
+		_voiceRate = 2.0f;
+	else
+		_voiceRate = 1.0f;
+	[self applyVoiceRate];
+	[self postStateChanged];
+}
+
+- (void)chatClosed:(int64_t)chatId {
+	NSDictionary *track = self.currentTrack;
+	if (!track || ![track[TGMusicTrackIsVoice] boolValue])
+		return;
+	if ([track[TGMusicTrackChatId] longLongValue] != chatId)
+		return;
+	[self stop];
+}
+
+- (void)chatOpened:(int64_t)chatId {
+	NSDictionary *track = self.currentTrack;
+	if (!track || ![track[TGMusicTrackIsVoice] boolValue])
+		return;
+	if ([track[TGMusicTrackChatId] longLongValue] == chatId)
+		return;
+	[self stop];
 }
 
 - (void)stop {
@@ -488,6 +561,7 @@ static AVAudioPlayer *TGMusicOpenPlayer(NSString *path, NSString *fileName, BOOL
 		return;
 	[self activateSession];
 	[_player play];
+	[self applyVoiceRate];
 	[self startTick];
 	[self postStateChanged];
 }
@@ -524,10 +598,12 @@ static AVAudioPlayer *TGMusicOpenPlayer(NSString *path, NSString *fileName, BOOL
 			[self toggle];
 			break;
 		case UIEventSubtypeRemoteControlNextTrack:
-			[self playNext];
+			if (!self.isVoice)
+				[self playNext];
 			break;
 		case UIEventSubtypeRemoteControlPreviousTrack:
-			[self playPrevious];
+			if (!self.isVoice)
+				[self playPrevious];
 			break;
 		case UIEventSubtypeRemoteControlStop:
 			[self stop];
@@ -546,6 +622,11 @@ static AVAudioPlayer *TGMusicOpenPlayer(NSString *path, NSString *fileName, BOOL
 	NSDictionary *track = self.currentTrack;
 	if (!centre || !track)
 		return;
+	if ([track[TGMusicTrackIsVoice] boolValue]){
+		[self clearNowPlaying];
+		_lastNowPlayingUpdate = [NSDate timeIntervalSinceReferenceDate];
+		return;
+	}
 	NSMutableDictionary *info = [NSMutableDictionary dictionary];
 	info[MPMediaItemPropertyTitle] = track[TGMusicTrackTitle] ?: @"Audio";
 	NSString *performer = track[TGMusicTrackPerformer];

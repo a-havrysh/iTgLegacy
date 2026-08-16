@@ -3767,9 +3767,6 @@ static const NSInteger kChatActionsTag = 77;
 		return YES;
 	if ([chat[@"markedUnread"] boolValue])
 		return YES;
-	if ([chat[@"id"] isKindOfClass:[NSNumber class]] &&
-		[TGReplyDictionary(self.rowDetails[chat[@"id"]])[@"markedUnread"] boolValue])
-		return YES;
 	return [[TGClient shared] isChatMarkedAsUnread:[chat[@"id"] longLongValue]];
 }
 
@@ -4210,8 +4207,6 @@ static const NSInteger kChatActionsTag = 77;
 			? TGReplyDictionary(self.rowDetails[c[@"id"]]) : nil;
 	NSString *action = TGReplyString(c[@"action"]);
 	NSString *draft = TGReplyString(c[@"draft"]);
-	if (!draft.length)
-		draft = TGReplyString(detail[@"draft"]);
 	NSString *handshake = [self secretHandshakeTextForChat:c];
 	if (action.length){
 		cell.previewLabel.text = action;

@@ -1,4 +1,5 @@
 #import "TGSavedMessagesViewController.h"
+#import "TGEmoji.h"
 #import "TGChatViewController.h"
 #import "TGClient.h"
 #import "TGClient+SavedMessages.h"
@@ -676,13 +677,13 @@ static NSString *TGSavedTopicTitle(NSDictionary *topic) {
 	self.avatar.contentMode = UIViewContentModeScaleAspectFill;
 	[self.contentView addSubview:self.avatar];
 
-	self.titleLabel = [[UILabel alloc] init];
+	self.titleLabel = [[TGEmojiLabel alloc] init];
 	self.titleLabel.font = [UIFont boldSystemFontOfSize:16];
 	self.titleLabel.backgroundColor = [UIColor clearColor];
 	self.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
 	[self.contentView addSubview:self.titleLabel];
 
-	self.previewLabel = [[UILabel alloc] init];
+	self.previewLabel = [[TGEmojiLabel alloc] init];
 	self.previewLabel.font = [UIFont systemFontOfSize:14];
 	self.previewLabel.backgroundColor = [UIColor clearColor];
 	self.previewLabel.numberOfLines = 2;

@@ -1,4 +1,5 @@
 #import "TGReactionPickerView.h"
+#import "TGEmoji.h"
 #import "TGClient.h"
 #import "TGClient+Reactions.h"
 #import "TGClient+ChatList.h"
@@ -17,16 +18,17 @@ static const CGFloat kStripVisibleButtons = 6.0f;
 static const CGFloat kStripEmojiFontSize = 24.0f;
 static const NSTimeInterval kStripReopenSuppression = 0.4;
 
-static const CGFloat kChipHeight = 20.0f;
-static const CGFloat kChipRadius = 10.0f;
-static const CGFloat kChipPadding = 7.0f;
-static const CGFloat kChipGap = 4.0f;
-static const CGFloat kChipRowGap = 3.0f;
-static const CGFloat kChipEmojiFontSize = 13.0f;
+static const CGFloat kChipHeight = 26.0f;
+static const CGFloat kChipRadius = 13.0f;
+static const CGFloat kChipPadding = 9.0f;
+static const CGFloat kChipGap = 5.0f;
+static const CGFloat kChipRowGap = 5.0f;
+static const CGFloat kChipEmojiFontSize = 14.0f;
 static const CGFloat kChipCountFontSize = 11.0f;
-static const CGFloat kChipCountGap = 3.0f;
-static const CGFloat kChipGlyphSlot = 16.0f;
-static const CGFloat kChipGlyphSide = 14.0f;
+static const CGFloat kChipCountGap = 2.0f;
+static const CGFloat kChipGlyphSlot = 17.0f;
+static const CGFloat kChipGlyphSide = 17.0f;
+static const CGFloat kChipMinRowWidth = 44.0f;
 
 static const CGFloat kReactionIconSide = 28.0f;
 
@@ -1055,7 +1057,7 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 	_avatarView.layer.cornerRadius = 4.0f;
 	[self.contentView addSubview:_avatarView];
 
-	_nameLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	_nameLabel = [[TGEmojiLabel alloc] initWithFrame:CGRectZero];
 	_nameLabel.backgroundColor = [UIColor clearColor];
 	_nameLabel.font = [UIFont systemFontOfSize:19];
 	_nameLabel.textColor = flat ? [[TGTheme shared] primaryTextColour] : [UIColor blackColor];
@@ -1725,13 +1727,18 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 	return ceilf(kChipPadding * 2 + kChipGlyphSlot + kChipCountGap + countWidth);
 }
 
-+ (CGFloat)heightForChips:(NSArray *)chips width:(CGFloat)width {
++ (CGFloat)rowHeight {
+	return kChipHeight;
+}
+
++ (CGSize)sizeForChips:(NSArray *)chips width:(CGFloat)width {
 	if (![chips isKindOfClass:[NSArray class]] || chips.count == 0)
-		return 0.0f;
-	if (width < 40.0f)
-		width = 40.0f;
+		return CGSizeZero;
+	if (width < kChipMinRowWidth)
+		width = kChipMinRowWidth;
 
 	CGFloat x = 0;
+	CGFloat widest = 0;
 	NSInteger rows = 1;
 	for (id raw in chips){
 		if (![raw isKindOfClass:[NSDictionary class]])
@@ -1742,14 +1749,22 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 		NSInteger count = [[(NSDictionary *)raw objectForKey:@"count"] integerValue];
 		CGFloat chipWidth = [self chipWidthForEmoji:emoji count:count];
 		if (x > 0 && x + chipWidth > width){
+			widest = MAX(widest, x - kChipGap);
 			rows++;
 			x = 0;
 		}
 		x += chipWidth + kChipGap;
 	}
 	if (x == 0 && rows == 1)
-		return 0.0f;
-	return rows * kChipHeight + (rows - 1) * kChipRowGap;
+		return CGSizeZero;
+	widest = MAX(widest, x - kChipGap);
+
+	return CGSizeMake(ceilf(MIN(widest, width)),
+	                  rows * kChipHeight + (rows - 1) * kChipRowGap);
+}
+
++ (CGFloat)heightForChips:(NSArray *)chips width:(CGFloat)width {
+	return [self sizeForChips:chips width:width].height;
 }
 
 - (id)initWithFrame:(CGRect)frame {
@@ -1866,8 +1881,8 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 	[super layoutSubviews];
 
 	CGFloat width = self.bounds.size.width;
-	if (width < 40.0f)
-		width = 40.0f;
+	if (width < kChipMinRowWidth)
+		width = kChipMinRowWidth;
 
 	CGFloat x = 0;
 	CGFloat y = 0;
@@ -1884,8 +1899,8 @@ static UIImage *TGReactionStretch(NSString *name, int cap) {
 }
 
 - (CGSize)sizeThatFits:(CGSize)size {
-	CGFloat width = size.width > 40.0f ? size.width : self.bounds.size.width;
-	return CGSizeMake(width, [[self class] heightForChips:_chips width:width]);
+	CGFloat width = size.width > kChipMinRowWidth ? size.width : self.bounds.size.width;
+	return [[self class] sizeForChips:_chips width:width];
 }
 
 - (void)reloadChips {

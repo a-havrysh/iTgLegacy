@@ -184,6 +184,7 @@
                    anonymous:(BOOL)anonymous
              multipleAnswers:(BOOL)multipleAnswers
            quizCorrectOption:(NSInteger)quizCorrectOption
+             quizExplanation:(NSString *)quizExplanation
                       toChat:(int64_t)chatId
                       thread:(int64_t)threadId
                   completion:(void (^)(int64_t messageId))completion;

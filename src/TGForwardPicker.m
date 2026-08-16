@@ -1,4 +1,5 @@
 #import "TGForwardPicker.h"
+#import "TGEmoji.h"
 #import "TGClient.h"
 #import "TGTheme.h"
 #import "TGIcons.h"
@@ -83,14 +84,14 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 	_avatar.clipsToBounds = YES;
 	[self.contentView addSubview:_avatar];
 
-	_title = [[UILabel alloc] init];
+	_title = [[TGEmojiLabel alloc] init];
 	_title.backgroundColor = [UIColor clearColor];
 	_title.textColor = [UIColor colorWithRed:0x11 / 255.0f green:0x11 / 255.0f
 										blue:0x11 / 255.0f alpha:1.0f];
 	_title.highlightedTextColor = [UIColor whiteColor];
 	[self.contentView addSubview:_title];
 
-	_titleSecond = [[UILabel alloc] init];
+	_titleSecond = [[TGEmojiLabel alloc] init];
 	_titleSecond.backgroundColor = [UIColor clearColor];
 	_titleSecond.textColor = _title.textColor;
 	_titleSecond.highlightedTextColor = [UIColor whiteColor];
@@ -101,7 +102,7 @@ static UIImage *TGForwardStretchImage(NSString *name, int leftCap) {
 	_groupIcon.hidden = YES;
 	[self.contentView addSubview:_groupIcon];
 
-	_preview = [[UILabel alloc] init];
+	_preview = [[TGEmojiLabel alloc] init];
 	_preview.backgroundColor = [UIColor clearColor];
 	_preview.textColor = [UIColor colorWithRed:0x88 / 255.0f green:0x88 / 255.0f
 										  blue:0x88 / 255.0f alpha:1.0f];

@@ -298,6 +298,8 @@
 		[self removeMessageIds:@[@(deletedId)]];
 		return;
 	}
+	if (deletedId)
+		[self removeMessageIds:@[@(deletedId)]];
 	TGMessageModel *model = [TGMessageModel fromDictionary:message];
 	if (!model)
 		return;

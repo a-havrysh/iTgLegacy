@@ -2,6 +2,8 @@
 #import <ImageIO/ImageIO.h>
 
 UIImage *TGDecodeThumbnail(NSString *path, CGFloat maxPixelSize) {
+	NSTimeInterval decodeStarted = [NSDate timeIntervalSinceReferenceDate];
+	BOOL onMain = [NSThread isMainThread];
 	NSURL *url = [NSURL fileURLWithPath:path];
 	NSDictionary *sourceOpts = @{ (id)kCGImageSourceShouldCache : @NO };
 	CGImageSourceRef src = CGImageSourceCreateWithURL((__bridge CFURLRef)url, (CFDictionaryRef)sourceOpts);
@@ -16,6 +18,12 @@ UIImage *TGDecodeThumbnail(NSString *path, CGFloat maxPixelSize) {
 	CFRelease(src);
 	if (!cgImage) return nil;
 	UIImage *image = [UIImage imageWithCGImage:cgImage];
+	NSLog(@"PERF decode %@ max=%d -> %dx%d %.0f KB in %.0f ms %@",
+			[path lastPathComponent], (int)maxPixelSize,
+			(int)CGImageGetWidth(cgImage), (int)CGImageGetHeight(cgImage),
+			CGImageGetHeight(cgImage) * CGImageGetBytesPerRow(cgImage) / 1024.0,
+			([NSDate timeIntervalSinceReferenceDate] - decodeStarted) * 1000.0,
+			onMain ? @"MAINTHREAD" : @"bg");
 	CGImageRelease(cgImage);
 	return image;
 }

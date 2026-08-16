@@ -1,4 +1,5 @@
 #import "TGTopicsViewController.h"
+#import "TGEmoji.h"
 #import "TGChatViewController.h"
 #import "TGClient.h"
 #import "TGClient+Forums.h"
@@ -181,14 +182,14 @@ static UIImage *TGTopicAvatarImage(NSString *initials, CGFloat size, NSInteger r
 	self.avatar.contentMode = UIViewContentModeScaleAspectFill;
 	[self.contentView addSubview:self.avatar];
 
-	self.titleLabel = [[UILabel alloc] init];
+	self.titleLabel = [[TGEmojiLabel alloc] init];
 	self.titleLabel.font = [UIFont boldSystemFontOfSize:16];
 	self.titleLabel.textColor = [UIColor colorWithRed:0x11 / 255.0f green:0x11 / 255.0f blue:0x11 / 255.0f alpha:1.0f];
 	self.titleLabel.backgroundColor = [UIColor clearColor];
 	self.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
 	[self.contentView addSubview:self.titleLabel];
 
-	self.previewLabel = [[UILabel alloc] init];
+	self.previewLabel = [[TGEmojiLabel alloc] init];
 	self.previewLabel.font = [UIFont systemFontOfSize:14];
 	self.previewLabel.textColor = [UIColor colorWithRed:0x88 / 255.0f green:0x88 / 255.0f blue:0x88 / 255.0f alpha:1.0f];
 	self.previewLabel.backgroundColor = [UIColor clearColor];

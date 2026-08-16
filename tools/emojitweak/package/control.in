@@ -1,0 +1,30 @@
+Package: @PACKAGE@
+Name: @NAME@
+Version: @VERSION@
+Architecture: iphoneos-arm
+Maintainer: @MAINTAINER@
+Author: @AUTHOR@
+Section: Fonts
+Priority: optional
+Depends: firmware (>= 6.0)
+Installed-Size: @INSTALLED_SIZE@
+Homepage: @HOMEPAGE@
+Description: Unicode @EMOJI_VERSION@ colour emoji for iOS 6
+ Replaces the stock Apple Color Emoji font with an sbix font built from
+ Twemoji @TWEMOJI_VERSION@ artwork covering Unicode Emoji @EMOJI_VERSION@:
+ @GLYPH_COUNT@ distinct emoji images, including skin tones, ZWJ professions,
+ family sequences, keycaps and regional-indicator flags. Bitmap strikes at
+ 20, 40, 48 and 96 ppem, so large emoji are sharp instead of upscaled.
+ .
+ Font metrics are byte-identical to the stock font, so line heights and
+ layout do not shift anywhere in the system.
+ .
+ The stock font is backed up on first install and put back when this
+ package is removed. Installing needs about @REQUIRED_MB@ MB free on the
+ system partition; the install refuses to start if there is not enough.
+ .
+ Known limitation: the England, Scotland and Wales tag flags fall back to
+ the black flag. iOS 6 CoreText deletes Unicode tag characters before the
+ font is consulted, so no font can distinguish those three sequences.
+ .
+ Artwork is Twemoji, CC-BY 4.0; see /var/lib/@PKGDIRNAME@/COPYING.

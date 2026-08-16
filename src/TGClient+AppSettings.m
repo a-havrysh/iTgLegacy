@@ -94,8 +94,31 @@ static NSDictionary *TGASBackgroundRow(id object){
 	out[@"isMoving"] = @([type[@"is_moving"] boolValue]);
 	if ([type[@"intensity"] isKindOfClass:NSNumber.class])
 		out[@"intensity"] = type[@"intensity"];
+	out[@"isInverted"] = @([type[@"is_inverted"] boolValue]);
 	TGASApplyFill(out, TGASDict(type[@"fill"]));
 	return out;
+}
+
+static NSDictionary *TGASFillFromRow(NSDictionary *row){
+	NSNumber *top = row[@"topColor"];
+	NSNumber *bottom = row[@"bottomColor"];
+	if (![top isKindOfClass:NSNumber.class])
+		top = @0;
+	if (![bottom isKindOfClass:NSNumber.class])
+		bottom = top;
+	if ([top intValue] == [bottom intValue])
+		return @{ @"@type" : @"backgroundFillSolid",
+				  @"color" : @([top intValue]) };
+	NSInteger angle = [row[@"rotation"] isKindOfClass:NSNumber.class]
+			? [row[@"rotation"] integerValue] : 0;
+	angle %= 360;
+	if (angle < 0)
+		angle += 360;
+	angle = (angle / 45) * 45;
+	return @{ @"@type"          : @"backgroundFillGradient",
+			  @"top_color"      : @([top intValue]),
+			  @"bottom_color"   : @([bottom intValue]),
+			  @"rotation_angle" : @((int)angle) };
 }
 
 static NSDictionary *TGASBackgroundTypeForKind(NSString *kind){
@@ -179,6 +202,57 @@ static NSDictionary *TGASBackgroundTypeForKind(NSString *kind){
 							   type:@{ @"@type"      : @"backgroundTypeWallpaper",
 									   @"is_blurred" : @(blurred),
 									   @"is_moving"  : @(moving) }
+					   forDarkTheme:forDarkTheme
+						 completion:completion];
+}
+
+- (void)setDefaultBackgroundRow:(NSDictionary *)row
+						blurred:(BOOL)blurred
+				   forDarkTheme:(BOOL)forDarkTheme
+					 completion:(void (^)(NSDictionary *background))completion {
+	if (![row isKindOfClass:NSDictionary.class]){
+		if (completion)
+			completion(nil);
+		return;
+	}
+	NSString *kind = [row[@"kind"] isKindOfClass:NSString.class] ? row[@"kind"] : @"wallpaper";
+
+	if ([kind isEqualToString:@"fill"]){
+		[self tgas_setDefaultBackground:nil
+								   type:@{ @"@type" : @"backgroundTypeFill",
+										   @"fill"  : TGASFillFromRow(row) }
+						   forDarkTheme:forDarkTheme
+							 completion:completion];
+		return;
+	}
+
+	NSString *identifier = TGASIdString(row[@"id"]);
+	if (identifier.length == 0 || [identifier isEqualToString:@"0"]){
+		if (completion)
+			completion(nil);
+		return;
+	}
+	NSDictionary *background = @{ @"@type"         : @"inputBackgroundRemote",
+								  @"background_id" : identifier };
+
+	if ([kind isEqualToString:@"pattern"]){
+		NSInteger intensity = [row[@"intensity"] isKindOfClass:NSNumber.class]
+				? [row[@"intensity"] integerValue] : 50;
+		[self tgas_setDefaultBackground:background
+								   type:@{ @"@type"       : @"backgroundTypePattern",
+										   @"fill"        : TGASFillFromRow(row),
+										   @"intensity"   : @((int)intensity),
+										   @"is_inverted" : @([row[@"isInverted"] boolValue]),
+										   @"is_moving"   : @([row[@"isMoving"] boolValue]) }
+						   forDarkTheme:forDarkTheme
+							 completion:completion];
+		return;
+	}
+
+	[self tgas_setDefaultBackground:background
+							   type:@{ @"@type"      : @"backgroundTypeWallpaper",
+									   @"is_blurred" : @(blurred),
+									   @"is_moving"  : @([row[@"isMoving"] boolValue]) }
 					   forDarkTheme:forDarkTheme
 						 completion:completion];
 }

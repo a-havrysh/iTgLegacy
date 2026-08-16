@@ -3,6 +3,7 @@
 #import "TGClient+Stories.h"
 #import "TGCall.h"
 #import "TGDiskCache.h"
+#import "TGRemoteImageView.h"
 #import <UIKit/UIKit.h>
 #include <dlfcn.h>
 #include "api_id.h"
@@ -393,8 +394,14 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 		[self handleUpdateNewMessage:obj];
 		return;
 	}
-	if ([type isEqualToString:@"updateMessageContent"]){
+	if ([type isEqualToString:@"updateMessageContent"] ||
+		[type isEqualToString:@"updateMessageEdited"]){
 		[self handleUpdateMessageContent:obj];
+		return;
+	}
+	if ([type isEqualToString:@"updateMessageSendSucceeded"] ||
+		[type isEqualToString:@"updateMessageSendFailed"]){
+		[self handleUpdateMessageSent:obj];
 		return;
 	}
 	if ([type isEqualToString:@"updateDeleteMessages"]){
@@ -408,8 +415,11 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 	if ([type isEqualToString:@"updateChatLastMessage"] ||
 		[type isEqualToString:@"updateChatPosition"] ||
 		[type isEqualToString:@"updateChatTitle"] ||
+		[type isEqualToString:@"updateChatPhoto"] ||
 		[type isEqualToString:@"updateChatReadInbox"] ||
 		[type isEqualToString:@"updateChatReadOutbox"] ||
+		[type isEqualToString:@"updateChatDraftMessage"] ||
+		[type isEqualToString:@"updateChatIsMarkedAsUnread"] ||
 		[type isEqualToString:@"updateChatNotificationSettings"]){
 		[self applyChatUpdate:obj];
 		return;
@@ -499,6 +509,14 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 	NSDictionary *m = obj[@"message"];
 	if (self.onMessage && m)
 		self.onMessage([m[@"chat_id"] longLongValue], TGFlattenMessage(m), 0);
+}
+
+- (void)handleUpdateMessageSent:(NSDictionary *)obj {
+	NSDictionary *m = obj[@"message"];
+	int64_t oldId = [obj[@"old_message_id"] longLongValue];
+	if (!m || !self.onMessage)
+		return;
+	self.onMessage([m[@"chat_id"] longLongValue], TGFlattenMessage(m), oldId);
 }
 
 // Content changed in place (a photo finished uploading, a text edited).
@@ -690,14 +708,16 @@ static const NSTimeInterval TGRequestSweepInterval = 30.0;
 	if (s == TGAuthStateReady){
 		[[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"tgWasSignedIn"];
 		[[NSUserDefaults standardUserDefaults] synchronize];
-		[self loadChats];
 		[self send:@{@"@type" : @"getMe"}];
+		[self loadChats];
 	}
 	if (s == TGAuthStateWaitPhoneNumber || s == TGAuthStateLoggingOut ||
 		s == TGAuthStateWaitRegistration){
 		[[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"tgWasSignedIn"];
 		[[NSUserDefaults standardUserDefaults] synchronize];
 		[self clearCachedChats];
+		[TGDiskCache clearImages];
+		[TGRemoteImageView tgPurgeMemoryCache];
 		[self.chatsById removeAllObjects];
 		[self.chatsConfirmedByServer removeAllObjects];
 		[self rebuildChats];
@@ -938,11 +958,17 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 	NSNumber *duration = nil;
 	NSData *waveform = nil;
 	BOOL isService = NO;
+	BOOL serviceNamesAuthor = NO;
 	NSString *callState = nil;     // "missed" or "answered" on a call message
 	NSString *audioTitle = nil, *audioPerformer = nil;
 	NSNumber *photoW = nil, *photoH = nil;
 	NSArray *photoSizes = nil;
 	NSDictionary *minithumb = nil;
+
+	int64_t actorId = [m[@"sender_id"][@"user_id"] longLongValue];
+	NSString *knownActor = [[TGClient shared] nameForUserId:actorId];
+	BOOL namedActor = knownActor.length > 0;
+	NSString *actorName = namedActor ? knownActor : @"Someone";
 
 	if ([ctype isEqualToString:@"messagePhoto"]){
 		// sizes run small to large; take the largest present
@@ -961,6 +987,7 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		docName     = content[@"video"][@"file_name"];
 		photoW      = content[@"video"][@"width"];
 		photoH      = content[@"video"][@"height"];
+		duration    = content[@"video"][@"duration"];
 		minithumb   = content[@"video"][@"minithumbnail"];
 
 	} else if ([ctype isEqualToString:@"messageVideoNote"]){
@@ -995,6 +1022,9 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 			// .webm is VP9, which this device cannot decode - thumbnail only.
 			photoFileId = sticker[@"thumbnail"][@"file"][@"id"];
 		}
+
+		photoW = sticker[@"width"];
+		photoH = sticker[@"height"];
 
 		extra = content[@"emoji"] ?: sticker[@"emoji"];
 
@@ -1050,59 +1080,102 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		longitude = v[@"location"][@"longitude"];
 
 	} else if ([ctype isEqualToString:@"messageChatAddMembers"]){
-		NSMutableArray *names = [NSMutableArray array];
-		for (NSNumber *uid in content[@"member_user_ids"])
-			[names addObject:[[TGClient shared] nameForUserId:uid.longLongValue] ?: @"someone"];
-		extra = [NSString stringWithFormat:@"%@ joined the group",
-				[names componentsJoinedByString:@", "]];
+		NSArray *added = content[@"member_user_ids"];
+		if (added.count == 1 && [added[0] longLongValue] == actorId){
+			extra = [NSString stringWithFormat:@"%@ joined the group", actorName];
+		} else {
+			NSMutableArray *names = [NSMutableArray array];
+			for (NSNumber *uid in added)
+				[names addObject:[[TGClient shared] nameForUserId:uid.longLongValue]
+						?: @"someone"];
+			extra = [NSString stringWithFormat:@"%@ invited %@", actorName,
+					[names componentsJoinedByString:@", "]];
+		}
 		isService = YES;
+		serviceNamesAuthor = YES;
 
 	} else if ([ctype isEqualToString:@"messageChatDeleteMember"]){
-		NSString *who = [[TGClient shared] nameForUserId:
-				[content[@"user_id"] longLongValue]] ?: @"someone";
-		extra = [NSString stringWithFormat:@"%@ left the group", who];
+		int64_t goneId = [content[@"user_id"] longLongValue];
+		if (goneId == actorId){
+			extra = [NSString stringWithFormat:@"%@ left the group", actorName];
+		} else {
+			NSString *who = [[TGClient shared] nameForUserId:goneId] ?: @"someone";
+			extra = [NSString stringWithFormat:@"%@ removed %@", actorName, who];
+		}
 		isService = YES;
+		serviceNamesAuthor = YES;
 
 	} else if ([ctype isEqualToString:@"messageChatJoinByLink"] ||
 			   [ctype isEqualToString:@"messageChatJoinByRequest"]){
-		extra = @"joined the group via invite link";
+		extra = [NSString stringWithFormat:@"%@ joined the group via invite link",
+				actorName];
 		isService = YES;
+		serviceNamesAuthor = YES;
 
 	} else if ([ctype isEqualToString:@"messageChatChangeTitle"]){
-		extra = [NSString stringWithFormat:@"Group renamed to \"%@\"",
-				content[@"title"] ?: @""];
+		NSString *newTitle = content[@"title"] ?: @"";
+		extra = namedActor
+			? [NSString stringWithFormat:@"%@ changed group name to \"%@\"",
+					actorName, newTitle]
+			: [NSString stringWithFormat:@"Channel renamed to \"%@\"", newTitle];
 		isService = YES;
+		serviceNamesAuthor = YES;
 
 	} else if ([ctype isEqualToString:@"messageChatChangePhoto"]){
-		extra = @"Group photo changed";
+		extra = namedActor
+			? [NSString stringWithFormat:@"%@ changed group photo", actorName]
+			: @"Channel photo updated";
 		isService = YES;
+		serviceNamesAuthor = YES;
 
 	} else if ([ctype isEqualToString:@"messageChatDeletePhoto"]){
-		extra = @"Group photo removed";
+		extra = namedActor
+			? [NSString stringWithFormat:@"%@ removed group photo", actorName]
+			: @"Channel photo removed";
 		isService = YES;
+		serviceNamesAuthor = YES;
 
 	} else if ([ctype isEqualToString:@"messagePinMessage"]){
-		extra = @"pinned a message";
+		extra = [NSString stringWithFormat:@"%@ pinned a message", actorName];
 		isService = YES;
+		serviceNamesAuthor = YES;
 
 	} else if ([ctype isEqualToString:@"messageBasicGroupChatCreate"] ||
 			   [ctype isEqualToString:@"messageSupergroupChatCreate"]){
-		extra = [NSString stringWithFormat:@"Group \"%@\" created",
-				content[@"title"] ?: @""];
+		NSString *title = content[@"title"];
+		extra = title.length
+			? [NSString stringWithFormat:@"%@ created the group \"%@\"",
+					actorName, title]
+			: [NSString stringWithFormat:@"%@ created a group", actorName];
 		isService = YES;
+		serviceNamesAuthor = YES;
 
 	} else if ([ctype isEqualToString:@"messageChatUpgradeTo"] ||
 			   [ctype isEqualToString:@"messageChatUpgradeFrom"]){
 		extra = @"Group upgraded to a supergroup";
 		isService = YES;
+		serviceNamesAuthor = YES;
 
 	} else if ([ctype isEqualToString:@"messageChatSetTheme"]){
-		extra = @"Chat theme changed";
+		NSString *theme = content[@"theme_name"];
+		BOOL mine = [m[@"is_outgoing"] boolValue];
+		if (!theme.length)
+			extra = mine ? @"You disabled chat theme"
+						 : [NSString stringWithFormat:@"%@ disabled chat theme", actorName];
+		else
+			extra = mine
+				? [NSString stringWithFormat:@"You changed chat theme to %@", theme]
+				: [NSString stringWithFormat:@"%@ changed chat theme to %@",
+						actorName, theme];
 		isService = YES;
+		serviceNamesAuthor = YES;
 
 	} else if ([ctype isEqualToString:@"messageScreenshotTaken"]){
-		extra = @"Screenshot taken";
+		extra = [m[@"is_outgoing"] boolValue]
+			? @"You took a screenshot!"
+			: [NSString stringWithFormat:@"%@ took a screenshot!", actorName];
 		isService = YES;
+		serviceNamesAuthor = YES;
 
 	} else if ([ctype isEqualToString:@"messageCall"]){
 		// A call is a row of its own, not a service line: it says which way it
@@ -1131,8 +1204,9 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 				content[@"game"][@"title"] ?: @""];
 
 	} else if ([ctype isEqualToString:@"messageUnsupported"]){
-		extra = @"Message not supported on this client";
-		isService = YES;
+		extra = @"This message is not supported on your version of Telegram. "
+				 "Please update to the latest version.";
+		isService = NO;
 
 	} else if ([ctype isEqualToString:@"messagePoll"]){
 		// Rendered by the chat as a question with its options and their share
@@ -1216,6 +1290,7 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 	if (!text.length && !photoFileId && !docFileId && !latitude){
 		text = TGPhraseFromTypeName(ctype);
 		isService = YES;
+		serviceNamesAuthor = YES;
 	}
 
 	// Reply, forward and edit state - three things a chat is unreadable
@@ -1237,6 +1312,7 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 	int64_t forwardUserId = 0;
 	int64_t forwardChatId = 0;
 	int64_t forwardMessageId = 0;
+	BOOL forwardIsChannel = NO;
 	if ([originType isEqualToString:@"messageOriginUser"]){
 		forwardUserId = [origin[@"sender_user_id"] longLongValue];
 		forwardFrom = [[TGClient shared] nameForUserId:forwardUserId] ?: @"a user";
@@ -1248,6 +1324,7 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		forwardFrom = signature.length ? signature : @"a channel";
 		forwardChatId    = [origin[@"chat_id"] longLongValue];
 		forwardMessageId = [origin[@"message_id"] longLongValue];
+		forwardIsChannel = YES;
 	}
 	else if ([originType isEqualToString:@"messageOriginChat"]){
 		forwardFrom = origin[@"author_signature"] ?: @"a chat";
@@ -1278,6 +1355,7 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		@"forwardUserId"    : [NSNumber numberWithLongLong:forwardUserId],
 		@"forwardChatId"    : [NSNumber numberWithLongLong:forwardChatId],
 		@"forwardMessageId" : [NSNumber numberWithLongLong:forwardMessageId],
+		@"forwardIsChannel" : @(forwardIsChannel),
 		@"edited"    : @([m[@"edit_date"] doubleValue] > 0),
 		@"kind"      : ctype ?: @"",
 		@"date"      : m[@"date"] ?: @(0),
@@ -1293,6 +1371,7 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		@"audioTitle"     : audioTitle     ?: @"",
 		@"audioPerformer" : audioPerformer ?: @"",
 		@"service"   : @(isService),
+		@"serviceNamesAuthor" : @(serviceNamesAuthor),
 		// Several photos sent together share an album id; the chat draws them
 		// as one block rather than as unrelated messages.
 		@"albumId"   : m[@"media_album_id"] ?: @"",
@@ -1301,6 +1380,10 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 		@"duration"  : duration ?: @0,
 		@"waveform"  : waveform ?: emptyWaveform,
 		@"senderId"  : m[@"sender_id"][@"user_id"] ?: @(0),
+		@"channelPost" : m[@"is_channel_post"] ?: @NO,
+		@"signature" : ([m[@"author_signature"] isKindOfClass:NSString.class]
+						? m[@"author_signature"] : @""),
+		@"views"     : m[@"interaction_info"][@"view_count"] ?: @(0),
 		@"lat"       : latitude    ?: [NSNull null],
 		@"lon"       : longitude   ?: [NSNull null],
 		@"callState" : callState   ?: @"",
@@ -2110,6 +2193,13 @@ static NSString *TGMessagePreview(NSDictionary *message) {
 	return ctype.length ? TGPhraseFromTypeName(ctype) : @"";
 }
 
+static NSString *TGDraftText(id draftMessage) {
+	if (![draftMessage isKindOfClass:NSDictionary.class])
+		return @"";
+	id text = ((NSDictionary *)draftMessage)[@"content"][@"text"][@"text"];
+	return [text isKindOfClass:NSString.class] ? text : @"";
+}
+
 /// Chats are ordered by the "order" of their position in a list. It is an
 /// int64 sent as a string, so it must not be compared as a string.
 static int64_t TGOrderInList(NSArray *positions, NSString *listType) {
@@ -2736,6 +2826,8 @@ static NSArray *TGPacksFrom(NSDictionary *target) {
 	}
 	if (chat[@"unread_count"])
 		info[@"unread"] = chat[@"unread_count"];
+	if (chat[@"is_marked_as_unread"])
+		info[@"markedUnread"] = @([chat[@"is_marked_as_unread"] boolValue]);
 
 	NSString *chatType = chat[@"type"][@"@type"];
 	if (chatType){
@@ -2765,8 +2857,7 @@ static NSArray *TGPacksFrom(NSDictionary *target) {
 	if (photoFile)
 		info[@"photoFileId"] = photoFile;
 
-	NSString *draft = chat[@"draft_message"][@"input_message_text"][@"text"][@"text"];
-	info[@"draft"] = draft ?: @"";
+	info[@"draft"] = TGDraftText(chat[@"draft_message"]);
 
 	if (chat[@"last_read_outbox_message_id"])
 		info[@"lastReadOutboxId"] = chat[@"last_read_outbox_message_id"];
@@ -2831,21 +2922,42 @@ static NSArray *TGPacksFrom(NSDictionary *target) {
 		self.chatsById[chatId] = info;
 	}
 
+	NSString *updateType = update[@"@type"];
+
 	if (update[@"title"])
 		info[@"title"] = update[@"title"];
 	if (update[@"unread_count"])
 		info[@"unread"] = update[@"unread_count"];
+	if (update[@"is_marked_as_unread"])
+		info[@"markedUnread"] = @([update[@"is_marked_as_unread"] boolValue]);
 
 	if (update[@"last_read_outbox_message_id"]){
 		info[@"lastReadOutboxId"] = update[@"last_read_outbox_message_id"];
 		[self refreshOutgoingReadStateIn:info];
 	}
 
+	if ([updateType isEqualToString:@"updateChatPhoto"]){
+		NSNumber *photoFile = update[@"photo"][@"small"][@"id"];
+		if (photoFile && ![info[@"isSaved"] boolValue])
+			info[@"photoFileId"] = photoFile;
+		else
+			[info removeObjectForKey:@"photoFileId"];
+	}
+
+	if ([updateType isEqualToString:@"updateChatDraftMessage"])
+		info[@"draft"] = TGDraftText(update[@"draft_message"]);
+
 	NSDictionary *last = update[@"last_message"];
 	if ([last isKindOfClass:NSDictionary.class]){
 		info[@"text"] = [self previewForLastMessage:last inChat:info];
 		info[@"date"] = last[@"date"] ?: @(0);
 		[self mergeOutgoingStateFromMessage:last into:info];
+	} else if ([updateType isEqualToString:@"updateChatLastMessage"]){
+		info[@"text"] = @"";
+		info[@"date"] = @(0);
+		info[@"lastMessageId"] = @(0);
+		info[@"outgoing"] = @NO;
+		info[@"outgoingRead"] = @NO;
 	}
 
 	if (update[@"notification_settings"])

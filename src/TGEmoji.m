@@ -168,12 +168,21 @@ static NSSet *TGEmojiShippedKeys(void) {
 	return keys;
 }
 
-static UIImage *TGEmojiImage(NSString *key) {
+static NSCache *TGEmojiImageCache(void) {
 	static NSCache *cache = nil;
 	if (!cache){
 		cache = [[NSCache alloc] init];
 		[cache setCountLimit:96];
 	}
+	return cache;
+}
+
+void TGEmojiPurgeImages(void) {
+	[TGEmojiImageCache() removeAllObjects];
+}
+
+static UIImage *TGEmojiImage(NSString *key) {
+	NSCache *cache = TGEmojiImageCache();
 	UIImage *image = [cache objectForKey:key];
 	if (image)
 		return image;
@@ -231,17 +240,55 @@ static NSAttributedString *TGEmojiPlaceholder(NSString *key, UIFont *font,
 				attributes:attributes];
 }
 
+static NSDictionary *TGEmojiRunAttributes(NSDictionary *source, UIFont *font,
+										  UIColor *colour) {
+	UIFont *runFont = font;
+	id fontValue = [source objectForKey:NSFontAttributeName];
+	if ([fontValue isKindOfClass:UIFont.class])
+		runFont = fontValue;
+	UIColor *runColour = colour;
+	id colourValue = [source objectForKey:NSForegroundColorAttributeName];
+	if ([colourValue isKindOfClass:UIColor.class])
+		runColour = colourValue;
+	return TGEmojiPlainAttributes(runFont ?: font, runColour ?: colour);
+}
+
+static NSAttributedString *TGEmojiCoreTextString(NSAttributedString *styled,
+												 UIFont *font, UIColor *colour) {
+	if (!styled.length)
+		return nil;
+	NSMutableAttributedString *out =
+			[[NSMutableAttributedString alloc] initWithString:styled.string];
+	NSUInteger index = 0;
+	NSUInteger length = styled.length;
+	while (index < length){
+		NSRange range = NSMakeRange(index, 0);
+		NSDictionary *attributes = [styled attributesAtIndex:index effectiveRange:&range];
+		if (range.length == 0)
+			range = NSMakeRange(index, 1);
+		[out setAttributes:TGEmojiRunAttributes(attributes, font, colour) range:range];
+		index = NSMaxRange(range);
+	}
+	return out;
+}
+
 static void TGEmojiAppendPlain(NSMutableAttributedString *target, NSString *text,
+							   NSAttributedString *styled,
 							   NSUInteger from, NSUInteger to, NSDictionary *attributes) {
 	if (to <= from)
 		return;
-	NSString *piece = [text substringWithRange:NSMakeRange(from, to - from)];
+	NSRange range = NSMakeRange(from, to - from);
+	if (styled && NSMaxRange(range) <= styled.length){
+		[target appendAttributedString:[styled attributedSubstringFromRange:range]];
+		return;
+	}
+	NSString *piece = [text substringWithRange:range];
 	[target appendAttributedString:[[NSAttributedString alloc] initWithString:piece
 																   attributes:attributes]];
 }
 
 static BOOL TGEmojiWalk(NSString *text, UIFont *font, UIColor *colour,
-						NSMutableArray *paragraphs) {
+						NSAttributedString *styled, NSMutableArray *paragraphs) {
 	NSUInteger length = text.length;
 	if (!length)
 		return NO;
@@ -273,7 +320,7 @@ static BOOL TGEmojiWalk(NSString *text, UIFont *font, UIColor *colour,
 
 		if (high == '\n'){
 			if (paragraphs){
-				TGEmojiAppendPlain(current, text, run, i, plain);
+				TGEmojiAppendPlain(current, text, styled, run, i, plain);
 				[paragraphs addObject:current];
 				current = [[NSMutableAttributedString alloc] init];
 			}
@@ -325,9 +372,12 @@ static BOOL TGEmojiWalk(NSString *text, UIFont *font, UIColor *colour,
 		if (!paragraphs)
 			break;
 
-		TGEmojiAppendPlain(current, text, run, i, plain);
+		TGEmojiAppendPlain(current, text, styled, run, i, plain);
 		if (replaceable){
-			NSAttributedString *slot = TGEmojiPlaceholder(key, font, plain);
+			NSDictionary *base = plain;
+			if (styled && i < styled.length)
+				base = [styled attributesAtIndex:i effectiveRange:NULL];
+			NSAttributedString *slot = TGEmojiPlaceholder(key, font, base);
 			if (slot)
 				[current appendAttributedString:slot];
 		}
@@ -337,7 +387,7 @@ static BOOL TGEmojiWalk(NSString *text, UIFont *font, UIColor *colour,
 
 	if (paragraphs){
 		if (changed){
-			TGEmojiAppendPlain(current, text, run, length, plain);
+			TGEmojiAppendPlain(current, text, styled, run, length, plain);
 			[paragraphs addObject:current];
 		} else {
 			[paragraphs removeAllObjects];
@@ -365,7 +415,7 @@ BOOL TGEmojiTextNeedsSubstitution(NSString *text) {
 		return NO;
 	if (!TGEmojiTextCarriesSymbols(text))
 		return NO;
-	return TGEmojiWalk(text, nil, nil, nil);
+	return TGEmojiWalk(text, nil, nil, nil, nil);
 }
 
 static NSArray *TGEmojiBuildLines(NSArray *paragraphs, NSDictionary *plain, CGFloat limit,
@@ -448,7 +498,7 @@ CGSize TGEmojiTextSize(NSString *text, UIFont *font, CGSize limit,
 		return [text sizeWithFont:font constrainedToSize:limit lineBreakMode:mode];
 
 	NSMutableArray *paragraphs = [NSMutableArray array];
-	if (!TGEmojiWalk(text, font, [UIColor blackColor], paragraphs) || !paragraphs.count)
+	if (!TGEmojiWalk(text, font, [UIColor blackColor], nil, paragraphs) || !paragraphs.count)
 		return [text sizeWithFont:font constrainedToSize:limit lineBreakMode:mode];
 
 	CGFloat widest = 0;
@@ -462,23 +512,10 @@ CGSize TGEmojiTextSize(NSString *text, UIFont *font, CGSize limit,
 	return CGSizeMake(ceilf(widest), ceilf(height));
 }
 
-void TGEmojiTextDraw(NSString *text, UIFont *font, UIColor *colour, CGRect rect,
-					 NSTextAlignment alignment, NSInteger maxLines) {
+static void TGEmojiDrawLines(NSArray *lines, UIFont *font, CGRect rect,
+							 NSTextAlignment alignment) {
 	CGContextRef context = UIGraphicsGetCurrentContext();
-	if (!context || rect.size.width < 1 || rect.size.height < 1)
-		return;
-
-	NSMutableArray *paragraphs = [NSMutableArray array];
-	if (!TGEmojiWalk(text, font, colour, paragraphs) || !paragraphs.count){
-		[colour set];
-		[text drawInRect:rect withFont:font lineBreakMode:NSLineBreakByWordWrapping];
-		return;
-	}
-
-	CGFloat widest = 0;
-	NSDictionary *plain = TGEmojiPlainAttributes(font, colour);
-	NSArray *lines = TGEmojiBuildLines(paragraphs, plain, rect.size.width, maxLines, &widest);
-	if (!lines.count)
+	if (!context || !lines.count)
 		return;
 
 	CGFloat lineHeight = font.lineHeight;
@@ -536,10 +573,70 @@ void TGEmojiTextDraw(NSString *text, UIFont *font, UIColor *colour, CGRect rect,
 	CGContextRestoreGState(context);
 }
 
+void TGEmojiTextDraw(NSString *text, UIFont *font, UIColor *colour, CGRect rect,
+					 NSTextAlignment alignment, NSInteger maxLines) {
+	CGContextRef context = UIGraphicsGetCurrentContext();
+	if (!context || rect.size.width < 1 || rect.size.height < 1)
+		return;
+
+	NSMutableArray *paragraphs = [NSMutableArray array];
+	if (!TGEmojiWalk(text, font, colour, nil, paragraphs) || !paragraphs.count){
+		[colour set];
+		[text drawInRect:rect withFont:font lineBreakMode:NSLineBreakByWordWrapping];
+		return;
+	}
+
+	CGFloat widest = 0;
+	NSDictionary *plain = TGEmojiPlainAttributes(font, colour);
+	NSArray *lines = TGEmojiBuildLines(paragraphs, plain, rect.size.width, maxLines, &widest);
+	TGEmojiDrawLines(lines, font, rect, alignment);
+}
+
+static BOOL TGEmojiAttributedDraw(NSAttributedString *styled, UIFont *font, UIColor *colour,
+								  CGRect rect, NSTextAlignment alignment, NSInteger maxLines) {
+	CGContextRef context = UIGraphicsGetCurrentContext();
+	if (!context || !styled.length || rect.size.width < 1 || rect.size.height < 1)
+		return NO;
+
+	NSAttributedString *coreText = TGEmojiCoreTextString(styled, font, colour);
+	NSMutableArray *paragraphs = [NSMutableArray array];
+	if (!TGEmojiWalk(styled.string, font, colour, coreText, paragraphs) || !paragraphs.count)
+		return NO;
+
+	CGFloat widest = 0;
+	NSDictionary *plain = TGEmojiPlainAttributes(font, colour);
+	NSArray *lines = TGEmojiBuildLines(paragraphs, plain, rect.size.width, maxLines, &widest);
+	if (!lines.count)
+		return NO;
+
+	TGEmojiDrawLines(lines, font, rect, alignment);
+	return YES;
+}
+
 @implementation TGEmojiLabel
 
-- (void)drawTextInRect:(CGRect)rect {
+- (NSAttributedString *)emojiStyledText {
+	if (![self respondsToSelector:@selector(attributedText)])
+		return nil;
+	NSAttributedString *styled = self.attributedText;
+	if (!styled.length)
+		return nil;
+	NSRange run = NSMakeRange(0, 0);
+	[styled attributesAtIndex:0
+		longestEffectiveRange:&run
+					  inRange:NSMakeRange(0, styled.length)];
+	return run.length < styled.length ? styled : nil;
+}
+
+- (NSString *)emojiPlainText {
 	NSString *text = self.text;
+	if (text.length)
+		return text;
+	return [self emojiStyledText].string;
+}
+
+- (void)drawTextInRect:(CGRect)rect {
+	NSString *text = [self emojiPlainText];
 	if (!TGEmojiTextNeedsSubstitution(text)){
 		[super drawTextInRect:rect];
 		return;
@@ -553,17 +650,23 @@ void TGEmojiTextDraw(NSString *text, UIFont *font, UIColor *colour, CGRect rect,
 	if (context && self.shadowColor)
 		CGContextSetShadowWithColor(context, self.shadowOffset, 0, self.shadowColor.CGColor);
 
-	TGEmojiTextDraw(text, self.font, ink ?: [UIColor blackColor], self.bounds,
-					self.textAlignment, self.numberOfLines);
+	NSAttributedString *styled = [self emojiStyledText];
+	BOOL drawn = styled && TGEmojiAttributedDraw(styled, self.font,
+			ink ?: [UIColor blackColor], self.bounds, self.textAlignment,
+			self.numberOfLines);
+	if (!drawn)
+		TGEmojiTextDraw(text, self.font, ink ?: [UIColor blackColor], self.bounds,
+						self.textAlignment, self.numberOfLines);
 
 	if (context)
 		CGContextRestoreGState(context);
 }
 
 - (CGSize)sizeThatFits:(CGSize)size {
-	if (!TGEmojiTextNeedsSubstitution(self.text))
+	NSString *text = [self emojiPlainText];
+	if (!TGEmojiTextNeedsSubstitution(text))
 		return [super sizeThatFits:size];
-	return TGEmojiTextSize(self.text, self.font, size, self.lineBreakMode,
+	return TGEmojiTextSize(text, self.font, size, self.lineBreakMode,
 						   self.numberOfLines);
 }
 

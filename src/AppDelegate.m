@@ -21,22 +21,115 @@
 #import "TGHacks.h"
 #import "TGIcons.h"
 #import "TGDiskCache.h"
-#import "TGAlertView.h"
+#import "TGRemoteImageView.h"
 #import <QuartzCore/QuartzCore.h>
 #include <stdio.h>
+#include <mach/mach.h>
+#include <malloc/malloc.h>
 
 @protocol TGTabBarHitTesting <NSObject>
 - (int)indexForLocation:(CGPoint)location;
 @end
 
+extern void TGEmojiPurgeImages(void);
+
 static NSTimeInterval TGLaunchStarted = 0;
 static NSTimeInterval TGOpenStarted = 0;
+static volatile double TGMainPingAt = 0;
+static unsigned long long TGResidentPeak = 0;
+
+unsigned long long TGResidentBytes(void) {
+	struct task_basic_info info;
+	mach_msg_type_number_t count = TASK_BASIC_INFO_COUNT;
+	if (task_info(mach_task_self(), TASK_BASIC_INFO, (task_info_t)&info, &count) != KERN_SUCCESS)
+		return 0;
+	unsigned long long rss = (unsigned long long)info.resident_size;
+	if (rss > TGResidentPeak)
+		TGResidentPeak = rss;
+	return rss;
+}
+
+double TGProcessCPUSeconds(void) {
+	double total = 0;
+	struct task_basic_info basic;
+	mach_msg_type_number_t count = TASK_BASIC_INFO_COUNT;
+	if (task_info(mach_task_self(), TASK_BASIC_INFO, (task_info_t)&basic, &count) == KERN_SUCCESS){
+		total += basic.user_time.seconds + basic.user_time.microseconds / 1e6;
+		total += basic.system_time.seconds + basic.system_time.microseconds / 1e6;
+	}
+	struct task_thread_times_info times;
+	count = TASK_THREAD_TIMES_INFO_COUNT;
+	if (task_info(mach_task_self(), TASK_THREAD_TIMES_INFO, (task_info_t)&times, &count) == KERN_SUCCESS){
+		total += times.user_time.seconds + times.user_time.microseconds / 1e6;
+		total += times.system_time.seconds + times.system_time.microseconds / 1e6;
+	}
+	return total;
+}
+
+static unsigned int TGThreadCount(void) {
+	thread_act_array_t threads;
+	mach_msg_type_number_t count = 0;
+	if (task_threads(mach_task_self(), &threads, &count) != KERN_SUCCESS)
+		return 0;
+	for (mach_msg_type_number_t i = 0; i < count; i++)
+		mach_port_deallocate(mach_task_self(), threads[i]);
+	vm_deallocate(mach_task_self(), (vm_address_t)threads, count * sizeof(thread_t));
+	return (unsigned int)count;
+}
+
+void TGMemMark(NSString *tag) {
+	unsigned long long rss = TGResidentBytes();
+	NSLog(@"PERF mem %@ rss=%.2f MB peak=%.2f MB cpu=%.2f s threads=%u",
+			tag, rss / 1048576.0, TGResidentPeak / 1048576.0,
+			TGProcessCPUSeconds(), TGThreadCount());
+}
+
+static void TGMemZoneReport(NSString *tag) {
+	vm_address_t *zones = NULL;
+	unsigned int count = 0;
+	if (malloc_get_all_zones(mach_task_self(), NULL, &zones, &count) != KERN_SUCCESS)
+		return;
+	unsigned long long inUse = 0;
+	for (unsigned int i = 0; i < count; i++){
+		malloc_zone_t *zone = (malloc_zone_t *)zones[i];
+		if (!zone || !zone->introspect)
+			continue;
+		malloc_statistics_t stats;
+		memset(&stats, 0, sizeof(stats));
+		malloc_zone_statistics(zone, &stats);
+		inUse += stats.size_in_use;
+		if (stats.size_in_use > 262144)
+			NSLog(@"PERF zone %@ %s in_use=%.2f MB allocated=%.2f MB blocks=%u",
+					tag, malloc_get_zone_name(zone) ?: "unnamed",
+					stats.size_in_use / 1048576.0, stats.size_allocated / 1048576.0,
+					stats.blocks_in_use);
+	}
+	NSLog(@"PERF zone %@ TOTAL malloc in_use=%.2f MB", tag, inUse / 1048576.0);
+}
+
+static void TGStartMemorySampler(void) {
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		TGMainPingAt = [NSDate timeIntervalSinceReferenceDate];
+		dispatch_async(dispatch_get_main_queue(), ^{
+			[NSTimer scheduledTimerWithTimeInterval:0.05
+											 target:[AppDelegate class]
+										   selector:@selector(tgPingMainThread)
+										   userInfo:nil
+											repeats:YES];
+		});
+		[NSThread detachNewThreadSelector:@selector(tgMemorySamplerLoop)
+								 toTarget:[AppDelegate class]
+							   withObject:nil];
+	});
+}
 
 void TGMarkLaunchStage(NSString *stage) {
 	if (TGLaunchStarted <= 0)
 		TGLaunchStarted = [NSDate timeIntervalSinceReferenceDate];
-	NSLog(@"PERF launch +%.0f ms: %@",
-			([NSDate timeIntervalSinceReferenceDate] - TGLaunchStarted) * 1000.0, stage);
+	NSLog(@"PERF launch +%.0f ms: %@ rss=%.2f MB cpu=%.2f s",
+			([NSDate timeIntervalSinceReferenceDate] - TGLaunchStarted) * 1000.0, stage,
+			TGResidentBytes() / 1048576.0, TGProcessCPUSeconds());
 }
 
 void TGBeginOpenTiming(void) {
@@ -55,6 +148,29 @@ void TGMarkOpenStage(NSString *stage) {
 }
 
 @implementation AppDelegate
+
++ (void)tgPingMainThread {
+	TGMainPingAt = [NSDate timeIntervalSinceReferenceDate];
+}
+
++ (void)tgMemorySamplerLoop {
+	NSTimeInterval started = [NSDate timeIntervalSinceReferenceDate];
+	double worstStall = 0;
+	while (1){
+		@autoreleasepool {
+			NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+			double stall = TGMainPingAt > 0 ? (now - TGMainPingAt) : 0;
+			if (stall > worstStall)
+				worstStall = stall;
+			NSLog(@"PERF sample +%.0f ms rss=%.2f MB cpu=%.2f s stall=%.0f ms worst=%.0f ms threads=%u",
+					(now - started) * 1000.0,
+					TGResidentBytes() / 1048576.0,
+					TGProcessCPUSeconds(),
+					stall * 1000.0, worstStall * 1000.0, TGThreadCount());
+		}
+		usleep(200000);
+	}
+}
 
 static UIBackgroundTaskIdentifier TGBackgroundTask;
 static BOOL TGBackgroundTaskActive = NO;
@@ -76,6 +192,7 @@ static void TGWatchForIncomingCalls(void) {
 		didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
 {
 	TGMarkLaunchStage(@"didFinishLaunching");
+	TGStartMemorySampler();
 	[TGHacks hackSetAnimationDuration];
 
 	NSString *cache = [NSSearchPathForDirectoriesInDomains(
@@ -429,6 +546,35 @@ static void TGWatchForIncomingCalls(void) {
 	NSString *arg = [url.path stringByReplacingOccurrencesOfString:@"/" withString:@""];
 	NSLog(@"handleOpenURL: %@", host ?: @"(launch)");
 
+	if ([host isEqualToString:@"mem"]){
+		TGMemMark(arg.length ? arg : @"probe");
+		TGMemZoneReport(arg.length ? arg : @"probe");
+		return YES;
+	}
+
+	if ([host isEqualToString:@"memflush"]){
+		NSString *what = arg.length ? arg : @"all";
+		unsigned long long before = TGResidentBytes();
+		if ([what isEqualToString:@"icons"] || [what isEqualToString:@"all"])
+			[TGIcons flush];
+		if ([what isEqualToString:@"images"] || [what isEqualToString:@"all"])
+			[TGRemoteImageView performSelector:NSSelectorFromString(@"tgPurgeMemoryCache")];
+		if ([what isEqualToString:@"emoji"] || [what isEqualToString:@"all"])
+			TGEmojiPurgeImages();
+		if ([what isEqualToString:@"warning"] || [what isEqualToString:@"all"])
+			[[NSNotificationCenter defaultCenter]
+					postNotificationName:UIApplicationDidReceiveMemoryWarningNotification
+								  object:[UIApplication sharedApplication]];
+		dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
+				dispatch_get_main_queue(), ^{
+			unsigned long long after = TGResidentBytes();
+			NSLog(@"PERF memflush %@ before=%.2f MB after=%.2f MB freed=%.2f MB",
+					what, before / 1048576.0, after / 1048576.0,
+					((double)before - (double)after) / 1048576.0);
+		});
+		return YES;
+	}
+
 	if ([host isEqualToString:@"phone"] && arg.length){
 		self.currentPhoneNumber = arg;
 		[[TGClient shared] sendPhoneNumber:arg];
@@ -697,52 +843,6 @@ static void TGWatchForIncomingCalls(void) {
 							  text:@"Chat deleted"
 						   seconds:5
 						  onCommit:^{ NSLog(@"snackbar: committed (test, no-op)"); }];
-		});
-		return YES;
-	}
-
-	if ([host isEqualToString:@"alerttest"]){
-		dispatch_async(dispatch_get_main_queue(), ^{
-			NSInteger which = [arg integerValue];
-			NSString *longTitle = @"A Very Long Prompt Title That Has To Wrap Onto Several Lines";
-			TGAlertView *alert = nil;
-			if (which == 1)
-				alert = [[TGAlertView alloc] initWithTitle:@"Confirmation Code"
-						message:@"Type the code you received."
-						delegate:nil cancelButtonTitle:@"Cancel" otherButtonTitles:nil];
-			else if (which == 2)
-				alert = [[TGAlertView alloc] initWithTitle:@"New Poll"
-						message:@"The question"
-						delegate:nil cancelButtonTitle:@"Cancel" otherButtonTitles:@"Next", nil];
-			else if (which == 3)
-				alert = [[TGAlertView alloc] initWithTitle:@"New Poll"
-						message:@"Option 1"
-						delegate:nil cancelButtonTitle:@"Cancel" otherButtonTitles:@"Add", @"Send", nil];
-			else if (which == 4)
-				alert = [[TGAlertView alloc] initWithTitle:longTitle
-						message:@"Option 1"
-						delegate:nil cancelButtonTitle:@"Cancel" otherButtonTitles:@"Add", @"Send", nil];
-			else if (which == 5)
-				alert = [[TGAlertView alloc] initWithTitle:longTitle
-						message:nil
-						delegate:nil cancelButtonTitle:@"Cancel" otherButtonTitles:@"Save", nil];
-			else
-				alert = [[TGAlertView alloc] initWithTitle:@"Reply"
-						message:nil
-						delegate:nil cancelButtonTitle:@"Cancel" otherButtonTitles:@"Send", nil];
-			alert.alertViewStyle = UIAlertViewStylePlainTextInput;
-			if (which == 9){
-				NSString *info = [NSString stringWithFormat:@"%@ tg=%d n=%d own=%d",
-						NSStringFromClass([alert class]),
-						(int)[alert isKindOfClass:[TGAlertView class]],
-						(int)alert.numberOfButtons,
-						(int)[alert respondsToSelector:NSSelectorFromString(@"usesOwnLayout")]];
-				UIAlertView *probe = [[UIAlertView alloc] initWithTitle:info
-						message:@"probe" delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil];
-				[probe show];
-				return;
-			}
-			[alert show];
 		});
 		return YES;
 	}

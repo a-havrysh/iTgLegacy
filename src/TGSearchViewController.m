@@ -45,7 +45,7 @@ static const CGFloat kSearchTagStripHeight = 34.0f;
 	self.title = @"Jump to Date";
 	_days = @[];
 	_positions = [NSMutableDictionary dictionary];
-	self.tableView.rowHeight = 46;
+	self.tableView.rowHeight = 44;
 	self.tableView.backgroundColor = [[TGTheme shared] listBackgroundColour];
 	self.tableView.tableFooterView = [[UIView alloc] init];
 
@@ -132,7 +132,7 @@ static const CGFloat kSearchTagStripHeight = 34.0f;
 	if (!cell){
 		cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
 									  reuseIdentifier:reuse];
-		cell.textLabel.font = [UIFont boldSystemFontOfSize:16];
+		cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
 		cell.textLabel.textColor = [[TGTheme shared] primaryTextColour];
 		cell.detailTextLabel.textColor = [[TGTheme shared] secondaryTextColour];
 	}

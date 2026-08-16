@@ -1,4 +1,5 @@
 #import "TGGroupMembersViewController.h"
+#import "TGEmoji.h"
 #import "TGClient.h"
 #import "TGClient+Groups.h"
 #import "TGClient+Contacts.h"
@@ -167,7 +168,7 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 
 	UIColor *titleColour = flat ? [[TGTheme shared] primaryTextColour] : [UIColor blackColor];
 
-	self.titleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	self.titleLabel = [[TGEmojiLabel alloc] initWithFrame:CGRectZero];
 	self.titleLabel.backgroundColor = [UIColor clearColor];
 	self.titleLabel.font = [UIFont systemFontOfSize:19];
 	self.titleLabel.textColor = titleColour;
@@ -175,7 +176,7 @@ static int64_t TGMembersUserId(NSDictionary *m) {
 	self.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
 	[self.contentView addSubview:self.titleLabel];
 
-	self.titleSecondLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+	self.titleSecondLabel = [[TGEmojiLabel alloc] initWithFrame:CGRectZero];
 	self.titleSecondLabel.backgroundColor = [UIColor clearColor];
 	self.titleSecondLabel.font = [UIFont boldSystemFontOfSize:19];
 	self.titleSecondLabel.textColor = titleColour;

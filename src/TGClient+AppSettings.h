@@ -37,6 +37,11 @@
 				  forDarkTheme:(BOOL)forDarkTheme
 					completion:(void (^)(NSDictionary *background))completion;
 
+- (void)setDefaultBackgroundRow:(NSDictionary *)row
+						blurred:(BOOL)blurred
+				   forDarkTheme:(BOOL)forDarkTheme
+					 completion:(void (^)(NSDictionary *background))completion;
+
 /// Plain colour wallpaper. `color` is 0xRRGGBB. Nothing is downloaded, which
 /// makes this the cheap option on this hardware.
 - (void)setDefaultBackgroundColor:(NSInteger)color

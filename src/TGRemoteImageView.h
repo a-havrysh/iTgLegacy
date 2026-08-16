@@ -9,6 +9,8 @@
 @property (nonatomic) NSTimeInterval fadeTransitionDuration;
 @property (nonatomic, strong) NSString *currentUrl;
 
++ (void)tgPurgeMemoryCache;
+
 - (UIImage *)currentImage;
 - (void)tryFillCache:(NSMutableDictionary *)dict;
 

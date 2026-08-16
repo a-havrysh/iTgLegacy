@@ -1,4 +1,5 @@
 #import "TGChatEventsViewController.h"
+#import "TGEmoji.h"
 #import "TGClient.h"
 #import "TGClient+ChatManagement.h"
 #import "TGClient+Messages.h"
@@ -734,7 +735,7 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 				CGRectMake(5, 5, TGEventsAvatarSide, TGEventsAvatarSide)];
 		[self.contentView addSubview:_avatarView];
 
-		_nameLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+		_nameLabel = [[TGEmojiLabel alloc] initWithFrame:CGRectZero];
 		_nameLabel.backgroundColor = [UIColor clearColor];
 		_nameLabel.font = [UIFont boldSystemFontOfSize:16];
 		[self.contentView addSubview:_nameLabel];
@@ -745,7 +746,7 @@ typedef NS_ENUM(NSInteger, TGEventsFilterPage) {
 		_dateLabel.textAlignment = NSTextAlignmentRight;
 		[self.contentView addSubview:_dateLabel];
 
-		_bodyLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+		_bodyLabel = [[TGEmojiLabel alloc] initWithFrame:CGRectZero];
 		_bodyLabel.backgroundColor = [UIColor clearColor];
 		_bodyLabel.font = [TGChatEventCell bodyFont];
 		_bodyLabel.numberOfLines = 0;

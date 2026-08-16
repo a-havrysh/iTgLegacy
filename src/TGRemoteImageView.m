@@ -44,6 +44,10 @@ static NSUInteger TGRemoteImageCost(UIImage *image) {
 
 @implementation TGRemoteImageView
 
++ (void)tgPurgeMemoryCache {
+	[TGRemoteImageMemoryCache() removeAllObjects];
+}
+
 - (id)initWithFrame:(CGRect)frame {
 	self = [super initWithFrame:frame];
 	if (self) {
