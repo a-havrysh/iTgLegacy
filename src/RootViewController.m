@@ -55,6 +55,8 @@ static const CGFloat TGTabBarHeight = 49.0f;
 @property (nonatomic, strong) UIBarButtonItem *masterBarButtonItem;
 @property (nonatomic, assign) NSInteger pendingIconBadge;
 @property (nonatomic, assign) NSInteger pushedIconBadge;
+@property (nonatomic, assign) BOOL iconBadgeScheduled;
+@property (nonatomic, assign) BOOL iconBadgePushed;
 @end
 
 static __weak RootViewController *gSplitRoot = nil;
@@ -422,16 +424,12 @@ static __weak RootViewController *gSplitRoot = nil;
 	return total;
 }
 
-/// Setting the icon badge is a synchronous mach call into SpringBoard, and
-/// during a launch SpringBoard is busy running the open animation - the reply
-/// took 600 ms of the first frame's budget, with the main thread parked in
-/// mach_msg the whole time. The number on the home screen can wait; the number
-/// on the tab bar cannot, and that one is only a view.
 - (void)pushIconBadge {
 	if (![UIApplication instancesRespondToSelector:@selector(setApplicationIconBadgeNumber:)])
 		return;
-	if (self.pendingIconBadge == self.pushedIconBadge)
+	if (self.iconBadgePushed && self.pendingIconBadge == self.pushedIconBadge)
 		return;
+	self.iconBadgePushed = YES;
 	self.pushedIconBadge = self.pendingIconBadge;
 	[UIApplication sharedApplication].applicationIconBadgeNumber = self.pendingIconBadge;
 }
@@ -449,8 +447,9 @@ static __weak RootViewController *gSplitRoot = nil;
 		total = 0;
 	[self.customTabBar setUnreadCount:total];
 
-	if (total == self.pendingIconBadge)
+	if (self.iconBadgeScheduled && total == self.pendingIconBadge)
 		return;
+	self.iconBadgeScheduled = YES;
 	self.pendingIconBadge = total;
 	[NSObject cancelPreviousPerformRequestsWithTarget:self
 											 selector:@selector(pushIconBadge)

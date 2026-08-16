@@ -71,9 +71,6 @@ static double TGProcessCPUSeconds(void) {
 
 static volatile BOOL TGPerfLoggingOn = NO;
 
-/// The running commentary - a resident-size line four times a second, one line
-/// per image decoded - costs real time on this hardware, so it stays off until
-/// itglegacy://perflog/on asks for it.
 BOOL TGPerfLogging(void) {
 	return TGPerfLoggingOn;
 }
@@ -151,9 +148,6 @@ static void TGLogMainStack(void) {
 	NSLog(@"PERF stack | %s", line);
 }
 
-/// RSS split by what asked the kernel for the pages. malloc statistics only
-/// see the heap, and on this app the heap is a fifth of the resident size, so
-/// the answer to "what is resident" is only ever visible here.
 static void TGRegionReport(NSString *tag) {
 	vm_address_t address = 0;
 	unsigned long long byTag[256];
@@ -207,9 +201,6 @@ void TGMemMark(NSString *tag) {
 			inUse / 1048576.0, TGProcessCPUSeconds());
 }
 
-/// The stage marks below used to start counting at didFinishLaunching, which
-/// hides everything dyld does first. A tap starts the process, so the honest
-/// zero is the exec time the kernel recorded for this pid.
 static NSTimeInterval TGProcessStarted(void) {
 	static NSTimeInterval started = -1;
 	if (started >= 0)
@@ -235,13 +226,6 @@ static double TGSinceTap(void) {
 	return ([NSDate timeIntervalSinceReferenceDate] - started) * 1000.0;
 }
 
-/// stderr into a file so TDLib's own diagnostics survive a crash and can be
-/// read off the device; scripts/devrun.sh pulls it. This runs from main, not
-/// from didFinishLaunching, because everything UIKit does in between - and
-/// every stage mark taken there - is otherwise written to a stderr nobody
-/// reads. The previous run is kept: an uncaught exception prints its reason to
-/// stderr and the process dies, so without the rotation the one message that
-/// explains a crash is deleted by the next launch.
 void TGRedirectLogToFile(void) {
 	NSString *cache = [NSSearchPathForDirectoriesInDomains(
 			NSCachesDirectory, NSUserDomainMask, YES) objectAtIndex:0];
@@ -271,13 +255,6 @@ void TGMarkLaunchStage(NSString *stage) {
 			TGResidentBytes() / 1048576.0, TGProcessCPUSeconds());
 }
 
-/// A stage mark says when the app handed a layer tree to Core Animation, not
-/// when the pixels appeared. The completion block of the transaction that
-/// carries those layers is the last point this process can observe, so the
-/// frame marks below hang off it.
-/// A frame mark is a number; the screenshot is the evidence behind it. The
-/// capture costs 100 ms of its own, so it happens only when a measuring run
-/// has asked for it and always after the timestamp has been taken.
 static void TGCaptureFrame(NSString *name) {
 	if (![[NSUserDefaults standardUserDefaults] boolForKey:@"tgCaptureFrames"])
 		return;
@@ -322,8 +299,6 @@ void TGWaitForTextWarm(void) {
 	});
 }
 
-/// The clock for opening a conversation starts at the tap, not at viewDidLoad -
-/// pushing the controller is itself part of what the finger waits through.
 void TGBeginOpenTimingFromTap(void) {
 	TGOpenStarted = [NSDate timeIntervalSinceReferenceDate];
 	TGOpenFrameSeen = NO;
@@ -349,10 +324,6 @@ void TGMarkOpenStage(NSString *stage) {
 	NSLog(@"PERF open +%.0f ms: %@", elapsed * 1000.0, stage);
 }
 
-/// The one that matters: the first frame in which the conversation is
-/// readable, and later the frame that holds the whole history. Each is
-/// reported once, and the second closes the open timing so the next tap starts
-/// from zero.
 void TGMarkOpenFrame(NSString *stage) {
 	if (TGOpenStarted <= 0 || TGOpenFrameSeen)
 		return;
@@ -422,10 +393,6 @@ void TGMarkOpenSettledFrame(NSString *stage) {
 static void TGStartMemorySampler(void) {
 	static dispatch_once_t once;
 	dispatch_once(&once, ^{
-		// A launch is over before a URL can turn sampling on, so the switch
-		// for it has to survive the previous run.
-		if ([[NSUserDefaults standardUserDefaults] boolForKey:@"tgStacksAtLaunch"])
-			TGStackSamplingOn = YES;
 		TGMainThreadPort = mach_thread_self();
 		TGMainPingAt = [NSDate timeIntervalSinceReferenceDate];
 		dispatch_async(dispatch_get_main_queue(), ^{
@@ -442,6 +409,13 @@ static void TGStartMemorySampler(void) {
 								 toTarget:[AppDelegate class]
 							   withObject:nil];
 	});
+}
+
+static void TGStartMemorySamplerIfRequested(void) {
+	if ([[NSUserDefaults standardUserDefaults] boolForKey:@"tgStacksAtLaunch"]){
+		TGStackSamplingOn = YES;
+		TGStartMemorySampler();
+	}
 }
 
 + (void)tgWarmEmojiFont {
@@ -498,7 +472,7 @@ static void TGWatchForIncomingCalls(void) {
 		didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
 {
 	TGMarkLaunchStage(@"didFinishLaunching");
-	TGStartMemorySampler();
+	TGStartMemorySamplerIfRequested();
 	[NSThread detachNewThreadSelector:@selector(tgWarmEmojiFont)
 							 toTarget:[AppDelegate class]
 						   withObject:nil];
@@ -865,12 +839,16 @@ static void TGWatchForIncomingCalls(void) {
 
 	if ([host isEqualToString:@"perflog"]){
 		TGPerfLoggingOn = [arg isEqualToString:@"on"];
+		if (TGPerfLoggingOn)
+			TGStartMemorySampler();
 		NSLog(@"PERF perflog %@", TGPerfLoggingOn ? @"on" : @"off");
 		return YES;
 	}
 
 	if ([host isEqualToString:@"stacks"]){
 		TGStackSamplingOn = [arg isEqualToString:@"on"];
+		if (TGStackSamplingOn)
+			TGStartMemorySampler();
 		NSLog(@"PERF stacks %@", TGStackSamplingOn ? @"on" : @"off");
 		return YES;
 	}

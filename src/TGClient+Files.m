@@ -43,9 +43,6 @@ static NSData *TGFilesDataFromBase64(id value) {
 	if (!text.length)
 		return nil;
 
-	// Minithumbnails are decoded off the main thread now, and from more than
-	// one queue. Filling this table under a plain flag let a second thread
-	// read it half-built and turn a picture into nothing.
 	static signed char table[256];
 	static dispatch_once_t once;
 	dispatch_once(&once, ^{

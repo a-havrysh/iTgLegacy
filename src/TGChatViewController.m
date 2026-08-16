@@ -2533,6 +2533,7 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 @property (nonatomic, strong) NSDictionary *pinnedMessage;
 @property (nonatomic, strong) UIView *pinnedBanner;
 @property (nonatomic, assign) CGFloat pinnedBannerInset;
+@property (nonatomic, assign) CGFloat shortContentInset;
 @property (nonatomic, assign) BOOL deeperHistoryPending;
 @property (nonatomic, assign) BOOL localHistoryShown;
 @property (nonatomic, assign) BOOL networkHistoryShown;
@@ -2786,10 +2787,13 @@ typedef NS_ENUM(NSInteger, TGComposeMode) {
 		self.table.frame = frame;
 	}
 	CGFloat width = self.table.bounds.size.width;
-	if (width < 1 || fabsf(width - self.laidOutWidth) < 0.5f)
+	if (width < 1 || fabsf(width - self.laidOutWidth) < 0.5f){
+		[self updateShortContentInset];
 		return;
+	}
 	self.laidOutWidth = width;
 	[self.table reloadData];
+	[self updateShortContentInset];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -3430,8 +3434,6 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 		if (![keep containsObject:key])
 			[self.minithumbnails removeObjectForKey:key];
 
-	// The pictures are the largest thing this screen holds; under pressure
-	// only what is actually on screen survives.
 	for (NSNumber *fileId in [self.images allKeys]){
 		if ([keepFiles containsObject:fileId])
 			continue;
@@ -3457,11 +3459,6 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 		return;
 	}
 
-	// TDLib answers the first getChatHistory of a chat with a single message
-	// and needs several more round trips to produce sixty, which is most of a
-	// second. The conversation opens on whatever the first answer holds,
-	// anchored at the bottom, and grows upwards as the rest arrives - the same
-	// order the messages would have been read in.
 	void (^partial)(NSArray *) = ^(NSArray *messages){
 		TGChatViewController *me = weakSelf;
 		if (!me || !messages.count || me.networkHistoryShown ||
@@ -3473,10 +3470,6 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 		[me applyHistory:messages final:NO partial:YES];
 	};
 
-	// The two walks used to run at once, and TDLib served them alternately:
-	// every batch was fetched twice and each answer waited behind the other
-	// request. The cache is what the screen needs first, so it goes first, and
-	// the server is asked afterwards.
 	[[TGClient shared] historyForChat:self.chatId thread:self.threadId limit:60
 							onlyLocal:YES progress:partial completion:^(NSArray *messages){
 		TGChatViewController *me = weakSelf;
@@ -3530,6 +3523,7 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	NSLog(@"TDLIB HISTORY%@: %lu msgs: %@", final ? @"" : @" (cached)",
 			(unsigned long)messages.count, [kinds componentsJoinedByString:@", "]);
 	[self.table reloadData];
+	[self updateShortContentInset];
 	if (messages.count){
 		TGMarkOpenFrame([NSString stringWithFormat:@"FIRST FRAME with %lu messages",
 				(unsigned long)messages.count]);
@@ -3684,11 +3678,6 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	}];
 }
 
-/// Quotes, reaction chips, link previews and sender names all arrive one reply
-/// at a time, and each used to reload the whole table. Every reload re-measures
-/// every row, so a chat where fifty messages carry reactions paid for fifty
-/// full height passes. These fold all the replies that land in one turn of the
-/// runloop into a single reload.
 - (void)setNeedsTableReload {
 	if (self.tableReloadPending)
 		return;
@@ -3969,9 +3958,6 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 		return;
 	self.photoWindow = window;
 
-	// Furthest row first, so that after each is moved to the end of the
-	// use order the rows nearest the screen sit newest, and the budget below
-	// gives up the far ones first.
 	NSMutableSet *wanted = [NSMutableSet set];
 	NSMutableArray *byProximity = [NSMutableArray array];
 	NSUInteger centre = window.location + window.length / 2;
@@ -4000,8 +3986,6 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 		}
 	}
 
-	// Only the nearest handful is ever held, so asking for more than that
-	// would download bytes that get thrown away before anyone sees them.
 	if (byProximity.count > kMaxLivePictures){
 		NSRange far = NSMakeRange(0, byProximity.count - kMaxLivePictures);
 		[wanted minusSet:[NSSet setWithArray:[byProximity subarrayWithRange:far]]];
@@ -4032,9 +4016,6 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	[self prunePicturesInUseOrder:byProximity];
 }
 
-/// A fixed number of megabytes of pictures is kept, the ones nearest the screen
-/// first, and everything past that is let go. A dropped picture also loses its
-/// "already asked for" mark, or it would never come back.
 - (void)prunePicturesInUseOrder:(NSArray *)nearestLast {
 	for (NSNumber *fileId in nearestLast){
 		[self.imageOrder removeObject:fileId];
@@ -4082,8 +4063,6 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 			avatars / 1048576.0);
 }
 
-/// The scaled copies the cells actually draw are keyed by file, so they follow
-/// the pictures they were made from out of memory.
 - (void)dropTileBitmapsOutside:(NSSet *)keep {
 	if (!self.tileBitmaps.count)
 		return;
@@ -4099,9 +4078,6 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	}
 }
 
-/// No bubble is wider than the budget, so nothing above that many pixels can
-/// ever reach the screen. Decoding to it turns a multi-megabyte camera photo
-/// into a few hundred kilobytes.
 - (CGFloat)pictureDecodeLimit {
 	CGFloat scale = [UIScreen mainScreen].scale;
 	if (scale < 1.0f)
@@ -4139,15 +4115,10 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 			return;
 		}
 
-		// The whole decode happens here, off the main thread and already
-		// scaled down: TDLib answers on the main thread, and a full-resolution
-		// photo drawn from there is what used to stall the first frame of a
-		// chat for over a second.
 		dispatch_async(TGImageDecodeQueue(), ^{
 			UIImage *img = nil;
 			@autoreleasepool {
 				img = TGDecodeThumbnail(path, limit);
-				// Stickers arrive as WebP, which UIImage does not know on iOS 7.
 				if (!img && [path.pathExtension.lowercaseString isEqualToString:@"webp"])
 					img = TGImageWithinPixelLimit(
 							[UIImage convertFromWebP:path compressedData:nil error:nil], limit);
@@ -4226,6 +4197,26 @@ static UIImage *TGChatVideoNoteGlyph(UIColor *colour, CGFloat side) {
 	if (stale.count)
 		[self.table reloadRowsAtIndexPaths:stale
 						  withRowAnimation:UITableViewRowAnimationNone];
+}
+
+- (void)updateShortContentInset {
+	if (!self.table)
+		return;
+	UIEdgeInsets insets = self.table.contentInset;
+	CGFloat fixed = insets.top - self.shortContentInset;
+	CGFloat room = self.table.bounds.size.height - fixed - insets.bottom;
+	NSInteger rows = [self displayRowCount];
+	if (self.shortContentInset <= 0 && rows * kSystemPlateHeight > room)
+		return;
+	CGFloat pad = rows ? room - self.table.contentSize.height : 0;
+	if (pad < 0)
+		pad = 0;
+	if (fabsf(pad - self.shortContentInset) < 0.5f)
+		return;
+	insets.top = fixed + pad;
+	self.shortContentInset = pad;
+	self.table.contentInset = insets;
+	self.table.scrollIndicatorInsets = insets;
 }
 
 - (void)scrollToBottomAnimated:(BOOL)animated {
@@ -4932,6 +4923,7 @@ static UIImage *TGPinnedBadgeGlyph(void) {
 	self.pinnedBannerInset = 0;
 	self.table.contentInset = insets;
 	self.table.scrollIndicatorInsets = insets;
+	[self updateShortContentInset];
 }
 
 - (void)showPinnedBanner:(NSString *)text {
@@ -4999,6 +4991,7 @@ static UIImage *TGPinnedBadgeGlyph(void) {
 	insets.top += height;
 	self.table.contentInset = insets;
 	self.table.scrollIndicatorInsets = insets;
+	[self updateShortContentInset];
 }
 
 - (void)pinnedBannerPressed:(UIControl *)banner {
@@ -9303,9 +9296,6 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 	return CGSizeZero;
 }
 
-/// A lookup and nothing more. The JPEG behind it is tiny, but decoding it here
-/// would be an image decode inside cellForRow, which is the one place on this
-/// device that cannot afford any.
 - (UIImage *)minithumbnailImageFor:(NSDictionary *)m {
 	NSNumber *key = [m[@"id"] isKindOfClass:NSNumber.class] ? m[@"id"] : nil;
 	if (!key)
@@ -9314,10 +9304,6 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 	return [cached isKindOfClass:[UIImage class]] ? cached : nil;
 }
 
-/// TDLib carries a forty-pixel JPEG of every picture inside the message, so a
-/// bubble can show a blurred version of what is coming while the real file is
-/// still being fetched. They are decoded here, off the main thread, as soon as
-/// the history they belong to arrives.
 - (void)warmMinithumbnailsFor:(NSArray *)messages {
 	NSMutableArray *pending = [NSMutableArray array];
 	for (NSDictionary *m in messages){
@@ -9331,10 +9317,6 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 	if (!pending.count)
 		return;
 
-	// The batch a conversation opens on is one or two messages, and a bubble
-	// that opens as a grey rectangle and fills in a frame later is exactly
-	// what this is meant to avoid. A couple of forty-pixel JPEGs cost about a
-	// millisecond, and no scroll is in progress at that moment.
 	if (pending.count <= 4){
 		for (NSArray *entry in pending){
 			id raw = entry[1];
@@ -9444,11 +9426,6 @@ static BOOL TGIsEmojiPiece(NSString *piece) {
 	if (cached)
 		return cached;
 
-	// Redrawing the picture at the size the bubble shows it saves the
-	// compositor some work, but it is a Core Graphics pass, and doing one
-	// inside cellForRow drops a frame of the scroll that asked for it. The
-	// picture already in hand is the same picture; the smaller copy is made
-	// off the main thread and used from the next time the row is built.
 	if (![self.tileBitmapsRequested containsObject:key]){
 		[self.tileBitmapsRequested addObject:key];
 		__weak typeof(self) weakSelf = self;
@@ -11393,9 +11370,6 @@ static const NSInteger kQuoteTapTag = 0x9009;
 			if (!fileId)
 				continue;
 			started++;
-			// Always off the file, never off what the bubble is showing: the
-			// bubble's copy is scaled down to the size it is drawn at, and the
-			// Camera Roll deserves the picture that was actually sent.
 			__weak typeof(self) weakForPhoto = self;
 			[[TGClient shared] downloadFile:[fileId integerValue]
 								 completion:^(NSString *path){

@@ -173,10 +173,6 @@ typedef NS_ENUM(NSInteger, TGConnectionState) {
              onlyLocal:(BOOL)onlyLocal
             completion:(void (^)(NSArray *messages))completion;
 
-/// The same walk, but reporting each batch as TDLib hands it over. Asking for
-/// sixty messages takes several round trips and the first one usually answers
-/// with a single message; `progress` is what lets a conversation paint that
-/// message instead of an empty screen while the rest is fetched.
 - (void)historyForChat:(int64_t)chatId
                 thread:(int64_t)threadId
                  limit:(NSInteger)limit

@@ -3280,20 +3280,12 @@ static UIImage *TGAvatarThumbnail(UIImage *source, CGFloat sidePoints) {
 			(unsigned long)count]);
 }
 
-/// The name a cached avatar is filed under. It used to include the TDLib file
-/// id, which is handed out afresh by each TDLib instance: the cache therefore
-/// gained a new copy of every picture on every launch and never once hit after
-/// a restart, which is why the list opened with grey silhouettes. The remote
-/// unique id is the same string across launches and still changes when the
-/// chat changes its picture, so it is what the file is named after now.
 static NSString *TGAvatarDiskKey(NSString *avatarKey) {
 	if (!avatarKey.length)
 		return nil;
 	return [NSString stringWithFormat:@"chatavatar_%@_%d", avatarKey, (int)kAvatar];
 }
 
-/// Every chat that has a picture gets one of these, and the same one on every
-/// launch when TDLib gave us a remote unique id for it.
 static NSString *TGAvatarKeyForChat(NSDictionary *chat) {
 	NSString *stable = chat[@"photoKey"];
 	if ([stable isKindOfClass:[NSString class]] && stable.length)
@@ -3309,10 +3301,6 @@ static CGFloat TGAvatarScale(void) {
 	return scale < 1.0f ? 1.0f : scale;
 }
 
-/// TDLib ships a tiny JPEG of the chat picture inside the chat itself, so a
-/// row never has to sit behind a coloured silhouette while the real picture is
-/// found. It is about forty pixels across and drawn into a fifty-six point
-/// box, which is the blur.
 - (UIImage *)blurredAvatarPlaceholderForChat:(NSDictionary *)chat {
 	NSString *encoded = chat[@"photoMini"];
 	if (![encoded isKindOfClass:[NSString class]] || !encoded.length)
@@ -3324,9 +3312,6 @@ static CGFloat TGAvatarScale(void) {
 	return nil;
 }
 
-/// The same tiny JPEGs, decoded off the main thread. A row is built during a
-/// scroll and must not decode anything while it is; by the time one is needed
-/// it is either already here or the row shows its initials for a frame.
 - (void)warmAvatarPlaceholders {
 	NSMutableArray *pending = [NSMutableArray array];
 	for (NSDictionary *c in [self visibleChats]){
@@ -3400,11 +3385,6 @@ static CGFloat TGAvatarScale(void) {
 	});
 }
 
-/// Everything the list needs to paint a complete first frame is already on
-/// disk; the only reason it used to arrive late is that the load went through
-/// a background queue and two hops back. Before the window goes up there is
-/// nothing else competing for the main thread, so the handful of pictures the
-/// first screenful shows are read here and now.
 - (void)loadCachedAvatarsForFirstFrame {
 	if (self.warmedFirstFrameAvatars)
 		return;
@@ -3430,8 +3410,6 @@ static CGFloat TGAvatarScale(void) {
 - (void)downloadAvatarForKey:(NSString *)avatarKey {
 	NSNumber *fileId = [self avatarFileIdForKey:avatarKey];
 	if (![fileId isKindOfClass:[NSNumber class]]){
-		// A key restored from the snapshot has no file id until TDLib has
-		// listed the chat again; the next sweep picks it up.
 		[self.avatarsInFlight removeObject:avatarKey];
 		[self.avatarsRequested removeObject:avatarKey];
 		return;

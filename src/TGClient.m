@@ -1524,8 +1524,6 @@ static NSDictionary *TGFlattenMessage(NSDictionary *m) {
 			return;
 		}
 
-		// Ask for the next batch before painting this one: drawing sixty rows
-		// takes long enough that TDLib would otherwise sit idle through it.
 		NSArray *soFar = progress ? [[collected reverseObjectEnumerator] allObjects] : nil;
 		[me fetchHistoryChunkForChat:chatId
 					   fromMessageId:oldest
@@ -2797,10 +2795,6 @@ static NSArray *TGPacksFrom(NSDictionary *target) {
 		info[@"isMuted"] = @([chat[@"notification_settings"][@"mute_for"] integerValue] > 0);
 
 	// Small avatar, if the chat has one. Downloaded lazily; the id is enough
-	// for the UI to ask for it later. The file id is only meaningful to the
-	// TDLib instance that issued it, so the cache key beside it is the remote
-	// unique id, which is the same string on every launch and still changes
-	// when the chat changes its picture.
 	NSNumber *photoFile = chat[@"photo"][@"small"][@"id"];
 	if (photoFile)
 		info[@"photoFileId"] = photoFile;
@@ -2987,9 +2981,6 @@ static NSDictionary *TGPlistSafeChat(NSDictionary *chat) {
 	return [out[@"id"] isKindOfClass:NSNumber.class] ? out : nil;
 }
 
-/// The folder strip sits above the first row. Learning about it only once
-/// TDLib has answered pushes every row down a strip's height a second after
-/// the list is already on screen, so the strip is remembered too.
 static NSString *const TGFolderSnapshotName = @"folders";
 
 - (void)saveCachedFolders {

@@ -27,10 +27,6 @@ UIImage *TGDecodeThumbnail(NSString *path, CGFloat maxPixelSize) {
 	return image;
 }
 
-/// One core. Decoding four photos at once on it finishes no sooner than one
-/// after another, competes with the main thread for it, and holds four sets of
-/// ImageIO buffers at the same time - which is what the resident peak was
-/// made of.
 dispatch_queue_t TGImageDecodeQueue(void) {
 	static dispatch_queue_t queue = NULL;
 	static dispatch_once_t once;
