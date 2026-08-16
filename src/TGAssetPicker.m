@@ -1,6 +1,7 @@
 #import "TGAssetPicker.h"
 
 #import <AssetsLibrary/AssetsLibrary.h>
+#import "TGLazyFramework.h"
 #import <QuartzCore/QuartzCore.h>
 
 #import "TGTheme.h"
@@ -229,9 +230,10 @@ static NSString *TGAssetPickerStage(ALAsset *asset, double stamp, NSInteger seri
 @implementation TGAssetPicker
 
 + (BOOL)available {
-	if (![ALAssetsLibrary respondsToSelector:@selector(authorizationStatus)])
+	Class library = TGALClass(ALAssetsLibrary);
+	if (![library respondsToSelector:@selector(authorizationStatus)])
 		return YES;
-	ALAuthorizationStatus status = [ALAssetsLibrary authorizationStatus];
+	ALAuthorizationStatus status = [library authorizationStatus];
 	return status != ALAuthorizationStatusDenied && status != ALAuthorizationStatusRestricted;
 }
 
@@ -443,7 +445,7 @@ static NSString *TGAssetPickerStage(ALAsset *asset, double stamp, NSInteger seri
 		return;
 	}
 
-	self.library = [[ALAssetsLibrary alloc] init];
+	self.library = [[TGALClass(ALAssetsLibrary) alloc] init];
 	__weak TGAssetPicker *weakSelf = self;
 	[self.library enumerateGroupsWithTypes:ALAssetsGroupSavedPhotos
 								usingBlock:^(ALAssetsGroup *group, BOOL *stop){
@@ -454,13 +456,13 @@ static NSString *TGAssetPickerStage(ALAsset *asset, double stamp, NSInteger seri
 			[me readGroupContents];
 			return;
 		}
-		[group setAssetsFilter:[ALAssetsFilter allPhotos]];
+		[group setAssetsFilter:[TGALClass(ALAssetsFilter) allPhotos]];
 		if ([group numberOfAssets] == 0)
 			return;
 		if (me.group)
 			return;
 		me.group = group;
-		NSString *name = [group valueForProperty:ALAssetsGroupPropertyName];
+		NSString *name = [group valueForProperty:TGALString(ALAssetsGroupPropertyName)];
 		if (name.length)
 			me.groupLabel.text = name;
 	} failureBlock:^(NSError *error){
@@ -681,7 +683,7 @@ static NSString *TGAssetPickerStage(ALAsset *asset, double stamp, NSInteger seri
 		TGAssetPicker *me = weakSelf;
 		if (!me)
 			return;
-		NSString *name = [me.group valueForProperty:ALAssetsGroupPropertyName];
+		NSString *name = [me.group valueForProperty:TGALString(ALAssetsGroupPropertyName)];
 		me.groupLabel.text = name.length ? name : @"Camera Roll";
 	});
 }

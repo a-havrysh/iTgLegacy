@@ -1,4 +1,5 @@
 #import "TGVideoRecorder.h"
+#import "TGLazyFramework.h"
 #import <CoreMedia/CoreMedia.h>
 
 NSString *const TGVideoRecorderErrorDomain = @"TGVideoRecorderErrorDomain";
@@ -38,7 +39,7 @@ static const long long TGVideoRecorderNoteDiskFloor    = 12ll * 1024ll * 1024ll;
 @implementation TGVideoRecorder
 
 + (BOOL)isAvailable {
-	return [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo] != nil;
+	return [TGAVClass(AVCaptureDevice) defaultDeviceWithMediaType:TGAVString(AVMediaTypeVideo)] != nil;
 }
 
 - (instancetype)initWithMode:(TGVideoRecorderMode)mode {
@@ -88,7 +89,7 @@ static const long long TGVideoRecorderNoteDiskFloor    = 12ll * 1024ll * 1024ll;
 }
 
 - (BOOL)canSwitchCamera {
-	return [AVCaptureDevice devicesWithMediaType:AVMediaTypeVideo].count > 1;
+	return [TGAVClass(AVCaptureDevice) devicesWithMediaType:TGAVString(AVMediaTypeVideo)].count > 1;
 }
 
 #pragma mark - errors
@@ -122,17 +123,17 @@ static const long long TGVideoRecorderNoteDiskFloor    = 12ll * 1024ll * 1024ll;
 #pragma mark - permissions
 
 - (BOOL)cameraAccessAllowedRequestingIfNeeded {
-	if (![AVCaptureDevice respondsToSelector:@selector(authorizationStatusForMediaType:)])
+	if (![TGAVClass(AVCaptureDevice) respondsToSelector:@selector(authorizationStatusForMediaType:)])
 		return YES;
 
 	AVAuthorizationStatus status =
-			[AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo];
+			[TGAVClass(AVCaptureDevice) authorizationStatusForMediaType:TGAVString(AVMediaTypeVideo)];
 	if (status == AVAuthorizationStatusAuthorized)
 		return YES;
 
 	if (status == AVAuthorizationStatusNotDetermined){
 		__weak typeof(self) weakSelf = self;
-		[AVCaptureDevice requestAccessForMediaType:AVMediaTypeVideo
+		[TGAVClass(AVCaptureDevice) requestAccessForMediaType:TGAVString(AVMediaTypeVideo)
 								 completionHandler:^(BOOL granted){
 			dispatch_async(dispatch_get_main_queue(), ^{
 				TGVideoRecorder *me = weakSelf;
@@ -152,7 +153,7 @@ static const long long TGVideoRecorderNoteDiskFloor    = 12ll * 1024ll * 1024ll;
 }
 
 - (void)requestMicrophoneAccess {
-	AVAudioSession *audio = [AVAudioSession sharedInstance];
+	AVAudioSession *audio = [TGAVClass(AVAudioSession) sharedInstance];
 	if (![audio respondsToSelector:@selector(requestRecordPermission:)])
 		return;
 	__weak typeof(self) weakSelf = self;
@@ -173,23 +174,23 @@ static const long long TGVideoRecorderNoteDiskFloor    = 12ll * 1024ll * 1024ll;
 #pragma mark - setup
 
 - (AVCaptureDevice *)cameraAtPosition:(AVCaptureDevicePosition)position {
-	NSArray *devices = [AVCaptureDevice devicesWithMediaType:AVMediaTypeVideo];
+	NSArray *devices = [TGAVClass(AVCaptureDevice) devicesWithMediaType:TGAVString(AVMediaTypeVideo)];
 	for (AVCaptureDevice *device in devices){
 		if (device.position == position)
 			return device;
 	}
-	return [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
+	return [TGAVClass(AVCaptureDevice) defaultDeviceWithMediaType:TGAVString(AVMediaTypeVideo)];
 }
 
 - (NSString *)preferredPresetForSession:(AVCaptureSession *)session {
 	NSArray *candidates = (self.mode == TGVideoRecorderModeNote)
-			? @[AVCaptureSessionPreset640x480, AVCaptureSessionPresetMedium, AVCaptureSessionPresetLow]
-			: @[AVCaptureSessionPreset1280x720, AVCaptureSessionPreset640x480, AVCaptureSessionPresetMedium];
+			? @[TGAVString(AVCaptureSessionPreset640x480), TGAVString(AVCaptureSessionPresetMedium), TGAVString(AVCaptureSessionPresetLow)]
+			: @[TGAVString(AVCaptureSessionPreset1280x720), TGAVString(AVCaptureSessionPreset640x480), TGAVString(AVCaptureSessionPresetMedium)];
 	for (NSString *preset in candidates){
 		if ([session canSetSessionPreset:preset])
 			return preset;
 	}
-	return AVCaptureSessionPresetMedium;
+	return TGAVString(AVCaptureSessionPresetMedium);
 }
 
 - (void)configureDevice:(AVCaptureDevice *)device {
@@ -208,7 +209,7 @@ static const long long TGVideoRecorderNoteDiskFloor    = 12ll * 1024ll * 1024ll;
 }
 
 - (void)applyConnectionSettings {
-	AVCaptureConnection *video = [self.movieOutput connectionWithMediaType:AVMediaTypeVideo];
+	AVCaptureConnection *video = [self.movieOutput connectionWithMediaType:TGAVString(AVMediaTypeVideo)];
 	if (!video)
 		return;
 	if (video.isVideoOrientationSupported)
@@ -232,7 +233,7 @@ static const long long TGVideoRecorderNoteDiskFloor    = 12ll * 1024ll * 1024ll;
 	self.cameraPosition = camera.position;
 
 	NSError *error = nil;
-	AVCaptureDeviceInput *videoInput = [AVCaptureDeviceInput deviceInputWithDevice:camera
+	AVCaptureDeviceInput *videoInput = [TGAVClass(AVCaptureDeviceInput) deviceInputWithDevice:camera
 																			error:&error];
 	if (!videoInput){
 		NSLog(@"TGVideoRecorder: video input: %@", error);
@@ -240,16 +241,16 @@ static const long long TGVideoRecorderNoteDiskFloor    = 12ll * 1024ll * 1024ll;
 		return;
 	}
 
-	AVAudioSession *audio = [AVAudioSession sharedInstance];
+	AVAudioSession *audio = [TGAVClass(AVAudioSession) sharedInstance];
 	NSError *audioError = nil;
-	[audio setCategory:AVAudioSessionCategoryPlayAndRecord error:&audioError];
+	[audio setCategory:TGAVString(AVAudioSessionCategoryPlayAndRecord) error:&audioError];
 	[audio setActive:YES error:&audioError];
 
-	AVCaptureDevice *microphone = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeAudio];
+	AVCaptureDevice *microphone = [TGAVClass(AVCaptureDevice) defaultDeviceWithMediaType:TGAVString(AVMediaTypeAudio)];
 	AVCaptureDeviceInput *audioInput = microphone
-			? [AVCaptureDeviceInput deviceInputWithDevice:microphone error:nil] : nil;
+			? [TGAVClass(AVCaptureDeviceInput) deviceInputWithDevice:microphone error:nil] : nil;
 
-	AVCaptureSession *session = [[AVCaptureSession alloc] init];
+	AVCaptureSession *session = [[TGAVClass(AVCaptureSession) alloc] init];
 	[session beginConfiguration];
 	session.sessionPreset = [self preferredPresetForSession:session];
 
@@ -265,7 +266,7 @@ static const long long TGVideoRecorderNoteDiskFloor    = 12ll * 1024ll * 1024ll;
 	else
 		audioInput = nil;
 
-	AVCaptureMovieFileOutput *output = [[AVCaptureMovieFileOutput alloc] init];
+	AVCaptureMovieFileOutput *output = [[TGAVClass(AVCaptureMovieFileOutput) alloc] init];
 	output.maxRecordedDuration = CMTimeMakeWithSeconds(self.maximumDuration, 30);
 	output.maxRecordedFileSize = [self maximumFileSize];
 	output.minFreeDiskSpaceLimit = [self diskFloor] / 2;
@@ -286,8 +287,8 @@ static const long long TGVideoRecorderNoteDiskFloor    = 12ll * 1024ll * 1024ll;
 	[self configureDevice:camera];
 	[self applyConnectionSettings];
 
-	AVCaptureVideoPreviewLayer *preview = [AVCaptureVideoPreviewLayer layerWithSession:session];
-	preview.videoGravity = AVLayerVideoGravityResizeAspectFill;
+	AVCaptureVideoPreviewLayer *preview = [TGAVClass(AVCaptureVideoPreviewLayer) layerWithSession:session];
+	preview.videoGravity = TGAVString(AVLayerVideoGravityResizeAspectFill);
 	self.previewLayer = preview;
 
 	[self startObserving];
@@ -311,7 +312,7 @@ static const long long TGVideoRecorderNoteDiskFloor    = 12ll * 1024ll * 1024ll;
 	if (!camera || camera.position == self.cameraPosition)
 		return;
 
-	AVCaptureDeviceInput *input = [AVCaptureDeviceInput deviceInputWithDevice:camera error:nil];
+	AVCaptureDeviceInput *input = [TGAVClass(AVCaptureDeviceInput) deviceInputWithDevice:camera error:nil];
 	if (!input)
 		return;
 
@@ -449,15 +450,15 @@ static const long long TGVideoRecorderNoteDiskFloor    = 12ll * 1024ll * 1024ll;
 	NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
 	[center addObserver:self
 			   selector:@selector(sessionRuntimeError:)
-				   name:AVCaptureSessionRuntimeErrorNotification
+				   name:TGAVString(AVCaptureSessionRuntimeErrorNotification)
 				 object:self.session];
 	[center addObserver:self
 			   selector:@selector(sessionWasInterrupted:)
-				   name:AVCaptureSessionWasInterruptedNotification
+				   name:TGAVString(AVCaptureSessionWasInterruptedNotification)
 				 object:self.session];
 	[center addObserver:self
 			   selector:@selector(sessionInterruptionEnded:)
-				   name:AVCaptureSessionInterruptionEndedNotification
+				   name:TGAVString(AVCaptureSessionInterruptionEndedNotification)
 				 object:self.session];
 	[center addObserver:self
 			   selector:@selector(applicationDidEnterBackground:)
@@ -477,7 +478,7 @@ static const long long TGVideoRecorderNoteDiskFloor    = 12ll * 1024ll * 1024ll;
 }
 
 - (void)sessionRuntimeError:(NSNotification *)notification {
-	NSError *error = notification.userInfo[AVCaptureSessionErrorKey];
+	NSError *error = notification.userInfo[TGAVString(AVCaptureSessionErrorKey)];
 	NSLog(@"TGVideoRecorder: runtime error %@", error);
 	if (self.recording){
 		self.pendingError = [self errorWithCode:TGVideoRecorderErrorRecordingFailed];
@@ -539,7 +540,7 @@ didFinishRecordingToOutputFileAtURL:(NSURL *)outputFileURL
 
 	BOOL usable = (error == nil);
 	if (error){
-		NSNumber *finished = error.userInfo[AVErrorRecordingSuccessfullyFinishedKey];
+		NSNumber *finished = error.userInfo[TGAVString(AVErrorRecordingSuccessfullyFinishedKey)];
 		usable = finished ? [finished boolValue] : NO;
 		if (!usable)
 			NSLog(@"TGVideoRecorder: recording error %@", error);
@@ -581,13 +582,13 @@ didFinishRecordingToOutputFileAtURL:(NSURL *)outputFileURL
 		CGSize dimensions = CGSizeZero;
 
 		@autoreleasepool {
-			AVURLAsset *asset = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:path]
+			AVURLAsset *asset = [TGAVClass(AVURLAsset) URLAssetWithURL:[NSURL fileURLWithPath:path]
 												   options:nil];
 			CMTime assetDuration = asset.duration;
 			if (CMTIME_IS_NUMERIC(assetDuration))
 				seconds = CMTimeGetSeconds(assetDuration);
 
-			NSArray *tracks = [asset tracksWithMediaType:AVMediaTypeVideo];
+			NSArray *tracks = [asset tracksWithMediaType:TGAVString(AVMediaTypeVideo)];
 			if (tracks.count > 0){
 				AVAssetTrack *track = tracks[0];
 				CGSize natural = CGSizeApplyAffineTransform(track.naturalSize,
@@ -663,9 +664,9 @@ didFinishRecordingToOutputFileAtURL:(NSURL *)outputFileURL
 	self.session = nil;
 	self.startedAt = nil;
 
-	AVAudioSession *audio = [AVAudioSession sharedInstance];
+	AVAudioSession *audio = [TGAVClass(AVAudioSession) sharedInstance];
 	NSError *audioError = nil;
-	[audio setCategory:AVAudioSessionCategoryPlayback error:&audioError];
+	[audio setCategory:TGAVString(AVAudioSessionCategoryPlayback) error:&audioError];
 	[audio setActive:YES error:&audioError];
 }
 

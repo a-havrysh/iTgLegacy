@@ -6,6 +6,8 @@
  * and the view controllers built on its structs are gone.
  */
 #import "AppDelegate.h"
+#import "TGLazyFramework.h"
+#import "TGLaunchSnapshot.h"
 #import "RootViewController.h"
 #import "TGClient.h"
 #import "TGTheme.h"
@@ -578,6 +580,17 @@ static void TGWatchForIncomingCalls(void) {
 	TGMarkLaunchStage(@"window on screen");
 	TGMarkFirstFrame(@"FIRST FRAME");
 
+	__weak typeof(self) weakSelf = self;
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
+			dispatch_get_main_queue(), ^{
+		AppDelegate *me = weakSelf;
+		if (!me)
+			return;
+		[TGLaunchSnapshot noteColdLaunchOffsetFromWindow:me.window];
+		if (![NSUserDefaults.standardUserDefaults boolForKey:@"tgWasSignedIn"])
+			[TGLaunchSnapshot restoreShippedImage:@"launched signed out"];
+	});
+
 	[self startTDLib];
 	[TGDiskCache sweep];
 	[TGDiskCache protectTreeAtPath:databaseDirectory];
@@ -600,8 +613,9 @@ static void TGWatchForIncomingCalls(void) {
 }
 
 - (void)applicationDidEnterBackground:(UIApplication *)application {
-	[TGIcons flush];
 	[[TGClient shared] saveCachedChats];
+	[TGLaunchSnapshot captureFromWindow:self.window];
+	[TGIcons flush];
 	[[NSURLCache sharedURLCache] removeAllCachedResponses];
 	[[TGNotificationManager shared] applicationDidEnterBackground];
 	[[TGBackgroundSession shared] applicationDidEnterBackground:application];
@@ -705,6 +719,9 @@ static void TGWatchForIncomingCalls(void) {
 		if (!me)
 			return;
 		NSLog(@"TDLIB AUTH: state %d", (int)state);
+
+		if (state == TGAuthStateWaitPhoneNumber || state == TGAuthStateLoggingOut)
+			[TGLaunchSnapshot restoreShippedImage:@"signed out"];
 
 		switch (state){
 			case TGAuthStateWaitPhoneNumber:
@@ -910,6 +927,24 @@ static void TGWatchForIncomingCalls(void) {
 			NSLog(@"PERF memflush %@ before=%.2f MB after=%.2f MB freed=%.2f MB",
 					what, before / 1048576.0, after / 1048576.0,
 					((double)before - (double)after) / 1048576.0);
+		});
+		return YES;
+	}
+
+	if ([host isEqualToString:@"lazyframeworks"]){
+		TGFrameworkSelfTest();
+		return YES;
+	}
+
+	if ([host isEqualToString:@"launchimage"]){
+		dispatch_async(dispatch_get_main_queue(), ^{
+			if ([arg isEqualToString:@"on"] || [arg isEqualToString:@"off"])
+				[TGLaunchSnapshot setEnabled:[arg isEqualToString:@"on"]];
+			else if ([arg isEqualToString:@"capture"])
+				[TGLaunchSnapshot captureFromWindow:self.window];
+			else if ([arg isEqualToString:@"restore"])
+				[TGLaunchSnapshot restoreShippedImage:@"asked to"];
+			NSLog(@"PERF launchimage state %@", [TGLaunchSnapshot describe]);
 		});
 		return YES;
 	}

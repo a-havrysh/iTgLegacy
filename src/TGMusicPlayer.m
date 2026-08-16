@@ -5,6 +5,7 @@
 #import "TGCall.h"
 #import <AVFoundation/AVFoundation.h>
 #import <MediaPlayer/MediaPlayer.h>
+#import "TGLazyFramework.h"
 
 NSString *const TGMusicPlayerStateChangedNotification = @"TGMusicPlayerStateChanged";
 NSString *const TGMusicPlayerProgressNotification     = @"TGMusicPlayerProgress";
@@ -373,7 +374,7 @@ static AVAudioPlayer *TGMusicOpenPlayer(NSString *path, NSString *fileName, BOOL
 	AVAudioPlayer *player = nil;
 	if (!voice && !TGMusicNeedsOpusDecode(path, fileName)){
 		NSString *usable = TGMusicPathWithExtension(path, fileName);
-		player = [[AVAudioPlayer alloc] initWithContentsOfURL:
+		player = [[TGAVClass(AVAudioPlayer) alloc] initWithContentsOfURL:
 				[NSURL fileURLWithPath:usable] error:nil];
 		if (player)
 			return player;
@@ -381,7 +382,7 @@ static AVAudioPlayer *TGMusicOpenPlayer(NSString *path, NSString *fileName, BOOL
 	NSString *wav = [TGVoiceDecoder wavFromOpusFile:path];
 	if (!wav.length)
 		return nil;
-	return [[AVAudioPlayer alloc] initWithContentsOfURL:
+	return [[TGAVClass(AVAudioPlayer) alloc] initWithContentsOfURL:
 			[NSURL fileURLWithPath:wav] error:nil];
 }
 
@@ -569,8 +570,8 @@ static AVAudioPlayer *TGMusicOpenPlayer(NSString *path, NSString *fileName, BOOL
 #pragma mark - session, remote control, lock screen
 
 - (void)activateSession {
-	AVAudioSession *session = [AVAudioSession sharedInstance];
-	[session setCategory:AVAudioSessionCategoryPlayback error:nil];
+	AVAudioSession *session = [TGAVClass(AVAudioSession) sharedInstance];
+	[session setCategory:TGAVString(AVAudioSessionCategoryPlayback) error:nil];
 	[session setActive:YES error:nil];
 	if (!_sessionActive){
 		_sessionActive = YES;
@@ -585,7 +586,7 @@ static AVAudioPlayer *TGMusicOpenPlayer(NSString *path, NSString *fileName, BOOL
 	[[UIApplication sharedApplication] endReceivingRemoteControlEvents];
 	TGCallState call = [TGCall shared].state;
 	if (call == TGCallStateNone || call == TGCallStateEnded || call == TGCallStateFailed)
-		[[AVAudioSession sharedInstance] setActive:NO error:nil];
+		[[TGAVClass(AVAudioSession) sharedInstance] setActive:NO error:nil];
 }
 
 - (void)handleRemoteControlEvent:(UIEvent *)event {
@@ -614,35 +615,37 @@ static AVAudioPlayer *TGMusicOpenPlayer(NSString *path, NSString *fileName, BOOL
 }
 
 - (Class)nowPlayingCentre {
-	return NSClassFromString(@"MPNowPlayingInfoCenter");
+	return TGMPClass(MPNowPlayingInfoCenter);
 }
 
 - (void)updateNowPlaying {
-	Class centre = [self nowPlayingCentre];
 	NSDictionary *track = self.currentTrack;
-	if (!centre || !track)
+	if (!track)
 		return;
 	if ([track[TGMusicTrackIsVoice] boolValue]){
 		[self clearNowPlaying];
 		_lastNowPlayingUpdate = [NSDate timeIntervalSinceReferenceDate];
 		return;
 	}
+	Class centre = [self nowPlayingCentre];
+	if (!centre)
+		return;
 	NSMutableDictionary *info = [NSMutableDictionary dictionary];
-	info[MPMediaItemPropertyTitle] = track[TGMusicTrackTitle] ?: @"Audio";
+	info[TGMPString(MPMediaItemPropertyTitle)] = track[TGMusicTrackTitle] ?: @"Audio";
 	NSString *performer = track[TGMusicTrackPerformer];
 	if (performer.length)
-		info[MPMediaItemPropertyArtist] = performer;
-	info[MPMediaItemPropertyPlaybackDuration] = [NSNumber numberWithDouble:self.duration];
-	info[MPNowPlayingInfoPropertyElapsedPlaybackTime] =
+		info[TGMPString(MPMediaItemPropertyArtist)] = performer;
+	info[TGMPString(MPMediaItemPropertyPlaybackDuration)] = [NSNumber numberWithDouble:self.duration];
+	info[TGMPString(MPNowPlayingInfoPropertyElapsedPlaybackTime)] =
 			[NSNumber numberWithDouble:self.currentTime];
-	info[MPNowPlayingInfoPropertyPlaybackRate] =
+	info[TGMPString(MPNowPlayingInfoPropertyPlaybackRate)] =
 			[NSNumber numberWithDouble:(self.isPlaying ? 1.0 : 0.0)];
 	[(MPNowPlayingInfoCenter *)[centre defaultCenter] setNowPlayingInfo:info];
 	_lastNowPlayingUpdate = [NSDate timeIntervalSinceReferenceDate];
 }
 
 - (void)clearNowPlaying {
-	Class centre = [self nowPlayingCentre];
+	Class centre = NSClassFromString(@"MPNowPlayingInfoCenter");
 	if (centre)
 		[(MPNowPlayingInfoCenter *)[centre defaultCenter] setNowPlayingInfo:nil];
 }

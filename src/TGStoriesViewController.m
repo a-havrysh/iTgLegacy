@@ -1,4 +1,5 @@
 #import "TGStoriesViewController.h"
+#import "TGLazyFramework.h"
 
 #import <AVFoundation/AVFoundation.h>
 #import <MobileCoreServices/MobileCoreServices.h>
@@ -4972,7 +4973,7 @@ static NSMutableArray *TGStoryComposersInFlight(void)
 	if (![[NSFileManager defaultManager] fileExistsAtPath:path])
 		return NO;
 
-	AVURLAsset *asset = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:path] options:nil];
+	AVURLAsset *asset = [TGAVClass(AVURLAsset) URLAssetWithURL:[NSURL fileURLWithPath:path] options:nil];
 	CMTime length = asset.duration;
 	double seconds = CMTIME_IS_NUMERIC(length) ? CMTimeGetSeconds(length) : 0.0;
 	if (seconds > 60.0)
@@ -4983,7 +4984,7 @@ static NSMutableArray *TGStoryComposersInFlight(void)
 
 	@autoreleasepool
 	{
-		AVAssetImageGenerator *generator = [[AVAssetImageGenerator alloc] initWithAsset:asset];
+		AVAssetImageGenerator *generator = [[TGAVClass(AVAssetImageGenerator) alloc] initWithAsset:asset];
 		generator.appliesPreferredTrackTransform = YES;
 		generator.maximumSize = CGSizeMake(360.0f, 640.0f);
 		CGImageRef frame = [generator copyCGImageAtTime:CMTimeMake(0, 1)

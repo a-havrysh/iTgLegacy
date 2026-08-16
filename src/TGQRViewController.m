@@ -1,4 +1,5 @@
 #import "TGQRViewController.h"
+#import "TGLazyFramework.h"
 #import "TGChatViewController.h"
 #import "TGClient.h"
 #import "TGTheme.h"
@@ -16,10 +17,7 @@ static NSString *TGQRMetadataObjectTypeQRCode(void) {
 	static BOOL resolved = NO;
 
 	if (!resolved){
-		NSString *__unsafe_unretained *symbol =
-				(NSString *__unsafe_unretained *)dlsym(RTLD_DEFAULT,
-													   "AVMetadataObjectTypeQRCode");
-		type = symbol ? *symbol : nil;
+		type = TGAVString(AVMetadataObjectTypeQRCode);
 		resolved = YES;
 	}
 	return type;
@@ -28,7 +26,7 @@ static NSString *TGQRMetadataObjectTypeQRCode(void) {
 static Class TGQRMetadataOutputClass(void) {
 	if (!TGQRMetadataObjectTypeQRCode())
 		return Nil;
-	return NSClassFromString(@"AVCaptureMetadataOutput");
+	return TGAVClass(AVCaptureMetadataOutput);
 }
 
 @interface TGQRViewController () <AVCaptureMetadataOutputObjectsDelegate,
@@ -76,9 +74,9 @@ static Class TGQRMetadataOutputClass(void) {
 }
 
 - (void)startCamera {
-	if ([AVCaptureDevice respondsToSelector:@selector(authorizationStatusForMediaType:)]){
+	if ([TGAVClass(AVCaptureDevice) respondsToSelector:@selector(authorizationStatusForMediaType:)]){
 		AVAuthorizationStatus status =
-				[AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo];
+				[TGAVClass(AVCaptureDevice) authorizationStatusForMediaType:TGAVString(AVMediaTypeVideo)];
 		if (status == AVAuthorizationStatusDenied || status == AVAuthorizationStatusRestricted){
 			self.failure = @"Telegram does not have access to the camera. "
 					@"You can allow it in Settings > Privacy > Camera.";
@@ -86,7 +84,7 @@ static Class TGQRMetadataOutputClass(void) {
 		}
 		if (status == AVAuthorizationStatusNotDetermined){
 			__weak typeof(self) weakSelf = self;
-			[AVCaptureDevice requestAccessForMediaType:AVMediaTypeVideo
+			[TGAVClass(AVCaptureDevice) requestAccessForMediaType:TGAVString(AVMediaTypeVideo)
 									 completionHandler:^(BOOL granted){
 				dispatch_async(dispatch_get_main_queue(), ^{
 					TGQRViewController *me = weakSelf;
@@ -105,17 +103,17 @@ static Class TGQRMetadataOutputClass(void) {
 		}
 	}
 
-	AVCaptureDevice *camera = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
+	AVCaptureDevice *camera = [TGAVClass(AVCaptureDevice) defaultDeviceWithMediaType:TGAVString(AVMediaTypeVideo)];
 	NSError *error = nil;
 	AVCaptureDeviceInput *input = camera
-			? [AVCaptureDeviceInput deviceInputWithDevice:camera error:&error] : nil;
+			? [TGAVClass(AVCaptureDeviceInput) deviceInputWithDevice:camera error:&error] : nil;
 	if (!input){
 		self.failure = @"This device has no camera to scan with.";
 		return;
 	}
 	self.camera = camera;
 
-	self.session = [[AVCaptureSession alloc] init];
+	self.session = [[TGAVClass(AVCaptureSession) alloc] init];
 	[self.session addInput:input];
 
 	if (![self attachMetadataReader] && ![self attachFrameReader]){
@@ -124,8 +122,8 @@ static Class TGQRMetadataOutputClass(void) {
 		return;
 	}
 
-	self.preview = [AVCaptureVideoPreviewLayer layerWithSession:self.session];
-	self.preview.videoGravity = AVLayerVideoGravityResizeAspectFill;
+	self.preview = [TGAVClass(AVCaptureVideoPreviewLayer) layerWithSession:self.session];
+	self.preview.videoGravity = TGAVString(AVLayerVideoGravityResizeAspectFill);
 	self.preview.frame = self.view.bounds;
 	[self.view.layer insertSublayer:self.preview atIndex:0];
 
@@ -158,10 +156,10 @@ static Class TGQRMetadataOutputClass(void) {
 }
 
 - (BOOL)attachFrameReader {
-	AVCaptureVideoDataOutput *frames = [[AVCaptureVideoDataOutput alloc] init];
+	AVCaptureVideoDataOutput *frames = [[TGAVClass(AVCaptureVideoDataOutput) alloc] init];
 
-	if ([self.session canSetSessionPreset:AVCaptureSessionPreset640x480])
-		self.session.sessionPreset = AVCaptureSessionPreset640x480;
+	if ([self.session canSetSessionPreset:TGAVString(AVCaptureSessionPreset640x480)])
+		self.session.sessionPreset = TGAVString(AVCaptureSessionPreset640x480);
 	if (![self.session canAddOutput:frames])
 		return NO;
 

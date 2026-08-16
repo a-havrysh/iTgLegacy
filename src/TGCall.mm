@@ -1,4 +1,5 @@
 #import "TGCall.h"
+#import "TGLazyFramework.h"
 #import "TGClient.h"
 #import "TGCallReflector.h"
 #import "TGCallMessages.h"
@@ -426,9 +427,9 @@ static void TGInstallCrypto(void) {
 
 	// The audio session has to be a call, or iOS routes it to the speaker and
 	// ignores the proximity sensor.
-	AVAudioSession *session = [AVAudioSession sharedInstance];
-	[session setCategory:AVAudioSessionCategoryPlayAndRecord error:nil];
-	[session setMode:AVAudioSessionModeVoiceChat error:nil];
+	AVAudioSession *session = [TGAVClass(AVAudioSession) sharedInstance];
+	[session setCategory:TGAVString(AVAudioSessionCategoryPlayAndRecord) error:nil];
+	[session setMode:TGAVString(AVAudioSessionModeVoiceChat) error:nil];
 	[session setActive:YES error:nil];
 
 	NSData *key = [[NSData alloc] initWithBase64EncodedString:state[@"encryption_key"]
@@ -621,7 +622,7 @@ static void TGInstallCrypto(void) {
 	}
 	self.establishedAt = nil;
 	self.callId = 0;
-	[[AVAudioSession sharedInstance] setActive:NO error:nil];
+	[[TGAVClass(AVAudioSession) sharedInstance] setActive:NO error:nil];
 }
 
 @end

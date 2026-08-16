@@ -1,4 +1,5 @@
 #import "TGVideoCaptureViewController.h"
+#import "TGLazyFramework.h"
 #import "TGVideoRecorder.h"
 
 #import <AVFoundation/AVFoundation.h>
@@ -437,15 +438,15 @@ static UIImage *TGVideoCaptureShutterImage(BOOL recording, BOOL pressed) {
 	self.timeDot.hidden = YES;
 	self.timeBadge.hidden = NO;
 
-	self.player = [AVPlayer playerWithURL:[NSURL fileURLWithPath:self.resultPath]];
-	self.playerLayer = [AVPlayerLayer playerLayerWithPlayer:self.player];
-	self.playerLayer.videoGravity = AVLayerVideoGravityResizeAspectFill;
+	self.player = [TGAVClass(AVPlayer) playerWithURL:[NSURL fileURLWithPath:self.resultPath]];
+	self.playerLayer = [TGAVClass(AVPlayerLayer) playerLayerWithPlayer:self.player];
+	self.playerLayer.videoGravity = TGAVString(AVLayerVideoGravityResizeAspectFill);
 	self.playerLayer.frame = self.stage.bounds;
 	[self.stage.layer addSublayer:self.playerLayer];
 
 	[[NSNotificationCenter defaultCenter] addObserver:self
 											 selector:@selector(playbackReachedEnd:)
-												 name:AVPlayerItemDidPlayToEndTimeNotification
+												 name:TGAVString(AVPlayerItemDidPlayToEndTimeNotification)
 											   object:self.player.currentItem];
 	[self.player play];
 	[self updateChrome];
@@ -459,7 +460,7 @@ static UIImage *TGVideoCaptureShutterImage(BOOL recording, BOOL pressed) {
 - (void)resetToCamera {
 	[[NSNotificationCenter defaultCenter]
 			removeObserver:self
-					  name:AVPlayerItemDidPlayToEndTimeNotification
+					  name:TGAVString(AVPlayerItemDidPlayToEndTimeNotification)
 					object:nil];
 	[self.player pause];
 	self.player = nil;

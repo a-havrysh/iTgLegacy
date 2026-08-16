@@ -1,4 +1,5 @@
 #import "TGVoiceRecorder.h"
+#import "TGLazyFramework.h"
 #import <AVFoundation/AVFoundation.h>
 #include "opusenc/opusenc.h"
 
@@ -37,9 +38,9 @@ static const NSTimeInterval TGVoiceRecorderMaxDuration = 60.0 * 60.0;
 }
 
 - (void)deactivateSession {
-	AVAudioSession *session = [AVAudioSession sharedInstance];
+	AVAudioSession *session = [TGAVClass(AVAudioSession) sharedInstance];
 	NSError *err = nil;
-	[session setCategory:AVAudioSessionCategoryPlayback error:&err];
+	[session setCategory:TGAVString(AVAudioSessionCategoryPlayback) error:&err];
 	[session setActive:YES error:&err];
 }
 
@@ -50,8 +51,8 @@ static const NSTimeInterval TGVoiceRecorderMaxDuration = 60.0 * 60.0;
 	[self teardownRecorderKeepingFile:NO];
 
 	NSError *err = nil;
-	AVAudioSession *session = [AVAudioSession sharedInstance];
-	if (![session setCategory:AVAudioSessionCategoryPlayAndRecord error:&err]){
+	AVAudioSession *session = [TGAVClass(AVAudioSession) sharedInstance];
+	if (![session setCategory:TGAVString(AVAudioSessionCategoryPlayAndRecord) error:&err]){
 		NSLog(@"TGVoiceRecorder: audio session category: %@", err);
 		return NO;
 	}
@@ -72,16 +73,16 @@ static const NSTimeInterval TGVoiceRecorderMaxDuration = 60.0 * 60.0;
 
 	// 48kHz mono 16-bit: what libopusenc wants, so nothing has to be resampled.
 	NSDictionary *settings = @{
-		AVFormatIDKey            : @(kAudioFormatLinearPCM),
-		AVSampleRateKey          : @(48000.0),
-		AVNumberOfChannelsKey    : @(1),
-		AVLinearPCMBitDepthKey   : @(16),
-		AVLinearPCMIsFloatKey    : @NO,
-		AVLinearPCMIsBigEndianKey: @NO,
+		TGAVString(AVFormatIDKey)            : @(kAudioFormatLinearPCM),
+		TGAVString(AVSampleRateKey)          : @(48000.0),
+		TGAVString(AVNumberOfChannelsKey)    : @(1),
+		TGAVString(AVLinearPCMBitDepthKey)   : @(16),
+		TGAVString(AVLinearPCMIsFloatKey)    : @NO,
+		TGAVString(AVLinearPCMIsBigEndianKey): @NO,
 	};
 
 	err = nil;
-	self.recorder = [[AVAudioRecorder alloc] initWithURL:[NSURL fileURLWithPath:self.pcmPath]
+	self.recorder = [[TGAVClass(AVAudioRecorder) alloc] initWithURL:[NSURL fileURLWithPath:self.pcmPath]
 												settings:settings
 												   error:&err];
 	if (!self.recorder || err){
