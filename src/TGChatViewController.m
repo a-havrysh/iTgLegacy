@@ -50,8 +50,6 @@
 #import <UIKit/UIGestureRecognizerSubclass.h>
 #import "TGAlertView.h"
 
-// SafariServices arrived after this deployment target, so Add to Reading List
-// is declared rather than linked and only offered where the class exists.
 @interface NSObject (TGReadingList)
 + (id)defaultReadingList;
 - (BOOL)addReadingListItemWithURL:(NSURL *)url
@@ -4894,7 +4892,6 @@ static UIImage *TGPinnedBadgeGlyph(void) {
 	[self endChatSearch];
 }
 
-/// A tapped #hashtag opens the chat's own search with the tag already in it.
 - (void)searchChatForTag:(NSString *)tag {
 	if (!tag.length)
 		return;
@@ -6157,8 +6154,6 @@ static const NSInteger kFailedMessageSheetTag = 105;
 		[self openLink:url];
 		return;
 	}
-	// A hashtag searches this chat, which is what openHashtag does when it is
-	// given no peer name of its own.
 	NSString *hashtag = target[@"hashtag"];
 	if ([hashtag isKindOfClass:NSString.class] && hashtag.length){
 		[self searchChatForTag:hashtag];
@@ -6170,8 +6165,6 @@ static const NSInteger kFailedMessageSheetTag = 105;
 							 thread:self.threadId];
 		return;
 	}
-	// A text mention names a user rather than a username, so it goes straight
-	// to that profile.
 	NSNumber *userId = target[@"userId"];
 	if ([userId isKindOfClass:NSNumber.class] && [userId longLongValue] > 0){
 		[self openProfileForUserId:[userId longLongValue]];
@@ -6457,8 +6450,6 @@ static const NSInteger kFailedMessageSheetTag = 105;
 
 	[self.table deselectRowAtIndexPath:path animated:NO];
 
-	// A link under the finger answers for itself: their long press on a URL
-	// opens Open / Copy / Add to Reading List, never the message menu.
 	UITableViewCell *cell = [self.table cellForRowAtIndexPath:path];
 	if ([cell isKindOfClass:TGBubbleCell.class] && !self.selecting){
 		TGBubbleCell *bubbleCell = (TGBubbleCell *)cell;
@@ -6475,9 +6466,6 @@ static const NSInteger kFailedMessageSheetTag = 105;
 
 #pragma mark - a link under the finger
 
-/// UILabel keeps no character geometry on iOS 6, so the line box is rebuilt
-/// the way UILabel wraps it - greedily, on whitespace - and the touch is
-/// resolved against that. A miss simply falls through to the message menu.
 - (NSArray *)lineRangesOfText:(NSString *)text font:(UIFont *)font width:(CGFloat)width {
 	NSMutableArray *lines = [NSMutableArray array];
 	if (!text.length || !font || width < 1)
@@ -6559,9 +6547,9 @@ static const NSInteger kFailedMessageSheetTag = 105;
 	NSString *text = label.text;
 	if (!text.length || label.hidden)
 		return nil;
-	// The substituted-emoji path draws its own glyphs, so the measured line
-	// boxes no longer describe what is on screen - do not guess there.
 	if (TGEmojiTextNeedsSubstitution(text))
+		return nil;
+	if (text.length > 600)
 		return nil;
 
 	NSError *error = nil;
@@ -6588,9 +6576,6 @@ static const NSInteger kFailedMessageSheetTag = 105;
 	return nil;
 }
 
-/// Their sheet for a held link: Open, Copy, Add to Reading List. Reading List
-/// has no API before SafariServices, so the row only appears where the class
-/// exists - the same gate their own canAddToReadingList applies.
 - (void)showHeldLinkSheetFor:(NSString *)url {
 	self.heldLinkURL = url;
 	NSString *title = url;
@@ -6642,8 +6627,6 @@ static const NSInteger kFailedMessageSheetTag = 105;
 
 #pragma mark - the sender beside a message
 
-/// Their avatar and their name both open the profile; holding either one is
-/// what offers Mention, which is the only place a mention is inserted.
 - (void)showPeerMenuForUserId:(int64_t)userId {
 	if (userId <= 0 || self.selecting)
 		return;
@@ -7148,9 +7131,6 @@ static const NSInteger kFailedMessageSheetTag = 105;
 	sheet.pinned = (self.pinnedMessageId == messageId);
 	sheet.allowsSelection = YES;
 	self.actionsSheet = sheet;
-
-	// The bubble under the finger stays lit for as long as the card is up, on
-	// Msg_In_Selected / Msg_Out_Selected - the pressed artwork of the period.
 	[self setPressedRow:row];
 
 	__weak typeof(self) weakSelf = self;
@@ -7200,8 +7180,6 @@ static const NSInteger kFailedMessageSheetTag = 105;
 														 topCapHeight:15];
 }
 
-/// A double tap sends the quick reaction, the way their bubble does: no
-/// picker, the default emoji straight onto the message.
 - (void)messageDoubleTapped:(UITapGestureRecognizer *)tap {
 	NSIndexPath *path = [self.table indexPathForRowAtPoint:[tap locationInView:self.table]];
 	NSDictionary *m = path ? [self messageAtRow:path.row] : nil;
@@ -8143,8 +8121,6 @@ static const NSInteger kFailedMessageSheetTag = 105;
 		return;
 	}
 
-	// A message of yours that never left offers to go again, which is what
-	// their delivery-failed marker does when it is tapped.
 	if ([m[@"outgoing"] boolValue] &&
 		[[self sendStateForMessage:m] isEqualToString:@"failed"] &&
 		[m[@"id"] isKindOfClass:NSNumber.class]){
@@ -8152,7 +8128,6 @@ static const NSInteger kFailedMessageSheetTag = 105;
 		return;
 	}
 
-	// "X pinned a message" goes to the message it is about.
 	if ([kind isEqualToString:@"messagePinMessage"]){
 		[self jumpToPinnedMessageBehind:m];
 		return;
@@ -8270,9 +8245,6 @@ static const NSInteger kFailedMessageSheetTag = 105;
 	[self tapFellThroughOnMessage:m];
 }
 
-/// Their reply header is the only part of a bubble that jumps, but a 3.5"
-/// screen makes a 38pt strip a small target, so a tap that found nothing else
-/// to do still goes to the answered message rather than dying on the spot.
 - (void)tapFellThroughOnMessage:(NSDictionary *)m {
 	NSNumber *replyTo = [m[@"replyId"] isKindOfClass:NSNumber.class] ? m[@"replyId"] : nil;
 	if (replyTo && [self scrollToMessageId:replyTo.longLongValue])
@@ -8280,8 +8252,6 @@ static const NSInteger kFailedMessageSheetTag = 105;
 	[self touchedMessageBackground];
 }
 
-/// messagePinMessage carries the pinned id in its content; older histories
-/// only have it as the reply target, so both are tried.
 - (void)jumpToPinnedMessageBehind:(NSDictionary *)m {
 	NSNumber *replyTo = [m[@"replyId"] isKindOfClass:NSNumber.class] ? m[@"replyId"] : nil;
 	if (replyTo && [self scrollToMessageId:replyTo.longLongValue])
@@ -8304,7 +8274,6 @@ static const NSInteger kFailedMessageSheetTag = 105;
 	}];
 }
 
-/// Their failed bubble offers Send Again and Delete, nothing else.
 - (void)offerResendOfMessage:(int64_t)messageId {
 	self.failedMessageId = messageId;
 	UIActionSheet *sheet = [[UIActionSheet alloc] initWithTitle:@"This message was not sent"
@@ -8745,8 +8714,6 @@ static const NSInteger kForwardTapTag = 0x9200;
 static const NSInteger kAvatarTapTag = 0x9300;
 static const NSInteger kSenderTapTag = 0x9301;
 
-/// Both the avatar beside a group message and the name above it open that
-/// member's profile, and holding either one offers Mention.
 - (void)attachAvatarTapIn:(TGBubbleCell *)cell sender:(int64_t)senderId {
 	cell.avatarUserId = senderId;
 	BOOL live = (senderId > 0 && !self.selecting);
@@ -8767,8 +8734,6 @@ static const NSInteger kSenderTapTag = 0x9301;
 	}
 }
 
-/// Shorter than the table's own hold, so pressing a name reaches the member
-/// menu instead of being taken by the message menu behind it.
 - (UILongPressGestureRecognizer *)senderHoldRecognizer {
 	UILongPressGestureRecognizer *hold = [[UILongPressGestureRecognizer alloc]
 			initWithTarget:self action:@selector(senderHeld:)];
@@ -9848,8 +9813,6 @@ static const NSInteger kQuoteTapTag = 0x9009;
 	return y;
 }
 
-/// Their reply header is what navigates - not the whole bubble - so the strip
-/// carries an invisible target of its own rather than the row's tap doing it.
 - (void)placeQuoteTapTargetIn:(TGBubbleCell *)cell frame:(CGRect)frame {
 	UIView *target = [cell.bubble viewWithTag:kQuoteTapTag];
 	if (!target){
@@ -10208,6 +10171,7 @@ static const NSInteger kQuoteTapTag = 0x9009;
 	cell.tail.hidden = YES;
 	cell.disc.hidden = YES;
 	cell.wave.hidden = YES;
+	[cell.bubble viewWithTag:kQuoteTapTag].hidden = YES;
 
 	if ([self albumAtRow:indexPath.row]){
 		[self configureAlbumCell:cell atIndexPath:indexPath inTable:tableView];

@@ -730,7 +730,7 @@ static UIImage *TGSwipePlateImage(BOOL destructive, BOOL highlighted) {
 
 static NSString *const TGChatListStoriesTrayKey = @"TGShowStoriesTray";
 static NSString *const TGChatListFolderStyleKey = @"TGChatListFolderStyle";
-static NSString *const TGChatListArchiveCollapsedKey = @"TGArchiveCollapsed";
+static NSString *const TGChatListArchiveHiddenKey = @"TGArchiveHiddenByDefault";
 
 static const NSInteger TGChatListFolderStyleChooser = 0;
 static const NSInteger TGChatListFolderStyleStrip = 1;
@@ -756,15 +756,14 @@ static NSInteger TGChatListFolderStyle(void) {
 	return stored ? [stored integerValue] : TGChatListFolderStyleStrip;
 }
 
-static BOOL TGArchiveCollapsed(void) {
-	return [[NSUserDefaults standardUserDefaults] boolForKey:TGChatListArchiveCollapsedKey];
+static BOOL TGArchiveHiddenByDefault(void) {
+	id stored = [[NSUserDefaults standardUserDefaults] objectForKey:TGChatListArchiveHiddenKey];
+	return stored ? [stored boolValue] : YES;
 }
 
-static void TGSetArchiveCollapsed(BOOL collapsed) {
+static void TGSetArchiveHiddenByDefault(BOOL hidden) {
 	NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-	if ([defaults boolForKey:TGChatListArchiveCollapsedKey] == collapsed)
-		return;
-	[defaults setBool:collapsed forKey:TGChatListArchiveCollapsedKey];
+	[defaults setBool:hidden forKey:TGChatListArchiveHiddenKey];
 	[defaults synchronize];
 }
 
@@ -1192,9 +1191,10 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 @property (nonatomic, assign) CGFloat headerHeight;
 @property (nonatomic, assign) CGFloat scrollAnchor;
 @property (nonatomic, assign) BOOL archiveAvailable;
-@property (nonatomic, assign) BOOL archiveRowShown;
+@property (nonatomic, assign) BOOL archiveRevealed;
 @property (nonatomic, assign) CGFloat archiveRowTop;
-@property (nonatomic, weak) UIView *archiveRowView;
+@property (nonatomic, weak) TGChatCell *archiveRowView;
+@property (nonatomic, assign) BOOL initialScrollApplied;
 @property (nonatomic, strong) UIView *emptyContainer;
 @property (nonatomic, strong) UIImageView *emptyIcon;
 @property (nonatomic, strong) UILabel *emptyTitleLabel;
@@ -1683,16 +1683,17 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 }
 
 - (void)revealArchiveIfPulled:(UIScrollView *)scrollView {
-	if (self.archiveRowShown || !self.archiveAvailable || ![self archiveBannerAllowed])
+	if (self.archiveRevealed || !self.archiveAvailable || !TGArchiveHiddenByDefault())
 		return;
-	if (!scrollView.dragging)
+	if (![self archiveBannerAllowed] || !scrollView.dragging)
+		return;
+	if (self.scrollAnchor > 0.5f)
 		return;
 	if (scrollView.contentOffset.y + scrollView.contentInset.top > -kArchivePullThreshold)
 		return;
 
 	CGPoint offset = scrollView.contentOffset;
-	self.archiveRowShown = YES;
-	TGSetArchiveCollapsed(NO);
+	self.archiveRevealed = YES;
 	[self rebuildTableHeader];
 	if (!CGPointEqualToPoint(scrollView.contentOffset, offset))
 		scrollView.contentOffset = offset;
@@ -1707,17 +1708,30 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 }
 
 - (void)collapseArchiveIfScrolledPast {
-	if (!self.archiveRowShown || ![self archiveBannerAllowed])
+	if (!self.archiveRevealed || !TGArchiveHiddenByDefault() || ![self archiveBannerAllowed])
 		return;
 	UITableView *table = self.tableView;
 	if (table.contentOffset.y + table.contentInset.top < self.archiveRowTop + kRowHeight)
 		return;
 
 	CGPoint offset = table.contentOffset;
-	TGSetArchiveCollapsed(YES);
+	self.archiveRevealed = NO;
 	[self rebuildTableHeader];
 	offset.y -= kRowHeight;
 	table.contentOffset = offset;
+}
+
+- (void)toggleArchiveHiddenByDefaultFromCell:(TGChatCell *)cell {
+	if (cell){
+		[cell setSwipeActionsVisible:NO animated:YES];
+		if (self.openSwipeCell == cell)
+			self.openSwipeCell = nil;
+	}
+
+	BOOL hidden = !TGArchiveHiddenByDefault();
+	TGSetArchiveHiddenByDefault(hidden);
+	self.archiveRevealed = NO;
+	[self rebuildTableHeader];
 }
 
 - (void)viewDidLayoutSubviews {
@@ -1870,7 +1884,10 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 		width = [UIScreen mainScreen].applicationFrame.size.width;
 	NSUInteger archivedCount = TGReplyArray([TGClient shared].archivedChats).count;
 	BOOL hasArchive = !self.showsArchive && self.folderId == 0 && archivedCount > 0;
-	BOOL showArchive = hasArchive && !TGArchiveCollapsed();
+	if (!hasArchive)
+		self.archiveRevealed = NO;
+	BOOL archiveHidden = TGArchiveHiddenByDefault();
+	BOOL showArchive = hasArchive && (!archiveHidden || self.archiveRevealed);
 	BOOL showTray = !self.showsArchive && TGStoriesTrayEnabled() &&
 			TGReplyArray(self.storyPosters).count > 0;
 	BOOL showStrip = [self usesFolderStrip];
@@ -1905,8 +1922,8 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 													  + folderBannerHeight + trayHeight]];
 
 	if (showArchive){
-		UIView *row = [self archiveHeaderRowWithWidth:width top:rowsTop
-												count:archivedCount];
+		TGChatCell *row = [self archiveHeaderRowWithWidth:width top:rowsTop
+													count:archivedCount];
 		[header addSubview:row];
 		self.archiveRowView = row;
 
@@ -1921,9 +1938,9 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	self.tableView.tableHeaderView = header;
 	self.headerHeight = height;
 	self.archiveAvailable = hasArchive;
-	self.archiveRowShown = showArchive;
 	self.archiveRowTop = rowsTop;
 	[self pinHeaderIfSearchBarClipped];
+	[self applyInitialScrollOffset];
 }
 
 - (void)pinHeaderIfSearchBarClipped {
@@ -1933,10 +1950,29 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	CGFloat shown = table.contentOffset.y + table.contentInset.top;
 	if (shown <= 0 || shown >= kSearchBarHeight)
 		return;
-	table.contentOffset = CGPointMake(0, -table.contentInset.top);
+	CGFloat target = shown < kSearchBarHeight / 2 ? 0 : kSearchBarHeight;
+	table.contentOffset = CGPointMake(0, target - table.contentInset.top);
 }
 
-- (UIView *)archiveHeaderRowWithWidth:(CGFloat)width top:(CGFloat)top count:(NSUInteger)archivedCount {
+- (void)applyInitialScrollOffset {
+	if (self.initialScrollApplied || self.searchResults)
+		return;
+	UITableView *table = self.tableView;
+	if (table.dragging || table.tracking || table.decelerating)
+		return;
+	if (table.bounds.size.height < 1)
+		return;
+	if (table.contentOffset.y + table.contentInset.top != 0)
+		return;
+	CGFloat reachable = table.contentSize.height - table.bounds.size.height
+			+ table.contentInset.top + table.contentInset.bottom;
+	if (reachable < kSearchBarHeight)
+		return;
+	self.initialScrollApplied = YES;
+	table.contentOffset = CGPointMake(0, kSearchBarHeight - table.contentInset.top);
+}
+
+- (TGChatCell *)archiveHeaderRowWithWidth:(CGFloat)width top:(CGFloat)top count:(NSUInteger)archivedCount {
 	TGChatCell *row = [[TGChatCell alloc] initWithStyle:UITableViewCellStyleDefault
 										reuseIdentifier:nil];
 	row.frame = CGRectMake(0, top, width, kRowHeight);
@@ -1957,11 +1993,34 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	row.avatar.backgroundColor = [UIColor clearColor];
 	row.backgroundColor = [[TGTheme shared] listBackgroundColour];
 	row.userInteractionEnabled = YES;
-	[row addGestureRecognizer:[[UITapGestureRecognizer alloc]
-			initWithTarget:self action:@selector(openArchive)]];
+
+	row.swipeActions = @[@{@"kind"  : @"archiveVisibility",
+						   @"title" : (TGArchiveHiddenByDefault() ? @"Unhide" : @"Hide")}];
+	__weak typeof(self) weakSelf = self;
+	__weak TGChatCell *weakRow = row;
+	row.onSwipeOpen = ^{
+		[weakSelf closeOpenSwipeCellAnimated:YES];
+		weakSelf.openSwipeCell = weakRow;
+	};
+	row.onSwipeAction = ^(NSString *__unused kind){
+		[weakSelf toggleArchiveHiddenByDefaultFromCell:weakRow];
+	};
+
+	UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc]
+			initWithTarget:self action:@selector(archiveRowTapped)];
+	tap.cancelsTouchesInView = NO;
+	[row addGestureRecognizer:tap];
 	[row setNeedsLayout];
 	[row layoutIfNeeded];
 	return row;
+}
+
+- (void)archiveRowTapped {
+	if (self.openSwipeCell){
+		[self closeOpenSwipeCellAnimated:YES];
+		return;
+	}
+	[self openArchive];
 }
 
 - (UIView *)loginBannerWithWidth:(CGFloat)width top:(CGFloat)top {
@@ -2707,6 +2766,7 @@ static UIImage *TGStoryScaledImage(UIImage *source, CGSize bounds) {
 	if (self.showsArchive){
 		self.chats = TGChatRows([TGClient shared].archivedChats);
 		[self.tableView reloadData];
+		[self applyInitialScrollOffset];
 		[self fetchMissingAvatars];
 		[self refreshUnreadCounters];
 		return;
